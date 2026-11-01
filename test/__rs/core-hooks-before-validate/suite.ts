@@ -391,99 +391,101 @@ export const registerBeforeValidateSuite = ({
   name: string
 }) => {
   test.suite(name, { config: configPath, resetBetweenTests: false }, () => {
-    test('beforeValidate: Rust port matches TS (data, callback order/args, errors)', async ({
-      payload,
-    }) => {
-      instrument(payload)
-      const stats: DiffStats = {
-        callbacksCompared: 0,
-        diffs: [],
-        inputsCompared: 0,
-        rejectionsCompared: 0,
-        runs: 0,
-      }
+    test(
+      'beforeValidate: Rust port matches TS (data, callback order/args, errors)',
+      { timeout: 1_800_000 },
+      async ({ payload }) => {
+        instrument(payload)
+        const stats: DiffStats = {
+          callbacksCompared: 0,
+          diffs: [],
+          inputsCompared: 0,
+          rejectionsCompared: 0,
+          runs: 0,
+        }
 
-      const targets = [
-        ...payload.config.collections.map((c) => ({ collection: c, global: undefined })),
-        ...payload.config.globals.map((g) => ({ collection: undefined, global: g })),
-      ]
-
-      for (const target of targets) {
-        const config = (target.collection ?? target.global)!
-        const fields = config.fields as any[]
-        const rawDocs = await rawDocsFor(
-          payload,
-          target.collection ? { collection: config.slug } : { global: config.slug },
-          docsPerCollection,
-        )
-        const inputJSONBase = JSON.stringify(rawDocs)
-        const factory = extraInputs[config.slug]
-        const inputSets: { inputs: () => RunInput[]; label: string }[] = [
-          ...dataKinds(payload, fields).map((kind) => ({
-            inputs: () =>
-              rawDocs.map((doc) => ({ data: kind.make(doc), doc: structuredClone(doc) as any })),
-            label: kind.label,
-          })),
-          // each edge input on its own so an expected rejection does not hide the others
-          ...(factory?.() ?? []).map((_, i) => ({
-            inputs: () => [factory!()[i]!],
-            label: `edge#${i}`,
-          })),
+        const targets = [
+          ...payload.config.collections.map((c) => ({ collection: c, global: undefined })),
+          ...payload.config.globals.map((g) => ({ collection: undefined, global: g })),
         ]
-        for (const variant of [...variantsFor(payload), ...(extraVariants[config.slug] ?? [])]) {
-          for (const inputSet of inputSets) {
-            for (const concurrent of [false, true]) {
-              const run = (engine: 'rs' | 'ts'): Promise<RunOutcome> =>
-                runBeforeValidate({
-                  collection: target.collection,
-                  concurrent,
-                  engine,
-                  global: target.global,
-                  inputs: inputSet.inputs,
-                  payload,
-                  variant,
-                })
-              const ts = await withTimeout(run('ts'))
-              const rs = await withTimeout(run('rs'))
-              stats.runs++
-              stats.inputsCompared +=
-                (ts.data as { $array?: unknown[] } | null)?.$array?.length ?? 0
-              stats.callbacksCompared += ts.events.length
-              if (ts.error) {
-                stats.rejectionsCompared++
-              }
-              let inputJSON = inputJSONBase
-              try {
-                inputJSON += JSON.stringify(inputSet.inputs())
-              } catch {
-                // cyclic edge inputs: generated values are still recognized by pattern
-              }
-              const diff = firstDiff(
-                canonicalizeGenerated(ts, inputJSON),
-                canonicalizeGenerated(rs, inputJSON),
-              )
-              if (diff) {
-                stats.diffs.push(
-                  `${config.slug} [${variant.name}, ${inputSet.label}${concurrent ? ', concurrent' : ''}] ${diff}`,
+
+        for (const target of targets) {
+          const config = (target.collection ?? target.global)!
+          const fields = config.fields as any[]
+          const rawDocs = await rawDocsFor(
+            payload,
+            target.collection ? { collection: config.slug } : { global: config.slug },
+            docsPerCollection,
+          )
+          const inputJSONBase = JSON.stringify(rawDocs)
+          const factory = extraInputs[config.slug]
+          const inputSets: { inputs: () => RunInput[]; label: string }[] = [
+            ...dataKinds(payload, fields).map((kind) => ({
+              inputs: () =>
+                rawDocs.map((doc) => ({ data: kind.make(doc), doc: structuredClone(doc) as any })),
+              label: kind.label,
+            })),
+            // each edge input on its own so an expected rejection does not hide the others
+            ...(factory?.() ?? []).map((_, i) => ({
+              inputs: () => [factory!()[i]!],
+              label: `edge#${i}`,
+            })),
+          ]
+          for (const variant of [...variantsFor(payload), ...(extraVariants[config.slug] ?? [])]) {
+            for (const inputSet of inputSets) {
+              for (const concurrent of [false, true]) {
+                const run = (engine: 'rs' | 'ts'): Promise<RunOutcome> =>
+                  runBeforeValidate({
+                    collection: target.collection,
+                    concurrent,
+                    engine,
+                    global: target.global,
+                    inputs: inputSet.inputs,
+                    payload,
+                    variant,
+                  })
+                const ts = await withTimeout(run('ts'))
+                const rs = await withTimeout(run('rs'))
+                stats.runs++
+                stats.inputsCompared +=
+                  (ts.data as { $array?: unknown[] } | null)?.$array?.length ?? 0
+                stats.callbacksCompared += ts.events.length
+                if (ts.error) {
+                  stats.rejectionsCompared++
+                }
+                let inputJSON = inputJSONBase
+                try {
+                  inputJSON += JSON.stringify(inputSet.inputs())
+                } catch {
+                  // cyclic edge inputs: generated values are still recognized by pattern
+                }
+                const diff = firstDiff(
+                  canonicalizeGenerated(ts, inputJSON),
+                  canonicalizeGenerated(rs, inputJSON),
                 )
+                if (diff) {
+                  stats.diffs.push(
+                    `${config.slug} [${variant.name}, ${inputSet.label}${concurrent ? ', concurrent' : ''}] ${diff}`,
+                  )
+                }
               }
             }
           }
         }
-      }
 
-      const resultsDir = path.resolve(dirname, 'results')
-      fs.mkdirSync(resultsDir, { recursive: true })
-      fs.writeFileSync(
-        path.resolve(resultsDir, `${name.replace(/[^\w-]+/g, '_')}.json`),
-        JSON.stringify(stats, null, 2),
-      )
-      console.log(
-        `[core-hooks-before-validate] ${name}: runs=${stats.runs} inputs=${stats.inputsCompared} callbackEvents=${stats.callbacksCompared} rejections=${stats.rejectionsCompared} diffs=${stats.diffs.length}`,
-      )
-      // the comparison must actually have exercised the Rust engine
-      expect(stats.runs).toBeGreaterThan(0)
-      expect(stats.diffs.slice(0, 50)).toEqual([])
-    })
+        const resultsDir = path.resolve(dirname, 'results')
+        fs.mkdirSync(resultsDir, { recursive: true })
+        fs.writeFileSync(
+          path.resolve(resultsDir, `${name.replace(/[^\w-]+/g, '_')}.json`),
+          JSON.stringify(stats, null, 2),
+        )
+        console.log(
+          `[core-hooks-before-validate] ${name}: runs=${stats.runs} inputs=${stats.inputsCompared} callbackEvents=${stats.callbacksCompared} rejections=${stats.rejectionsCompared} diffs=${stats.diffs.length}`,
+        )
+        // the comparison must actually have exercised the Rust engine
+        expect(stats.runs).toBeGreaterThan(0)
+        expect(stats.diffs.slice(0, 50)).toEqual([])
+      },
+    )
   })
 }

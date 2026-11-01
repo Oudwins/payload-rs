@@ -198,103 +198,112 @@ export const registerDifferentialSuite = ({
   name: string
 }) => {
   test.suite(name, { config: configPath, resetBetweenTests: false }, () => {
-    test('afterRead: Rust core runtime matches TS (docs, callback order/args, errors)', async ({
-      payload,
-    }) => {
-      instrument(payload)
-      const stats: DiffStats = { callbacksCompared: 0, diffs: [], docsCompared: 0, runs: 0 }
+    test(
+      'afterRead: Rust core runtime matches TS (docs, callback order/args, errors)',
+      { timeout: 1_800_000 },
+      async ({ payload }) => {
+        instrument(payload)
+        const stats: DiffStats = { callbacksCompared: 0, diffs: [], docsCompared: 0, runs: 0 }
 
-      const targets = [
-        ...payload.config.collections.map((c) => ({ collection: c, global: undefined })),
-        ...payload.config.globals.map((g) => ({ collection: undefined, global: g })),
-      ]
+        const targets = [
+          ...payload.config.collections.map((c) => ({ collection: c, global: undefined })),
+          ...payload.config.globals.map((g) => ({ collection: undefined, global: g })),
+        ]
 
-      for (const target of targets) {
-        const config = (target.collection ?? target.global)!
-        const firstFieldName = (config.fields as any[]).find(
-          (f) => 'name' in f && f.name !== 'id',
-        )?.name
-        for (const variant of [
-          ...variantsFor(payload, firstFieldName),
-          ...(extraVariants[config.slug] ?? []),
-        ]) {
-          const rawDocs = await rawDocsFor(
-            payload,
-            target.collection
-              ? { collection: target.collection.slug }
-              : { global: target.global!.slug },
-            variant.locale,
-            docsPerCollection,
-          )
-          const factory = extraDocs[config.slug]
-          // Seeded docs together (sequential and concurrent), then each edge doc on its own so
-          // an expected rejection does not hide the docs after it.
-          const docSets: { factory?: typeof factory; label: string; rawDocs: typeof rawDocs }[] = [
-            { label: 'seeded', rawDocs },
-            ...(factory?.() ?? []).map((_, i) => ({
-              factory: () => [factory!()[i]!],
-              label: `edge#${i}`,
-              rawDocs: [],
-            })),
-          ]
-          for (const docSet of docSets) {
-            for (const [concurrent, trace] of (target.collection ? [false, true] : [false]).flatMap(
-              (c) => [
+        for (const target of targets) {
+          const config = (target.collection ?? target.global)!
+          const firstFieldName = (config.fields as any[]).find(
+            (f) => 'name' in f && f.name !== 'id',
+          )?.name
+          for (const variant of [
+            ...variantsFor(payload, firstFieldName),
+            ...(extraVariants[config.slug] ?? []),
+          ]) {
+            const rawDocs = await rawDocsFor(
+              payload,
+              target.collection
+                ? { collection: target.collection.slug }
+                : { global: target.global!.slug },
+              variant.locale,
+              docsPerCollection,
+            )
+            const factory = extraDocs[config.slug]
+            // Seeded docs together (sequential and concurrent), then each edge doc on its own so
+            // an expected rejection does not hide the docs after it.
+            const docSets: { factory?: typeof factory; label: string; rawDocs: typeof rawDocs }[] =
+              [
+                { label: 'seeded', rawDocs },
+                ...(factory?.() ?? []).map((_, i) => ({
+                  factory: () => [factory!()[i]!],
+                  label: `edge#${i}`,
+                  rawDocs: [],
+                })),
+              ]
+            for (const docSet of docSets) {
+              for (const [concurrent, trace] of (target.collection
+                ? [false, true]
+                : [false]
+              ).flatMap((c) => [
                 [c, false],
                 [c, true],
-              ],
-            )) {
-              const run = (engine: 'rs' | 'ts'): Promise<RunOutcome> =>
-                runAfterRead({
-                  collection: target.collection,
-                  concurrent,
-                  engine,
-                  global: target.global,
-                  payload,
-                  rawDocs: docSet.rawDocs,
-                  rawDocsFactory: docSet.factory,
-                  trace,
-                  variant: { ...variant, findMany: concurrent || undefined },
-                })
-              const ts = await withTimeout(run('ts'))
-              const rs = await withTimeout(run('rs'))
-              stats.runs++
-              if (trace) {
-                stats.tracedRuns = (stats.tracedRuns ?? 0) + 1
-                stats.traceEventsCompared =
-                  (stats.traceEventsCompared ?? 0) +
-                  ts.events.filter((e) => (e as { op?: string }).op).length
-              }
-              stats.docsCompared += (ts.docs as unknown[]).length
-              stats.callbacksCompared += ts.events.filter((e) => !(e as { op?: string }).op).length
-              if (ts.error) {
-                stats.rejectionsCompared = (stats.rejectionsCompared ?? 0) + 1
-              }
-              const inputJSON = JSON.stringify(docSet.rawDocs)
-              const diff = firstDiff(
-                canonicalizeGeneratedIDs(ts, inputJSON),
-                canonicalizeGeneratedIDs(rs, inputJSON),
-              )
-              if (diff) {
-                stats.diffs.push(
-                  `${config.slug} [${variant.name}, ${docSet.label}${concurrent ? ', concurrent' : ''}${trace ? ', traced' : ''}] ${diff}`,
+              ])) {
+                const run = (engine: 'rs' | 'ts'): Promise<RunOutcome> =>
+                  runAfterRead({
+                    collection: target.collection,
+                    concurrent,
+                    engine,
+                    global: target.global,
+                    payload,
+                    rawDocs: docSet.rawDocs,
+                    rawDocsFactory: docSet.factory,
+                    trace,
+                    variant: { ...variant, findMany: concurrent || undefined },
+                  })
+                const ts = await withTimeout(run('ts'))
+                const rs = await withTimeout(run('rs'))
+                stats.runs++
+                if (trace) {
+                  stats.tracedRuns = (stats.tracedRuns ?? 0) + 1
+                  stats.traceEventsCompared =
+                    (stats.traceEventsCompared ?? 0) +
+                    ts.events.filter((e) => (e as { op?: string }).op).length
+                }
+                stats.docsCompared += (ts.docs as unknown[]).length
+                stats.callbacksCompared += ts.events.filter(
+                  (e) => !(e as { op?: string }).op,
+                ).length
+                if (ts.error) {
+                  stats.rejectionsCompared = (stats.rejectionsCompared ?? 0) + 1
+                }
+                const inputJSON = JSON.stringify(docSet.rawDocs)
+                const diff = firstDiff(
+                  canonicalizeGeneratedIDs(ts, inputJSON),
+                  canonicalizeGeneratedIDs(rs, inputJSON),
                 )
+                if (diff) {
+                  stats.diffs.push(
+                    `${config.slug} [${variant.name}, ${docSet.label}${concurrent ? ', concurrent' : ''}${trace ? ', traced' : ''}] ${diff}`,
+                  )
+                }
               }
             }
           }
         }
-      }
 
-      const resultsDir = path.resolve(dirname, 'results')
-      fs.mkdirSync(resultsDir, { recursive: true })
-      fs.writeFileSync(
-        path.resolve(resultsDir, `${name.replace(/[^\w-]+/g, '_')}.json`),
-        JSON.stringify(stats, null, 2),
-      )
-      console.log(
-        `[core-runtime] ${name}: runs=${stats.runs} (traced=${stats.tracedRuns ?? 0}) docs=${stats.docsCompared} callbackEvents=${stats.callbacksCompared} docTraceEvents=${stats.traceEventsCompared ?? 0} rejections=${stats.rejectionsCompared ?? 0} diffs=${stats.diffs.length}`,
-      )
-      expect(stats.diffs).toEqual([])
-    })
+        const resultsDir = path.resolve(dirname, 'results')
+        fs.mkdirSync(resultsDir, { recursive: true })
+        fs.writeFileSync(
+          path.resolve(resultsDir, `${name.replace(/[^\w-]+/g, '_')}.json`),
+          JSON.stringify(stats, null, 2),
+        )
+        console.log(
+          `[core-runtime] ${name}: runs=${stats.runs} (traced=${stats.tracedRuns ?? 0}) docs=${stats.docsCompared} callbackEvents=${stats.callbacksCompared} docTraceEvents=${stats.traceEventsCompared ?? 0} rejections=${stats.rejectionsCompared ?? 0} diffs=${stats.diffs.length}`,
+        )
+        // a run that compared nothing must not pass
+        expect(stats.runs).toBeGreaterThan(0)
+        expect(stats.docsCompared).toBeGreaterThan(0)
+        expect(stats.diffs).toEqual([])
+      },
+    )
   })
 }

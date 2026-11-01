@@ -8,10 +8,15 @@
  *
  * --loopback   PAYLOAD_RS_ENGINE_LOOPBACK=true (TS stand-in engine; verifies the glue only)
  * --addon      PAYLOAD_ENGINE_ADDON (default: the shared packages/engine-rs/payload-engine.node)
+ * --core ts    PAYLOAD_CORE_ENGINE=ts: field hooks / validators stay TS (SQL engine parity only);
+ *              default: PAYLOAD_ENGINE=rs alone, i.e. the Rust core runtime too
  *
  * Files of one test/<suite> directory never run concurrently. Every file gets its own SQLite file under /tmp (deleted afterwards) and an engine stats file, so
- * the summary shows that the engine served the data methods. Writes <out>/summary.json and prints
- * a markdown table plus every test whose status differs from the baseline.
+ * the summary shows that the engine served the data methods (and how many calls ran the upstream
+ * TS method because an adapter internal or the client's `execute` was replaced). Writes
+ * <out>/summary.json and prints a markdown table plus every test whose status differs from the
+ * baseline. Exits non-zero when a file differs, has no result, has no baseline entry, or when the
+ * run compared no tests or made no engine calls at all.
  */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -23,6 +28,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const argv = process.argv.slice(2)
 const options = {
   addon: undefined,
+  core: undefined,
   jobs: 1,
   loopback: false,
   out: '/tmp/rs-adapter-runs',
@@ -33,6 +39,8 @@ for (let i = 0; i < argv.length; i++) {
   const arg = argv[i]
   if (arg === '--loopback') {
     options.loopback = true
+  } else if (arg === '--core') {
+    options.core = argv[++i]
   } else if (arg === '--addon') {
     options.addon = path.resolve(argv[++i])
   } else if (arg === '--out') {
@@ -77,6 +85,11 @@ const runFile = (file, index) =>
     if (options.addon) {
       env.PAYLOAD_ENGINE_ADDON = options.addon
     }
+    if (options.core) {
+      env.PAYLOAD_CORE_ENGINE = options.core
+    } else {
+      delete env.PAYLOAD_CORE_ENGINE
+    }
     const started = Date.now()
     const child = spawn(
       'pnpm',
@@ -109,10 +122,18 @@ const runFile = (file, index) =>
 const testsOf = (fileResult) =>
   new Map((fileResult?.assertionResults ?? []).map((test) => [test.fullName, test]))
 
+const readJSON = (file) => {
+  try {
+    return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 const compare = ({ code, durationMs, file, jsonFile, statsFile }) => {
-  const result = existsSync(jsonFile) ? JSON.parse(readFileSync(jsonFile, 'utf8')) : undefined
+  const result = readJSON(jsonFile)
   const fileResult = result?.testResults?.[0]
-  const stats = existsSync(statsFile) ? JSON.parse(readFileSync(statsFile, 'utf8')) : undefined
+  const stats = readJSON(statsFile)
   const baseTests = testsOf(baselineByFile.get(file))
   const tests = testsOf(fileResult)
   const counts = { failed: 0, passed: 0, skipped: 0 }
@@ -151,9 +172,15 @@ const compare = ({ code, durationMs, file, jsonFile, statsFile }) => {
     ]++
   }
   const calls = stats ? Object.values(stats.calls).reduce((a, b) => a + b, 0) : 0
+  const upstreamCalls = stats?.upstream
+    ? Object.values(stats.upstream).reduce((a, b) => a + b, 0)
+    : 0
   return {
     baseline: baseCounts,
     calls,
+    hasBaseline: baselineByFile.has(file),
+    upstreamCalls,
+    upstreamReasons: stats?.upstreamReasons,
     code,
     counts,
     differences,
@@ -190,7 +217,7 @@ const worker = async () => {
     const merged = [...previous.filter((p) => !results.some((r) => r.file === p.file)), ...results]
     writeFileSync(summaryFile, JSON.stringify(merged, null, 2))
     process.stdout.write(
-      `${entry.file}: ${entry.counts.passed}/${entry.baseline.passed} passed, ${entry.counts.failed} failed (baseline ${entry.baseline.failed}), ${entry.differences.length} diffs, ${entry.calls} engine calls, ${Math.round(entry.durationMs / 1000)}s${entry.loadError ? ` LOAD ERROR ${String(entry.loadError).slice(0, 200)}` : ''}\n`,
+      `${entry.file}: ${entry.counts.passed}/${entry.baseline.passed} passed, ${entry.counts.failed} failed (baseline ${entry.baseline.failed}), ${entry.differences.length} diffs, ${entry.calls} engine calls, ${entry.upstreamCalls} upstream, ${Math.round(entry.durationMs / 1000)}s${entry.loadError ? ` LOAD ERROR ${String(entry.loadError).slice(0, 200)}` : ''}\n`,
     )
   }
 }
@@ -198,10 +225,20 @@ await Promise.all(Array.from({ length: Math.max(1, options.jobs) }, worker))
 
 results.sort((a, b) => a.file.localeCompare(b.file))
 let md =
-  '| suite | baseline pass/fail/skip | rs pass/fail/skip | diffs | engine calls |\n|---|---|---|---|---|\n'
+  '| suite | baseline pass/fail/skip | rs pass/fail/skip | diffs | engine calls | upstream calls |\n|---|---|---|---|---|---|\n'
 for (const r of results) {
-  md += `| ${r.file} | ${r.baseline.passed}/${r.baseline.failed}/${r.baseline.skipped} | ${r.counts.passed}/${r.counts.failed}/${r.counts.skipped} | ${r.differences.length}${r.loadError ? ' (load error)' : ''} | ${r.calls} |\n`
+  md += `| ${r.file} | ${r.baseline.passed}/${r.baseline.failed}/${r.baseline.skipped} | ${r.counts.passed}/${r.counts.failed}/${r.counts.skipped} | ${r.differences.length}${r.loadError ? ' (load error)' : ''}${r.hasBaseline ? '' : ' (no baseline)'} | ${r.calls} | ${r.upstreamCalls}${r.upstreamCalls ? ` (${Object.keys(r.upstreamReasons ?? {}).join(', ')})` : ''} |\n`
 }
+const totals = results.reduce(
+  (sum, r) => ({
+    calls: sum.calls + r.calls,
+    differing: sum.differing + (r.differences.length || r.loadError || !r.hasBaseline ? 1 : 0),
+    tests: sum.tests + r.counts.passed + r.counts.failed + r.counts.skipped,
+    upstream: sum.upstream + r.upstreamCalls,
+  }),
+  { calls: 0, differing: 0, tests: 0, upstream: 0 },
+)
+md += `\n**${results.length - totals.differing}/${results.length} files identical to the baseline**, ${totals.tests} tests, ${totals.calls} engine calls, ${totals.upstream} upstream calls\n`
 for (const r of results) {
   if (r.differences.length || r.loadError) {
     md += `\n### ${r.file}\n`
@@ -215,3 +252,6 @@ for (const r of results) {
 }
 writeFileSync(path.join(options.out, 'summary.md'), md)
 process.stdout.write(`\n${md}`)
+if (totals.differing > 0 || totals.tests === 0 || totals.calls === 0) {
+  process.exitCode = 1
+}

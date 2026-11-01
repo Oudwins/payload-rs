@@ -5,9 +5,13 @@ use payload_engine::fields::field_affects_data;
 use payload_engine::js::JsVal;
 use payload_sql_read::Val;
 
-use crate::host::Host;
 use crate::js::{JsError, JsResult, for_in_keys, get, has_in, is_object_type, new_obj, set};
 use crate::paths::find_field;
+
+/// Calls an entity `select` function synchronously: `config({ operation, req, select })`.
+pub trait SelectHost {
+  fn call_select(&self, function: &JsVal, operation: &str, select: &Val) -> JsResult<Val>;
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectMode {
@@ -141,7 +145,7 @@ pub fn sanitize_select(fields: &JsVal, select: &Val, versions: bool) -> JsResult
 }
 
 /// `resolveSelect({ config, operation, req, select })`
-pub fn resolve_select(host: &dyn Host, config: &JsVal, operation: &str, select: &Val) -> JsResult<Val> {
+pub fn resolve_select(host: &dyn SelectHost, config: &JsVal, operation: &str, select: &Val) -> JsResult<Val> {
   if !config.is_fn() {
     return Ok(select.clone());
   }

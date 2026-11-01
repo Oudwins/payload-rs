@@ -879,10 +879,7 @@ fn replay_recorded_operations() {
     .unwrap_or_default();
   files.retain(|p| filter.as_ref().is_none_or(|f| p.to_string_lossy().contains(f.as_str())));
   files.sort();
-  if files.is_empty() {
-    eprintln!("no fixtures in {} (run test/__rs/upsert/record.sh)", dir.display());
-    return;
-  }
+  assert!(!files.is_empty(), "no fixtures in {} (run test/__rs/upsert/record.sh)", dir.display());
   let mut total = Stats::default();
   let max_failures = std::env::var("UPSERT_MAX_FAILURES").ok().and_then(|v| v.parse().ok()).unwrap_or(5);
   for f in &files {
@@ -941,5 +938,6 @@ fn replay_recorded_operations() {
     fmt(total.upserts),
     fmt(total.reads),
   );
+  assert!(total.replayed > 0, "replayed zero recorded operations");
   assert!(total.failures.is_empty(), "{} of {} replayed operations differ", total.failures.len(), total.replayed);
 }

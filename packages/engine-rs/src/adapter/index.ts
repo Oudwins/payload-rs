@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { renameSync, writeFileSync } from 'node:fs'
 
 /**
  * `withRustEngine(adapterObj)` (ENGINE_CONTRACT.md): the sqlite adapter with its raw schema and
@@ -8,12 +8,13 @@ import { writeFileSync } from 'node:fs'
  */
 import type { NativeSqliteEngine } from '../native.js'
 import type { FunctionRegistry } from '../serialize.js'
+import type { DrizzleQueryErrorClass } from './errors.js'
 import type { LoopbackEngine } from './loopback.js'
 
 import { getNativeEngine } from '../native.js'
 import { createEngineError } from '../schema.js'
 import { createFunctionRegistry, deserializeFromEngine, serializeForEngine } from '../serialize.js'
-import { getSqliteConnId } from '../sqlite/client.js'
+import { getSqliteConnId, Sqlite3Client, Sqlite3Transaction } from '../sqlite/client.js'
 import { rebuildError } from './errors.js'
 import { createLoopbackEngine } from './loopback.js'
 import { buildEngineInput, decodeRawSchema, initWithEngineSchema } from './schema.js'
@@ -48,16 +49,73 @@ export const engineMethods = [
   'upsert',
 ] as const
 
+type UpstreamMethod = (this: unknown, args: unknown) => Promise<unknown>
+
 type EngineState = {
   attachedClientId?: number
   engine: LoopbackEngine | NativeSqliteEngine
-  hostErrors: unknown[]
   registry: FunctionRegistry
+}
+
+/** Per adapter object, fixed by `withRustEngine`'s `init` (survives re-init). */
+type Glue = {
+  DrizzleQueryErrorClass?: DrizzleQueryErrorClass
+  /** `internalAdapterProperties` values right after the upstream adapter was built. */
+  internals: Record<string, unknown>
+  operatorEntries: [string, unknown][]
+  /** The upstream TS data methods (run instead of the engine, see `findUpstreamReason`). */
+  upstream: Record<string, UpstreamMethod>
+  /** The engine-backed methods installed on the adapter. */
+  wrappers: Record<string, unknown>
 }
 
 type AdapterObj = { init: (args: { payload: any }) => AnyObject }
 
+/** Options of `withRustEngine`. */
+export type WithRustEngineOptions = {
+  /**
+   * drizzle-orm's `DrizzleQueryError` from the drizzle-orm copy the adapter's drizzle session runs
+   * on (`@payloadcms/db-sqlite` passes its own), so engine query errors are instances of the class
+   * upstream throws. Without it a shape-identical copy is thrown.
+   */
+  DrizzleQueryError?: DrizzleQueryErrorClass
+}
+
 const states = new WeakMap<object, EngineState>()
+const glues = new WeakMap<object, Glue>()
+
+/**
+ * Adapter properties the upstream data methods use through `this` / `adapter` at call time
+ * (`count` → `countDistinct`, `deleteOne` / `upsertRow` → `deleteWhere`, `upsertRow` → `insert`,
+ * `createVersion` → `execute`, where building → `operators`, `createJSONQuery`,
+ * `convertPathToJSONTraversal`). The engine has its own implementation of them, so a replacement
+ * (`vi.spyOn(payload.db, 'countDistinct')`, `payload.db.deleteWhere = ...`) only has upstream's
+ * effect when the call runs the upstream method: `callEngine` then does exactly that.
+ */
+const internalAdapterProperties = [
+  'convertPathToJSONTraversal',
+  'countDistinct',
+  'createJSONQuery',
+  'deleteWhere',
+  'execute',
+  'insert',
+  'operators',
+] as const
+
+const transparentClientMethods = new WeakMap<object, () => boolean>()
+
+/**
+ * Declares `wrapper` (installed as `execute` on a Rust sqlite client or transaction) as forwarding
+ * every call unchanged to the original method while `isTransparent()` returns true, so engine
+ * calls keep running in Rust. Any other replacement of `execute` makes the adapter run the
+ * upstream TS data methods, whose statements go through it (ENGINE_STATUS.md #1).
+ */
+export const registerTransparentClientMethod = (
+  wrapper: (...args: never[]) => unknown,
+  isTransparent: () => boolean = () => true,
+) => {
+  transparentClientMethods.set(wrapper, isTransparent)
+}
 
 /** Whether `adapter` was created through `withRustEngine` (db-sqlite `connect` picks the client). */
 export const isRustEngineAdapter = (adapter: unknown): boolean =>
@@ -67,9 +125,17 @@ const rustAdapters = new WeakSet<object>()
 
 const isLoopback = () => process.env.PAYLOAD_RS_ENGINE_LOOPBACK === 'true'
 
-const stats: { calls: Record<string, number>; engines: Record<'loopback' | 'native', number> } = {
+const stats: {
+  calls: Record<string, number>
+  engines: Record<'loopback' | 'native', number>
+  /** Calls that ran the upstream TS method instead of the engine, per method and per reason. */
+  upstream: Record<string, number>
+  upstreamReasons: Record<string, number>
+} = {
   calls: {},
   engines: { loopback: 0, native: 0 },
+  upstream: {},
+  upstreamReasons: {},
 }
 
 /**
@@ -89,13 +155,20 @@ const recordStats = (update: () => void) => {
     return
   }
   if (lastStatsWrite === 0) {
-    process.once('exit', () => writeFileSync(file, JSON.stringify(stats)))
+    process.once('exit', () => writeStatsFile(file))
   }
   const now = performance.now()
   if (now - lastStatsWrite > 250) {
     lastStatsWrite = now
-    writeFileSync(file, JSON.stringify(stats))
+    writeStatsFile(file)
   }
+}
+
+/** Atomic (rename), so a reader or a child process sharing the file never sees partial JSON. */
+const writeStatsFile = (file: string) => {
+  const temporary = `${file}.${process.pid}.tmp`
+  writeFileSync(temporary, JSON.stringify(stats))
+  renameSync(temporary, file)
 }
 
 /**
@@ -104,6 +177,7 @@ const recordStats = (update: () => void) => {
  */
 export const withRustEngine = <TAdapterObj extends AdapterObj>(
   adapterObj: TAdapterObj,
+  options: WithRustEngineOptions = {},
 ): TAdapterObj => ({
   ...adapterObj,
   init: (args: { payload: any }) => {
@@ -113,13 +187,25 @@ export const withRustEngine = <TAdapterObj extends AdapterObj>(
     }
     rustAdapters.add(adapter)
 
-    const upstream: Record<string, (this: unknown, args: unknown) => Promise<unknown>> = {}
+    const internals: Record<string, unknown> = {}
+    for (const key of internalAdapterProperties) {
+      internals[key] = adapter[key]
+    }
+    const upstream: Record<string, UpstreamMethod> = {}
+    const wrappers: Record<string, unknown> = {}
     for (const method of engineMethods) {
       upstream[method] = adapter[method]
-      adapter[method] = function (this: AnyObject, methodArgs: AnyObject) {
+      adapter[method] = wrappers[method] = function (this: AnyObject, methodArgs: AnyObject) {
         return callEngine({ adapter: this, args: methodArgs, method })
       }
     }
+    glues.set(adapter, {
+      DrizzleQueryErrorClass: options.DrizzleQueryError,
+      internals,
+      operatorEntries: Object.entries(adapter.operators ?? {}),
+      upstream,
+      wrappers,
+    })
 
     adapter.init = async function (this: AnyObject) {
       await initWithEngineSchema({
@@ -144,6 +230,8 @@ const createEngineState = ({
   upstream: Record<string, (this: unknown, args: unknown) => Promise<unknown>>
 }): { root: AnyObject } & EngineState => {
   const registry = createFunctionRegistry()
+  // `create` is synchronous and the only place the engine calls JS (`call` has no host), so every
+  // error collected here belongs to it
   const hostErrors: unknown[] = []
   const { graphJson, optionsJson, root } = buildEngineInput({ adapter: adapter as never, registry })
 
@@ -184,7 +272,7 @@ const createEngineState = ({
     throw toInitError({ error, hostErrors })
   }
 
-  return { engine, hostErrors, registry, root }
+  return { engine, registry, root }
 }
 
 const toInitError = ({ error, hostErrors }: { error: unknown; hostErrors: unknown[] }): unknown => {
@@ -219,12 +307,29 @@ const callEngine = async ({
   method: string
 }): Promise<unknown> => {
   const state = states.get(adapter) ?? states.get(Object.getPrototypeOf(adapter))
-  if (!state) {
+  const glue = glues.get(adapter) ?? glues.get(Object.getPrototypeOf(adapter))
+  if (!state || !glue) {
     throw new Error(`payload.db.${method}: the Rust engine is not initialized (call init first)`)
   }
+  const adapterReason = findUpstreamReason({ adapter, glue, method })
+  if (adapterReason) {
+    return callUpstream({ adapter, args, glue, method, reason: adapterReason })
+  }
   const req = args?.req
-  mutateDataBeforeTransaction({ adapter, args, method })
-  const db = await getTransactionDB({ adapter, req })
+  let db: AnyObject
+  if (req?.transactionID) {
+    // the transaction's connection is only known after awaiting `transactionID`, which upstream
+    // does itself (`getTransaction`): decide on it before any of upstream's mutations of `data`
+    db = await getTransactionDB({ adapter, req })
+    const txReason = findConnectionReason(db)
+    if (txReason) {
+      return callUpstream({ adapter, args, glue, method, reason: txReason })
+    }
+    mutateDataBeforeTransaction({ adapter, args, method })
+  } else {
+    mutateDataBeforeTransaction({ adapter, args, method })
+    db = await getTransactionDB({ adapter, req })
+  }
   mutateDataAfterTransaction({ adapter, args, method })
   const connId = getSqliteConnId(db.session.tx ?? db.session.client)
 
@@ -243,20 +348,212 @@ const callEngine = async ({
   try {
     resultJson = await state.engine.call(method, argsJson, connId, callContextJson(adapter))
   } catch (error) {
-    if (state.hostErrors.length) {
-      throw state.hostErrors.shift()
-    }
     const parsed = parseEngineError(error)
     if (!parsed) {
       throw error
     }
-    throw rebuildError({
+    const rebuilt = rebuildError({
       decode: (value) => deserializeFromEngine(value, state.registry),
+      DrizzleQueryErrorClass: glue.DrizzleQueryErrorClass,
       error: parsed as never,
       req,
     })
+    if (rebuilt.name === 'ValidationError' && writesBeforeUniqueCheck.has(method)) {
+      // unique violations are raised by `upsertRow`, after its `markWrite`
+      markWrite(adapter)
+    }
+    throw rebuilt
   }
-  return deserializeFromEngine(JSON.parse(resultJson), state.registry)
+  const result = deserializeFromEngine(JSON.parse(resultJson), state.registry)
+  if (isMarkedWrite({ args, method, result })) {
+    markWrite(adapter)
+  }
+  return result
+}
+
+/** Runs the upstream TS method (statements through drizzle and the JS client, like upstream). */
+const callUpstream = ({
+  adapter,
+  args,
+  glue,
+  method,
+  reason,
+}: {
+  adapter: AnyObject
+  args: AnyObject
+  glue: Glue
+  method: string
+  reason: string
+}) => {
+  recordStats(() => {
+    stats.upstream[method] = (stats.upstream[method] ?? 0) + 1
+    stats.upstreamReasons[reason] = (stats.upstreamReasons[reason] ?? 0) + 1
+  })
+  return glue.upstream[method]!.call(adapter, args)
+}
+
+/**
+ * Why a call must run the upstream TS method instead of the engine: something upstream reaches
+ * at call time through JS (and the engine cannot) was replaced.
+ */
+const findUpstreamReason = ({
+  adapter,
+  glue,
+  method,
+}: {
+  adapter: AnyObject
+  glue: Glue
+  method: string
+}): string | undefined => {
+  for (const key of internalAdapterProperties) {
+    if (adapter[key] !== glue.internals[key]) {
+      return `adapter.${key}`
+    }
+  }
+  const operators = adapter.operators ?? {}
+  if (
+    Object.keys(operators).length !== glue.operatorEntries.length ||
+    glue.operatorEntries.some(([key, value]) => operators[key] !== value)
+  ) {
+    return 'adapter.operators'
+  }
+  // upstream `upsert` is `this.updateOne(...)`
+  if (method === 'upsert' && adapter.updateOne !== glue.wrappers.updateOne) {
+    return 'adapter.updateOne'
+  }
+  return findConnectionReason(adapter.drizzle)
+}
+
+/**
+ * The drizzle instance's statements must go through JS when its session logs queries (drizzle
+ * `logger`), when it is not on a Rust sqlite client / transaction, or when that client's
+ * `execute` was replaced (`payload.db.drizzle.$client.execute = ...`).
+ */
+const findConnectionReason = (db: AnyObject | undefined): string | undefined => {
+  const session = db?.session
+  if (!session) {
+    return 'adapter.drizzle'
+  }
+  if (!isNoopLogger(session.logger)) {
+    return 'drizzle logger'
+  }
+  const target = session.tx ?? session.client
+  if (!hasSqliteConnId(target)) {
+    return 'drizzle client'
+  }
+  return isReplacedClientMethod(target.execute, session.tx ? transactionExecute : clientExecute)
+    ? 'client.execute'
+    : undefined
+}
+
+// identity comparison only
+// oxlint-disable-next-line typescript/unbound-method
+const clientExecute: unknown = Sqlite3Client.prototype.execute
+// oxlint-disable-next-line typescript/unbound-method
+const transactionExecute: unknown = Sqlite3Transaction.prototype.execute
+
+const drizzleEntityKind = Symbol.for('drizzle:entityKind')
+
+/** drizzle's `is(logger, NoopLogger)` without importing a drizzle-orm copy. */
+const isNoopLogger = (logger: unknown) =>
+  typeof logger === 'object' &&
+  logger !== null &&
+  (logger.constructor as unknown as Record<symbol, unknown>)?.[drizzleEntityKind] === 'NoopLogger'
+
+const hasSqliteConnId = (target: unknown) => {
+  try {
+    getSqliteConnId(target as never)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const isReplacedClientMethod = (method: unknown, original: unknown) => {
+  if (method === original) {
+    return false
+  }
+  if (typeof method !== 'function') {
+    return true
+  }
+  const isTransparent = transparentClientMethods.get(method)
+  if (isTransparent) {
+    return !isTransparent()
+  }
+  // Transitional: the shadow harness's candidate wrapper (packages/engine-rs/src/shadow) forwards
+  // to the original unless the reference client was overridden, which the engine cannot follow
+  // anyway (ENGINE_STATUS.md #1); it should register itself with registerTransparentClientMethod.
+  return method.name !== 'candidateClientCall'
+}
+
+/** Upstream `markWrite` (`lastWriteTimestamp`, read-replica routing). */
+const markWrite = (adapter: AnyObject) => {
+  adapter.lastWriteTimestamp = Date.now()
+}
+
+/** Methods whose unique-violation ValidationError comes from `upsertRow` (after `markWrite`). */
+const writesBeforeUniqueCheck = new Set<string>([
+  'create',
+  'createGlobal',
+  'createGlobalVersion',
+  'createVersion',
+  'updateGlobal',
+  'updateGlobalVersion',
+  'updateJobs',
+  'updateMany',
+  'updateOne',
+  'updateVersion',
+  'upsert',
+])
+
+/** Methods that always reach upstream's `markWrite` when they succeed. */
+const alwaysMarkWrite = new Set<string>([
+  'create',
+  'createGlobal',
+  'createGlobalVersion',
+  'createVersion',
+  'deleteMany',
+  'updateGlobal',
+  'updateGlobalVersion',
+  'updateVersion',
+  'upsert',
+])
+
+/**
+ * Whether upstream called `markWrite` in a call that returned `result`. Upstream marks when a row
+ * is written (`upsertRow`, the atomic `updateOne`, a non-empty `updateJobs` claim) or deleted
+ * (`deleteOne` with a match, `deleteVersions` with matches, `deleteMany` always). With
+ * `returning: false` a write without an id gives no evidence in the result: not marked.
+ */
+const isMarkedWrite = ({
+  args,
+  method,
+  result,
+}: {
+  args: AnyObject
+  method: string
+  result: unknown
+}) => {
+  if (alwaysMarkWrite.has(method)) {
+    return true
+  }
+  switch (method) {
+    case 'deleteOne':
+      return result !== null && result !== undefined
+    case 'deleteVersions':
+    case 'updateJobs':
+    case 'updateMany':
+      return Array.isArray(result) && result.length > 0
+    case 'updateOne':
+      return (
+        Boolean(args?.id) ||
+        args?.options?.upsert === true ||
+        args?.options?.atomic === true ||
+        (result !== null && result !== undefined)
+      )
+    default:
+      return false
+  }
 }
 
 /**

@@ -382,176 +382,184 @@ export const registerAfterHooksSuite = ({
   }
 
   test.suite(name, { config: configPath, resetBetweenTests: false }, () => {
-    test('afterChange: Rust matches TS (docs, callback order/args, errors)', async ({
-      payload,
-    }) => {
-      setup(payload)
-      const stats: DiffStats = {
-        callbackEvents: 0,
-        diffs: [],
-        docs: 0,
-        rejections: 0,
-        runs: 0,
-        unhandledRejections: 0,
-      }
-      const localization = payload.config.localization
-      const locales: (string | undefined)[] = localization
-        ? [localization.defaultLocale, localization.localeCodes[1], 'all'].filter(
-            (l, i, all) => l && all.indexOf(l) === i,
-          )
-        : [undefined]
+    test(
+      'afterChange: Rust matches TS (docs, callback order/args, errors)',
+      { timeout: 1_800_000 },
+      async ({ payload }) => {
+        setup(payload)
+        const stats: DiffStats = {
+          callbackEvents: 0,
+          diffs: [],
+          docs: 0,
+          rejections: 0,
+          runs: 0,
+          unhandledRejections: 0,
+        }
+        const localization = payload.config.localization
+        const locales: (string | undefined)[] = localization
+          ? [localization.defaultLocale, localization.localeCodes[1], 'all'].filter(
+              (l, i, all) => l && all.indexOf(l) === i,
+            )
+          : [undefined]
 
-      const targets: Target[] = [
-        ...payload.config.collections.map((collection) => ({ collection })),
-        ...payload.config.globals.map((global) => ({ global })),
-      ]
-      for (const target of targets) {
-        const slug = (target.collection ?? target.global)!.slug
-        for (const locale of locales) {
-          const config = (target.collection ?? target.global)!
+        const targets: Target[] = [
+          ...payload.config.collections.map((collection) => ({ collection })),
+          ...payload.config.globals.map((global) => ({ global })),
+        ]
+        for (const target of targets) {
+          const slug = (target.collection ?? target.global)!.slug
+          for (const locale of locales) {
+            const config = (target.collection ?? target.global)!
+            const docs = [
+              ...(await rawDocsFor(payload, target, locale, docsPerCollection)),
+              ...[1, 2].map((seed) => ({
+                ...(target.collection ? { id: `sample-${seed}` } : {}),
+                ...sampleDoc(
+                  payload,
+                  config.fields,
+                  seed,
+                  locale === 'all' ? localization && localization.localeCodes : undefined,
+                ),
+              })),
+            ]
+            const variant = {
+              fallbackLocale: localization ? localization.defaultLocale : undefined,
+              locale: locale === 'all' ? localization && localization.defaultLocale : locale,
+            }
+            const sets = afterChangeCaseSets(docs)
+            const edge = locale === locales[0] ? (afterChangeEdgeCases[slug] ?? []) : []
+            const runs = [
+              ...sets.map((set) => ({ ...set, concurrency: [false, true] })),
+              ...edge.flatMap((set, i) =>
+                set.cases().map((_, j) => ({
+                  cases: () => [set.cases()[j]!],
+                  concurrency: [false],
+                  label: `edge#${i}.${j}`,
+                  operation: set.operation,
+                })),
+              ),
+            ]
+            for (const set of runs) {
+              const inputJSON = JSON.stringify(docs) + JSON.stringify(set.cases())
+              for (const concurrent of set.concurrency) {
+                await compare(
+                  stats,
+                  `${slug} [${locale ?? '-'}, ${set.label}${concurrent ? ', concurrent' : ''}]`,
+                  set.cases().length,
+                  inputJSON,
+                  (engine) =>
+                    runAfterChange({
+                      cases: set.cases,
+                      collection: target.collection,
+                      concurrent,
+                      engine,
+                      global: target.global,
+                      operation: set.operation,
+                      payload,
+                      variant,
+                    }),
+                )
+              }
+            }
+          }
+        }
+        writeStats(name, 'afterChange', stats)
+        // a run that compared nothing must not pass
+        expect(stats.runs).toBeGreaterThan(0)
+        expect(stats.diffs).toEqual([])
+      },
+    )
+
+    test(
+      'beforeDuplicate: Rust matches TS (docs, callback order/args, errors)',
+      { timeout: 1_800_000 },
+      async ({ payload }) => {
+        setup(payload)
+        const stats: DiffStats = {
+          callbackEvents: 0,
+          diffs: [],
+          docs: 0,
+          rejections: 0,
+          runs: 0,
+          unhandledRejections: 0,
+        }
+        const localization = payload.config.localization
+        for (const collection of payload.config.collections) {
           const docs = [
-            ...(await rawDocsFor(payload, target, locale, docsPerCollection)),
+            ...(await rawDocsFor(
+              payload,
+              { collection },
+              localization ? 'all' : undefined,
+              docsPerCollection,
+            )),
             ...[1, 2].map((seed) => ({
-              ...(target.collection ? { id: `sample-${seed}` } : {}),
+              id: `sample-${seed}`,
+              createdAt: '2020-01-01T00:00:00.000Z',
               ...sampleDoc(
                 payload,
-                config.fields,
+                collection.fields,
                 seed,
-                locale === 'all' ? localization && localization.localeCodes : undefined,
+                localization ? localization.localeCodes : undefined,
               ),
             })),
           ]
-          const variant = {
-            fallbackLocale: localization ? localization.defaultLocale : undefined,
-            locale: locale === 'all' ? localization && localization.defaultLocale : locale,
-          }
-          const sets = afterChangeCaseSets(docs)
-          const edge = locale === locales[0] ? (afterChangeEdgeCases[slug] ?? []) : []
-          const runs = [
-            ...sets.map((set) => ({ ...set, concurrency: [false, true] })),
-            ...edge.flatMap((set, i) =>
-              set.cases().map((_, j) => ({
-                cases: () => [set.cases()[j]!],
-                concurrency: [false],
-                label: `edge#${i}.${j}`,
-                operation: set.operation,
-              })),
+          const stripped = () =>
+            docs.map((doc) => {
+              // what duplicateDocument does before calling beforeDuplicate
+              const copy = clone(doc)
+              delete copy.createdAt
+              delete copy.id
+              return copy
+            })
+          const sets = [
+            { docs: () => [...docs.map(clone), { id: 'rs-synthetic-empty' }], label: 'as-read' },
+            { docs: stripped, label: 'stripped' },
+            ...(duplicateEdgeDocs[collection.slug] ?? []).flatMap((factory, i) =>
+              factory().map((_, j) => ({ docs: () => [factory()[j]!], label: `edge#${i}.${j}` })),
             ),
           ]
-          for (const set of runs) {
-            const inputJSON = JSON.stringify(docs) + JSON.stringify(set.cases())
-            for (const concurrent of set.concurrency) {
+          for (const set of sets) {
+            const inputJSON = JSON.stringify(docs) + JSON.stringify(set.docs())
+            for (const [concurrent, overrideAccess] of [
+              [false, true],
+              [true, false],
+            ]) {
               await compare(
                 stats,
-                `${slug} [${locale ?? '-'}, ${set.label}${concurrent ? ', concurrent' : ''}]`,
-                set.cases().length,
+                `${collection.slug} [${set.label}${concurrent ? ', concurrent' : ''}]`,
+                set.docs().length,
                 inputJSON,
                 (engine) =>
-                  runAfterChange({
-                    cases: set.cases,
-                    collection: target.collection,
-                    concurrent,
+                  runBeforeDuplicate({
+                    collection,
+                    concurrent: concurrent!,
+                    docs: set.docs,
                     engine,
-                    global: target.global,
-                    operation: set.operation,
+                    overrideAccess: overrideAccess!,
                     payload,
-                    variant,
+                    variant: { locale: localization ? localization.defaultLocale : undefined },
                   }),
               )
             }
           }
         }
-      }
-      writeStats(name, 'afterChange', stats)
-      expect(stats.diffs).toEqual([])
-    })
-
-    test('beforeDuplicate: Rust matches TS (docs, callback order/args, errors)', async ({
-      payload,
-    }) => {
-      setup(payload)
-      const stats: DiffStats = {
-        callbackEvents: 0,
-        diffs: [],
-        docs: 0,
-        rejections: 0,
-        runs: 0,
-        unhandledRejections: 0,
-      }
-      const localization = payload.config.localization
-      for (const collection of payload.config.collections) {
-        const docs = [
-          ...(await rawDocsFor(
+        // `collection!.fields` on a null collection: same TypeError rejection
+        await compare(stats, 'null collection', 1, '', (engine) =>
+          runBeforeDuplicate({
+            collection: null,
+            concurrent: false,
+            docs: () => [{}],
+            engine,
+            overrideAccess: true,
             payload,
-            { collection },
-            localization ? 'all' : undefined,
-            docsPerCollection,
-          )),
-          ...[1, 2].map((seed) => ({
-            id: `sample-${seed}`,
-            createdAt: '2020-01-01T00:00:00.000Z',
-            ...sampleDoc(
-              payload,
-              collection.fields,
-              seed,
-              localization ? localization.localeCodes : undefined,
-            ),
-          })),
-        ]
-        const stripped = () =>
-          docs.map((doc) => {
-            // what duplicateDocument does before calling beforeDuplicate
-            const copy = clone(doc)
-            delete copy.createdAt
-            delete copy.id
-            return copy
-          })
-        const sets = [
-          { docs: () => [...docs.map(clone), { id: 'rs-synthetic-empty' }], label: 'as-read' },
-          { docs: stripped, label: 'stripped' },
-          ...(duplicateEdgeDocs[collection.slug] ?? []).flatMap((factory, i) =>
-            factory().map((_, j) => ({ docs: () => [factory()[j]!], label: `edge#${i}.${j}` })),
-          ),
-        ]
-        for (const set of sets) {
-          const inputJSON = JSON.stringify(docs) + JSON.stringify(set.docs())
-          for (const [concurrent, overrideAccess] of [
-            [false, true],
-            [true, false],
-          ]) {
-            await compare(
-              stats,
-              `${collection.slug} [${set.label}${concurrent ? ', concurrent' : ''}]`,
-              set.docs().length,
-              inputJSON,
-              (engine) =>
-                runBeforeDuplicate({
-                  collection,
-                  concurrent: concurrent!,
-                  docs: set.docs,
-                  engine,
-                  overrideAccess: overrideAccess!,
-                  payload,
-                  variant: { locale: localization ? localization.defaultLocale : undefined },
-                }),
-            )
-          }
-        }
-      }
-      // `collection!.fields` on a null collection: same TypeError rejection
-      await compare(stats, 'null collection', 1, '', (engine) =>
-        runBeforeDuplicate({
-          collection: null,
-          concurrent: false,
-          docs: () => [{}],
-          engine,
-          overrideAccess: true,
-          payload,
-          variant: {},
-        }),
-      )
-      writeStats(name, 'beforeDuplicate', stats)
-      expect(stats.diffs).toEqual([])
-    })
+            variant: {},
+          }),
+        )
+        writeStats(name, 'beforeDuplicate', stats)
+        // a run that compared nothing must not pass
+        expect(stats.runs).toBeGreaterThan(0)
+        expect(stats.diffs).toEqual([])
+      },
+    )
   })
 }

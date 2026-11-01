@@ -5,8 +5,10 @@
 //! - `@libsql/core/lib-esm/config.js`: `expandConfig`, `isInMemoryConfig`
 //! - `@libsql/client/lib-esm/sqlite3.js`: the URL checks of `_createClient`
 //!
-//! The result is the path handed to `new Database(path)` plus the `intMode`.
+//! The result is the path and options handed to `new Database(path, opts)`
+//! plus the `intMode`.
 
+use crate::conn::OpenOptions;
 use crate::error::{ClientError, Result};
 use crate::value::IntMode;
 
@@ -22,15 +24,24 @@ pub struct ClientConfig {
   pub int_mode_json: String,
   /// Whether `config.syncUrl` is truthy.
   pub sync_url: bool,
-  /// Whether `config.encryptionKey` is truthy.
-  pub encryption_key: bool,
+  /// Whether `config.authToken` is a string, `null` or `undefined`. The
+  /// binding reads `opts.authToken ?? ""` as a string argument, so any other
+  /// value makes `new Database` throw (unless the URL sets `authToken`).
+  pub is_auth_token_valid: bool,
+  /// `config.encryptionKey ?? ""` when it is a string.
+  pub encryption_key: String,
+  /// Whether `config.encryptionKey` is a string, `null` or `undefined`
+  /// (read like `authToken`).
+  pub is_encryption_key_valid: bool,
 }
 
 /// Where and how to open the database.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OpenTarget {
-  /// The path passed to `new Database(path)`.
+  /// The path passed to `new Database(path, opts)`.
   pub path: String,
+  /// The parts of `opts` that reach SQLite.
+  pub options: OpenOptions,
   pub int_mode: IntMode,
 }
 
@@ -284,6 +295,7 @@ pub fn resolve_config(config: &ClientConfig) -> Result<OpenTarget> {
   let is_in_memory_mode = original_scheme == "file" && uri.path == ":memory:" && uri.authority.is_none();
 
   let mut tls: Option<bool> = None;
+  let mut has_url_auth_token = false;
   let mut connection_query_params: Vec<String> = Vec::new();
   for (key, value) in uri.query.iter().flatten() {
     if is_in_memory_mode {
@@ -317,7 +329,7 @@ pub fn resolve_config(config: &ClientConfig) -> Result<OpenTarget> {
           }
           tls = Some(value == "1");
         }
-        "authToken" => {}
+        "authToken" => has_url_auth_token = true,
         _ => {
           return Err(ClientError::libsql(
             format!("Unsupported URL query parameter {}", json_str(key)),
@@ -422,14 +434,19 @@ pub fn resolve_config(config: &ClientConfig) -> Result<OpenTarget> {
       "URL_SCHEME_NOT_SUPPORTED",
     ));
   }
-  if config.encryption_key {
-    return Err(ClientError::libsql(
-      "Encryption (encryptionKey) is not supported by the Rust SQLite runtime",
-      "URL_SCHEME_NOT_SUPPORTED",
-    ));
-  }
   let path = if is_in_memory { format!("file:{path}") } else { path };
-  Ok(OpenTarget { path, int_mode })
+  // `new Database(path, opts)`: the binding reads `authToken`, then
+  // `encryptionKey` as string arguments (neon `cx.argument::<JsString>`).
+  // `expandConfig` drops both (`undefined`) for in-memory URLs.
+  let options = if is_in_memory_mode {
+    OpenOptions::default()
+  } else {
+    if !(has_url_auth_token || config.is_auth_token_valid) || !config.is_encryption_key_valid {
+      return Err(ClientError::Type("failed to downcast any to string".to_string()));
+    }
+    OpenOptions { encryption_key: config.encryption_key.as_bytes().to_vec() }
+  };
+  Ok(OpenTarget { path, options, int_mode })
 }
 
 #[cfg(test)]
@@ -437,7 +454,13 @@ mod tests {
   use super::*;
 
   fn cfg(url: &str) -> ClientConfig {
-    ClientConfig { url: url.to_string(), int_mode_json: "\"number\"".to_string(), ..Default::default() }
+    ClientConfig {
+      url: url.to_string(),
+      int_mode_json: "\"number\"".to_string(),
+      is_auth_token_valid: true,
+      is_encryption_key_valid: true,
+      ..Default::default()
+    }
   }
 
   #[test]

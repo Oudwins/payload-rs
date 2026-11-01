@@ -205,34 +205,7 @@ pub fn with_wrapped<R>(value: &mut JsVal, f: impl FnOnce(&mut JsVal) -> R) -> R 
 
 /// `Number.prototype.toString()` (radix 10).
 pub fn number_to_string(n: f64) -> String {
-  if n.is_nan() {
-    return "NaN".into();
-  }
-  if n == 0.0 {
-    return "0".into();
-  }
-  if n.is_infinite() {
-    return if n > 0.0 { "Infinity".into() } else { "-Infinity".into() };
-  }
-  let sign = if n < 0.0 { "-" } else { "" };
-  // `{:e}` yields the shortest round-tripping digits, like V8.
-  let formatted = format!("{:e}", n.abs());
-  let (mantissa, exp) = formatted.split_once('e').unwrap_or((&formatted, "0"));
-  let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-  let k = digits.len() as i64;
-  let point = exp.parse::<i64>().unwrap_or(0) + 1;
-  let body = if k <= point && point <= 21 {
-    format!("{digits}{}", "0".repeat((point - k) as usize))
-  } else if 0 < point && point <= 21 {
-    format!("{}.{}", &digits[..point as usize], &digits[point as usize..])
-  } else if -6 < point && point <= 0 {
-    format!("0.{}{digits}", "0".repeat((-point) as usize))
-  } else {
-    let e = point - 1;
-    let e = if e >= 0 { format!("+{e}") } else { e.to_string() };
-    if k == 1 { format!("{digits}e{e}") } else { format!("{}.{}e{e}", &digits[..1], &digits[1..]) }
-  };
-  format!("{sign}{body}")
+  payload_engine::js::num_to_js_string(n)
 }
 
 fn quote(s: &str, out: &mut String) {
@@ -253,7 +226,65 @@ fn quote(s: &str, out: &mut String) {
   out.push('"');
 }
 
-fn stringify_into(v: &JsVal, out: &mut String) {
+/// The key under which `JSON.stringify` reached a value (for the circular structure message).
+enum StackKey {
+  Index(usize),
+  Prop(String),
+}
+
+impl StackKey {
+  fn describe(&self) -> String {
+    match self {
+      StackKey::Index(i) => format!("index {i}"),
+      StackKey::Prop(k) => format!("property '{k}'"),
+    }
+  }
+}
+
+fn constructor_name(v: &JsVal) -> &'static str {
+  if matches!(v, JsVal::Arr(_)) { "Array" } else { "Object" }
+}
+
+/// V8's `TypeError` for a circular structure: the cycle from the object that is visited again,
+/// with at most two lines after it, an ellipsis and the last line.
+fn circular_error(stack: &[(StackKey, usize, &'static str)], start: usize, closing: &StackKey) -> EngineError {
+  const PREFIX: usize = 2;
+  const POSTFIX: usize = 1;
+  let mut message = format!("Converting circular structure to JSON\n    --> starting at object with constructor '{}'", stack[start].2);
+  let line = |(key, _, ctor): &(StackKey, usize, &'static str)| format!("\n    |     {} -> object with constructor '{ctor}'", key.describe());
+  let prefix_end = stack.len().min(start + 1 + PREFIX);
+  for entry in &stack[start + 1..prefix_end] {
+    message.push_str(&line(entry));
+  }
+  if stack.len() > prefix_end + POSTFIX {
+    message.push_str("\n    |     ...");
+  }
+  for entry in &stack[prefix_end.max(stack.len().saturating_sub(POSTFIX))..] {
+    message.push_str(&line(entry));
+  }
+  message.push_str(&format!("\n    --- {} closes the circle", closing.describe()));
+  type_error(message)
+}
+
+fn stringify_into(v: &JsVal, key: StackKey, out: &mut String, stack: &mut Vec<(StackKey, usize, &'static str)>) -> Result<()> {
+  match v.typed() {
+    // `Date.prototype.toJSON`: `null` for an invalid date
+    Some(payload_engine::js::TypedValue::Date(ms)) => {
+      match iso_string(ms) {
+        Ok(iso) => quote(&iso, out),
+        Err(_) => out.push_str("null"),
+      }
+      return Ok(());
+    }
+    Some(payload_engine::js::TypedValue::BigInt(_)) => return Err(type_error("Do not know how to serialize a BigInt")),
+    None => {}
+  }
+  if let Some(id) = v.identity() {
+    if let Some(start) = stack.iter().position(|(_, seen, _)| *seen == id) {
+      return Err(circular_error(stack, start, &key));
+    }
+    stack.push((key, id, constructor_name(v)));
+  }
   match v {
     JsVal::Undefined | JsVal::Fn(_) | JsVal::Null => out.push_str("null"),
     JsVal::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
@@ -271,7 +302,7 @@ fn stringify_into(v: &JsVal, out: &mut String) {
         if i > 0 {
           out.push(',');
         }
-        stringify_into(item, out);
+        stringify_into(item, StackKey::Index(i), out, stack)?;
       }
       out.push(']');
     }
@@ -288,21 +319,26 @@ fn stringify_into(v: &JsVal, out: &mut String) {
         first = false;
         quote(k, out);
         out.push(':');
-        stringify_into(item, out);
+        stringify_into(item, StackKey::Prop(k.clone()), out, stack)?;
       }
       out.push('}');
     }
   }
+  if v.identity().is_some() {
+    stack.pop();
+  }
+  Ok(())
 }
 
-/// `JSON.stringify(value)`; `None` where JS returns `undefined`.
-pub fn json_stringify(v: &JsVal) -> Option<String> {
+/// `JSON.stringify(value)`; `Ok(None)` where JS returns `undefined`. `Date`s serialize through
+/// `toJSON`; `bigint`s and circular structures throw V8's `TypeError`s.
+pub fn json_stringify(v: &JsVal) -> Result<Option<String>> {
   if matches!(v, JsVal::Undefined | JsVal::Fn(_)) {
-    return None;
+    return Ok(None);
   }
   let mut out = String::new();
-  stringify_into(v, &mut out);
-  Some(out)
+  stringify_into(v, StackKey::Prop(String::new()), &mut out, &mut Vec::new())?;
+  Ok(Some(out))
 }
 
 /// Days since 1970-01-01 to (year, month, day), proleptic Gregorian.
@@ -407,6 +443,59 @@ mod tests {
     assert_eq!(m.keys().collect::<Vec<_>>(), ["1", "2", "b", "a", "01"]);
   }
 
+  /// Messages recorded from Node 24 (`JSON.stringify` of the same structures).
+  #[test]
+  fn stringify_errors_match_v8() {
+    // builds the structure with a "\0self" marker string, then points the markers at the root
+    let cyclic = |build: &dyn Fn(JsVal) -> JsVal| {
+      let mut heap = crate::heap::Heap::default();
+      let tree = heap.import(&build(JsVal::str("\u{0}self")));
+      // replace every "\0self" string by the root object
+      fn patch(heap: &mut crate::heap::Heap, v: &crate::heap::HVal, root: &crate::heap::HVal) {
+        for (k, item) in heap.entries(v).unwrap() {
+          match &item {
+            crate::heap::HVal::Prim(JsVal::Str(s)) if &**s == "\u{0}self" => heap.set(v, &k, root.clone()).unwrap(),
+            crate::heap::HVal::Node(_) => patch(heap, &item, root),
+            _ => {}
+          }
+        }
+      }
+      patch(&mut heap, &tree, &tree);
+      heap.export(&tree, &mut Default::default())
+    };
+    let message = |v: &JsVal| json_stringify(v).unwrap_err().message;
+    let obj1 = |k: &str, v: JsVal| JsVal::obj(Obj::from([(k.to_string(), v)]));
+
+    let a = cyclic(&|s| obj1("self", s));
+    assert_eq!(
+      message(&a),
+      "Converting circular structure to JSON\n    --> starting at object with constructor 'Object'\n    --- property 'self' closes the circle"
+    );
+    let b = cyclic(&|s| obj1("x", obj1("y", JsVal::arr(vec![JsVal::Num(1.0), obj1("z", s)]))));
+    assert_eq!(
+      message(&b),
+      "Converting circular structure to JSON\n    --> starting at object with constructor 'Object'\n    |     property 'x' -> object with constructor 'Object'\n    |     property 'y' -> object with constructor 'Array'\n    |     index 1 -> object with constructor 'Object'\n    --- property 'z' closes the circle"
+    );
+    let c = cyclic(&|s| obj1("q", obj1("r", obj1("s", obj1("t", obj1("u", s))))));
+    assert_eq!(
+      message(&c),
+      "Converting circular structure to JSON\n    --> starting at object with constructor 'Object'\n    |     property 'q' -> object with constructor 'Object'\n    |     property 'r' -> object with constructor 'Object'\n    |     ...\n    |     property 't' -> object with constructor 'Object'\n    --- property 'u' closes the circle"
+    );
+    let d = cyclic(&|s| JsVal::arr(vec![JsVal::Num(1.0), s]));
+    assert_eq!(
+      message(&d),
+      "Converting circular structure to JSON\n    --> starting at object with constructor 'Array'\n    --- index 1 closes the circle"
+    );
+    let g = cyclic(&|s| obj1("c", obj1("d", obj1("e", obj1("f", s)))));
+    assert_eq!(
+      message(&g),
+      "Converting circular structure to JSON\n    --> starting at object with constructor 'Object'\n    |     property 'c' -> object with constructor 'Object'\n    |     property 'd' -> object with constructor 'Object'\n    |     property 'e' -> object with constructor 'Object'\n    --- property 'f' closes the circle"
+    );
+    assert_eq!(message(&obj1("a", JsVal::bigint("1"))), "Do not know how to serialize a BigInt");
+    let dates = JsVal::obj(Obj::from([("a".to_string(), JsVal::date(f64::NAN)), ("b".to_string(), JsVal::date(0.0))]));
+    assert_eq!(json_stringify(&dates).unwrap().unwrap(), r#"{"a":null,"b":"1970-01-01T00:00:00.000Z"}"#);
+  }
+
   #[test]
   fn stringify() {
     let v = JsVal::obj(obj([
@@ -414,6 +503,6 @@ mod tests {
       ("b", JsVal::Undefined),
       ("c", JsVal::arr(vec![JsVal::Undefined, JsVal::str("x\n\u{1}\"")])),
     ]));
-    assert_eq!(json_stringify(&v).unwrap(), r#"{"a":1.5,"c":[null,"x\n\u0001\""]}"#);
+    assert_eq!(json_stringify(&v).unwrap().unwrap(), r#"{"a":1.5,"c":[null,"x\n\u0001\""]}"#);
   }
 }

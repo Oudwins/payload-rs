@@ -4,11 +4,14 @@
 //! delete or append. See RUST_PORT.md for ownership and porting rules.
 
 pub mod adapter;
-pub mod field_path;
+mod field_path;
+mod heap;
 pub mod js;
 mod small;
 mod traverse;
 pub mod types;
+
+use std::collections::HashMap;
 
 use payload_engine::error::Result;
 use payload_engine::js::JsVal;
@@ -34,13 +37,15 @@ pub struct TransformForWriteArgs<'a> {
 }
 
 /// `transformForWrite`. `data` is mutated in place exactly like the TS
-/// implementation mutates its argument (also when an error is returned).
+/// implementation mutates its argument (also when an error is returned); objects
+/// shared between several places of `data` stay shared (see [`heap`]).
 pub fn transform_for_write(args: TransformForWriteArgs<'_>, data: &mut JsVal) -> Result<RowToInsert> {
   let ctx = Ctx { adapter: args.adapter, base_table_name: args.table_name, now: args.now.unwrap_or_else(js::now_ms) };
   let mut out = RowToInsert::default();
   let mut sh = Shared::default();
+  let root = sh.heap.import(data);
 
-  {
+  let result = {
     let mut lvl = Level {
       arrays: &mut out.arrays,
       arrays_to_push: &mut out.arrays_to_push,
@@ -60,10 +65,14 @@ pub fn transform_for_write(args: TransformForWriteArgs<'_>, data: &mut JsVal) ->
       path: args.path,
       within_array_or_block_locale: None,
     };
-    traverse_fields(&ctx, &mut sh, &mut lvl, traverse_args, data)?;
-  }
+    traverse_fields(&ctx, &mut sh, &mut lvl, traverse_args, &root)
+  };
+  let mut final_values = HashMap::new();
+  *data = sh.heap.export(&root, &mut final_values);
+  result?;
 
   let Shared {
+    heap,
     blocks,
     blocks_to_delete,
     numbers,
@@ -83,6 +92,11 @@ pub fn transform_for_write(args: TransformForWriteArgs<'_>, data: &mut JsVal) ->
   out.selects = selects;
   out.texts = texts;
   out.texts_to_delete = texts_to_delete;
+
+  // Output values reference objects of `data` that later steps of the transform mutated.
+  if heap.needs_fix_up() {
+    out.map_values(&mut |v| heap.fix_up(v, &mut final_values));
+  }
 
   Ok(out)
 }

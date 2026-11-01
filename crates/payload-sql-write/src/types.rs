@@ -8,8 +8,6 @@ use indexmap::{IndexMap, IndexSet};
 use payload_engine::js::{JsVal, Obj};
 use serde_json::{Map, Value as Json, json};
 
-use crate::js::number_to_string;
-
 /// A drizzle `SQL` value produced by the transform instead of plain data.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SqlExpr {
@@ -63,34 +61,38 @@ pub struct RowToInsert {
   pub texts_to_delete: Vec<Obj>,
 }
 
-const RESERVED_KEYS: [&str; 6] = ["$fn", "$num", "$obj", "$ref", "$undefined", "$sql"];
-
-/// Encodes a JS value in the engine JSON format of `serializeForEngine`
-/// (`{"$undefined":true}`, `{"$num":"NaN"}`, `{"$obj":{...}}` escapes).
+/// Encodes a JS value in the engine JSON format of `serializeForEngine` / `deserializeFromEngine`
+/// (`payload_engine::js::encode_value`: `{"$undefined":true}`, `{"$num":"NaN"}`, `{"$date":...}`,
+/// `{"$bigint":"1"}`, `{"$obj":{...}}` escapes). Plain objects whose only key is `$sql` are
+/// escaped too, so they never read as the `{"$sql": [...]}` of an [`SqlExpr`].
 pub fn encode_value(v: &JsVal) -> Json {
-  match v {
-    JsVal::Undefined => json!({ "$undefined": true }),
-    JsVal::Null => Json::Null,
-    JsVal::Bool(b) => Json::Bool(*b),
-    JsVal::Num(n) => {
-      if n.is_finite() {
-        // arbitrary_precision keeps the JS formatting of the number.
-        serde_json::from_str(&number_to_string(*n)).unwrap_or(Json::Null)
-      } else {
-        json!({ "$num": number_to_string(*n) })
+  escape_sql_key(payload_engine::js::encode_value(v))
+}
+
+/// Wraps every plain object `{"$sql": ...}` of an engine-encoded tree in `{"$obj": ...}`.
+fn escape_sql_key(json: Json) -> Json {
+  match json {
+    Json::Array(items) => Json::Array(items.into_iter().map(escape_sql_key).collect()),
+    Json::Object(o) => {
+      let marker = (o.len() == 1).then(|| o.keys().next().cloned()).flatten();
+      match marker.as_deref() {
+        // the escaped object's own entries are user values
+        Some("$obj") => {
+          let inner = o.into_iter().next().map(|(_, v)| v).unwrap_or(Json::Null);
+          let inner = match inner {
+            Json::Object(entries) => Json::Object(entries.into_iter().map(|(k, v)| (k, escape_sql_key(v))).collect()),
+            other => other,
+          };
+          json!({ "$obj": inner })
+        }
+        Some("$undefined" | "$num" | "$date" | "$bigint" | "$fn" | "$ref") => Json::Object(o),
+        _ => {
+          let out: Map<String, Json> = o.into_iter().map(|(k, v)| (k, escape_sql_key(v))).collect();
+          if out.len() == 1 && out.contains_key("$sql") { json!({ "$obj": out }) } else { Json::Object(out) }
+        }
       }
     }
-    JsVal::Str(s) => Json::String(s.to_string()),
-    JsVal::Arr(a) => Json::Array(a.iter().map(encode_value).collect()),
-    JsVal::Obj(o) => {
-      let out: Map<String, Json> = o.iter().map(|(k, v)| (k.clone(), encode_value(v))).collect();
-      if out.len() == 1 && RESERVED_KEYS.contains(&out.keys().next().map(String::as_str).unwrap_or("")) {
-        json!({ "$obj": out })
-      } else {
-        Json::Object(out)
-      }
-    }
-    JsVal::Fn(id) => json!({ "$fn": id }),
+    other => other,
   }
 }
 
@@ -148,7 +150,64 @@ impl NestedRowToInsert {
   }
 }
 
+fn map_row(row: &mut Row, f: &mut dyn FnMut(&JsVal) -> JsVal) {
+  for value in row.values_mut() {
+    if let RowValue::Value(v) = value {
+      *v = f(v);
+    }
+  }
+}
+
+fn map_objs(rows: &mut [Obj], f: &mut dyn FnMut(&JsVal) -> JsVal) {
+  for row in rows {
+    for value in row.values_mut() {
+      *value = f(value);
+    }
+  }
+}
+
+fn map_nested(map: &mut IndexMap<String, Vec<NestedRowToInsert>>, f: &mut dyn FnMut(&JsVal) -> JsVal) {
+  for rows in map.values_mut() {
+    for row in rows {
+      row.map_values(f);
+    }
+  }
+}
+
+impl NestedRowToInsert {
+  /// Replaces every plain value of the row (and of nested rows).
+  pub(crate) fn map_values(&mut self, f: &mut dyn FnMut(&JsVal) -> JsVal) {
+    map_nested(&mut self.arrays, f);
+    map_nested(&mut self.arrays_to_push, f);
+    for row in self.locales.values_mut() {
+      map_row(row, f);
+    }
+    map_row(&mut self.row, f);
+  }
+}
+
 impl RowToInsert {
+  /// Replaces every plain value of the rows and records.
+  pub(crate) fn map_values(&mut self, f: &mut dyn FnMut(&JsVal) -> JsVal) {
+    map_nested(&mut self.arrays, f);
+    map_nested(&mut self.arrays_to_push, f);
+    map_nested(&mut self.blocks, f);
+    for row in self.locales.values_mut() {
+      map_row(row, f);
+    }
+    map_objs(&mut self.numbers, f);
+    map_objs(&mut self.numbers_to_delete, f);
+    map_objs(&mut self.relationships, f);
+    map_objs(&mut self.relationships_to_append, f);
+    map_objs(&mut self.relationships_to_delete, f);
+    map_row(&mut self.row, f);
+    for rows in self.selects.values_mut() {
+      map_objs(rows, f);
+    }
+    map_objs(&mut self.texts, f);
+    map_objs(&mut self.texts_to_delete, f);
+  }
+
   /// Engine JSON with the same keys and key order as the TS `RowToInsert`
   /// (`blocksToDelete` as an array, SQL values as `{"$sql": [...]}`).
   pub fn encode(&self) -> Json {
@@ -168,5 +227,28 @@ impl RowToInsert {
       "texts": encode_objs(&self.texts),
       "textsToDelete": encode_objs(&self.texts_to_delete),
     })
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// User objects shaped like engine markers stay plain objects (`deserializeFromEngine` would
+  /// otherwise turn `{"$bigint":"0"}` into `0n`); typed values use their markers.
+  #[test]
+  fn reserved_keys_are_escaped() {
+    let obj1 = |k: &str, v: JsVal| JsVal::obj(Obj::from([(k.to_string(), v)]));
+    for key in ["$bigint", "$date", "$fn", "$num", "$obj", "$ref", "$undefined", "$sql"] {
+      let user = obj1(key, JsVal::str("0"));
+      assert_eq!(encode_value(&user), json!({ "$obj": { key: "0" } }), "{key}");
+      assert_eq!(encode_value(&obj1("nested", user.clone())), json!({ "nested": { "$obj": { key: "0" } } }), "{key}");
+    }
+    assert_eq!(encode_value(&obj1("$obj", obj1("$sql", JsVal::Num(1.0)))), json!({ "$obj": { "$obj": { "$obj": { "$sql": 1 } } } }));
+    assert_eq!(encode_value(&JsVal::date(0.0)), json!({ "$date": "1970-01-01T00:00:00.000Z" }));
+    assert_eq!(encode_value(&JsVal::date(f64::NAN)), json!({ "$date": null }));
+    assert_eq!(encode_value(&JsVal::bigint("12")), json!({ "$bigint": "12" }));
+    assert_eq!(encode_value(&JsVal::Num(f64::NAN)), json!({ "$num": "NaN" }));
+    assert_eq!(encode_value(&JsVal::Undefined), json!({ "$undefined": true }));
   }
 }

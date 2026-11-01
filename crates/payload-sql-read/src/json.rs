@@ -40,6 +40,54 @@ struct Parser<'a> {
   i: usize,
 }
 
+/// `JSON.parse` sources V8 reports as `"<source>" is not valid JSON`.
+const SPECIAL_SOURCES: [&str; 4] = ["[object Object]", "undefined", "Infinity", "NaN"];
+/// V8 `JsonParser::kMaxContextCharacters` / `kMinOriginalSourceLengthForContext`.
+const MAX_CONTEXT_CHARACTERS: usize = 10;
+const MIN_SOURCE_LENGTH_FOR_CONTEXT: usize = MAX_CONTEXT_CHARACTERS * 2 + 1;
+
+/// The `SyntaxError` messages of V8's `JsonParser` (Node 24) that carry a position.
+#[derive(Clone, Copy)]
+enum Msg {
+  UnexpectedNumber,
+  UnexpectedString,
+  UnterminatedString,
+  ExpectedPropNameOrRBrace,
+  ExpectedCommaOrRBrack,
+  ExpectedCommaOrRBrace,
+  ExpectedColonAfterPropertyName,
+  ExpectedDoubleQuotedPropertyName,
+  ExponentPartMissingNumber,
+  UnterminatedFractionalNumber,
+  NoNumberAfterMinusSign,
+  BadControlCharacter,
+  BadUnicodeEscape,
+  BadEscapedCharacter,
+  UnexpectedNonWhiteSpaceCharacter,
+}
+
+impl Msg {
+  fn text(self) -> &'static str {
+    match self {
+      Msg::UnexpectedNumber => "Unexpected number",
+      Msg::UnexpectedString => "Unexpected string",
+      Msg::UnterminatedString => "Unterminated string",
+      Msg::ExpectedPropNameOrRBrace => "Expected property name or '}'",
+      Msg::ExpectedCommaOrRBrack => "Expected ',' or ']' after array element",
+      Msg::ExpectedCommaOrRBrace => "Expected ',' or '}' after property value",
+      Msg::ExpectedColonAfterPropertyName => "Expected ':' after property name",
+      Msg::ExpectedDoubleQuotedPropertyName => "Expected double-quoted property name",
+      Msg::ExponentPartMissingNumber => "Exponent part is missing a number",
+      Msg::UnterminatedFractionalNumber => "Unterminated fractional number",
+      Msg::NoNumberAfterMinusSign => "No number after minus sign",
+      Msg::BadControlCharacter => "Bad control character in string literal",
+      Msg::BadUnicodeEscape => "Bad Unicode escape",
+      Msg::BadEscapedCharacter => "Bad escaped character",
+      Msg::UnexpectedNonWhiteSpaceCharacter => "Unexpected non-whitespace character after",
+    }
+  }
+}
+
 impl Parser<'_> {
   fn peek(&self) -> Option<u16> {
     self.s.get(self.i).copied()
@@ -51,42 +99,101 @@ impl Parser<'_> {
     }
   }
 
-  fn unexpected(&self) -> EngineError {
-    match self.peek() {
-      None => syntax_error("Unexpected end of JSON input"),
-      Some(c) => syntax_error(format!(
-        "Unexpected token '{}', \"{}\" is not valid JSON",
-        String::from_utf16_lossy(&[c]),
-        String::from_utf16_lossy(&self.s[..self.s.len().min(32)])
-      )),
+  /// `CalculateFileLocation`: 1-based line and column of the cursor (`\r\n`, `\r` and `\n` end
+  /// a line).
+  fn line_column(&self) -> (usize, usize) {
+    let mut line = 1;
+    let mut line_start = 0;
+    let mut k = 0;
+    while k < self.i {
+      if self.s[k] == 0x0d && k + 1 < self.i && self.s[k + 1] == 0x0a {
+        k += 1;
+      }
+      if matches!(self.s[k], 0x0d | 0x0a) {
+        line += 1;
+        line_start = k + 1;
+      }
+      k += 1;
     }
+    (line, 1 + k - line_start)
   }
 
-  fn expect(&mut self, c: u16) -> Result<()> {
+  /// `ReportUnexpectedToken(token, message)` with an explicit message.
+  fn error(&self, msg: Msg) -> EngineError {
+    let (line, column) = self.line_column();
+    let text = msg.text();
+    let joiner = if matches!(msg, Msg::UnexpectedNonWhiteSpaceCharacter) { " JSON at" } else { " in JSON at" };
+    syntax_error(format!("{text}{joiner} position {} (line {line} column {column})", self.i))
+  }
+
+  /// `ReportUnexpectedCharacter(current)`: the message for the token the current character
+  /// starts (`LookUpErrorMessageForJsonToken`).
+  fn unexpected(&self) -> EngineError {
+    let Some(c) = self.peek() else { return syntax_error("Unexpected end of JSON input") };
+    match c {
+      0x22 => return self.error(Msg::UnexpectedString),
+      0x2d | 0x30..=0x39 => return self.error(Msg::UnexpectedNumber),
+      _ => {}
+    }
+    let source = String::from_utf16_lossy(self.s);
+    if SPECIAL_SOURCES.contains(&source.as_str()) {
+      return syntax_error(format!("\"{source}\" is not valid JSON"));
+    }
+    let token = String::from_utf16_lossy(&[c]);
+    let len = self.s.len();
+    let pos = self.i;
+    let slice = |from: usize, to: usize| String::from_utf16_lossy(&self.s[from..to.min(len)]);
+    syntax_error(if len < MIN_SOURCE_LENGTH_FOR_CONTEXT {
+      format!("Unexpected token '{token}', \"{source}\" is not valid JSON")
+    } else if pos < MAX_CONTEXT_CHARACTERS {
+      format!("Unexpected token '{token}', \"{}\"... is not valid JSON", slice(0, pos + MAX_CONTEXT_CHARACTERS))
+    } else if pos < len - MAX_CONTEXT_CHARACTERS {
+      format!(
+        "Unexpected token '{token}', ...\"{}\"... is not valid JSON",
+        slice(pos - MAX_CONTEXT_CHARACTERS, pos + MAX_CONTEXT_CHARACTERS)
+      )
+    } else {
+      format!("Unexpected token '{token}', ...\"{}\" is not valid JSON", slice(pos - MAX_CONTEXT_CHARACTERS, len))
+    })
+  }
+
+  /// `ExpectNext(token, message)`: skips white space, then requires `c`.
+  fn expect_next(&mut self, c: u16, msg: Msg) -> Result<()> {
+    self.ws();
     if self.peek() == Some(c) {
       self.i += 1;
       Ok(())
     } else {
-      Err(self.unexpected())
+      Err(self.error(msg))
     }
   }
 
+  /// `ScanLiteral(word)`; the first character already matched.
   fn literal(&mut self, word: &str, value: Val) -> Result<Val> {
-    for c in word.encode_utf16() {
-      self.expect(c)?;
+    let word: Vec<u16> = word.encode_utf16().collect();
+    let remaining = self.s.len() - self.i;
+    if remaining >= word.len() && self.s[self.i + 1..self.i + word.len()] == word[1..] {
+      self.i += word.len();
+      return Ok(value);
     }
-    Ok(value)
+    self.i += 1;
+    for k in 0..(word.len() - 1).min(remaining - 1) {
+      if word[1 + k] != self.s[self.i] {
+        return Err(self.unexpected());
+      }
+      self.i += 1;
+    }
+    Err(syntax_error("Unexpected end of JSON input"))
   }
 
   fn hex4(&mut self) -> Result<u16> {
     let mut v: u16 = 0;
     for _ in 0..4 {
-      let c = self.peek().ok_or_else(|| self.unexpected())?;
-      let d = match c {
-        0x30..=0x39 => c - 0x30,
-        0x41..=0x46 => c - 0x41 + 10,
-        0x61..=0x66 => c - 0x61 + 10,
-        _ => return Err(self.unexpected()),
+      let d = match self.peek() {
+        Some(c @ 0x30..=0x39) => c - 0x30,
+        Some(c @ 0x41..=0x46) => c - 0x41 + 10,
+        Some(c @ 0x61..=0x66) => c - 0x61 + 10,
+        _ => return Err(self.error(Msg::BadUnicodeEscape)),
       };
       v = v * 16 + d;
       self.i += 1;
@@ -94,17 +201,21 @@ impl Parser<'_> {
     Ok(v)
   }
 
+  /// `ScanJsonString`; the cursor is on the opening quote.
   fn string(&mut self) -> Result<JsStr> {
-    self.expect(0x22)?;
+    self.i += 1;
     let mut out: Vec<u16> = Vec::new();
     loop {
-      let c = self.peek().ok_or_else(|| syntax_error("Unterminated string in JSON"))?;
-      self.i += 1;
+      let Some(c) = self.peek() else { return Err(self.error(Msg::UnterminatedString)) };
       match c {
-        0x22 => return Ok(JsStr::from_units(&out)),
-        0x5c => {
-          let e = self.peek().ok_or_else(|| self.unexpected())?;
+        0x22 => {
           self.i += 1;
+          return Ok(JsStr::from_units(&out));
+        }
+        0x5c => {
+          self.i += 1;
+          // past the end or outside Latin-1: `ReportUnexpectedCharacter`
+          let Some(e) = self.peek().filter(|e| *e <= 0xff) else { return Err(self.unexpected()) };
           match e {
             0x22 | 0x5c | 0x2f => out.push(e),
             0x62 => out.push(0x08),
@@ -113,43 +224,48 @@ impl Parser<'_> {
             0x72 => out.push(0x0d),
             0x74 => out.push(0x09),
             0x75 => {
+              self.i += 1;
               let u = self.hex4()?;
               out.push(u);
+              continue;
             }
-            _ => {
-              self.i -= 1;
-              return Err(self.unexpected());
-            }
+            _ => return Err(self.error(Msg::BadEscapedCharacter)),
           }
+          self.i += 1;
         }
-        c if c < 0x20 => {
-          self.i -= 1;
-          return Err(syntax_error("Bad control character in string literal in JSON"));
+        c if c < 0x20 => return Err(self.error(Msg::BadControlCharacter)),
+        c => {
+          out.push(c);
+          self.i += 1;
         }
-        c => out.push(c),
       }
     }
   }
 
+  /// `ParseJsonNumber`
   fn number(&mut self) -> Result<Val> {
     let start = self.i;
     let digit = |c: Option<u16>| matches!(c, Some(0x30..=0x39));
     if self.peek() == Some(0x2d) {
       self.i += 1;
-    }
-    match self.peek() {
-      Some(0x30) => self.i += 1,
-      Some(0x31..=0x39) => {
-        while digit(self.peek()) {
-          self.i += 1;
-        }
+      if !digit(self.peek()) {
+        return Err(self.error(Msg::NoNumberAfterMinusSign));
       }
-      _ => return Err(self.unexpected()),
+    }
+    if self.peek() == Some(0x30) {
+      self.i += 1;
+      if digit(self.peek()) {
+        return Err(self.error(Msg::UnexpectedNumber));
+      }
+    } else {
+      while digit(self.peek()) {
+        self.i += 1;
+      }
     }
     if self.peek() == Some(0x2e) {
       self.i += 1;
       if !digit(self.peek()) {
-        return Err(self.unexpected());
+        return Err(self.error(Msg::UnterminatedFractionalNumber));
       }
       while digit(self.peek()) {
         self.i += 1;
@@ -161,7 +277,7 @@ impl Parser<'_> {
         self.i += 1;
       }
       if !digit(self.peek()) {
-        return Err(self.unexpected());
+        return Err(self.error(Msg::ExponentPartMissingNumber));
       }
       while digit(self.peek()) {
         self.i += 1;
@@ -170,9 +286,21 @@ impl Parser<'_> {
     let text = String::from_utf16_lossy(&self.s[start..self.i]);
     Ok(Val::Num(text.parse::<f64>().unwrap_or(f64::NAN)))
   }
+
+  /// A property key at the cursor (after `{` or `,`), followed by its `:`.
+  fn property_key(&mut self, missing: Msg) -> Result<JsStr> {
+    self.ws();
+    if self.peek() != Some(0x22) {
+      return Err(self.error(missing));
+    }
+    let key = self.string()?;
+    self.expect_next(0x3a, Msg::ExpectedColonAfterPropertyName)?;
+    Ok(key)
+  }
 }
 
-/// `JSON.parse` over UTF-16 code units (iterative: nesting depth is unbounded, like V8).
+/// `JSON.parse` over UTF-16 code units (iterative: nesting depth is unbounded, like V8), with
+/// V8's `SyntaxError` messages.
 pub fn parse_units(s: &[u16]) -> Result<Val> {
   let mut p = Parser { s, i: 0 };
   let mut stack: Vec<Frame> = Vec::new();
@@ -186,9 +314,7 @@ pub fn parse_units(s: &[u16]) -> Result<Val> {
           p.i += 1;
           Val::from_obj(JsObject::new())
         } else {
-          let key = p.string()?;
-          p.ws();
-          p.expect(0x3a)?;
+          let key = p.property_key(Msg::ExpectedPropNameOrRBrace)?;
           stack.push(Frame::Obj(JsObject::new(), key));
           continue 'value;
         }
@@ -217,7 +343,7 @@ pub fn parse_units(s: &[u16]) -> Result<Val> {
         None => {
           p.ws();
           if p.i != s.len() {
-            return Err(p.unexpected());
+            return Err(p.error(Msg::UnexpectedNonWhiteSpaceCharacter));
           }
           return Ok(value);
         }
@@ -234,7 +360,7 @@ pub fn parse_units(s: &[u16]) -> Result<Val> {
               let Some(Frame::Arr(items)) = stack.pop() else { unreachable!() };
               value = Val::new_arr(items);
             }
-            _ => return Err(p.unexpected()),
+            _ => return Err(p.error(Msg::ExpectedCommaOrRBrack)),
           }
         }
         Some(Frame::Obj(obj, key)) => {
@@ -243,10 +369,7 @@ pub fn parse_units(s: &[u16]) -> Result<Val> {
           match p.peek() {
             Some(0x2c) => {
               p.i += 1;
-              p.ws();
-              *key = p.string()?;
-              p.ws();
-              p.expect(0x3a)?;
+              *key = p.property_key(Msg::ExpectedDoubleQuotedPropertyName)?;
               continue 'value;
             }
             Some(0x7d) => {
@@ -254,7 +377,7 @@ pub fn parse_units(s: &[u16]) -> Result<Val> {
               let Some(Frame::Obj(obj, _)) = stack.pop() else { unreachable!() };
               value = Val::from_obj(obj);
             }
-            _ => return Err(p.unexpected()),
+            _ => return Err(p.error(Msg::ExpectedCommaOrRBrace)),
           }
         }
       }

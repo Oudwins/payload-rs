@@ -430,11 +430,12 @@ const probeValues = (): unknown[] => [
   '__proto__',
 ]
 
-const reservedKeys = new Set(['$fn', '$num', '$obj', '$ref', '$undefined'])
+const reservedKeys = new Set(['$bigint', '$date', '$fn', '$num', '$obj', '$ref', '$undefined'])
 
 /**
- * A where / sort value in the engine serialization format (`decode_graph`). Unlike
- * `serializeForEngine` this keeps own `__proto__` keys (JSON.parse creates them).
+ * A where / sort value in the engine serialization format (`decode_graph_typed`: `Date`s and
+ * `bigint`s keep their type). Unlike `serializeForEngine` this keeps own `__proto__` keys
+ * (JSON.parse creates them).
  */
 const encodeValue = (v: unknown): unknown => {
   if (v === undefined || typeof v === 'symbol' || typeof v === 'function') {
@@ -442,6 +443,12 @@ const encodeValue = (v: unknown): unknown => {
   }
   if (typeof v === 'number') {
     return Number.isFinite(v) ? v : { $num: String(v) }
+  }
+  if (typeof v === 'bigint') {
+    return { $bigint: String(v) }
+  }
+  if (v instanceof Date) {
+    return { $date: Number.isNaN(v.getTime()) ? null : v.toISOString() }
   }
   if (v === null || typeof v !== 'object') {
     return v
@@ -478,6 +485,10 @@ const encodeParam = (v: unknown): unknown => {
   }
   if (v === undefined) {
     return { $undefined: true }
+  }
+  if (v instanceof Date) {
+    // `valueToSql` binds `valueOf()`; SQLite stores `NaN` as NULL
+    return Number.isNaN(v.getTime()) ? null : v.getTime()
   }
   return { $unbindable: true }
 }
@@ -600,7 +611,9 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
       }
     }
 
-    const mined = JSON.parse(fs.readFileSync(path.join(dirname, 'fixtures', 'mined.json'), 'utf8')) as {
+    const mined = JSON.parse(
+      fs.readFileSync(path.join(dirname, 'fixtures', 'mined.json'), 'utf8'),
+    ) as {
       sorts: { value: unknown }[]
       wheres: { value: Where }[]
     }
@@ -633,8 +646,9 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
       const out: Case[] = []
       const fieldNames = new Set(fields.map((f: any) => f.name))
       fieldNames.add('id')
-      const add = (c: { limit?: number; page?: number } & Omit<Case, 'collection' | 'kind' | 'limit' | 'page'>) =>
-        out.push({ collection: slug, kind, limit: 0, page: 1, ...c })
+      const add = (
+        c: { limit?: number; page?: number } & Omit<Case, 'collection' | 'kind' | 'limit' | 'page'>,
+      ) => out.push({ collection: slug, kind, limit: 0, page: 1, ...c })
 
       const paths = collectPaths(payload, fields, '', 0, localeCodes)
       paths.push({ field: { name: 'id', type: 'number' } as any, path: 'id' })
@@ -658,12 +672,20 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
             values.push(pick(datePool))
           }
           for (const value of values) {
-            add({ locale: nextLocale(), source: 'generated', where: { [p]: { [operator]: value } } })
+            add({
+              locale: nextLocale(),
+              source: 'generated',
+              where: { [p]: { [operator]: value } },
+            })
           }
         }
         // probes: one random probe value per path for a few operators
         for (const operator of ['equals', 'contains', 'in', 'like', 'not_equals']) {
-          add({ locale: nextLocale(), source: 'probe', where: { [p]: { [operator]: pick(probeValues()) } } })
+          add({
+            locale: nextLocale(),
+            source: 'probe',
+            where: { [p]: { [operator]: pick(probeValues()) } },
+          })
         }
         if (
           ['relationship', 'upload'].includes(field.type) &&
@@ -675,7 +697,11 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
             ['checkbox', 'number', 'text'].includes(f.type),
           ) as any
           for (const operator of ['contains', 'equals', 'not_equals']) {
-            add({ locale: nextLocale(), source: 'nested-relationship', where: { [p]: { [operator]: {} } } })
+            add({
+              locale: nextLocale(),
+              source: 'nested-relationship',
+              where: { [p]: { [operator]: {} } },
+            })
             if (sub) {
               add({
                 locale: nextLocale(),
@@ -709,11 +735,43 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
           add({ source: 'review-probe', where: { [p]: { contains: undefined } } })
           add({ source: 'review-probe', where: { [p]: { in: [undefined, '2020-01-01'] } } })
           add({ source: 'review-probe', where: { [p]: { greater_than: '2021-06-15T08:30:00' } } })
+          // `Date` instances (local API) are converted with `toISOString()`
+          add({
+            source: 'review-probe',
+            where: { [p]: { equals: new Date('2021-06-15T12:30:00.000Z') } },
+          })
+          add({
+            source: 'review-probe',
+            where: {
+              [p]: { in: [new Date('2020-01-01T00:00:00.000Z'), '2023-12-31T23:59:59.000Z'] },
+            },
+          })
+          add({ source: 'review-probe', where: { [p]: { greater_than_equal: new Date(0) } } })
+          add({ source: 'review-probe', where: { [p]: { equals: new Date(Number.NaN) } } })
         }
         if (field.type === 'text' || p === 'id') {
           for (const value of probeValues().slice(0, 4)) {
             add({ source: 'review-probe', where: { [p]: { equals: value } } })
           }
+          // a `Date` on a non-date field binds its time value
+          add({ source: 'review-probe', where: { [p]: { equals: new Date(5) } } })
+          add({ source: 'review-probe', where: { [p]: { like: new Date(Number.NaN) } } })
+          // `String(object)` throws when the object's own `toString` is not callable
+          add({
+            source: 'review-probe',
+            where: { [p]: { contains: JSON.parse('{"toString":1}') } },
+          })
+          add({ source: 'review-probe', where: { [p]: { contains: JSON.parse('{"valueOf":1}') } } })
+        }
+        if (field.type === 'relationship' || field.type === 'upload') {
+          add({
+            source: 'review-probe',
+            where: { [p]: { equals: JSON.parse('{"toString":"x"}') } },
+          })
+          add({
+            source: 'review-probe',
+            where: { [p]: { in: JSON.parse('[1,{"toString":null}]') } },
+          })
         }
       }
       add({ limit: -1, page: 2, source: 'review-probe' })
@@ -816,10 +874,19 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
           continue
         }
         const target = payload.collections[field.collection]?.config
-        const targetField = target?.flattenedFields.find((f: any) => f.name === field.on.split('.')[0])
+        const targetField = target?.flattenedFields.find(
+          (f: any) => f.name === field.on.split('.')[0],
+        )
         const rawSql = `"${toSnakeCase(slug)}"."id"`
         const isPoly = Array.isArray((field as any).targetField?.relationTo)
-        const extra = [undefined, ...[0, 1, 2].map(() => ({ [pick(collectPaths(payload, target!.flattenedFields, '', 0, localeCodes)).path]: { equals: pick(edgeValues) } }))]
+        const extra = [
+          undefined,
+          ...[0, 1, 2].map(() => ({
+            [pick(collectPaths(payload, target!.flattenedFields, '', 0, localeCodes)).path]: {
+              equals: pick(edgeValues),
+            },
+          })),
+        ]
         for (const userWhere of extra) {
           for (const operator of ['equals', 'in', 'not_equals', 'contains']) {
             cases.push({
@@ -842,7 +909,12 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
 
       // findDistinct
       const distinctPaths = collectPaths(payload, config.flattenedFields, '', 0, localeCodes)
-        .filter((p) => !['array', 'blocks', 'group', 'join', 'json', 'richText', 'tab'].includes(p.field.type) || p.path.includes('.'))
+        .filter(
+          (p) =>
+            !['array', 'blocks', 'group', 'join', 'json', 'richText', 'tab'].includes(
+              p.field.type,
+            ) || p.path.includes('.'),
+        )
         .map((p) => p.path)
       for (const field of distinctPaths) {
         for (let i = 0; i < 3; i++) {
@@ -855,7 +927,12 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
             page: pick([1, 1, 2]),
             sort: pick([undefined, undefined, field, `-${field}`, 'id', pick(distinctPaths)]),
             source: 'distinct',
-            where: pick([undefined, undefined, { id: { exists: true } }, { [pick(distinctPaths)]: { exists: true } }]),
+            where: pick([
+              undefined,
+              undefined,
+              { id: { exists: true } },
+              { [pick(distinctPaths)]: { exists: true } },
+            ]),
           })
         }
       }
@@ -874,7 +951,13 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
       c.w = encode(c.where)
 
       if (c.kind === 'find' || c.kind === 'versions') {
-        c.sql = captureBuildQuery({ fields, locale: c.locale, sort: clone(sortArg), tableName, where: c.where })
+        c.sql = captureBuildQuery({
+          fields,
+          locale: c.locale,
+          sort: clone(sortArg),
+          tableName,
+          where: c.where,
+        })
         try {
           const res = isVersions
             ? await payload.db.findVersions({
@@ -905,8 +988,16 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
         if (i % 3 === 0) {
           try {
             const res = isVersions
-              ? await payload.db.countVersions({ collection: c.collection as CollectionSlug, locale: c.locale, where: c.where as Where } as any)
-              : await payload.db.count({ collection: c.collection as CollectionSlug, locale: c.locale, where: c.where as Where })
+              ? await payload.db.countVersions({
+                  collection: c.collection as CollectionSlug,
+                  locale: c.locale,
+                  where: c.where as Where,
+                } as any)
+              : await payload.db.count({
+                  collection: c.collection as CollectionSlug,
+                  locale: c.locale,
+                  where: c.where as Where,
+                })
             c.count = { totalDocs: res.totalDocs }
           } catch (e) {
             c.count = { error: toError(e) }
@@ -929,7 +1020,9 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
         }
       } else if (c.kind === 'raw') {
         const raw = rawConstraint(sql.raw(c.rawSql!))
-        let where: Where = { [c.rawOn!]: { [c.rawOperator!]: c.rawPoly ? { relationTo: c.rawPoly, value: raw } : raw } } as any
+        let where: Where = {
+          [c.rawOn!]: { [c.rawOperator!]: c.rawPoly ? { relationTo: c.rawPoly, value: raw } : raw },
+        } as any
         if (c.where && Object.keys(c.where).length) {
           where = { and: [where, c.where as Where] }
         }
@@ -961,7 +1054,10 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
             sort: clone(c.sort) as any,
             where: c.where as Where,
           } as any)
-          c.result = { totalDocs: res.totalDocs, values: res.values.map((v: any) => v[c.field!] ?? null) }
+          c.result = {
+            totalDocs: res.totalDocs,
+            values: res.values.map((v: any) => v[c.field!] ?? null),
+          }
         } catch (e) {
           errors++
           c.result = { error: toError(e) }
@@ -1053,8 +1149,14 @@ test.suite(`rs query corpus: ${suite}`, { config: configPath, resetBetweenTests:
     }
     const out = path.join(dirname, 'fixtures')
     fs.mkdirSync(out, { recursive: true })
-    fs.writeFileSync(path.join(out, `${suite}.json.gz`), zlib.gzipSync(JSON.stringify(fixture), { level: 9 }))
-    fs.writeFileSync(path.join(out, `${suite}.db.gz`), zlib.gzipSync(fs.readFileSync(dbPath), { level: 9 }))
+    fs.writeFileSync(
+      path.join(out, `${suite}.json.gz`),
+      zlib.gzipSync(JSON.stringify(fixture), { level: 9 }),
+    )
+    fs.writeFileSync(
+      path.join(out, `${suite}.db.gz`),
+      zlib.gzipSync(fs.readFileSync(dbPath), { level: 9 }),
+    )
     // eslint-disable-next-line no-console
     console.log(`[rs-query] ${suite}: ${cases.length} cases, ${errors} TS errors`)
     expect(cases.length).toBeGreaterThan(0)

@@ -47,7 +47,13 @@ export type EngineError = {
 
 type Req = { t?: (key: string, options?: Record<string, unknown>) => string } | undefined
 
-/** Shape-compatible copy of drizzle-orm's `DrizzleQueryError` (drizzle-orm is not resolvable here). */
+/** Constructor of drizzle-orm's `DrizzleQueryError` (`new DrizzleQueryError(query, params, cause)`). */
+export type DrizzleQueryErrorClass = new (query: string, params: unknown[], cause?: Error) => Error
+
+/**
+ * Shape-compatible copy of drizzle-orm's `DrizzleQueryError`, used when the adapter did not pass
+ * the class of the drizzle-orm copy its session runs on (`withRustEngine(obj, { DrizzleQueryError })`).
+ */
 export class DrizzleQueryError extends Error {
   // `declare`: own properties are created by the constructor in drizzle's order
   declare cause: unknown
@@ -68,10 +74,13 @@ export class DrizzleQueryError extends Error {
 
 export const rebuildError = ({
   decode,
+  DrizzleQueryErrorClass = DrizzleQueryError,
   error,
   req,
 }: {
   decode: (value: unknown) => unknown
+  /** The class upstream's drizzle session throws (identity matters for `instanceof`). */
+  DrizzleQueryErrorClass?: DrizzleQueryErrorClass
   error: EngineError
   req: Req
 }): Error => {
@@ -86,7 +95,7 @@ export const rebuildError = ({
       )
     }
     case 'DrizzleQueryError':
-      return new DrizzleQueryError(
+      return new DrizzleQueryErrorClass(
         error.query!,
         decode(error.params) as unknown[],
         error.cause ? toJsError(error.cause) : undefined,

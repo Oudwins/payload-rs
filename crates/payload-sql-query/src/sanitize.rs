@@ -6,7 +6,7 @@ use payload_engine::js::JsVal;
 
 use crate::adapter::{QueryAdapter, read_undefined};
 use crate::columns::{PolyColumn, is_polymorphic_relationship};
-use crate::js_ops::{date_parse, js_number, js_string, parse_float, parse_int, to_iso_string, uuid_validate};
+use crate::js_ops::{date_parse, js_number, js_number_checked, js_string_checked, parse_float, parse_int, to_iso_string, uuid_validate};
 use crate::paths::field_type;
 use crate::sql::{Expr, Operand, Sql};
 use crate::where_val::WhereVal;
@@ -40,6 +40,9 @@ fn num(n: f64) -> JsVal {
 
 /// `convertDateToISO(item)`; `Ok(None)` mirrors `undefined`.
 fn convert_date_to_iso(item: &JsVal) -> Result<Option<JsVal>> {
+  if let Some(ms) = item.as_date() {
+    return Ok(Some(JsVal::str(to_iso_string(ms)?)));
+  }
   Ok(match item {
     JsVal::Undefined => None,
     JsVal::Str(s) => {
@@ -85,7 +88,7 @@ pub fn sanitize_query_value(adapter: &QueryAdapter, args: SanitizeArgs) -> Resul
           all.push(v.clone());
         } else {
           all.push(v.clone());
-          all.push(JsVal::str(js_string(v)));
+          all.push(JsVal::str(js_string_checked(v)?));
         }
       }
       formatted_value = JsVal::arr(all);
@@ -173,7 +176,8 @@ pub fn sanitize_query_value(adapter: &QueryAdapter, args: SanitizeArgs) -> Resul
             return Ok(Some(SanitizedQueryValue { columns: None, operator, value: raw(&sql) }));
           }
           let inner = val.get("value");
-          let value = if id_type.as_deref() == Some("number") { num(js_number(inner)) } else { JsVal::str(js_string(inner)) };
+          let value =
+            if id_type.as_deref() == Some("number") { num(js_number_checked(inner)?) } else { JsVal::str(js_string_checked(inner)?) };
           return Ok(Some(SanitizedQueryValue { columns: None, operator, value: Operand::Val(value) }));
         }
 
@@ -184,12 +188,12 @@ pub fn sanitize_query_value(adapter: &QueryAdapter, args: SanitizeArgs) -> Resul
             let mut values = Vec::new();
             for each in items {
               let v = if id_type == "number" {
-                let n = js_number(each);
+                let n = js_number_checked(each)?;
                 if n.is_nan() { JsVal::Null } else { num(n) }
               } else if id_type == "uuid" && !uuid_validate(each) {
                 JsVal::Null
               } else {
-                JsVal::str(js_string(each))
+                JsVal::str(js_string_checked(each)?)
               };
               if v.truthy() {
                 values.push(v);
@@ -197,13 +201,13 @@ pub fn sanitize_query_value(adapter: &QueryAdapter, args: SanitizeArgs) -> Resul
             }
             JsVal::arr(values)
           } else if id_type == "number" {
-            let n = js_number(val);
+            let n = js_number_checked(val)?;
             if n.is_nan() {
               continue;
             }
             num(n)
           } else {
-            JsVal::str(js_string(val))
+            JsVal::str(js_string_checked(val)?)
           };
           out.push(SanitizedColumn { raw_column: raw_column.clone(), value });
         }
@@ -215,19 +219,21 @@ pub fn sanitize_query_value(adapter: &QueryAdapter, args: SanitizeArgs) -> Resul
         formatted_value = JsVal::arr(
           items
             .iter()
-            .map(|v| match id_type.as_deref() {
-              Some("number") => num(js_number(v)),
-              Some("text") => JsVal::str(js_string(v)),
-              _ => v.clone(),
+            .map(|v| {
+              Ok(match id_type.as_deref() {
+                Some("number") => num(js_number_checked(v)?),
+                Some("text") => JsVal::str(js_string_checked(v)?),
+                _ => v.clone(),
+              })
             })
-            .collect(),
+            .collect::<Result<_>>()?,
         );
       } else {
         if id_type.as_deref() == Some("number") {
-          formatted_value = num(js_number(val));
+          formatted_value = num(js_number_checked(val)?);
         }
         if id_type.as_deref() == Some("text") {
-          formatted_value = JsVal::str(js_string(val));
+          formatted_value = JsVal::str(js_string_checked(val)?);
         }
       }
     }
@@ -249,9 +255,11 @@ pub fn sanitize_query_value(adapter: &QueryAdapter, args: SanitizeArgs) -> Resul
 
   if operator == "contains" {
     if let Some(items) = formatted_value.as_arr().filter(|_| has_many && matches!(ftype, "number" | "text")) {
-      formatted_value = JsVal::arr(items.iter().map(|v| JsVal::str(format!("%{}%", js_string(v)))).collect());
+      formatted_value = JsVal::arr(
+        items.iter().map(|v| Ok(JsVal::str(format!("%{}%", js_string_checked(v)?)))).collect::<Result<_>>()?,
+      );
     } else if formatted_value.as_arr().is_none() {
-      formatted_value = JsVal::str(format!("%{}%", js_string(&formatted_value)));
+      formatted_value = JsVal::str(format!("%{}%", js_string_checked(&formatted_value)?));
     }
   }
 

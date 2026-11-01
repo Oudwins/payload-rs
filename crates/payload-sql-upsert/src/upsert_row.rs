@@ -632,7 +632,7 @@ fn write_rows(
           rt.col_ref("parent")?,
           rt.col_ref("order")?
         ),
-        vec![crate::value::map_to_driver(rt.column_type("parent"), &parent_id), JsVal::Num(1.0)],
+        vec![crate::value::map_to_driver(rt.column_type("parent"), &parent_id)?, JsVal::Num(1.0)],
       );
       let max_rows = exec.query_columns(rt, &["order"], &max_q)?;
       let mut max_order = JsVal::Num(0.0);
@@ -647,6 +647,8 @@ fn write_rows(
         // maxOrder + index + 1 (JS `+`: string concatenation when maxOrder is a string)
         let order = match &max_order {
           JsVal::Str(s) => JsVal::str(format!("{s}{index}1")),
+          // a blob (`ArrayBuffer`) concatenates as its `toString()`
+          JsVal::Arr(_) => JsVal::str(format!("[object ArrayBuffer]{index}1")),
           other => JsVal::Num(js_to_number(other) + index as f64 + 1.0),
         };
         js_insert(row, "order", order);

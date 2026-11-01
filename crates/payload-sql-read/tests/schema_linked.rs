@@ -160,6 +160,7 @@ fn replay_schema_linked_fixtures() {
   for f in failures.iter().take(30) {
     println!("MISMATCH {f}");
   }
+  assert!(total > 0, "compared zero schema-linked calls");
   assert!(failures.is_empty(), "{} of {total} schema-linked calls differ", failures.len());
   if recorded_nonzero > 0 {
     assert!(nonzero_index_lookups > 0, "no call resolved a block table name through a non-zero schema index");

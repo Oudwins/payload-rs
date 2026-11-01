@@ -119,5 +119,6 @@ fn replay_fixtures() {
   for f in failures.iter().take(30) {
     println!("MISMATCH {f}");
   }
+  assert!(total > 0, "compared zero fixture calls (RS_READ_ONLY={only:?} matched no fixture with calls)");
   assert!(failures.is_empty(), "{} of {total} fixture calls differ", failures.len());
 }

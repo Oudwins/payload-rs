@@ -43,5 +43,6 @@ fn date_parse_matches_v8_in_every_recorded_zone() {
     println!("dates [{zone}]: {}/{} match", cases.len() - zone_failures, cases.len());
   }
   println!("dates TOTAL: {}/{total} match", total - failures.len());
+  assert!(total > 0, "dates.json has no cases");
   assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

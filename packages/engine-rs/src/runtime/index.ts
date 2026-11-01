@@ -12,6 +12,8 @@ import type { AfterReadArgs } from '../../../payload/src/fields/hooks/afterRead/
 import type { JsonObject } from '../../../payload/src/types/index.js'
 
 import { MissingEditorProp } from '../../../payload/src/errors/MissingEditorProp.js'
+import { getDefaultValue } from '../../../payload/src/fields/getDefaultValue.js'
+import { getFieldPaths } from '../../../payload/src/fields/getFieldPaths.js'
 import { relationshipPopulationPromise } from '../../../payload/src/fields/hooks/afterRead/relationshipPopulationPromise.js'
 import { virtualFieldPopulationPromise } from '../../../payload/src/fields/hooks/afterRead/virtualFieldPopulationPromise.js'
 import { deepCopyObjectSimple } from '../../../payload/src/utilities/deepCopyObject.js'
@@ -86,6 +88,7 @@ const HIDDEN = 2
 const NAME_IS_ID = 4
 const NAME_TRUTHY = 8
 const HAS_DEFAULT_VALUE = 16
+const HOOKED = 32
 const FLATTEN_LOCALES = 1
 const SHOW_HIDDEN_FIELDS = 2
 const FIELD_DEPTH_ZERO = 4
@@ -110,11 +113,35 @@ const leafRun = (
   bits: number,
   select: any,
   fieldPromises: Promise<void>[],
+  // Only for runs with hooked leaves: the `afterReadArgs` array, the traversal's `blockData`,
+  // `fields` (= `siblingFields`) and parent paths.
+  c?: any[],
+  blockData?: unknown,
+  fields?: any[],
+  parentIndexPath?: string,
+  parentPath?: string,
+  parentSchemaPath?: string,
 ): number => {
   for (let i = start; i < end; i++) {
     const fieldFlags = flags[i]!
     let promise: Promise<void>
-    if (fieldFlags & AFFECTS_DATA) {
+    if (fieldFlags & HOOKED) {
+      promise = hookedLeaf(
+        c!,
+        blockData,
+        fields![i],
+        i,
+        parentIndexPath!,
+        parentPath!,
+        parentSchemaPath!,
+        siblingDoc,
+        fields,
+        keys[i]!,
+        fieldFlags,
+        bits,
+        select,
+      )
+    } else if (fieldFlags & AFFECTS_DATA) {
       try {
         if (plainLeafField(siblingDoc, keys[i]!, fieldFlags, bits, select)) {
           return i
@@ -208,6 +235,85 @@ const leafEpilogue = (
   (fieldFlags & HAS_DEFAULT_VALUE) !== 0
 
 /**
+ * `promise()` of a plain leaf data field with `afterRead` hooks (crates/payload-core-runtime
+ * config.rs `hooked_leaf`, flag `HOOKED`), as one `async` function with the body of
+ * `afterRead/promise.ts` for such a field: `getFieldPaths`, the hidden check,
+ * `stripUnselectedFields` and hoisting reads, the hooks loop (each hook awaited, args object
+ * literal in the same key order) and the default value step (`getDefaultValue` awaited).
+ * `leafRun` calls it where `traverseFields` calls `promise()` and pushes its promise. `c` is the
+ * `afterReadArgs` array.
+ */
+const hookedLeaf = async (
+  c: any[],
+  blockData: unknown,
+  field: any,
+  fieldIndex: number,
+  parentIndexPath: string,
+  parentPath: string,
+  parentSchemaPath: string,
+  siblingDoc: any,
+  siblingFields: unknown,
+  key: PropertyKey,
+  fieldFlags: number,
+  bits: number,
+  select: any,
+): Promise<void> => {
+  const { indexPath, path, schemaPath } = getFieldPaths({
+    field,
+    index: fieldIndex,
+    parentIndexPath,
+    parentPath,
+    parentSchemaPath,
+  })
+  const [segments, schemaSegments, indexSegments] = pathSegments(path, schemaPath, indexPath)
+  const state = leafPrologue(siblingDoc, key, fieldFlags, bits, select)
+  if (state === LEAF_UNSELECTED) {
+    return
+  }
+  if ('hooks' in field && field.hooks?.afterRead) {
+    for (const hook of field.hooks.afterRead) {
+      const hookedValue = await hook({
+        blockData,
+        collection: c[ARG_COLLECTION],
+        context: c[ARG_CONTEXT],
+        currentDepth: c[ARG_CURRENT_DEPTH],
+        data: c[ARG_DOC],
+        depth: c[ARG_DEPTH],
+        draft: c[ARG_DRAFT],
+        field,
+        findMany: c[ARG_FIND_MANY],
+        global: c[ARG_GLOBAL],
+        indexPath: indexSegments,
+        operation: 'read',
+        originalDoc: c[ARG_DOC],
+        overrideAccess: c[ARG_OVERRIDE_ACCESS],
+        path: segments,
+        req: c[ARG_REQ],
+        schemaPath: schemaSegments,
+        showHiddenFields: c[ARG_SHOW_HIDDEN_FIELDS],
+        siblingData: siblingDoc,
+        siblingFields,
+        value: siblingDoc[key],
+      })
+
+      if (hookedValue !== undefined) {
+        siblingDoc[key] = hookedValue
+      }
+    }
+  }
+  if (leafEpilogue(siblingDoc, key, fieldFlags, state === LEAF_REMOVED)) {
+    const req = c[ARG_REQ]
+    siblingDoc[key] = await getDefaultValue({
+      defaultValue: field.defaultValue,
+      locale: c[ARG_LOCALE],
+      req,
+      user: req.user,
+      value: siblingDoc[key],
+    })
+  }
+}
+
+/**
  * The array field's `rows.forEach((row, rowIndex) => traverseFields({ siblingDoc: row || {},
  * ... }))` when every field of the rows is a plain leaf (iterating like `forEach`: `length` read
  * once, holes skipped). Returns -1, or `[rowIndex, fieldIndex, siblingDoc, length]` where a
@@ -223,12 +329,36 @@ const leafRows = (
   bits: number,
   select: any,
   fieldPromises: Promise<void>[],
+  // Only for rows with hooked leaves: the `afterReadArgs` array, `blockData`, `field.fields`
+  // and the array field's `path` / `schemaPath`.
+  c?: any[],
+  blockData?: unknown,
+  fields?: any[],
+  path?: string,
+  schemaPath?: string,
 ): [number, number, unknown, number] | -1 => {
   const len = length < 0 ? rows.length : length
   for (let rowIndex = startRow; rowIndex < len; rowIndex++) {
     if (rowIndex in rows) {
       const siblingDoc = rows[rowIndex] || {}
-      const stopped = leafRun(siblingDoc, keys, flags, 0, end, bits, select, fieldPromises)
+      const stopped = c
+        ? leafRun(
+            siblingDoc,
+            keys,
+            flags,
+            0,
+            end,
+            bits,
+            select,
+            fieldPromises,
+            c,
+            blockData,
+            fields,
+            '',
+            path + '.' + rowIndex,
+            schemaPath,
+          )
+        : leafRun(siblingDoc, keys, flags, 0, end, bits, select, fieldPromises)
       if (stopped >= 0) {
         return [rowIndex, stopped, siblingDoc, len]
       }
@@ -487,73 +617,6 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
     // The args object literal of `promise.ts` (field afterRead hooks), same key order and shape.
     getBlockSelect,
     getSelectMode,
-    /**
-     * One iteration of a plain leaf's hooks loop: `const hookedValue = await hook({ ...args,
-     * value: siblingDoc[field.name] }); if (hookedValue !== undefined) siblingDoc[field.name] =
-     * hookedValue`. The assignment runs in the await's reaction job, right where the TS
-     * continuation runs it, before the engine task resumes.
-     */
-    callLeafHook: (
-      token: number,
-      hook: (args: unknown) => unknown,
-      c: any[],
-      blockData: unknown,
-      field: unknown,
-      existingSegments: undefined | unknown[][],
-      path: string,
-      schemaPath: string,
-      indexPath: string,
-      siblingData: any,
-      siblingFields: unknown,
-      key: PropertyKey,
-    ) => {
-      const segments = existingSegments ?? pathSegments(path, schemaPath, indexPath)
-      void reflectApply(
-        promiseThen,
-        promiseResolve(
-          hook({
-            blockData,
-            collection: c[ARG_COLLECTION],
-            context: c[ARG_CONTEXT],
-            currentDepth: c[ARG_CURRENT_DEPTH],
-            data: c[ARG_DOC],
-            depth: c[ARG_DEPTH],
-            draft: c[ARG_DRAFT],
-            field,
-            findMany: c[ARG_FIND_MANY],
-            global: c[ARG_GLOBAL],
-            indexPath: segments[2],
-            operation: 'read',
-            originalDoc: c[ARG_DOC],
-            overrideAccess: c[ARG_OVERRIDE_ACCESS],
-            path: segments[0],
-            req: c[ARG_REQ],
-            schemaPath: segments[1],
-            showHiddenFields: c[ARG_SHOW_HIDDEN_FIELDS],
-            siblingData,
-            siblingFields,
-            value: siblingData[key],
-          }),
-        ),
-        [
-          (hookedValue: unknown) => {
-            try {
-              if (hookedValue !== undefined) {
-                siblingData[key] = hookedValue
-              }
-            } catch (error) {
-              resume(token, false, error)
-              return
-            }
-            resume(token, true, undefined)
-          },
-          (error: unknown) => resume(token, false, error),
-        ],
-      )
-      return segments
-    },
-    leafEpilogue,
-    leafPrologue,
     leafRows,
     leafRun,
     /** `fieldPromises.push(promise())` for a field whose `promise()` completed synchronously. */

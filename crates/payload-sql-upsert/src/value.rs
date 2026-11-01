@@ -9,7 +9,7 @@
 //! mistaken for an internal marker.
 
 use payload_engine::error::{EngineError, Result};
-use payload_engine::js::{JsVal, Obj};
+use payload_engine::js::{JsVal, Obj, TypedValue};
 use payload_sql_write::js::{js_insert, json_stringify, to_js_string};
 use payload_sql_write::{Row, RowValue};
 use rusqlite::types::{Value, ValueRef};
@@ -41,24 +41,34 @@ pub fn obj_into_row(obj: Obj) -> Row {
 /// drizzle sqlite column `mapToDriverValue` for the drizzle column built from
 /// a RawColumn `type` (packages/drizzle/src/sqlite/schema/buildDrizzleTable.ts).
 /// `null` bypasses the encoder (drizzle `Param` handling).
-pub fn map_to_driver(column_type: &str, value: &JsVal) -> JsVal {
+pub fn map_to_driver(column_type: &str, value: &JsVal) -> Result<JsVal> {
   if value.is_null() {
-    return JsVal::Null;
+    return Ok(JsVal::Null);
   }
-  match column_type {
+  Ok(match column_type {
     // integer(name, { mode: 'boolean' }): `value ? 1 : 0`
     "boolean" => JsVal::Num(if value.truthy() { 1.0 } else { 0.0 }),
     // text(name, { mode: 'json' }): `JSON.stringify(value)`
-    "jsonb" | "geometry" => json_stringify(value).map(JsVal::str).unwrap_or(JsVal::Undefined),
+    "jsonb" | "geometry" => json_stringify(value)?.map(JsVal::str).unwrap_or(JsVal::Undefined),
     // numeric(name, { mode: 'number' }): `String(value)`
     "numeric" => JsVal::str(to_js_string(value)),
     _ => value.clone(),
-  }
+  })
 }
 
 /// A bound SQLite value: `@libsql/client` `valueToSql` followed by libsql's
 /// native binding (every JS number is bound as a double, booleans become numbers).
 pub fn bind_value(value: &JsVal) -> Result<Value> {
+  match value.typed() {
+    // `value.valueOf()`; an invalid date binds `NaN`, which SQLite stores as NULL
+    Some(TypedValue::Date(ms)) => return Ok(Value::Real(ms)),
+    Some(TypedValue::BigInt(decimal)) => {
+      return decimal.parse::<i64>().map(Value::Integer).map_err(|_| {
+        EngineError::new("RangeError", "bigint is too large to be represented as a 64-bit integer and passed as argument")
+      });
+    }
+    None => {}
+  }
   Ok(match value {
     JsVal::Null => Value::Null,
     JsVal::Bool(b) => Value::Real(if *b { 1.0 } else { 0.0 }),
@@ -101,9 +111,11 @@ pub fn map_from_driver(column_type: &str, value: JsVal) -> Result<JsVal> {
   }
   Ok(match column_type {
     "boolean" => JsVal::Bool(js_to_number(&value) == 1.0),
+    // `JSON.parse(value)` stringifies non-string driver values first (a blob is an `ArrayBuffer`)
     "jsonb" | "geometry" => match &value {
       JsVal::Str(s) => json_parse(s)?,
-      other => other.clone(),
+      JsVal::Arr(_) => json_parse("[object ArrayBuffer]")?,
+      other => json_parse(&to_js_string(other))?,
     },
     "numeric" => match &value {
       JsVal::Num(_) => value,
@@ -113,10 +125,13 @@ pub fn map_from_driver(column_type: &str, value: JsVal) -> Result<JsVal> {
   })
 }
 
-/// `JSON.parse(text)` with JS object key order (integer-like keys first).
+/// `JSON.parse(text)` with JS object key order (integer-like keys first) and V8's
+/// `SyntaxError` messages.
 pub fn json_parse(text: &str) -> Result<JsVal> {
+  payload_sql_read::json::parse(text)?;
+  // Valid JSON; serde only rejects escaped lone surrogates, which a `JsVal` string cannot hold.
   let json: serde_json::Value = serde_json::from_str(text)
-    .map_err(|e| EngineError::new("SyntaxError", format!("JSON.parse failed: {e}")))?;
+    .map_err(|e| EngineError::internal(format!("JSON text with lone surrogates is not supported: {e}")))?;
   Ok(from_json_js(&json))
 }
 
@@ -134,21 +149,41 @@ fn from_json_js(json: &serde_json::Value) -> JsVal {
   }
 }
 
-/// JS `Number(value)` for primitives.
+/// JS `Number(value)` for driver values (a blob is an `ArrayBuffer`: `NaN`).
 pub fn js_to_number(value: &JsVal) -> f64 {
   match value {
     JsVal::Null => 0.0,
     JsVal::Undefined => f64::NAN,
     JsVal::Bool(b) => f64::from(u8::from(*b)),
     JsVal::Num(n) => *n,
-    JsVal::Str(s) => {
-      let t = s.trim();
-      if t.is_empty() {
-        0.0
-      } else {
-        t.parse::<f64>().unwrap_or(f64::NAN)
-      }
-    }
+    JsVal::Str(s) => payload_sql_read::jsops::string_to_number(s),
     _ => f64::NAN,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// drizzle `numeric` / `boolean` decoders use `Number(value)`; jsonb columns `JSON.parse`.
+  #[test]
+  fn driver_values_decode_like_js() {
+    let num = |s: &str| match map_from_driver("numeric", JsVal::str(s)).unwrap() {
+      JsVal::Num(n) => n,
+      other => panic!("{other:?}"),
+    };
+    assert_eq!(num("0x10"), 16.0);
+    assert_eq!(num("0b101"), 5.0);
+    assert_eq!(num(" \u{FEFF}12\n"), 12.0);
+    assert_eq!(num(""), 0.0);
+    assert!(num("inf").is_nan());
+    assert!(num("\u{85}1").is_nan());
+    assert_eq!(num("0x20000000000003"), 9007199254740996.0);
+    assert!(matches!(map_from_driver("boolean", JsVal::str("0x1")).unwrap(), JsVal::Bool(true)));
+    let err = map_from_driver("jsonb", JsVal::str("{\"a\" 1}")).unwrap_err();
+    assert_eq!((err.name.as_str(), err.message.as_str()), ("SyntaxError", "Expected ':' after property name in JSON at position 5 (line 1 column 6)"));
+    let err = map_from_driver("jsonb", JsVal::Num(f64::INFINITY)).unwrap_err();
+    assert_eq!(err.message, "\"Infinity\" is not valid JSON");
+    assert!(matches!(map_from_driver("jsonb", JsVal::Num(5.0)).unwrap(), JsVal::Num(n) if n == 5.0));
   }
 }

@@ -55,7 +55,7 @@ import {
   insert,
 } from '@payloadcms/drizzle/sqlite'
 import { withRustEngine } from '@payloadcms/engine-rs'
-import { like, notLike } from 'drizzle-orm'
+import { DrizzleQueryError, like, notLike } from 'drizzle-orm'
 import { createDatabaseAdapter, defaultBeginTransaction, findMigrationDir } from 'payload'
 import { fileURLToPath } from 'url'
 
@@ -249,7 +249,10 @@ export function sqliteAdapter(args: Args): DatabaseAdapterObj<SQLiteAdapter> {
     init: adapter,
   }
 
-  return process.env.PAYLOAD_ENGINE === 'rs' ? withRustEngine(adapterObj) : adapterObj
+  // DrizzleQueryError: the class of the drizzle-orm copy `connect`'s drizzle session throws
+  return process.env.PAYLOAD_ENGINE === 'rs'
+    ? withRustEngine(adapterObj, { DrizzleQueryError })
+    : adapterObj
 }
 
 export type {

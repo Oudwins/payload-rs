@@ -1,6 +1,6 @@
 //! Regression tests for the phase-A review probes of the query builder, against the schema of
 //! the `rsq-uuid` corpus (`test/__rs/query/fixtures/rsq-uuid.json.gz`, recorded by
-//! `test/__rs/query/query.int.spec.ts` with `RS_QUERY_SUITE=rsq-uuid`; skipped when missing).
+//! `test/__rs/query/query.int.spec.ts` with `RS_QUERY_SUITE=rsq-uuid`; fails when missing).
 //! The same probes are in the corpus as `review-probe` cases, so the differential test also checks
 //! them against the TS adapter; these tests pin the exact SQL.
 
@@ -42,10 +42,7 @@ struct Env {
 
 fn env() -> Option<Env> {
   let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test/__rs/query/fixtures/rsq-uuid.json.gz");
-  if !path.exists() {
-    eprintln!("{} is missing, skipping", path.display());
-    return None;
-  }
+  assert!(path.exists(), "{} is missing (record it with RS_QUERY_SUITE=rsq-uuid)", path.display());
   let out = Command::new("gzip").arg("-dc").arg(&path).output().expect("run gzip");
   let fixture: Json = serde_json::from_slice(&out.stdout).expect("parse fixture");
   let root = decode_graph(&fixture["graph"]).expect("decode graph");
@@ -191,4 +188,42 @@ fn js_error_messages() {
 
   let err = env.where_sql(path_op("title", "like", JsVal::Null)).unwrap_err();
   assert_eq!(err.message, "Cannot read properties of null (reading 'split')");
+}
+
+/// `Date` instances (local API) are converted with `toISOString()` on date fields (`RangeError`
+/// for an invalid date) and bind their time value elsewhere, like libsql's `valueToSql`.
+#[test]
+fn typed_dates_convert_like_ts() {
+  let Some(env) = env() else { return };
+  let q = env.where_sql(path_op("publishedAt", "equals", JsVal::date(1_623_760_200_000.0))).unwrap();
+  assert_eq!(q.sql, "\"posts\".\"published_at\" = ?");
+  assert_eq!(q.params, vec![SqlValue::Text("2021-06-15T12:30:00.000Z".into())]);
+
+  let q = env
+    .where_sql(path_op("publishedAt", "in", JsVal::arr(vec![JsVal::date(0.0), JsVal::str("2020-01-01")])))
+    .unwrap();
+  assert_eq!(
+    q.params,
+    vec![SqlValue::Text("1970-01-01T00:00:00.000Z".into()), SqlValue::Text("2020-01-01T00:00:00.000Z".into())]
+  );
+
+  let err = env.where_sql(path_op("publishedAt", "equals", JsVal::date(f64::NAN))).unwrap_err();
+  assert_eq!((err.name.as_str(), err.message.as_str()), ("RangeError", "Invalid time value"));
+
+  let q = env.where_sql(path_op("title", "equals", JsVal::date(5.0))).unwrap();
+  assert_eq!(q.params, vec![SqlValue::Real(5.0)]);
+}
+
+/// `String(object)` / `Number(object)` throw when the object's own `toString` is not callable.
+#[test]
+fn objects_without_primitive_value_throw() {
+  let Some(env) = env() else { return };
+  let bad = obj(vec![("toString", JsVal::Num(1.0))]);
+  let err = env.where_sql(path_op("title", "contains", bad.clone())).unwrap_err();
+  assert_eq!((err.name.as_str(), err.message.as_str()), ("TypeError", "Cannot convert object to primitive value"));
+  let err = env.where_sql(path_op("category", "equals", bad.clone())).unwrap_err();
+  assert_eq!(err.message, "Cannot convert object to primitive value");
+  // an own non-callable `valueOf` falls back to the inherited `toString`
+  let q = env.where_sql(path_op("title", "contains", obj(vec![("valueOf", JsVal::Num(1.0))]))).unwrap();
+  assert_eq!(q.params, vec![SqlValue::Text("%[object Object]%".into())]);
 }

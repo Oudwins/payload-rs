@@ -146,6 +146,15 @@ impl DrizzleSchema {
     self.tables.get(ts_name).ok_or_else(|| EngineError::internal(format!("Table \"{ts_name}\" not found in schema")))
   }
 
+  /// The column named `column` (database name) of the table whose database name is `table`.
+  pub fn column_by_db_name(&self, table: &str, column: &str) -> Option<&Column> {
+    let table = match self.tables.get(table) {
+      Some(t) if t.db_name == table => t,
+      _ => self.tables.values().find(|t| t.db_name == table)?,
+    };
+    table.columns.values().find(|c| c.name == column)
+  }
+
   /// Payload's `adapter.tables[name]` existence check.
   pub fn has_table(&self, ts_name: &str) -> bool {
     self.tables.contains_key(ts_name)

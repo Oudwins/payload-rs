@@ -4,8 +4,22 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+# Query validation (`validateQueryPaths`, `validateSearchParam`, `validateSortQuery`,
+# `sanitizeJoinQuery` and the where/path utilities they call) runs on the payload-core-runtime
+# (strategy B: Rust drives the live JS objects and calls through Node-API on the JS thread), see
+# `src/live`. The remaining synchronous select/sort/version utilities work on decoded values.
+
 [dependencies]
 indexmap.workspace = true
+napi = { version = "3", features = ["napi10"] }
+payload-core-runtime = { path = "../payload-core-runtime" }
 payload-engine = { path = "../payload-engine" }
 payload-sql-read = { path = "../payload-sql-read" }
 serde_json.workspace = true
+
+[dev-dependencies]
+napi-derive = "3"
+
+[[example]]
+name = "query_addon"
+crate-type = ["cdylib"]

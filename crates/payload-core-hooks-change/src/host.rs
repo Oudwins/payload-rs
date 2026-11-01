@@ -36,6 +36,9 @@ pub struct ChangeHost {
   pub in_op: Persist,
   pub parse_float: Persist,
   pub object_prototype: Persist,
+  /// `traverseFields` over a run of leaf fields: pushes upstream's `promise()` of each (a JS
+  /// `async` function) into the traversal's promises array.
+  pub before_change_leaves: Persist,
 }
 
 thread_local! {
@@ -70,6 +73,7 @@ pub fn install(obj: Local) -> JsResult<()> {
     in_op: f("inOp")?,
     parse_float: f("parseFloat")?,
     object_prototype: f("objectPrototype")?,
+    before_change_leaves: f("beforeChangeLeaves")?,
   };
   HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
   Ok(())

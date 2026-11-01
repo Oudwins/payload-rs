@@ -1,11 +1,11 @@
 //! JS builtins used by `transform/read`: `Number()`, `Number.parseFloat`,
 //! `Number.prototype.toString`, `JSON.parse` (dates live in [`crate::date`]).
 
-use payload_engine::error::Result;
+use payload_engine::error::{EngineError, Result};
 use payload_engine::js::JsVal;
 
 use crate::jsstr::JsStr;
-use crate::value::Val;
+use crate::value::{Builtin, Val};
 
 /// JS `WhiteSpace` and `LineTerminator` (what `String.prototype.trim` removes).
 pub fn is_js_whitespace(c: char) -> bool {
@@ -18,39 +18,7 @@ pub fn is_js_whitespace(c: char) -> bool {
 
 /// `Number.prototype.toString()` (radix 10), e.g. `1e21`, `1.5e-7`, `0.000001`.
 pub fn num_to_string(n: f64) -> String {
-  if n.is_nan() {
-    return "NaN".into();
-  }
-  if n == 0.0 {
-    return "0".into();
-  }
-  if n.is_infinite() {
-    return if n > 0.0 { "Infinity".into() } else { "-Infinity".into() };
-  }
-  let sign = if n < 0.0 { "-" } else { "" };
-  // `{:e}` yields the shortest round-tripping digits, e.g. `1.2345e-7`.
-  let sci = format!("{:e}", n.abs());
-  let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
-  let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-  let exp: i32 = exp.parse().unwrap_or(0);
-  let k = digits.len() as i32;
-  let n_exp = exp + 1;
-  let body = if k <= n_exp && n_exp <= 21 {
-    format!("{digits}{}", "0".repeat((n_exp - k) as usize))
-  } else if 0 < n_exp && n_exp <= 21 {
-    format!("{}.{}", &digits[..n_exp as usize], &digits[n_exp as usize..])
-  } else if -6 < n_exp && n_exp <= 0 {
-    format!("0.{}{digits}", "0".repeat((-n_exp) as usize))
-  } else {
-    let e = n_exp - 1;
-    let e_sign = if e >= 0 { "+" } else { "-" };
-    if k == 1 {
-      format!("{digits}e{e_sign}{}", e.abs())
-    } else {
-      format!("{}.{}e{e_sign}{}", &digits[..1], &digits[1..], e.abs())
-    }
-  };
-  format!("{sign}{body}")
+  payload_engine::js::num_to_js_string(n)
 }
 
 /// Length of the longest prefix of `s` matching `StrDecimalLiteral`
@@ -116,28 +84,48 @@ fn parse_decimal(s: &str) -> f64 {
   normalized.parse::<f64>().unwrap_or(f64::NAN)
 }
 
-fn parse_radix(digits: &str, radix: u32) -> f64 {
-  if digits.is_empty() {
-    return f64::NAN;
-  }
-  let mut acc: u128 = 0;
-  let mut approx = 0f64;
-  let mut overflow = false;
+/// Digits of a power-of-two radix (2, 8, 16) as V8's `InternalStringToIntDouble` converts them:
+/// exact up to 53 significant bits, then rounded half to even (`Infinity` past the double range).
+pub fn pow2_radix_to_f64(digits: &str, radix: u32) -> f64 {
+  let bits_per_digit = radix.trailing_zeros();
+  let mut mantissa: u64 = 0;
+  let mut significant_bits = 0usize;
+  let mut round_bit = false;
+  let mut sticky = false;
+  let mut dropped = 0usize;
   for c in digits.chars() {
-    let Some(d) = c.to_digit(radix) else { return f64::NAN };
-    if !overflow {
-      match acc.checked_mul(radix as u128).and_then(|v| v.checked_add(d as u128)) {
-        Some(v) => acc = v,
-        None => {
-          overflow = true;
-          approx = acc as f64 * radix as f64 + d as f64;
-        }
+    let d = c.to_digit(radix).unwrap_or(0);
+    for shift in (0..bits_per_digit).rev() {
+      let bit = (d >> shift) & 1 == 1;
+      if significant_bits == 0 && !bit {
+        continue;
       }
-    } else {
-      approx = approx * radix as f64 + d as f64;
+      if significant_bits < 53 {
+        mantissa = (mantissa << 1) | u64::from(bit);
+        significant_bits += 1;
+      } else {
+        if dropped == 0 {
+          round_bit = bit;
+        } else {
+          sticky |= bit;
+        }
+        dropped += 1;
+      }
     }
   }
-  if overflow { approx } else { acc as f64 }
+  if round_bit && (sticky || mantissa & 1 == 1) {
+    mantissa += 1;
+  }
+  let exponent = i32::try_from(dropped).unwrap_or(i32::MAX);
+  // `mantissa` may be 2^53 after rounding up; still exact as a double.
+  if exponent > 1100 { f64::INFINITY } else { mantissa as f64 * 2f64.powi(exponent) }
+}
+
+fn parse_radix(digits: &str, radix: u32) -> f64 {
+  if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+    return f64::NAN;
+  }
+  pow2_radix_to_f64(digits, radix)
 }
 
 /// `StringToNumber` (`Number(string)`).
@@ -180,9 +168,10 @@ pub fn parse_float(s: &str) -> f64 {
   parse_decimal(&t[..len])
 }
 
-/// `Number(value)` (`ToNumber`).
-pub fn to_number(v: &Val) -> f64 {
-  match v {
+/// `Number(value)` (`ToNumber`), including the `TypeError` of an object that cannot be
+/// converted to a primitive (own non-callable `valueOf` and `toString`).
+pub fn to_number(v: &Val) -> Result<f64> {
+  Ok(match v {
     Val::Undefined => f64::NAN,
     Val::Null => 0.0,
     Val::Bool(b) => f64::from(u8::from(*b)),
@@ -190,13 +179,66 @@ pub fn to_number(v: &Val) -> f64 {
     // Lone surrogates are never white space or digits, so U+FFFD gives the same result.
     Val::Str(s) => string_to_number(&s.to_lossy()),
     Val::Date(t) => *t,
-    Val::Arr(_) => string_to_number(&v.to_js_string()),
-    Val::Obj(_) | Val::Builtin(_) => f64::NAN,
+    Val::Arr(_) | Val::Obj(_) => to_number(&ordinary_to_primitive(v, false, &mut Vec::new())?)?,
+    // `Object.prototype` and built-in functions print `[object Object]` / their source.
+    Val::Builtin(_) => f64::NAN,
+  })
+}
+
+/// `OrdinaryToPrimitive(value, hint)` for an array or ordinary object (`hint_string` for
+/// `String(value)`, otherwise `number`). Methods are looked up through the prototype chain: the
+/// inherited `valueOf` returns the object itself, the inherited `toString` gives
+/// `"[object Object]"` (arrays: `join(',')`). Data rows can only shadow them with non-callable
+/// values, which are skipped; `TypeError` when neither yields a primitive.
+fn ordinary_to_primitive(v: &Val, hint_string: bool, joining: &mut Vec<usize>) -> Result<Val> {
+  let order = if hint_string { ["toString", "valueOf"] } else { ["valueOf", "toString"] };
+  for name in order {
+    match crate::props::get(v, name)? {
+      Val::Builtin(Builtin::Function("toString")) => {
+        return Ok(match v {
+          Val::Arr(a) => Val::Str(JsStr::from(array_join(a, joining)?)),
+          _ => Val::str("[object Object]"),
+        });
+      }
+      // `valueOf` (and any other built-in reachable here) returns an object
+      Val::Builtin(Builtin::Function(_)) => {}
+      // not callable
+      _ => {}
+    }
   }
+  Err(EngineError::new("TypeError", "Cannot convert object to primitive value"))
+}
+
+/// `Array.prototype.join(',')`: nullish items print as `''`, as does a reference to an array
+/// that is already being joined (V8's cycle detection).
+fn array_join(a: &crate::value::ArrRef, joining: &mut Vec<usize>) -> Result<String> {
+  let id = std::rc::Rc::as_ptr(a) as *const () as usize;
+  if joining.contains(&id) {
+    return Ok(String::new());
+  }
+  joining.push(id);
+  let items = a.borrow().to_vec();
+  let mut out = String::new();
+  for (i, item) in items.iter().enumerate() {
+    if i > 0 {
+      out.push(',');
+    }
+    let part = match item {
+      Val::Undefined | Val::Null => String::new(),
+      Val::Arr(_) | Val::Obj(_) => ordinary_to_primitive(item, true, joining)?.to_js_string(),
+      other => other.to_js_string(),
+    };
+    out.push_str(&part);
+  }
+  joining.pop();
+  Ok(out)
 }
 
 /// `Number(value)` for a config value.
 pub fn js_to_number(v: &JsVal) -> f64 {
+  if let Some(t) = v.as_date() {
+    return t;
+  }
   match v {
     JsVal::Undefined | JsVal::Fn(_) | JsVal::Obj(_) => f64::NAN,
     JsVal::Null => 0.0,

@@ -39,9 +39,6 @@ pub struct Host {
   pub path_segments: Persist,
   pub push_settled: Persist,
   pub leaf_rows: Persist,
-  pub leaf_prologue: Persist,
-  pub leaf_epilogue: Persist,
-  pub call_leaf_hook: Persist,
 }
 
 thread_local! {
@@ -82,9 +79,6 @@ pub fn install(obj: Local) -> JsResult<()> {
     path_segments: f("pathSegments")?,
     push_settled: f("pushSettled")?,
     leaf_rows: f("leafRows")?,
-    leaf_prologue: f("leafPrologue")?,
-    leaf_epilogue: f("leafEpilogue")?,
-    call_leaf_hook: f("callLeafHook")?,
   };
   HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
   Ok(())

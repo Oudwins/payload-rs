@@ -10,7 +10,7 @@ use std::cell::OnceCell;
 use std::rc::Rc;
 
 use napi::sys;
-use payload_core_runtime::config::{self, BlockCandidate, BlockDesc, FieldDesc, FieldsDesc, format_number};
+use payload_core_runtime::config::{self, BlockCandidate, BlockDesc, FieldDesc, FieldsDesc, Kind, format_number};
 use payload_core_runtime::executor::{await_js, spawn};
 use payload_core_runtime::host::{self, call_host, host};
 use payload_core_runtime::js::{self, JsResult, Local, Thrown, Type, Val};
@@ -34,6 +34,10 @@ fn mutant(_id: &str) -> bool {
 
 /// The arguments that are the same for every `traverseFields`/`promise` call of one run.
 struct Ctx {
+  /// `[id, collection, context, data, doc, global, onFieldAccess, operation, overrideAccess, req]`
+  /// for the host's `beforeValidateLeaves` (indices `C_*` in
+  /// packages/engine-rs/src/runtime/beforeValidate/index.ts).
+  arr: Val,
   id: Val,
   collection: Val,
   context: Val,
@@ -72,6 +76,50 @@ impl Trav {
   }
 }
 
+impl Ctx {
+  #[allow(clippy::too_many_arguments)]
+  fn new(
+    id: Val,
+    collection: Val,
+    context: Val,
+    data: Val,
+    doc: Val,
+    global: Val,
+    on_field_access: Val,
+    operation: Val,
+    override_access: Val,
+    req: Val,
+  ) -> JsResult<Ctx> {
+    let arr = js::array();
+    let values = [&id, &collection, &context, &data, &doc, &global, &on_field_access, &operation, &override_access, &req];
+    for (i, v) in values.into_iter().enumerate() {
+      js::set_element(arr, i as u32, v.get())?;
+    }
+    Ok(Ctx {
+      arr: Val::from_local(arr)?,
+      id,
+      collection,
+      context,
+      data,
+      doc,
+      global,
+      on_field_access,
+      operation,
+      override_access,
+      req,
+    })
+  }
+}
+
+/// A field whose `promise()` traverses no subfields and calls no editor hooks: the host runs it
+/// (`beforeValidateLeaves`, upstream's `promise.ts` body for such a field).
+fn is_leaf(kind: Kind) -> bool {
+  !matches!(
+    kind,
+    Kind::Array | Kind::Blocks | Kind::Collapsible | Kind::Group | Kind::RichText | Kind::Row | Kind::Tab | Kind::Tabs
+  )
+}
+
 /// `beforeValidate(args)` (index.ts): returns the promise of `args.data` (same identity).
 pub fn before_validate(args: Local) -> JsResult<Local> {
   let args = Val::from_local(args)?;
@@ -98,18 +146,18 @@ pub fn before_validate(args: Local) -> JsResult<Local> {
     } else {
       host::get_optional(global.get(), js::key("fields"))?
     };
-    let ctx = Rc::new(Ctx {
+    let ctx = Rc::new(Ctx::new(
       id,
       collection,
       context,
-      data: data.clone(),
-      doc: doc.clone(),
+      data.clone(),
+      doc.clone(),
       global,
       on_field_access,
       operation,
       override_access,
       req,
-    });
+    )?);
     let trav = Rc::new(Trav {
       block_data: Val::Undefined,
       doc_for_hooks,
@@ -155,7 +203,7 @@ pub fn traverse_fields_entry(args: Local) -> JsResult<Local> {
     let req = g("req")?;
     let sibling_data = g("siblingData")?;
     let sibling_doc = g("siblingDoc")?;
-    let ctx = Rc::new(Ctx {
+    let ctx = Rc::new(Ctx::new(
       id,
       collection,
       context,
@@ -166,7 +214,7 @@ pub fn traverse_fields_entry(args: Local) -> JsResult<Local> {
       operation,
       override_access,
       req,
-    });
+    )?);
     let trav = Rc::new(Trav {
       block_data,
       doc_for_hooks,
@@ -209,6 +257,41 @@ async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
   let mut order: Vec<(usize, &Rc<FieldDesc>)> = items.iter().enumerate().collect();
   if mutant("M3") {
     order.reverse();
+  } else if t.tab_fields.is_none() && items.iter().any(|f| is_leaf(f.kind)) {
+    // Runs of leaves go to the host in one call each (upstream's `promise()` per field, pushed
+    // in order); other fields are ported tasks.
+    let mut index = 0;
+    while index < items.len() {
+      if !is_leaf(items[index].kind) {
+        let desc = &items[index];
+        let promise = spawn(field_promise(ctx.clone(), t.clone(), desc.clone(), Val::Ref(desc.node.clone()), index))?;
+        js::push(promises, promise)?;
+        index += 1;
+        continue;
+      }
+      let start = index;
+      while index < items.len() && is_leaf(items[index].kind) {
+        index += 1;
+      }
+      call_host(
+        &bh.before_validate_leaves,
+        &[
+          ctx.arr.get(),
+          t.fields.node.get(),
+          js::number(start as f64),
+          js::number(index as f64),
+          promises,
+          t.block_data.get(),
+          t.doc_for_hooks.get(),
+          js::string(&t.parent_index_path),
+          js::string(&t.parent_path),
+          js::string(&t.parent_schema_path),
+          t.sibling_data.get(),
+          t.sibling_doc.get(),
+        ],
+      )?;
+    }
+    order.clear();
   }
   for (index, desc) in order {
     let field_js = match &t.tab_fields {

@@ -464,5 +464,6 @@ fn builtins_match_v8() {
   for f in failures.iter().take(if verbose() { 50 } else { 10 }) {
     eprintln!("{f}");
   }
+  assert!(total > 50_000, "fixture has too few builtin cases: {total}");
   assert!(failures.is_empty());
 }

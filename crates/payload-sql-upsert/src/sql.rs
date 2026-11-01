@@ -146,9 +146,9 @@ pub fn sqlite_code_name(extended: i32) -> String {
   name.to_string()
 }
 
-/// `"name"` (drizzle sqlite `escapeName`, no inner escaping).
+/// drizzle sqlite `escapeName`: `"name"` with embedded `"` doubled.
 pub fn ident(name: &str) -> String {
-  format!("\"{name}\"")
+  format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 /// A drizzle table view over a [`RawTable`] from the raw schema.
@@ -211,7 +211,7 @@ pub fn require_table<'a>(schema: &'a RawSchema, name: &str) -> Result<Table<'a>>
 
 /// `eq(table[key], value)`
 pub fn eq(t: Table<'_>, key: &str, value: &JsVal) -> Result<SqlFragment> {
-  Ok(SqlFragment::new(format!("{} = ?", t.col_ref(key)?), vec![map_to_driver(t.column_type(key), value)]))
+  Ok(SqlFragment::new(format!("{} = ?", t.col_ref(key)?), vec![map_to_driver(t.column_type(key), value)?]))
 }
 
 /// `isNull(table[key])`
@@ -228,7 +228,7 @@ pub fn in_array(t: Table<'_>, key: &str, values: &[JsVal]) -> Result<SqlFragment
   let placeholders = vec!["?"; values.len()].join(", ");
   Ok(SqlFragment::new(
     format!("{} in ({placeholders})", t.col_ref(key)?),
-    values.iter().map(|v| map_to_driver(ty, v)).collect(),
+    values.iter().map(|v| map_to_driver(ty, v)).collect::<Result<Vec<_>>>()?,
   ))
 }
 
@@ -262,19 +262,19 @@ pub fn or(conditions: Vec<SqlFragment>) -> Option<SqlFragment> {
 
 /// Renders a value for a column: drizzle `SQL` values are inlined, plain
 /// values become a `Param` encoded by the column.
-fn value_chunk(t: Table<'_>, key: &str, value: &RowValue) -> SqlFragment {
-  match value {
+fn value_chunk(t: Table<'_>, key: &str, value: &RowValue) -> Result<SqlFragment> {
+  Ok(match value {
     RowValue::Sql(SqlExpr::Raw(raw)) => SqlFragment::raw(raw.as_str()),
     // sql`ST_GeomFromGeoJSON(${json})`: a plain interpolated value
     RowValue::Sql(SqlExpr::GeomFromGeoJson(json)) => {
       SqlFragment::new("ST_GeomFromGeoJSON(?)", vec![JsVal::str(json.as_str())])
     }
-    RowValue::Value(v) => SqlFragment::new("?", vec![map_to_driver(t.column_type(key), v)]),
-  }
+    RowValue::Value(v) => SqlFragment::new("?", vec![map_to_driver(t.column_type(key), v)?]),
+  })
 }
 
 /// The insert value for an omitted column: drizzle `default` / `$defaultFn` / `null`.
-fn default_chunk(column: &Json) -> SqlFragment {
+fn default_chunk(column: &Json) -> Result<SqlFragment> {
   let ty = column.get("type").and_then(Json::as_str).unwrap_or("");
   if let Some(default) = column.get("default") {
     if !default.is_null() {
@@ -282,26 +282,26 @@ fn default_chunk(column: &Json) -> SqlFragment {
       if ty == "geometry" {
         if let Json::Array(a) = default {
           let point = json!({ "type": "Point", "coordinates": [a.first().cloned().unwrap_or(Json::Null), a.get(1).cloned().unwrap_or(Json::Null)] });
-          sanitized = json_stringify(&JsVal::from_json(&point)).map(JsVal::str).unwrap_or_default();
+          sanitized = json_stringify(&JsVal::from_json(&point))?.map(JsVal::str).unwrap_or_default();
         }
       }
-      return SqlFragment::new("?", vec![map_to_driver(ty, &sanitized)]);
+      return Ok(SqlFragment::new("?", vec![map_to_driver(ty, &sanitized)?]));
     }
   }
   let truthy = |k: &str| column.get(k).map(|v| JsVal::from_json(v).truthy()).unwrap_or(false);
   if ty == "timestamp" && truthy("defaultNow") && column.get("default").is_none() {
-    return SqlFragment::raw("(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))");
+    return Ok(SqlFragment::raw("(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"));
   }
   if ty == "uuid" {
     // `$defaultFn` (defaultV7 is applied after defaultRandom and wins)
     if truthy("defaultV7") {
-      return SqlFragment::new("?", vec![JsVal::str(uuid::Uuid::now_v7().to_string())]);
+      return Ok(SqlFragment::new("?", vec![JsVal::str(uuid::Uuid::now_v7().to_string())]));
     }
     if truthy("defaultRandom") {
-      return SqlFragment::new("?", vec![JsVal::str(uuid::Uuid::new_v4().to_string())]);
+      return Ok(SqlFragment::new("?", vec![JsVal::str(uuid::Uuid::new_v4().to_string())]));
     }
   }
-  SqlFragment::raw("null")
+  Ok(SqlFragment::raw("null"))
 }
 
 /// The `returning` selection of a statement.
@@ -358,7 +358,7 @@ fn update_set(t: Table<'_>, set: &Row) -> Result<SqlFragment> {
     }
     first = false;
     out.sql.push_str(&format!("{} = ", ident(name)));
-    out.push(value_chunk(t, key, value));
+    out.push(value_chunk(t, key, value)?);
   }
   Ok(out)
 }
@@ -390,8 +390,8 @@ pub fn build_insert(
         out.sql.push_str(", ");
       }
       match get_defined(row, key) {
-        Some(value) => out.push(value_chunk(t, key, value)),
-        None => out.push(default_chunk(column)),
+        Some(value) => out.push(value_chunk(t, key, value)?),
+        None => out.push(default_chunk(column)?),
       }
     }
     out.sql.push(')');
@@ -593,5 +593,15 @@ mod tests {
     let q = build_update(t, &set, None, &Returning::None).unwrap();
     assert_eq!(q.sql, "update \"posts\" set \"views\" = views + 2");
     assert!(q.params.is_empty());
+  }
+
+  /// drizzle `escapeName` doubles embedded quotes (`odd"posts` -> `"odd""posts"`).
+  #[test]
+  fn ident_doubles_embedded_quotes() {
+    assert_eq!(ident("posts"), "\"posts\"");
+    assert_eq!(ident("odd\"posts"), "\"odd\"\"posts\"");
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("create table \"odd\"\"posts\" (\"id\" integer primary key)").unwrap();
+    conn.execute(&format!("insert into {} ({}) values (1)", ident("odd\"posts"), ident("id")), []).unwrap();
   }
 }

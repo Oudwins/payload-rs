@@ -8,7 +8,7 @@ use crate::ValidationResult::{self, Invalid, Valid};
 use crate::date::date_parse;
 use crate::host::{FilterOptionsCall, FindArgs, HostTz, Req};
 use crate::js::{
-  OBJECT_PROTOTYPE_KEYS, call_to_string_with, get, get_opt, gt, join, json_stringify_interpolated, lt, object_id_is_valid,
+  OBJECT_PROTOTYPE_KEYS, call_to_string_with, get, get_opt, gt, join, json_stringify_interpolated, lt, object_id_is_valid, object_id_to_hex_string,
   parse_float, parse_float_str, same_value_zero, strict_eq, to_number, to_string_with, trim, type_error, type_of,
 };
 
@@ -681,6 +681,8 @@ pub fn validate_filter_options(value: &JsVal, options: &JsVal, req: &Req) -> Res
           let id = get_opt(val, "value");
           if id.truthy() {
             value_ids.push(id);
+          } else if object_id_is_valid(val)? {
+            value_ids.push(object_id_to_hex_string(val)?);
           }
         }
         if matches!(val, JsVal::Str(_) | JsVal::Num(_)) {
@@ -739,6 +741,10 @@ pub fn validate_filter_options(value: &JsVal, options: &JsVal, req: &Req) -> Res
       if matches!(val, JsVal::Str(_) | JsVal::Num(_)) {
         requested_id = val.clone();
       }
+
+      if type_of(val) == "object" && object_id_is_valid(val)? {
+        requested_id = object_id_to_hex_string(val)?;
+      }
     }
 
     if matches!(relation_to, JsVal::Arr(_)) && type_of(val) == "object" && get_opt(val, "relationTo").truthy() {
@@ -784,7 +790,7 @@ fn is_valid_id(value: &JsVal, id_type: &JsVal, req: &Req) -> Result<bool> {
   let id_type = id_type.as_str();
   if id_type == Some("text") && value.truthy() {
     if matches!(type_of(value), "object" | "string") {
-      let is_object_id = object_id_is_valid(value);
+      let is_object_id = object_id_is_valid(value)?;
       return Ok(matches!(value, JsVal::Str(_)) || is_object_id);
     }
     return Ok(false);
@@ -795,7 +801,7 @@ fn is_valid_id(value: &JsVal, id_type: &JsVal, req: &Req) -> Result<bool> {
   }
 
   if id_type == Some("ObjectID") {
-    return Ok(object_id_is_valid(&JsVal::str(string(value, req)?)));
+    return object_id_is_valid(&JsVal::str(string(value, req)?));
   }
 
   Ok(false)

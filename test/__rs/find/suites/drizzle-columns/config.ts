@@ -60,6 +60,8 @@ export default buildConfigWithDefaults({
         fields: [
           { name: 'title', type: 'text' },
           { name: 'category', type: 'relationship', relationTo: categoriesSlug },
+          // replaced by a `numeric({ mode: 'bigint' })` column in afterSchemaInit
+          { name: 'rank', type: 'number' },
         ],
       },
       {
@@ -85,6 +87,7 @@ export default buildConfigWithDefaults({
               isOn: integer('is_on', { mode: 'boolean' }),
               numBig: numeric('num_big', { mode: 'bigint' }),
               numStr: numeric('num_str'),
+              rank: numeric('rank', { mode: 'bigint' }),
               realVal: real('real_val'),
               whenMs: integer('when_ms', { mode: 'timestamp_ms' }),
               whenSec: integer('when_sec', { mode: 'timestamp' }),

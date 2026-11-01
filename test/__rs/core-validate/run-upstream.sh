@@ -7,8 +7,8 @@
 set -u
 source /tmp/penv.sh
 export PAYLOAD_DATABASE=sqlite NODE_NO_WARNINGS=1 DISABLE_LOGGING=true NODE_OPTIONS="--no-deprecation --no-experimental-strip-types"
-OUT=${OUT:-/tmp/rs-validate-host}
-DB=${DB:-/tmp/rs-validate-host.db}
+OUT=${OUT:-/tmp/rs-validate}
+DB=${DB:-/tmp/rs-validate.db}
 mkdir -p "$OUT"
 for suite in "$@"; do
   for tz in ${TZS:-UTC}; do

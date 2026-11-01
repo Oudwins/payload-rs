@@ -11,6 +11,8 @@
  * does via drizzle) and through `sqliteEngineQuery` (plain rusqlite on the
  * same Rust queue) for the Rust runtime.
  */
+import fs from 'node:fs'
+
 import type { AnyClient, CreateClient, Log } from './scenarios.js'
 
 import { describeValue } from './describe.js'
@@ -213,6 +215,34 @@ export const orderingScenarios: OrderingScenario[] = [
         ])
       }
       c.close()
+    },
+  },
+  {
+    name: 'ATTACHed file shared with another client',
+    run: async ({ createClient, log, url }) => {
+      const otherUrl = `${url}-attached`
+      const otherFile = otherUrl.slice('file:'.length)
+      for (const suffix of ['', '-wal', '-shm', '-journal']) {
+        fs.rmSync(otherFile + suffix, { force: true })
+      }
+      const other = createClient({ url: otherUrl })
+      await other.execute('create table o (a)')
+      const main = createClient({ url })
+      await main.execute(`attach database '${otherFile}' as x`)
+      for (let i = 0; i < 10; i++) {
+        const tx = await main.transaction('write')
+        await settle(log, `round ${i}`, [
+          ['tx insert into attached', tx.execute('insert into x.o values (1)')],
+          ['commit', tx.commit()],
+          ['other client read', other.execute('select count(*) n from o')],
+          ['other client write', other.execute('insert into o values (2)')],
+        ])
+      }
+      main.close()
+      other.close()
+      for (const suffix of ['', '-wal', '-shm', '-journal']) {
+        fs.rmSync(otherFile + suffix, { force: true })
+      }
     },
   },
   {

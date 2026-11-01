@@ -37,19 +37,40 @@ fn cstr_lossy(p: *const c_char) -> Option<String> {
   }
 }
 
-/// Rewrites error messages that changed between SQLite 3.45.1 (bundled by
-/// `libsql@0.4.7`) and the SQLite bundled by `rusqlite`, so both runtimes
-/// report identical messages.
+/// Error message normalization hook kept for engine crates that call it.
+/// The runtime now links the reference SQLite build (libSQL 3.45.1, see
+/// `lib.rs`), so messages are already identical and this is the identity.
 pub fn compat_message(message: String) -> String {
-  // 3.46+ (resolve.c lookupName): `no such column: "x" - should this be a
-  // string literal in single-quotes?`; 3.45: `no such column: x`.
-  const SUFFIX: &str = "\" - should this be a string literal in single-quotes?";
-  if let Some(rest) = message.strip_prefix("no such column: \"") {
-    if let Some(col) = rest.strip_suffix(SUFFIX) {
-      return format!("no such column: {col}");
-    }
-  }
   message
+}
+
+/// Options of `new Database(path, opts)` that reach SQLite.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OpenOptions {
+  /// `opts.encryptionKey` (UTF-8 bytes of the JS string). Empty means no
+  /// encryption, as in the binding.
+  pub encryption_key: Vec<u8>,
+}
+
+// SQLite3 Multiple Ciphers API (linked through `libsql-ffi`), used by
+// `libsql_sys::connection::set_encryption_cipher` / `set_encryption_key`.
+unsafe extern "C" {
+  fn sqlite3mc_cipher_index(cipher_name: *const c_char) -> c_int;
+  fn sqlite3mc_config(db: *mut ffi::sqlite3, param_name: *const c_char, new_value: c_int) -> c_int;
+  fn sqlite3_key(db: *mut ffi::sqlite3, key: *const std::ffi::c_void, key_len: c_int) -> c_int;
+}
+
+/// Runs `sqlite3_initialize` once, to completion, before the first open.
+/// SQLite marks itself initialized before it runs `SQLITE_EXTRA_INIT`
+/// (`sqlite3mc_initialize`, which installs the encrypting VFS as default), so
+/// a connection opened concurrently with the very first initialization could
+/// miss that VFS and silently ignore its encryption key.
+fn initialize_sqlite() {
+  static INIT: std::sync::Once = std::sync::Once::new();
+  // SAFETY: plain library initialization; idempotent.
+  INIT.call_once(|| unsafe {
+    ffi::sqlite3_initialize();
+  });
 }
 
 /// Finalizes a prepared statement on drop.
@@ -65,10 +86,17 @@ impl Drop for StmtGuard {
 }
 
 impl Conn {
-  /// Opens a database like `new Database(path)` does in the `libsql` binding:
-  /// read/write/create, URI filenames, busy timeout 0, foreign keys on and
-  /// double-quoted string literals disabled (libsql is built with `DQS=0`).
+  /// [`Conn::open_with`] without options.
   pub fn open(path: &str) -> Result<Self> {
+    Self::open_with(path, &OpenOptions::default())
+  }
+
+  /// Opens a database like `new Database(path, opts)` of the `libsql` binding
+  /// (`libsql::Database::connect` for a local file): `sqlite3_open_v2` with
+  /// read/write/create/URI flags, then, with an encryption key, the
+  /// `aes256cbc` cipher and `sqlite3_key`. `rusqlite` installs a 5s busy
+  /// timeout on open; libsql leaves SQLite's default of 0, so it is reset.
+  pub fn open_with(path: &str, options: &OpenOptions) -> Result<Self> {
     let open_failed = |rc: i32| ClientError::Error {
       message: format!(
         "ConnectionFailed({:?})",
@@ -76,22 +104,30 @@ impl Conn {
       ),
       code: Some(String::new()),
     };
+    let misuse = |what: &str| ClientError::Error { message: format!("Misuse({what:?})"), code: Some(String::new()) };
+    initialize_sqlite();
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI;
     let conn = Connection::open_with_flags(path, flags).map_err(|e| match e {
       rusqlite::Error::SqliteFailure(f, _) => open_failed(f.extended_code & 0xff),
       _ => open_failed(ffi::SQLITE_CANTOPEN),
     })?;
-    let configure = || -> rusqlite::Result<()> {
-      conn.busy_timeout(std::time::Duration::ZERO)?;
-      conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DQS_DML, false)?;
-      conn.set_db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_DQS_DDL, false)?;
-      Ok(())
-    };
-    configure().map_err(|_| open_failed(ffi::SQLITE_ERROR))?;
-    // SAFETY: live connection handle.
-    let rc = crate::math::register(unsafe { conn.handle() });
-    if rc != ffi::SQLITE_OK {
-      return Err(open_failed(rc));
+    conn.busy_timeout(std::time::Duration::ZERO).map_err(|_| open_failed(ffi::SQLITE_ERROR))?;
+    // `Builder::new_local(":memory:")` builds a memory database, which never
+    // applies the encryption config.
+    if !options.encryption_key.is_empty() && path != ":memory:" {
+      let key_len = c_int::try_from(options.encryption_key.len()).map_err(|_| misuse("failed to set encryption key"))?;
+      // SAFETY: live connection handle, NUL terminated names, `key_len`
+      // readable bytes at the key pointer.
+      unsafe {
+        let db = conn.handle();
+        let cipher = sqlite3mc_cipher_index(c"aes256cbc".as_ptr());
+        if sqlite3mc_config(db, c"default:cipher".as_ptr(), cipher) == -1 {
+          return Err(misuse("failed to set encryption cipher"));
+        }
+        if sqlite3_key(db, options.encryption_key.as_ptr().cast(), key_len) != ffi::SQLITE_OK {
+          return Err(misuse("failed to set encryption key"));
+        }
+      }
     }
     Ok(Self { conn: Some(conn), path: path.to_string(), retired: false })
   }
@@ -152,7 +188,7 @@ impl Conn {
   fn last_error(db: *mut ffi::sqlite3) -> (String, String, i32) {
     // SAFETY: `db` is a live connection handle.
     let (raw, msg) = unsafe { (ffi::sqlite3_extended_errcode(db), cstr_lossy(ffi::sqlite3_errmsg(db))) };
-    (compat_message(msg.unwrap_or_default()), code_name(raw), raw)
+    (msg.unwrap_or_default(), code_name(raw), raw)
   }
 
   fn sqlite_error(db: *mut ffi::sqlite3) -> ClientError {
@@ -263,6 +299,17 @@ impl Conn {
     }
   }
 
+  /// `sqlite3_bind_parameter_name` of every parameter of the first statement
+  /// of `sql` (`None` for nameless `?` parameters), as read by the binding's
+  /// `convert_params_object` after `db.prepare(sql)`. Prepare errors are the
+  /// ones `executeStmt` reports.
+  pub fn parameter_names(&self, sql: &str) -> Result<Vec<Option<String>>> {
+    let (_, guard) = self.prepare(sql)?;
+    // SAFETY: live statement; indexes are in range.
+    let count = unsafe { ffi::sqlite3_bind_parameter_count(guard.0) };
+    Ok((1..=count).map(|i| cstr_lossy(unsafe { ffi::sqlite3_bind_parameter_name(guard.0, i) })).collect())
+  }
+
   /// Port of `executeStmt(db, stmt, intMode)` (libsql-client `sqlite3.ts`).
   pub fn execute(&self, stmt: &Statement, int_mode: IntMode) -> Result<ResultSet> {
     if let Some(err) = &stmt.error {
@@ -349,7 +396,7 @@ impl Conn {
       // SAFETY: `errmsg` was allocated by SQLite (or is NULL).
       unsafe { ffi::sqlite3_free(errmsg.cast()) };
       let (fallback, code, raw_code) = Self::last_error(db);
-      return Err(ClientError::Sqlite { message: message.map(compat_message).unwrap_or(fallback), code, raw_code });
+      return Err(ClientError::Sqlite { message: message.unwrap_or(fallback), code, raw_code });
     }
     Ok(())
   }
@@ -399,6 +446,58 @@ mod tests {
     assert_eq!(r.rows[0][0], Cell::Number(0.0));
     let err = c.execute_sql("select \"nope\"", IntMode::Number).unwrap_err();
     assert_eq!(err.js_message(), "SQLITE_ERROR: no such column: nope");
+  }
+
+  /// The linked SQLite is the reference build (see lib.rs).
+  #[test]
+  fn links_the_libsql_build() {
+    let r = mem()
+      .execute_sql(
+        "select sqlite_version(), sqlite_source_id(), sqlite3mc_version(), regexp('a', 'abc'), median(1)",
+        IntMode::Number,
+      )
+      .unwrap();
+    assert_eq!(
+      r.rows[0],
+      vec![
+        Cell::String("3.45.1".into()),
+        Cell::String("2024-01-30 16:01:20 e876e51a0ed5c5b3126f52e532044363a014bc594cfefa87ffb5b82257ccalt1".into()),
+        Cell::String("SQLite3 Multiple Ciphers 1.8.1".into()),
+        Cell::Number(1.0),
+        Cell::Number(1.0),
+      ]
+    );
+  }
+
+  #[test]
+  fn encryption_key_round_trip() {
+    let path = std::env::temp_dir().join(format!("payload-sqlite-enc-{}.db", std::process::id()));
+    let path = path.to_string_lossy().into_owned();
+    let _ = std::fs::remove_file(&path);
+    let key = OpenOptions { encryption_key: b"a\0b".to_vec() };
+    let c = Conn::open_with(&path, &key).unwrap();
+    c.execute_sql("create table t(a)", IntMode::Number).unwrap();
+    drop(c);
+    let header = std::fs::read(&path).unwrap();
+    assert_ne!(&header[..16], b"SQLite format 3\0");
+    let read = |options: &OpenOptions| {
+      Conn::open_with(&path, options).unwrap().execute_sql("select count(*) from t", IntMode::Number)
+    };
+    assert_eq!(read(&key).unwrap().rows[0][0], Cell::Number(0.0));
+    let wrong = OpenOptions { encryption_key: b"a".to_vec() };
+    for options in [OpenOptions::default(), wrong] {
+      let err = read(&options).unwrap_err();
+      assert_eq!(err, ClientError::Sqlite { message: "file is not a database".into(), code: "SQLITE_NOTADB".into(), raw_code: 26 });
+    }
+    let _ = std::fs::remove_file(&path);
+  }
+
+  #[test]
+  fn parameter_names_of_the_first_statement() {
+    let names = mem().parameter_names("select :a, ?, @b, $c::d(e), ?5, :a; select :z").unwrap();
+    let expected = [Some(":a"), None, Some("@b"), Some("$c::d(e)"), Some("?5")];
+    assert_eq!(names, expected.map(|n| n.map(str::to_string)).to_vec());
+    assert_eq!(mem().parameter_names("").unwrap_err().js_message(), "SQLITE_OK: not an error");
   }
 
   #[test]

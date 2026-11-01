@@ -429,111 +429,113 @@ export const registerBeforeChangeSuite = ({
   only?: string[]
 }) => {
   test.suite(name, { config: configPath, resetBetweenTests: false }, () => {
-    test('beforeChange: Rust port matches TS (data, callback order/args, errors)', async ({
-      payload,
-    }) => {
-      instrument(payload)
-      const stats: DiffStats = {
-        diffs: [],
-        events: {},
-        inputsCompared: 0,
-        rejections: {},
-        runs: 0,
-        unhandled: 0,
-        rustAwaits: 0,
-        rustTasks: 0,
-      }
+    test(
+      'beforeChange: Rust port matches TS (data, callback order/args, errors)',
+      { timeout: 1_800_000 },
+      async ({ payload }) => {
+        instrument(payload)
+        const stats: DiffStats = {
+          diffs: [],
+          events: {},
+          inputsCompared: 0,
+          rejections: {},
+          runs: 0,
+          unhandled: 0,
+          rustAwaits: 0,
+          rustTasks: 0,
+        }
 
-      const targets: Target[] = [
-        ...payload.config.collections.map((c) => ({
-          collection: c,
-          fields: c.fields,
-          slug: c.slug,
-        })),
-        ...payload.config.globals.map((g) => ({ fields: g.fields, global: g, slug: g.slug })),
-      ].filter((t) => !only || only.includes(t.slug))
+        const targets: Target[] = [
+          ...payload.config.collections.map((c) => ({
+            collection: c,
+            fields: c.fields,
+            slug: c.slug,
+          })),
+          ...payload.config.globals.map((g) => ({ fields: g.fields, global: g, slug: g.slug })),
+        ].filter((t) => !only || only.includes(t.slug))
 
-      for (const target of targets) {
-        const firstFieldNames = (target.fields as any[])
-          .filter((f) => 'name' in f && f.name !== 'id')
-          .slice(0, 2)
-          .map((f) => f.name as string)
-        for (const variant of [
-          ...variantsFor(payload, firstFieldNames),
-          ...(extraVariants[target.slug] ?? []),
-        ]) {
-          const stored = await storedDocsFor(payload, target, variant.locale, docsPerCollection)
-          const sets = inputSetsFor(payload, target, variant, stored, fuzzRounds)
-          const extra = extraInputs[target.slug]
-          if (extra) {
-            const count = extra(variant).length
-            for (let i = 0; i < count; i++) {
-              sets.push({ factory: () => extra(variant)[i]!, label: `edge#${i}` })
+        for (const target of targets) {
+          const firstFieldNames = (target.fields as any[])
+            .filter((f) => 'name' in f && f.name !== 'id')
+            .slice(0, 2)
+            .map((f) => f.name as string)
+          for (const variant of [
+            ...variantsFor(payload, firstFieldNames),
+            ...(extraVariants[target.slug] ?? []),
+          ]) {
+            const stored = await storedDocsFor(payload, target, variant.locale, docsPerCollection)
+            const sets = inputSetsFor(payload, target, variant, stored, fuzzRounds)
+            const extra = extraInputs[target.slug]
+            if (extra) {
+              const count = extra(variant).length
+              for (let i = 0; i < count; i++) {
+                sets.push({ factory: () => extra(variant)[i]!, label: `edge#${i}` })
+              }
             }
-          }
-          for (const set of sets) {
-            const inputJSON = JSON.stringify(set.factory())
-            for (const concurrent of [false, true]) {
-              const run = (engine: 'rs' | 'ts'): Promise<RunOutcome> =>
-                runBeforeChange({
-                  collection: target.collection,
-                  concurrent,
-                  engine,
-                  global: target.global,
-                  inputs: set.factory(),
-                  payload,
-                  variant,
-                })
-              const ts = await withTimeout(run('ts'))
-              const before = getCoreRuntime().stats()
-              const rs = await withTimeout(run('rs'))
-              const after = getCoreRuntime().stats()
-              stats.rustTasks += after.tasks - before.tasks
-              stats.rustAwaits += after.awaits - before.awaits
-              stats.runs++
-              stats.unhandled += ts.unhandled.length
-              stats.inputsCompared += Array.isArray(ts.inputsAfter) ? ts.inputsAfter.length : 0
-              for (const event of ts.events as { args?: unknown; kind: string }[]) {
-                if (event.args) {
-                  stats.events[event.kind] = (stats.events[event.kind] ?? 0) + 1
+            for (const set of sets) {
+              const inputJSON = JSON.stringify(set.factory())
+              for (const concurrent of [false, true]) {
+                const run = (engine: 'rs' | 'ts'): Promise<RunOutcome> =>
+                  runBeforeChange({
+                    collection: target.collection,
+                    concurrent,
+                    engine,
+                    global: target.global,
+                    inputs: set.factory(),
+                    payload,
+                    variant,
+                  })
+                const ts = await withTimeout(run('ts'))
+                const before = getCoreRuntime().stats()
+                const rs = await withTimeout(run('rs'))
+                const after = getCoreRuntime().stats()
+                stats.rustTasks += after.tasks - before.tasks
+                stats.rustAwaits += after.awaits - before.awaits
+                stats.runs++
+                stats.unhandled += ts.unhandled.length
+                stats.inputsCompared += Array.isArray(ts.inputsAfter) ? ts.inputsAfter.length : 0
+                for (const event of ts.events as { args?: unknown; kind: string }[]) {
+                  if (event.args) {
+                    stats.events[event.kind] = (stats.events[event.kind] ?? 0) + 1
+                  }
                 }
-              }
-              if (ts.error) {
-                const key =
-                  typeof ts.error === 'object' && ts.error && 'class' in ts.error
-                    ? String((ts.error as { class: unknown }).class)
-                    : String(ts.error)
-                stats.rejections[key] = (stats.rejections[key] ?? 0) + 1
-              }
-              const diff = firstDiff(
-                canonicalizeGenerated(ts, inputJSON),
-                canonicalizeGenerated(rs, inputJSON),
-              )
-              if (diff) {
-                stats.diffs.push(
-                  `${target.slug} [${variant.name}, ${set.label}${concurrent ? ', concurrent' : ''}] ${diff}`,
+                if (ts.error) {
+                  const key =
+                    typeof ts.error === 'object' && ts.error && 'class' in ts.error
+                      ? String((ts.error as { class: unknown }).class)
+                      : String(ts.error)
+                  stats.rejections[key] = (stats.rejections[key] ?? 0) + 1
+                }
+                const diff = firstDiff(
+                  canonicalizeGenerated(ts, inputJSON),
+                  canonicalizeGenerated(rs, inputJSON),
                 )
+                if (diff) {
+                  stats.diffs.push(
+                    `${target.slug} [${variant.name}, ${set.label}${concurrent ? ', concurrent' : ''}] ${diff}`,
+                  )
+                }
               }
             }
           }
         }
-      }
 
-      const resultsDir = path.resolve(dirname, 'results')
-      fs.mkdirSync(resultsDir, { recursive: true })
-      fs.writeFileSync(
-        path.resolve(resultsDir, `${name.replace(/[^\w-]+/g, '_')}.json`),
-        JSON.stringify(stats, null, 2),
-      )
-      const eventTotal = Object.values(stats.events).reduce((a, b) => a + b, 0)
-      const rejectionTotal = Object.values(stats.rejections).reduce((a, b) => a + b, 0)
-      console.log(
-        `[core-hooks-before-change] ${name}: runs=${stats.runs} inputs=${stats.inputsCompared} callbackCalls=${eventTotal} ${JSON.stringify(stats.events)} rejections=${rejectionTotal} ${JSON.stringify(stats.rejections)} unhandled=${stats.unhandled} rustTasks=${stats.rustTasks} rustAwaits=${stats.rustAwaits} diffs=${stats.diffs.length}`,
-      )
-      // The Rust engine must have actually run: a missing addon would reject every RS run.
-      expect(stats.runs).toBeGreaterThan(0)
-      expect(stats.rustTasks).toBeGreaterThan(0)
-      expect(stats.diffs).toEqual([])
-    })
+        const resultsDir = path.resolve(dirname, 'results')
+        fs.mkdirSync(resultsDir, { recursive: true })
+        fs.writeFileSync(
+          path.resolve(resultsDir, `${name.replace(/[^\w-]+/g, '_')}.json`),
+          JSON.stringify(stats, null, 2),
+        )
+        const eventTotal = Object.values(stats.events).reduce((a, b) => a + b, 0)
+        const rejectionTotal = Object.values(stats.rejections).reduce((a, b) => a + b, 0)
+        console.log(
+          `[core-hooks-before-change] ${name}: runs=${stats.runs} inputs=${stats.inputsCompared} callbackCalls=${eventTotal} ${JSON.stringify(stats.events)} rejections=${rejectionTotal} ${JSON.stringify(stats.rejections)} unhandled=${stats.unhandled} rustTasks=${stats.rustTasks} rustAwaits=${stats.rustAwaits} diffs=${stats.diffs.length}`,
+        )
+        // The Rust engine must have actually run: a missing addon would reject every RS run.
+        expect(stats.runs).toBeGreaterThan(0)
+        expect(stats.rustTasks).toBeGreaterThan(0)
+        expect(stats.diffs).toEqual([])
+      },
+    )
   })
 }

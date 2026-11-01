@@ -1,11 +1,13 @@
 export { DrizzleQueryError } from './adapter/errors.js'
-export type { EngineError } from './adapter/errors.js'
+export type { DrizzleQueryErrorClass, EngineError } from './adapter/errors.js'
 export {
   engineMethods,
   getRustEngineStats,
   isRustEngineAdapter,
+  registerTransparentClientMethod,
   withRustEngine,
 } from './adapter/index.js'
+export type { WithRustEngineOptions } from './adapter/index.js'
 export { getNativeEngine } from './native.js'
 export type { NativeEngine, NativeSqliteEngine, NativeSqliteEngineClass } from './native.js'
 export { applyRawSchemaRS, buildRawSchemaRS, createEngineError } from './schema.js'

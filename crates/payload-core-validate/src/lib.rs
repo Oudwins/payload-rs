@@ -9,6 +9,13 @@
 //! text editor and JSON Schema validation).
 //!
 //! The result is TS's `true | string`; an `Err` is what the TS validator would throw.
+//!
+//! This crate works on [`JsVal`](payload_engine::js::JsVal) data snapshots, for Rust callers
+//! that hold plain data. The validators the addon exposes to JS (`validateBinding()`) are the
+//! live-value port in `live/` (`payload-core-validate-live`), which reads the caller's objects
+//! after every await like TS and calls methods (`toString`, `ObjectId`) through JS; values a
+//! snapshot can't evaluate (own `toString` / `toJSON` functions, `ObjectId` duck typing) are
+//! unsupported-value errors here.
 
 pub mod date;
 pub mod host;

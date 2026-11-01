@@ -278,12 +278,13 @@ pub fn parse_params(
             let mut parts = Vec::new();
             for v in view.items() {
               let escaped = escape_sql_value(v)?;
-              parts.push(if v.as_str().is_some() { format!("'{}'", js_string(&escaped)) } else { js_string(&escaped) });
+              let escaped = crate::js_ops::js_string_checked(&escaped)?;
+              parts.push(if v.as_str().is_some() { format!("'{escaped}'") } else { escaped });
             }
             formatted_value = format!("({})", parts.join(","));
           } else {
             let (_, wildcard) = operator_keys(&operator).ok_or_else(missing)?;
-            formatted_value = format!("'{wildcard}{}{wildcard}'", js_string(&escape_sql_value(&view)?));
+            formatted_value = format!("'{wildcard}{}{wildcard}'", crate::js_ops::js_string_checked(&escape_sql_value(&view)?)?);
           }
           if operator == "exists" {
             formatted_value = String::new();

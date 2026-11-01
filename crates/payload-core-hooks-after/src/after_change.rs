@@ -22,13 +22,16 @@ use payload_core_runtime::host as rt;
 use payload_core_runtime::js::{self, JsResult, Local, Thrown, Type, Val};
 
 use crate::common::{
-  Paths, Segments, call_hook, find_block, for_each, for_of_list, get_field_paths, get_nested_value, keys_length,
-  nullish_or, nullish_or_empty_object, or, or_empty_object, promise_all, spread,
+  Paths, Segments, call_hook, find_block, for_each, for_of_list, get_field_paths, get_nested_value, is_leaf,
+  keys_length, nullish_or, nullish_or_empty_object, or, or_empty_object, promise_all, spread,
 };
 use crate::host;
 
 /// The destructured `afterChange` args, constant for the whole traversal.
 struct Ctx {
+  /// `[collection, context, data, doc, global, operation, previousDoc, req]` for the host's
+  /// `afterChangeLeaves` (indices `AC_*` in packages/engine-rs/src/runtime/afterChange/binding.ts).
+  arr: Val,
   collection: Val,
   context: Val,
   data: Val,
@@ -64,15 +67,22 @@ pub fn after_change(args: Local) -> JsResult<Local> {
 async fn run(args: Val) -> JsResult<Val> {
   let a = args.get();
   let g = |name: &str| -> JsResult<Val> { Val::from_local(rt::get_named(a, name)?) };
+  let (collection, context, data, doc) = (g("collection")?, g("context")?, g("data")?, g("doc")?);
+  let (global, operation, previous_doc, req) = (g("global")?, g("operation")?, g("previousDoc")?, g("req")?);
+  let arr = js::array();
+  for (i, v) in [&collection, &context, &data, &doc, &global, &operation, &previous_doc, &req].into_iter().enumerate() {
+    js::set_element(arr, i as u32, v.get())?;
+  }
   let ctx = Rc::new(Ctx {
-    collection: g("collection")?,
-    context: g("context")?,
-    data: g("data")?,
-    doc: g("doc")?,
-    global: g("global")?,
-    operation: g("operation")?,
-    previous_doc: g("previousDoc")?,
-    req: g("req")?,
+    arr: Val::from_local(arr)?,
+    collection,
+    context,
+    data,
+    doc,
+    global,
+    operation,
+    previous_doc,
+    req,
   });
 
   // fields: (collection?.fields || global?.fields)!
@@ -113,19 +123,48 @@ async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
     return Ok(Val::Undefined);
   };
   let promises = js::array();
-  for (index, desc) in items.iter().enumerate() {
+  let mut index = 0;
+  while index < items.len() {
+    if t.tab_fields.is_none() && is_leaf(items[index].kind) {
+      // A run of leaves: upstream's `promise()` of each, pushed in order by the host.
+      let start = index;
+      while index < items.len() && is_leaf(items[index].kind) {
+        index += 1;
+      }
+      let h = host::host()?;
+      host::call(
+        &h.after_change_leaves,
+        &[
+          ctx.arr.get(),
+          t.fields.node.get(),
+          js::number(start as f64),
+          js::number(index as f64),
+          promises,
+          t.block_data.get(),
+          js::string(&t.parent_index_path),
+          js::string(&t.parent_path),
+          js::string(&t.parent_schema_path),
+          t.previous_sibling_doc.get(),
+          t.sibling_data.get(),
+          t.sibling_doc.get(),
+        ],
+      )?;
+      continue;
+    }
+    let desc = &items[index];
     let field_js = match &t.tab_fields {
       Some(arr) => Val::from_local(js::get_element(arr.get(), index as u32)?)?,
       None => Val::Ref(desc.node.clone()),
     };
     let p = spawn(field_promise(ctx.clone(), t.clone(), desc.clone(), field_js, index))?;
     js::push(promises, p)?;
+    index += 1;
   }
   await_js(promise_all(promises)?).await?;
   Ok(Val::Undefined)
 }
 
-/// Port of `promise.ts`.
+/// Port of `promise.ts` (leaf fields run in the host, see [`is_leaf`]).
 async fn field_promise(
   ctx: Rc<Ctx>,
   t: Rc<Trav>,

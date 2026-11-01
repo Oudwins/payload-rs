@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use indexmap::IndexMap;
-use payload_engine::js::{JsVal, decode_graph};
+use payload_engine::js::{JsVal, decode_graph, decode_graph_typed};
 use payload_sql_write::{StaticWriteAdapter, TransformForWriteArgs, encode_value, transform_for_write};
 use serde_json::{Value as Json, json};
 
@@ -54,10 +54,7 @@ fn replay_captured_transform_for_write_calls() {
     .filter(|p| filter.as_ref().is_none_or(|f| p.to_string_lossy().contains(f.as_str())))
     .collect();
   files.sort();
-  if files.is_empty() {
-    eprintln!("no fixtures in {} (see test/__rs/write/runCapture.ts)", dir.display());
-    return;
-  }
+  assert!(!files.is_empty(), "no fixtures in {} (see test/__rs/write/runCapture.ts)", dir.display());
 
   let mut total = 0usize;
   let mut errors_expected = 0usize;
@@ -100,7 +97,12 @@ fn replay_captured_transform_for_write_calls() {
         file_total += 1;
         let id = format!("{name} group {group_index} call {call_index}");
         let fields = &fields[call["fields"].as_str().unwrap_or_default()];
-        let mut data = decode(&call["data"]);
+        // `dataGraph` keeps object identity and typed `Date`s / `bigint`s; older fixtures store
+        // `data` as a tree with dates as strings.
+        let mut data = match call.get("dataGraph") {
+          Some(graph) => decode_graph_typed(graph).expect("decodable data graph"),
+          None => decode(&call["data"]),
+        };
         // The adapter can be reconfigured at runtime (e.g. `payload.db.blocksAsJSON = true`).
         if let Some(v) = call["blocksAsJSON"].as_bool() {
           adapter.blocks_as_json = v;
@@ -160,5 +162,6 @@ fn replay_captured_transform_for_write_calls() {
   for f in failures.iter().take(40) {
     eprintln!("  {f}");
   }
+  assert!(total > 0, "replayed zero transformForWrite calls");
   assert!(failures.is_empty(), "{} of {total} calls differ", failures.len());
 }

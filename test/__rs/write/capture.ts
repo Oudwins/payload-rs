@@ -3,8 +3,12 @@
  * (crates/payload-sql-write/tests/replay.rs).
  *
  * Encoding (shared with the Rust side, see `encode_value` in crates/payload-sql-write/src/types.rs):
- * - values use the `serializeForEngine` conventions without `$ref`s: `{"$undefined":true}`,
- *   `{"$num":"NaN"}`, `{"$obj":{...}}` escapes, dates as ISO strings
+ * - values use the `serializeForEngine` conventions: `{"$undefined":true}`, `{"$num":"NaN"}`,
+ *   `{"$date":iso|null}`, `{"$bigint":"1"}`, `{"$obj":{...}}` escapes (fixtures recorded before
+ *   typed values existed store dates as ISO strings)
+ * - the input `data` is a graph (`dataGraph`: `{ objects, root }` with `{"$ref":id}` for objects
+ *   reachable more than once, cycles included), so object identity survives; outputs and
+ *   `dataAfter` are trees
  * - `Set` as an array, drizzle `SQL` as `{"$sql":[{"str":"..."} | param]}`
  * - fields and config blocks keep only the keys the write transform reads, block objects carry
  *   `block[InternalBlockTableNameIndex]` under `__internalBlockTableNameIndex`
@@ -32,7 +36,16 @@ const SCHEMA_KEYS = new Set([
   'type',
   'virtual',
 ])
-const RESERVED_KEYS = new Set(['$fn', '$num', '$obj', '$ref', '$sql', '$undefined'])
+const RESERVED_KEYS = new Set([
+  '$bigint',
+  '$date',
+  '$fn',
+  '$num',
+  '$obj',
+  '$ref',
+  '$sql',
+  '$undefined',
+])
 const MAX_CALLS_PER_GROUP = Number(process.env.RS_WRITE_MAX_CALLS ?? 4000)
 
 const isSQL = (v: any): boolean =>
@@ -47,13 +60,19 @@ const isStringChunk = (v: any): boolean =>
   Array.isArray(v.value) &&
   v.constructor?.name === 'StringChunk'
 
-export const encodeValue = (v: unknown, depth = 0): unknown => {
+type Encode = (v: unknown, depth: number) => unknown
+
+export const encodeValue = (
+  v: unknown,
+  depth = 0,
+  child: Encode = (x, d) => encodeValue(x, d),
+): unknown => {
   if (depth > 200) {
     throw new Error('encodeValue: value too deep (cycle?)')
   }
   switch (typeof v) {
     case 'bigint':
-      return Number(v)
+      return { $bigint: String(v) }
     case 'boolean':
     case 'string':
       return v
@@ -69,28 +88,71 @@ export const encodeValue = (v: unknown, depth = 0): unknown => {
     return null
   }
   if (v instanceof Date) {
-    return v.toISOString()
+    return { $date: Number.isNaN(v.getTime()) ? null : v.toISOString() }
   }
   if (v instanceof Set) {
-    return Array.from(v).map((x) => encodeValue(x, depth + 1))
+    return Array.from(v).map((x) => child(x, depth + 1))
   }
   if (isSQL(v)) {
     return {
       $sql: (v as any).queryChunks.map((c: any) =>
-        isStringChunk(c) ? { str: c.value.join('') } : encodeValue(c, depth + 1),
+        isStringChunk(c) ? { str: c.value.join('') } : child(c, depth + 1),
       ),
     }
   }
   if (Array.isArray(v)) {
-    return Array.from(v, (x) => encodeValue(x, depth + 1))
+    return Array.from(v, (x) => child(x, depth + 1))
   }
   // null prototype: an own `__proto__` key (e.g. from JSON.parse) stays an own key
   const out: Record<string, unknown> = Object.create(null)
   const keys = Object.keys(v as object)
   for (const key of keys) {
-    out[key] = encodeValue((v as Record<string, unknown>)[key], depth + 1)
+    out[key] = child((v as Record<string, unknown>)[key], depth + 1)
   }
   return keys.length === 1 && RESERVED_KEYS.has(keys[0]!) ? { $obj: out } : out
+}
+
+/**
+ * `{ objects, root }` (`decode_graph_typed`): objects reachable more than once (or from inside
+ * themselves) are stored once in `objects` and referenced as `{"$ref": id}`.
+ */
+export const encodeGraph = (root: unknown): { objects: unknown[]; root: unknown } => {
+  const counts = new Map<object, number>()
+  const visit = (v: unknown) => {
+    if (!v || typeof v !== 'object') {
+      return
+    }
+    const n = (counts.get(v) ?? 0) + 1
+    counts.set(v, n)
+    if (n === 1 && !(v instanceof Date) && !isSQL(v)) {
+      for (const item of v instanceof Set || Array.isArray(v) ? Array.from(v) : Object.values(v)) {
+        visit(item)
+      }
+    }
+  }
+  visit(root)
+  const ids = new Map<object, number>()
+  const objects: unknown[] = []
+  const encode: Encode = (v, depth) => {
+    if (
+      v &&
+      typeof v === 'object' &&
+      (counts.get(v) ?? 0) > 1 &&
+      !(v instanceof Set) &&
+      !isSQL(v)
+    ) {
+      let id = ids.get(v)
+      if (id === undefined) {
+        id = objects.length
+        ids.set(v, id)
+        objects.push(null)
+        objects[id] = encodeValue(v, 0, encode)
+      }
+      return { $ref: id }
+    }
+    return encodeValue(v, depth, encode)
+  }
+  return { objects, root: encode(root, 0) }
 }
 
 /** Encodes fields / blocks keeping only what the write transform reads. */
@@ -228,7 +290,7 @@ export const wrapTransformForWrite = <F extends (args: any) => any>(original: F)
         enableAtomicWrites: Boolean(args.enableAtomicWrites),
         blocksAsJSON: Boolean(args.adapter?.blocksAsJSON),
         adapterName: args.adapter?.name,
-        data: encodeValue(args.data),
+        dataGraph: encodeGraph(args.data),
       }
     } catch {
       return original(args)

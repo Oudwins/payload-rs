@@ -20,6 +20,25 @@ type Args<T extends JsonObject> = {
   req: PayloadRequest
 }
 
+type RustCoreHooks = {
+  beforeValidate: <T extends JsonObject>(args: Args<T>) => Promise<T>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust core engine (`packages/engine-rs/src/runtime/hooks.ts`), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_PORT.md.
+ */
+const isRustCoreEngine = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustCoreHooksSpecifier = '../../../../../engine-rs/src/runtime/hooks.js'
+let rustCoreHooks: RustCoreHooks | undefined
+const rustCoreHooksLoad: Promise<RustCoreHooks> | undefined = isRustCoreEngine
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustCoreHooksSpecifier).then(
+      (loaded: RustCoreHooks) => (rustCoreHooks = loaded),
+    )
+  : undefined
+void rustCoreHooksLoad?.catch(() => {})
+
 /**
  * This function is responsible for the following actions, in order:
  * - Sanitize incoming data
@@ -28,39 +47,47 @@ type Args<T extends JsonObject> = {
  * - Merge original document data into incoming data
  * - Compute default values for undefined fields
  */
-export const beforeValidate = async <T extends JsonObject>({
-  id,
-  collection,
-  context,
-  data: incomingData,
-  doc,
-  docForHooks,
-  global,
-  onFieldAccess,
-  operation,
-  overrideAccess,
-  req,
-}: Args<T>): Promise<T> => {
-  await traverseFields({
-    id,
-    collection,
-    context,
-    data: incomingData,
-    doc,
-    docForHooks,
-    fields: (collection?.fields || global?.fields)!,
-    global,
-    onFieldAccess,
-    operation,
-    overrideAccess,
-    parentIndexPath: '',
-    parentIsLocalized: false,
-    parentPath: '',
-    parentSchemaPath: '',
-    req,
-    siblingData: incomingData,
-    siblingDoc: doc!,
-  })
+export const beforeValidate: <T extends JsonObject>(args: Args<T>) => Promise<T> = isRustCoreEngine
+  ? (args) =>
+      rustCoreHooks
+        ? rustCoreHooks.beforeValidate(args)
+        : rustCoreHooksLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.beforeValidate(args)
+          })
+  : async <T extends JsonObject>({
+      id,
+      collection,
+      context,
+      data: incomingData,
+      doc,
+      docForHooks,
+      global,
+      onFieldAccess,
+      operation,
+      overrideAccess,
+      req,
+    }: Args<T>): Promise<T> => {
+      await traverseFields({
+        id,
+        collection,
+        context,
+        data: incomingData,
+        doc,
+        docForHooks,
+        fields: (collection?.fields || global?.fields)!,
+        global,
+        onFieldAccess,
+        operation,
+        overrideAccess,
+        parentIndexPath: '',
+        parentIsLocalized: false,
+        parentPath: '',
+        parentSchemaPath: '',
+        req,
+        siblingData: incomingData,
+        siblingDoc: doc!,
+      })
 
-  return incomingData
-}
+      return incomingData
+    }

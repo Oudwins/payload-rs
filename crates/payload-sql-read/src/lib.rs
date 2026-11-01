@@ -21,6 +21,7 @@ pub mod json;
 pub mod jsops;
 pub mod jsstr;
 pub mod props;
+pub mod sort;
 pub mod transform;
 pub mod value;
 

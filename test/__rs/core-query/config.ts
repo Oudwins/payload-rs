@@ -9,6 +9,77 @@ import { buildConfigWithDefaults } from '../../buildConfigWithDefaults.js'
 
 const isAdmin = ({ req }: { req: any }) => req.user?.role === 'admin'
 
+/**
+ * Access functions of the `cq-adv*` collections (live differential, ./live/synthetic.int.spec.ts):
+ * behaviour selected by `req.context.mode`. They log into `req.context.log`, take 0 to 3
+ * microtasks or a macrotask, throw tagged errors, return `where` results, or mutate the `where`
+ * object the case stashed in `req.context.where` while the validation is suspended.
+ */
+const adversarial =
+  (label: string) =>
+  async ({ req }: { req: any }): Promise<any> => {
+    const context = req.context ?? {}
+    ;(context.log ??= []).push(label)
+    switch (context.mode) {
+      case 'immediate':
+        await new Promise((resolve) => setImmediate(resolve))
+        return true
+      case 'mutate': {
+        await null
+        const where = context.where
+        if (where && typeof where === 'object' && !Object.isFrozen(where)) {
+          const [first] = Object.keys(where)
+          if (first) {
+            delete where[first]
+          }
+          where[`late_${label}`] = { equals: 1 }
+        }
+        return label.length % 2 === 0
+      }
+      case 'throw':
+        if (label.includes('title')) {
+          throw Object.assign(new Error(`denied ${label}`), { [Symbol.for('cq.userError')]: label })
+        }
+        return true
+      case 'ticks':
+        for (let i = 0; i < label.length % 4; i++) {
+          await null
+        }
+        return label.length % 3 !== 0
+      case 'where':
+        return { title: { equals: label } }
+      default:
+        return true
+    }
+  }
+
+const AdvTargets: CollectionConfig = {
+  slug: 'cq-adv-targets',
+  access: { read: adversarial('targets.read') },
+  fields: [
+    { name: 'title', type: 'text', access: { read: adversarial('targets.title') } },
+    { name: 'secret', type: 'text', hidden: true },
+    { name: 'owner', type: 'relationship', relationTo: 'cq-adv' },
+  ],
+}
+
+const Adv: CollectionConfig = {
+  slug: 'cq-adv',
+  access: { read: adversarial('adv.read') },
+  fields: [
+    { name: 'title', type: 'text', access: { read: adversarial('adv.title') } },
+    { name: 'plain', type: 'text' },
+    { name: 'target', type: 'relationship', relationTo: 'cq-adv-targets' },
+    { name: 'targets', type: 'relationship', hasMany: true, relationTo: 'cq-adv-targets' },
+    { name: 'owned', type: 'join', collection: 'cq-adv-targets', on: 'owner' },
+    {
+      name: 'group',
+      type: 'group',
+      fields: [{ name: 'inner', type: 'text', access: { read: adversarial('adv.group.inner') } }],
+    },
+  ],
+}
+
 const Authors: CollectionConfig = {
   slug: 'cq-authors',
   access: {
@@ -71,7 +142,7 @@ const Members: CollectionConfig = {
 export default buildConfigWithDefaults({
   suite: 'rs-core-query',
   config: {
-    collections: [Authors, Teams, Posts, Members],
+    collections: [Authors, Teams, Posts, Members, Adv, AdvTargets],
     globals: [
       {
         slug: 'cq-settings',

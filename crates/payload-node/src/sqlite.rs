@@ -4,11 +4,13 @@
 //! returns (or resolves to) an envelope `{ ok: value }` / `{ error: {...} }` so
 //! the TS glue can rebuild the exact error objects of `@libsql/client`.
 //!
-//! Database work runs on the per-database-file ordered queues of
-//! `payload_sqlite::worker` (one worker thread per file) and settles a promise
-//! through a napi deferred. Only `sqliteCreateClient` (synchronous in libsql
-//! as well) and `sqliteInTransaction` (the synchronous `closed` getter) block
-//! the JS thread until earlier queued work is done.
+//! Database work runs on the process-wide ordered queue of
+//! `payload_sqlite::worker` (one worker thread) and settles a promise through
+//! a napi deferred. The `*Sync` functions (and `sqliteCreateClient`) block the
+//! JS thread until earlier queued work and their own step are done, like the
+//! synchronous `libsql` binding; the TS glue uses them where upstream
+//! interleaves JS evaluation with statement execution (batches, named
+//! parameter lookup, the `closed` getter).
 //!
 //! Other napi modules run engine SQL on the same queue as a client or
 //! transaction id through [`queue_job`].
@@ -22,6 +24,7 @@ use napi_derive::napi;
 
 use payload_sqlite::client;
 use payload_sqlite::config::{ClientConfig, resolve_config};
+use payload_sqlite::conn::OpenOptions;
 use payload_sqlite::{Args, BindValue, Cell, ClientError, ConnId, IntMode, ResultSet, Statement};
 use payload_sqlite::worker::{self, Session};
 
@@ -52,6 +55,17 @@ unsafe fn js_number(env: sys::napi_env, n: f64) -> Result<sys::napi_value> {
 unsafe fn js_bigint(env: sys::napi_env, n: i64) -> Result<sys::napi_value> {
   let mut out = ptr::null_mut();
   check!(unsafe { sys::napi_create_bigint_int64(env, n, &mut out) });
+  Ok(out)
+}
+
+/// `BigInt(n)` of a JS number `n` that holds an integer value.
+unsafe fn js_bigint_from_integral_f64(env: sys::napi_env, n: f64) -> Result<sys::napi_value> {
+  // Every integral f64 converted from an i64 lies in [-2^63, 2^63].
+  let magnitude = n.abs() as u64 as u128 + u128::from(n.abs() >= 18_446_744_073_709_551_616.0);
+  let words = [magnitude as u64, (magnitude >> 64) as u64];
+  let count = if words[1] == 0 { 1 } else { 2 };
+  let mut out = ptr::null_mut();
+  check!(unsafe { sys::napi_create_bigint_words(env, i32::from(n < 0.0), count, words.as_ptr(), &mut out) });
   Ok(out)
 }
 
@@ -170,23 +184,36 @@ unsafe fn read_bind_value(env: sys::napi_env, v: sys::napi_value) -> Result<Bind
       let mut ab = ptr::null_mut();
       let mut offset = 0usize;
       check!(unsafe { sys::napi_get_typedarray_info(env, v, &mut kind, &mut len, &mut data, &mut ab, &mut offset) });
-      if kind != sys::TypedarrayType::uint8_array {
-        return Ok(BindValue::Invalid);
-      }
-      let bytes = if len == 0 || data.is_null() {
-        Vec::new()
-      } else {
-        // SAFETY: napi reports `len` readable bytes at `data` (already offset).
-        unsafe { std::slice::from_raw_parts(data.cast::<u8>(), len) }.to_vec()
+      let bytes = |data: *mut std::ffi::c_void, len: usize| {
+        if len == 0 || data.is_null() {
+          Vec::new()
+        } else {
+          // SAFETY: napi reports `len` readable bytes at `data`.
+          unsafe { std::slice::from_raw_parts(data.cast::<u8>(), len) }.to_vec()
+        }
       };
-      BindValue::Blob(bytes)
+      match kind {
+        // neon's `JsUint8Array` (`Buffer`, `Uint8Array`, `Uint8ClampedArray`):
+        // the viewed bytes.
+        sys::TypedarrayType::uint8_array | sys::TypedarrayType::uint8_clamped_array => BindValue::Blob(bytes(data, len)),
+        // `JsFloat32Array`: `v.buffer(cx).as_slice(cx)`, the whole underlying
+        // ArrayBuffer regardless of the view's offset and length.
+        sys::TypedarrayType::float32_array => {
+          let mut ab_data: *mut std::ffi::c_void = ptr::null_mut();
+          let mut ab_len = 0usize;
+          check!(unsafe { sys::napi_get_arraybuffer_info(env, ab, &mut ab_data, &mut ab_len) });
+          BindValue::Blob(bytes(ab_data, ab_len))
+        }
+        _ => BindValue::Invalid,
+      }
     }
     _ => BindValue::Invalid,
   })
 }
 
 /// A normalized `InStatement` coming from `packages/engine-rs/src/sqlite`:
-/// `{ sql, args?: unknown[], names?: string[], error?: [kind, message] }`.
+/// `{ sql, args?: unknown[], error?: [kind, message] }`. Named arguments are
+/// resolved to positional values by the TS glue (see `executeConvertedSync`).
 pub struct JsStatement(Statement);
 
 impl TypeName for JsStatement {
@@ -223,14 +250,7 @@ impl FromNapiValue for JsStatement {
       } else {
         array_items(env, args_v)?.into_iter().map(|item| read_bind_value(env, item)).collect::<Result<Vec<_>>>()?
       };
-      let names_v = get(env, v, "names")?;
-      let args = if type_of(env, names_v)? == sys::ValueType::napi_undefined {
-        Args::Positional(values)
-      } else {
-        let names = array_items(env, names_v)?.into_iter().map(|n| read_string(env, n)).collect::<Result<Vec<_>>>()?;
-        Args::Named(names.into_iter().zip(values).collect())
-      };
-      Ok(JsStatement(Statement { sql, args, error }))
+      Ok(JsStatement(Statement { sql, args: Args::Positional(values), error }))
     }
   }
 }
@@ -243,7 +263,7 @@ enum Value {
   Id(ConnId),
   Bool(bool),
   Result(ResultSet),
-  Results(Vec<ResultSet>),
+  Names(Vec<Option<String>>),
 }
 
 /// `{ ok: value }` or `{ error: { kind, message, code?, rawCode? } }`.
@@ -275,9 +295,9 @@ impl From<ResultSet> for Value {
     Value::Result(r)
   }
 }
-impl From<Vec<ResultSet>> for Value {
-  fn from(r: Vec<ResultSet>) -> Self {
-    Value::Results(r)
+impl From<Vec<Option<String>>> for Value {
+  fn from(names: Vec<Option<String>>) -> Self {
+    Value::Names(names)
   }
 }
 
@@ -311,8 +331,10 @@ unsafe fn result_set_to_js(env: sys::napi_env, rs: &ResultSet) -> Result<sys::na
     set(env, obj, "columnTypes", types)?;
     set(env, obj, "rows", rows)?;
     set(env, obj, "rowsAffected", js_number(env, rs.rows_affected as f64)?)?;
+    // `BigInt(info.lastInsertRowid)`: the binding returns the rowid as a JS
+    // number (`cx.number(last_insert_rowid as f64)`), so it is rounded.
     let rowid = match rs.last_insert_rowid {
-      Some(id) => js_bigint(env, id)?,
+      Some(id) => js_bigint_from_integral_f64(env, id as f64)?,
       None => js_undefined(env)?,
     };
     set(env, obj, "lastInsertRowid", rowid)?;
@@ -366,10 +388,14 @@ impl ToNapiValue for Outcome {
             Value::Id(id) => js_number(env, *id as f64)?,
             Value::Bool(b) => js_bool(env, *b)?,
             Value::Result(rs) => result_set_to_js(env, rs)?,
-            Value::Results(list) => {
-              let arr = js_array(env, list.len())?;
-              for (i, rs) in list.iter().enumerate() {
-                set_index(env, arr, i, result_set_to_js(env, rs)?)?;
+            Value::Names(names) => {
+              let arr = js_array(env, names.len())?;
+              for (i, name) in names.iter().enumerate() {
+                let v = match name {
+                  Some(name) => js_string(env, name)?,
+                  None => js_null(env)?,
+                };
+                set_index(env, arr, i, v)?;
               }
               arr
             }
@@ -392,7 +418,7 @@ type Resolver<T> = Box<dyn FnOnce(Env) -> Result<T> + Send>;
 /// Runs `job` on the ordered queue of connection `id` (see
 /// `payload_sqlite::worker`) and returns a promise of its result; an `Err`
 /// rejects the promise. The job runs after every job queued earlier for any
-/// id of the same database file, and alone on that file, so Rust engine code
+/// id, and alone, so Rust engine code
 /// can interleave with `@libsql/client`-style calls exactly in call order.
 pub fn queue_job<'env, T: ToNapiValue + Send + 'static>(
   env: &'env Env,
@@ -450,20 +476,27 @@ fn spawn<'env>(
 // exported functions
 
 /// `createClient(config)`: resolves the URL, opens the database (on the
-/// calling thread, as `new Database(path)` does) and runs
-/// `SELECT 1 AS checkThatTheDatabaseCanBeOpened` in order on the file's queue.
+/// calling thread, as `new Database(path, opts)` does) and runs
+/// `SELECT 1 AS checkThatTheDatabaseCanBeOpened` in order on the queue.
 /// Returns `{ ok: { id, path, intMode } }`; `id` addresses the client.
+/// `encryption_key` is `config.encryptionKey ?? ""` when that is a string;
+/// the `is_*_valid` flags tell whether `authToken` / `encryptionKey` are
+/// strings or nullish (see `ClientConfig`).
 #[napi]
 pub fn sqlite_create_client(
   url: String,
   int_mode_json: String,
   sync_url: bool,
-  encryption_key: bool,
+  is_auth_token_valid: bool,
+  encryption_key: String,
+  is_encryption_key_valid: bool,
 ) -> Result<CreatedClient> {
-  let config = ClientConfig { url, int_mode_json, sync_url, encryption_key };
+  let config =
+    ClientConfig { url, int_mode_json, sync_url, is_auth_token_valid, encryption_key, is_encryption_key_valid };
   let created = (|| -> payload_sqlite::Result<CreatedClientData> {
     let target = resolve_config(&config)?;
-    let id = worker::open_client(&target.path)?;
+    let options: OpenOptions = target.options.clone();
+    let id = worker::open_client_with(&target.path, &options)?;
     let check_mode = target.int_mode;
     let checked = worker::call(id, move |session| {
       session.conn()?.execute_sql("SELECT 1 AS checkThatTheDatabaseCanBeOpened", check_mode).map(|_| ())
@@ -539,32 +572,6 @@ pub fn sqlite_execute<'env>(
   })
 }
 
-/// `Sqlite3Client.batch` (`kind = "batch"`, with `mode`), `Sqlite3Client.migrate`
-/// (`kind = "migrate"`) or `Sqlite3Transaction.batch` (`kind = "transaction"`).
-#[napi]
-pub fn sqlite_batch<'env>(
-  env: &'env Env,
-  id: u32,
-  stmts: Vec<JsStatement>,
-  int_mode_name: String,
-  kind: String,
-  mode: String,
-) -> Result<Object<'env>> {
-  let int_mode = int_mode(&int_mode_name);
-  let stmts: Vec<Statement> = stmts.into_iter().map(|s| s.0).collect();
-  let in_transaction = kind == "transaction";
-  spawn(env, id, in_transaction, move |session| {
-    session
-      .conn()
-      .and_then(|conn| match kind.as_str() {
-        "migrate" => client::migrate(conn, &stmts, int_mode),
-        "transaction" => client::tx_batch(conn, &stmts, int_mode),
-        _ => client::batch(conn, &stmts, &mode, int_mode),
-      })
-      .into()
-  })
-}
-
 /// `Sqlite3Client.executeMultiple` / `Sqlite3Transaction.executeMultiple`.
 #[napi]
 pub fn sqlite_execute_multiple<'env>(
@@ -606,8 +613,51 @@ pub fn sqlite_transaction_end<'env>(env: &'env Env, id: u32, action: String, int
   })
 }
 
+/// Runs `f` on the queue after all earlier work and blocks the JS thread
+/// until it is done; transaction connections that left their transaction
+/// are released afterwards.
+fn call_sync<T: Into<Value>>(
+  id: ConnId,
+  f: impl FnOnce(&mut Session<'_>) -> payload_sqlite::Result<T> + Send + 'static,
+) -> Outcome
+where
+  T: Send + 'static,
+{
+  let result = worker::call(id, move |session| {
+    let r = f(session);
+    session.retire_finished_transaction();
+    r
+  });
+  match result {
+    Ok(r) => r.into(),
+    Err(e) => Outcome(Err(e)),
+  }
+}
+
+/// `executeStmt(db, stmt)` on the client's `#getDb()` / the transaction's
+/// `#database`, synchronously (one step of a batch or migration).
+#[napi]
+pub fn sqlite_execute_sync(id: u32, stmt: JsStatement, int_mode_name: String) -> Outcome {
+  let mode = int_mode(&int_mode_name);
+  call_sync(id, move |session| session.conn()?.execute(&stmt.0, mode))
+}
+
+/// `db.prepare(sql)` followed by the parameter names the binding looks up in
+/// a named-arguments object (`null` for nameless parameters), synchronously.
+#[napi]
+pub fn sqlite_parameter_names_sync(id: u32, sql: String) -> Outcome {
+  call_sync(id, move |session| session.conn()?.parameter_names(&sql))
+}
+
+/// `#getDb()` of a client (opens `#db` if a transaction detached it),
+/// synchronously.
+#[napi]
+pub fn sqlite_get_db_sync(id: u32) -> Outcome {
+  call_sync(id, |session| session.conn().map(|_| ()))
+}
+
 /// `db.inTransaction` (the `Sqlite3Transaction.closed` getter), evaluated
-/// after all queued work on the database file. Blocks the JS thread.
+/// after all queued work. Blocks the JS thread.
 #[napi]
 pub fn sqlite_in_transaction(id: u32) -> Outcome {
   match worker::call(id, |session| session.conn().map(|conn| conn.in_transaction())) {

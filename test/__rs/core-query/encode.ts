@@ -72,7 +72,8 @@ export const encodeData = (root: unknown): { objects: unknown[]; root: unknown }
     if (Array.isArray(v)) {
       return Array.from(v, encode)
     }
-    const out: Record<string, unknown> = {}
+    // null prototype: an own `__proto__` key stays a plain key
+    const out: Record<string, unknown> = Object.create(null)
     const keys = Object.keys(v)
     for (const key of keys) {
       out[key] = encode((v as any)[key])
@@ -144,7 +145,7 @@ export const encodeCfg = (
         if (Array.isArray(v)) {
           return Array.from(v, (item) => encodeCfg(item, index, stack))
         }
-        const out: Record<string, unknown> = {}
+        const out: Record<string, unknown> = Object.create(null)
         const keys = Object.keys(v)
         for (const key of keys) {
           out[key] = encodeCfg((v as any)[key], index, stack)

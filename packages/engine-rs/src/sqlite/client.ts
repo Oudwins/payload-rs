@@ -7,14 +7,23 @@
  * The JS-only state (`closed`, argument conversion, `Row` objects) is ported
  * here verbatim. The client's `#db` (lazily re-created after `transaction()`)
  * lives in Rust behind the client id; all database work runs in Rust on one
- * ordered queue per database file, shared by the client, its transactions and
- * every other client of the file, so calls take effect strictly in call order
- * as with libsql's synchronous binding.
+ * process-wide ordered queue, shared by every client and transaction, so
+ * calls take effect strictly in call order as with libsql's synchronous
+ * binding.
+ *
+ * Single statements without named arguments run as queued jobs. Where
+ * upstream interleaves JS evaluation with statement execution (batches and
+ * migrations read each statement only when it is reached; named arguments
+ * are looked up by the parameter names of the prepared statement), the port
+ * runs upstream's code verbatim on top of blocking native steps
+ * (`executeStmtSync`), exactly as the synchronous `libsql` binding does.
  */
 import type { NativeOutcome, NativeResultSet, NativeStatement } from './native.js'
 
 import { LibsqlError, toJsError } from './errors.js'
 import { getNativeSqlite } from './native.js'
+
+type NativeHandleId = number
 
 type IntMode = 'bigint' | 'number' | 'string'
 type TransactionMode = 'deferred' | 'read' | 'write'
@@ -168,54 +177,128 @@ function valueToSql(value: unknown, intMode: IntMode): unknown {
   return value
 }
 
+/** A statement after the argument conversion of upstream `executeStmt`. */
+type ConvertedStatement = { args: Record<string, unknown> | unknown[]; sql: unknown }
+
 /**
- * The argument handling of `executeStmt`. Errors are not thrown here but
- * attached to the statement, so Rust raises them at exactly the point where
- * `executeStmt` would throw (after earlier batch statements / closed checks).
+ * The argument conversion of upstream `executeStmt`, verbatim: reads
+ * `stmt.sql` once and `stmt.args` twice, and throws what `valueToSql` throws.
+ * Anything but an array of args (including none) builds a named-arguments
+ * object.
  */
-function normalizeStatement(stmt: InStatement, intMode: IntMode): NativeStatement {
-  let sql: string = ''
-  try {
-    if (typeof stmt === 'string') {
-      return { sql: stmt }
-    }
-    sql = stmt.sql
-    if (Array.isArray(stmt.args)) {
-      return { args: stmt.args.map((value) => valueToSql(value, intMode)), sql }
-    }
-    const args: Record<string, unknown> = {}
-    for (const name in stmt.args) {
-      const argName =
-        name[0] === '@' || name[0] === '$' || name[0] === ':' ? name.substring(1) : name
-      args[argName] = valueToSql((stmt.args as Record<string, unknown>)[name], intMode)
-    }
-    return { args: Object.values(args), names: Object.keys(args), sql }
-  } catch (e) {
-    const err = e as Error
-    const kind =
-      err instanceof RangeError ? 'RangeError' : err instanceof TypeError ? 'TypeError' : 'Error'
-    return { error: [kind, String(err?.message)], sql: typeof sql === 'string' ? sql : '' }
+function convertStatement(stmt: InStatement, intMode: IntMode): ConvertedStatement {
+  if (typeof stmt === 'string') {
+    return { args: [], sql: stmt }
   }
+  const sql: unknown = stmt.sql
+  if (Array.isArray(stmt.args)) {
+    return { args: stmt.args.map((value) => valueToSql(value, intMode)), sql }
+  }
+  const args: Record<string, unknown> = {}
+  for (const name in stmt.args) {
+    const argName = name[0] === '@' || name[0] === '$' || name[0] === ':' ? name.substring(1) : name
+    args[argName] = valueToSql((stmt.args as Record<string, unknown>)[name], intMode)
+  }
+  return { args, sql }
 }
 
+/** `db.prepare(sql)` of the binding reads `sql` as a string argument. */
+const sqlTypeError = () => new TypeError('failed to downcast any to string')
+
+/** A thrown error as `[class, message]` for `NativeStatement.error`. */
+const describeThrown = (e: unknown): [string, string] => {
+  const err = e as Error
+  const kind =
+    err instanceof RangeError ? 'RangeError' : err instanceof TypeError ? 'TypeError' : 'Error'
+  return [kind, String(err?.message)]
+}
+
+/**
+ * Runs one statement as a queued job. Errors of the conversion (and a
+ * non-string `sql`) are not thrown here but attached to the statement, so
+ * Rust raises them in queue order exactly where `executeStmt` would throw
+ * (after the transaction's closed check). Named arguments need the prepared
+ * statement's parameter names and run through `runNamed` instead.
+ */
 async function executeStmt(
   handle: Handle,
   stmt: InStatement,
   intMode: IntMode,
   inTransaction: boolean,
+  runNamed: (converted: ConvertedStatement) => ResultSetImpl,
 ): Promise<ResultSetImpl> {
-  const native = getNativeSqlite()
+  let converted: ConvertedStatement
+  try {
+    converted = convertStatement(stmt, intMode)
+  } catch (e) {
+    return runQueued(handle, { error: describeThrown(e), sql: '' }, intMode, inTransaction)
+  }
+  const { args, sql } = converted
+  if (!Array.isArray(args)) {
+    return runNamed(converted)
+  }
+  const native: NativeStatement =
+    typeof sql === 'string' ? { args, sql } : { error: describeThrown(sqlTypeError()), sql: '' }
+  return runQueued(handle, native, intMode, inTransaction)
+}
+
+async function runQueued(
+  handle: Handle,
+  native: NativeStatement,
+  intMode: IntMode,
+  inTransaction: boolean,
+) {
   return toResultSet(
-    unwrap(
-      await native.sqliteExecute(
-        handle.id,
-        normalizeStatement(stmt, intMode),
-        intMode,
-        inTransaction,
-      ),
-    ),
+    unwrap(await getNativeSqlite().sqliteExecute(handle.id, native, intMode, inTransaction)),
   )
 }
+
+/** `transactionModeToBegin` of `@libsql/core/util`. */
+function transactionModeToBegin(mode: unknown) {
+  if (mode === 'write') {
+    return 'BEGIN IMMEDIATE'
+  } else if (mode === 'read') {
+    return 'BEGIN TRANSACTION READONLY'
+  } else if (mode === 'deferred') {
+    return 'BEGIN DEFERRED'
+  }
+  throw RangeError('Unknown transaction mode, supported values are "write", "read" and "deferred"')
+}
+
+/**
+ * Port of upstream `executeStmt(db, stmt, intMode)`, run synchronously on the
+ * connection behind `id` (the client's `#getDb()` or the transaction's
+ * `#database`).
+ */
+const executeStmtSync = (id: NativeHandleId, stmt: InStatement, intMode: IntMode) =>
+  executeConvertedSync(id, convertStatement(stmt, intMode), intMode)
+
+/**
+ * The binding part of `executeStmtSync`. Named arguments are looked up like
+ * the binding's `convert_params_object`: `args[name.slice(1)]` (a JS property
+ * lookup, prototype included) for each parameter name of the prepared
+ * statement. A nameless `?` parameter with named arguments aborts the process
+ * in the binding (`unwrap` on `None`); here it is bound to NULL.
+ */
+function executeConvertedSync(
+  id: NativeHandleId,
+  { args, sql }: ConvertedStatement,
+  intMode: IntMode,
+) {
+  const native = getNativeSqlite()
+  if (typeof sql !== 'string') {
+    throw sqlTypeError()
+  }
+  const values = Array.isArray(args)
+    ? args
+    : unwrap(native.sqliteParameterNamesSync(id, sql)).map((name) =>
+        name === null ? null : args[name.substring(1)],
+      )
+  return toResultSet(unwrap(native.sqliteExecuteSync(id, { args: values, sql }, intMode)))
+}
+
+/** `db.inTransaction` of the connection behind `id`, synchronously. */
+const inTransactionSync = (id: NativeHandleId) => unwrap(getNativeSqlite().sqliteInTransaction(id))
 
 const toStatement = (stmtOrSql: InStatement, args?: InArgs): InStatement =>
   typeof stmtOrSql === 'string' ? { args: args || [], sql: stmtOrSql } : stmtOrSql
@@ -246,20 +329,31 @@ export class Sqlite3Client {
     }
   }
 
+  /** `#getDb()`: opens `#db` in Rust if a transaction detached it, synchronously. */
+  #getDb() {
+    unwrap(getNativeSqlite().sqliteGetDbSync(this.#handle.id))
+    return this.#handle.id
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
   async batch(stmts: Array<InStatement>, mode: TransactionMode = 'deferred') {
     this.#checkNotClosed()
-    const intMode = this.#intMode
-    const normalized = stmts.map((stmt) => normalizeStatement(stmt, intMode))
-    const results = unwrap(
-      await getNativeSqlite().sqliteBatch(
-        this.#handle.id,
-        normalized,
-        intMode,
-        'batch',
-        String(mode),
-      ),
-    )
-    return results.map(toResultSet)
+    const db = this.#getDb()
+    try {
+      executeStmtSync(db, transactionModeToBegin(mode), this.#intMode)
+      const resultSets = stmts.map((stmt) => {
+        if (!inTransactionSync(db)) {
+          throw new LibsqlError('The transaction has been rolled back', 'TRANSACTION_CLOSED')
+        }
+        return executeStmtSync(db, stmt, this.#intMode)
+      })
+      executeStmtSync(db, 'COMMIT', this.#intMode)
+      return resultSets
+    } finally {
+      if (inTransactionSync(db)) {
+        executeStmtSync(db, 'ROLLBACK', this.#intMode)
+      }
+    }
   }
 
   close() {
@@ -270,7 +364,9 @@ export class Sqlite3Client {
   async execute(stmtOrSql: InStatement, args?: InArgs) {
     const stmt = toStatement(stmtOrSql, args)
     this.#checkNotClosed()
-    return executeStmt(this.#handle, stmt, this.#intMode, false)
+    return executeStmt(this.#handle, stmt, this.#intMode, false, (converted) =>
+      executeConvertedSync(this.#getDb(), converted, this.#intMode),
+    )
   }
 
   async executeMultiple(sql: string) {
@@ -280,29 +376,39 @@ export class Sqlite3Client {
     )
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async migrate(stmts: Array<InStatement>) {
     this.#checkNotClosed()
-    const intMode = this.#intMode
-    const normalized = stmts.map((stmt) => normalizeStatement(stmt, intMode))
-    const results = unwrap(
-      await getNativeSqlite().sqliteBatch(
-        this.#handle.id,
-        normalized,
-        intMode,
-        'migrate',
-        'deferred',
-      ),
-    )
-    return results.map(toResultSet)
+    const db = this.#getDb()
+    try {
+      executeStmtSync(db, 'PRAGMA foreign_keys=off', this.#intMode)
+      executeStmtSync(db, transactionModeToBegin('deferred'), this.#intMode)
+      const resultSets = stmts.map((stmt) => {
+        if (!inTransactionSync(db)) {
+          throw new LibsqlError('The transaction has been rolled back', 'TRANSACTION_CLOSED')
+        }
+        return executeStmtSync(db, stmt, this.#intMode)
+      })
+      executeStmtSync(db, 'COMMIT', this.#intMode)
+      return resultSets
+    } finally {
+      if (inTransactionSync(db)) {
+        executeStmtSync(db, 'ROLLBACK', this.#intMode)
+      }
+      executeStmtSync(db, 'PRAGMA foreign_keys=on', this.#intMode)
+    }
   }
 
+  /**
+   * `this.#getDb().sync()`: a local (non-replica) database rejects with the
+   * binding's `libsql::Error::SyncNotSupported("File")` (plain `Error`,
+   * `code: ""`).
+   */
   // eslint-disable-next-line @typescript-eslint/require-await
   async sync(): Promise<never> {
     this.#checkNotClosed()
-    throw new LibsqlError(
-      'sync() (embedded replicas) is not supported by the Rust SQLite runtime',
-      'SYNC_NOT_SUPPORTED',
-    )
+    this.#getDb()
+    throw toJsError({ code: '', kind: 'Error', message: 'SyncNotSupported("File")' })
   }
 
   /**
@@ -312,8 +418,13 @@ export class Sqlite3Client {
    */
   async transaction(mode: TransactionMode = 'write') {
     const intMode = this.#intMode
+    // Any non-string mode fails `transactionModeToBegin` like '' does.
     const id = unwrap(
-      await getNativeSqlite().sqliteTransaction(this.#handle.id, String(mode), intMode),
+      await getNativeSqlite().sqliteTransaction(
+        this.#handle.id,
+        typeof mode === 'string' ? mode : '',
+        intMode,
+      ),
     )
     return new Sqlite3Transaction(newHandle(id), intMode)
   }
@@ -331,19 +442,18 @@ export class Sqlite3Transaction {
     handles.set(this, database)
   }
 
+  #checkNotClosed() {
+    if (this.closed) {
+      throw new LibsqlError('The transaction is closed', 'TRANSACTION_CLOSED')
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
   async batch(stmts: Array<InStatement>) {
-    const intMode = this.#intMode
-    const normalized = stmts.map((stmt) => normalizeStatement(stmt, intMode))
-    const results = unwrap(
-      await getNativeSqlite().sqliteBatch(
-        this.#database.id,
-        normalized,
-        intMode,
-        'transaction',
-        '',
-      ),
-    )
-    return results.map(toResultSet)
+    return stmts.map((stmt) => {
+      this.#checkNotClosed()
+      return executeStmtSync(this.#database.id, stmt, this.#intMode)
+    })
   }
 
   close() {
@@ -355,7 +465,16 @@ export class Sqlite3Transaction {
   }
 
   async execute(stmtOrSql: InStatement, args?: InArgs) {
-    return executeStmt(this.#database, toStatement(stmtOrSql, args), this.#intMode, true)
+    return executeStmt(
+      this.#database,
+      toStatement(stmtOrSql, args),
+      this.#intMode,
+      true,
+      (converted) => {
+        this.#checkNotClosed()
+        return executeConvertedSync(this.#database.id, converted, this.#intMode)
+      },
+    )
   }
 
   async executeMultiple(sql: string) {
@@ -396,14 +515,20 @@ export function createClient(config: Config): Sqlite3Client {
   // `let { url, authToken, tls, intMode, concurrency } = config`: `url` is
   // destructured first (matters for the TypeError message when config is null).
   const { url } = config
-  let { intMode } = config
+  let { authToken, intMode } = config
   intMode ??= 'number'
+  // `new Database(path, opts)` reads `opts.authToken ?? ""` and
+  // `opts.encryptionKey ?? ""` as string arguments.
+  authToken ??= ''
+  const encryptionKey: unknown = config.encryptionKey ?? ''
   const created = unwrap(
     getNativeSqlite().sqliteCreateClient(
       String(url),
       String(JSON.stringify(intMode)),
       Boolean(config.syncUrl),
-      Boolean(config.encryptionKey),
+      typeof authToken === 'string',
+      typeof encryptionKey === 'string' ? encryptionKey : '',
+      typeof encryptionKey === 'string',
     ),
   )
   return new Sqlite3Client(newHandle(created.id), created.intMode)
@@ -412,7 +537,7 @@ export function createClient(config: Config): Sqlite3Client {
 /**
  * The Rust connection id (`payload_sqlite::ConnId`) behind a client or
  * transaction created by this module. Rust engine code queued for this id
- * runs in call order with every other call on the same database file, on the
+ * runs in call order with every other call (one process-wide queue), on the
  * client's current connection (`#getDb()`) or the transaction's connection.
  */
 export function getSqliteConnId(target: Sqlite3Client | Sqlite3Transaction): number {

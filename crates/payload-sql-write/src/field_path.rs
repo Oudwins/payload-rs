@@ -1,56 +1,56 @@
 //! Port of `expandOwnDottedKey` / `setOwnProperty` from
-//! `packages/payload/src/utilities/fieldPath.ts`.
+//! `packages/payload/src/utilities/fieldPath.ts`, on the transform's [`Heap`].
 
-use payload_engine::error::Result;
-use payload_engine::js::{JsVal, Obj};
+use payload_engine::error::{EngineError, Result};
+use payload_engine::js::JsVal;
 
-use crate::js::{self, is_array_index, to_js_string, type_error};
+use crate::heap::{HVal, Heap};
+use crate::js::to_js_string;
+use crate::js::type_error;
 
-/// `Object.hasOwn(target, key)`
-fn has_own(target: &JsVal, key: &str) -> bool {
+/// `setOwnProperty({ key, target, value })`
+fn set_own_property(heap: &mut Heap, target: &HVal, key: &str, value: HVal) -> Result<()> {
   match target {
-    JsVal::Obj(o) => o.contains_key(key),
-    JsVal::Arr(a) => key == "length" || (is_array_index(key) && key.parse::<usize>().is_ok_and(|i| i < a.len())),
-    JsVal::Str(s) => {
-      key == "length" || (is_array_index(key) && key.parse::<usize>().is_ok_and(|i| i < s.encode_utf16().count()))
+    // `Object.hasOwn(target, key) || !(key in target)` -> `Reflect.set`, otherwise
+    // `Object.defineProperty`: both create / overwrite the own data property here.
+    HVal::Node(_) => heap.set(target, key, value),
+    HVal::Prim(JsVal::Null | JsVal::Undefined) => Err(type_error("Cannot convert undefined or null to object")),
+    // functions are objects; their properties are not modelled
+    HVal::Prim(JsVal::Fn(_)) => Ok(()),
+    // an own index / `length` of a string: `Reflect.set` on a primitive
+    HVal::Prim(JsVal::Str(_)) if heap.has_own(target, key) => {
+      Err(EngineError::new("TypeError", "Reflect.set called on non-object"))
     }
-    _ => false,
+    // `key in primitive` throws before anything is assigned
+    HVal::Prim(other) => {
+      Err(type_error(format!("Cannot use 'in' operator to search for '{key}' in {}", to_js_string(other))))
+    }
   }
 }
 
-/// `setOwnProperty({ key, target, value })` for the targets reachable here.
-fn set_own_property(target: &mut JsVal, key: &str, value: JsVal) -> Result<()> {
-  match target {
-    JsVal::Obj(_) | JsVal::Arr(_) | JsVal::Null | JsVal::Undefined => js::set(target, key, value),
-    JsVal::Fn(_) => Ok(()),
-    // `key in primitive` throws before anything is assigned.
-    other => Err(type_error(format!("Cannot use 'in' operator to search for '{key}' in {}", to_js_string(other)))),
-  }
-}
-
-/// `expandOwnDottedKey({ key, target })`: moves `target['a.b']` to
-/// `target.a['b']`, returning whether the key was expanded.
-pub fn expand_own_dotted_key(key: &str, target: &mut JsVal) -> Result<bool> {
-  if !has_own(target, key) || !key.contains('.') {
+/// `expandOwnDottedKey({ key, target })`: moves `target['a.b']` to `target.a['b']`, returning
+/// whether the key was expanded.
+pub(crate) fn expand_own_dotted_key(heap: &mut Heap, key: &str, target: &HVal) -> Result<bool> {
+  if !heap.has_own(target, key) || !key.contains('.') {
     return Ok(false);
   }
 
   if key.split('.').any(|segment| segment == "__proto__") {
-    js::delete(target, key)?;
+    heap.delete(target, key)?;
     return Ok(false);
   }
 
   let (field_name, remaining_path) = key.split_once('.').unwrap_or((key, ""));
 
-  if !has_own(target, field_name) || !target.get(field_name).truthy() {
-    set_own_property(target, field_name, JsVal::obj(Obj::new()))?;
+  if !heap.has_own(target, field_name) || !heap.get(target, field_name)?.truthy() {
+    let empty = heap.new_object();
+    set_own_property(heap, target, field_name, empty)?;
   }
 
-  let value = js::get(target, key)?.clone();
-  if let Some(nested_target) = js::get_mut(target, field_name) {
-    set_own_property(nested_target, remaining_path, value)?;
-  }
-  js::delete(target, key)?;
+  let nested_target = heap.get(target, field_name)?;
+  let value = heap.get(target, key)?;
+  set_own_property(heap, &nested_target, remaining_path, value)?;
+  heap.delete(target, key)?;
 
   Ok(true)
 }

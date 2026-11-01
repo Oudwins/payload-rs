@@ -351,7 +351,7 @@ fn resolve_where_path<'p>(
       };
       match column_table.columns.get(&path_plan.column_path) {
         Some(c) => {
-          WhereColumn::Column(ColumnRef { table: column_table.db_name.clone(), name: c.name.clone(), primary: false })
+          WhereColumn::Column(ColumnRef { table: column_table.db_name.clone(), table_name: column_table.db_name.clone(), name: c.name.clone(), primary: false })
         }
         None => return Err(EngineError::new("TypeError", "Cannot read properties of undefined (reading 'name')")),
       }

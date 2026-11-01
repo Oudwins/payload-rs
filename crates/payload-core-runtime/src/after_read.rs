@@ -13,7 +13,7 @@ use std::cell::OnceCell;
 use std::rc::Rc;
 
 use crate::config::{self, BlockCandidate, FieldDesc, FieldsDesc, Kind, Segment, format_number};
-use crate::executor::{await_call, await_call_returning, await_js, spawn};
+use crate::executor::{await_call, await_js, spawn};
 use crate::host::{self, call_host, host};
 use crate::js::{self, JsResult, Local, Thrown, Type, Val};
 
@@ -262,7 +262,7 @@ fn traverse_fields(ctx: &Rc<Ctx>, trav: Rc<Trav>) -> JsResult<()> {
   let plan = trav.fields.plan(ctx.override_access_truthy, parent_localized);
   for segment in plan.iter() {
     match *segment {
-      Segment::Run(start, end) => leaf_run(ctx, &trav, start, end)?,
+      Segment::Run(start, end, hooked) => leaf_run(ctx, &trav, start, end, hooked)?,
       Segment::Field(index) => {
         let desc = &items[index as usize];
         if matches!(desc.kind, Kind::Row | Kind::Collapsible | Kind::Group) && !desc.has_name {
@@ -272,12 +272,8 @@ fn traverse_fields(ctx: &Rc<Ctx>, trav: Rc<Trav>) -> JsResult<()> {
           push_settled(ctx, result)?;
           continue;
         }
-        let promise = if desc.hooked_leaf.holds(ctx.override_access_truthy, parent_localized) {
-          spawn(hooked_leaf(ctx.clone(), trav.clone(), desc.clone(), index as usize))?
-        } else {
-          let field_js = Val::Ref(desc.node.clone());
-          spawn(field_promise(ctx.clone(), trav.clone(), desc.clone(), field_js, index as usize))?
-        };
+        let field_js = Val::Ref(desc.node.clone());
+        let promise = spawn(field_promise(ctx.clone(), trav.clone(), desc.clone(), field_js, index as usize))?;
         js::push(ctx.field_promises.get(), promise)?;
       }
     }
@@ -331,28 +327,42 @@ mod leaf_run_bits {
 /// `traverseFields` for the plain leaves `start..end` (see [`config::Leaf`]): one host call
 /// performs, per field and in order, exactly the sibling doc reads/deletes `promise()` does for
 /// such a field and pushes the same kind of promise (fulfilled, or rejected with what a read
-/// threw) onto `fieldPromises`. No field in the run awaits, so `promise()` would also complete
+/// threw) onto `fieldPromises`. No plain leaf awaits, so `promise()` would also complete
 /// synchronously, and the promise count and states, hence the microtask schedule, are unchanged.
-fn leaf_run(ctx: &Rc<Ctx>, t: &Rc<Trav>, start: u32, end: u32) -> JsResult<()> {
+/// A hooked leaf in the run (`hooked`) is a call of the host's `hookedLeaf`, a JS `async`
+/// function with the body `promise()` has for such a field, whose promise is pushed in place.
+fn leaf_run(ctx: &Rc<Ctx>, t: &Rc<Trav>, start: u32, end: u32, hooked: bool) -> JsResult<()> {
   let h = host()?;
   let table = t.fields.leaf_table()?;
   let bits = leaf_bits(ctx, t);
   let select = t.select.get();
   let mut from = start;
   while from < end {
-    let stopped = call_host(
-      &h.leaf_run,
-      &[
-        t.sibling_doc.get(),
-        table.keys.get(),
-        table.flags.get(),
-        js::number(f64::from(from)),
-        js::number(f64::from(end)),
-        js::number(f64::from(bits)),
-        select,
-        ctx.field_promises.get(),
-      ],
-    )?;
+    let mut args = [js::undefined(); 14];
+    args[..8].copy_from_slice(&[
+      t.sibling_doc.get(),
+      table.keys.get(),
+      table.flags.get(),
+      js::number(f64::from(from)),
+      js::number(f64::from(end)),
+      js::number(f64::from(bits)),
+      select,
+      ctx.field_promises.get(),
+    ]);
+    let argc = if hooked {
+      args[8..].copy_from_slice(&[
+        ctx.arr.get(),
+        t.block_data.get(),
+        t.sibling_fields(),
+        js::string(&t.parent_index_path),
+        js::string(&t.parent_path),
+        js::string(&t.parent_schema_path),
+      ]);
+      14
+    } else {
+      8
+    };
+    let stopped = call_host(&h.leaf_run, &args[..argc])?;
     // -1: done. Otherwise the index of a field whose default value applies: the host did its
     // reads up to `typeof siblingDoc[field.name] === 'undefined'`; the rest of its `promise()`
     // (from `await getDefaultValue(...)` on) runs as the field's task.
@@ -368,74 +378,6 @@ fn leaf_run(ctx: &Rc<Ctx>, t: &Rc<Trav>, start: u32, end: u32) -> JsResult<()> {
     from = index + 1;
   }
   Ok(())
-}
-
-/// `promise()` of a field that is a plain leaf apart from its `afterRead` hooks (see
-/// [`config::Leaf`]): the leaf reads before the hooks (`leafPrologue`), the hooks loop, then the
-/// default value check (`leafEpilogue`) and step. Each hook call, its await and the
-/// `siblingDoc[field.name] = hookedValue` continuation go through one host call
-/// (`callLeafHook`).
-async fn hooked_leaf(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, index: usize) -> JsResult<Val> {
-  let h = host()?;
-  let flags = js::number(f64::from(f.leaf_flags()));
-  let state = call_host(
-    &h.leaf_prologue,
-    &[t.sibling_doc.get(), f.name_key(), flags, js::number(f64::from(leaf_bits(&ctx, &t))), t.select.get()],
-  )?;
-  // 0: continue, 1: continue (hidden value removed), 2: unselected (`promise()` returned)
-  let state = js::get_f64(state);
-  if state == 2.0 {
-    return Ok(Val::Undefined);
-  }
-  let removed_field_value = state == 1.0;
-
-  // for (const hook of field.hooks.afterRead)
-  let field_js = Val::Ref(f.node.clone());
-  let hooks = Val::from_local(host::get_named(host::get_named(field_js.get(), "hooks")?, "afterRead")?)?;
-  let paths = get_field_paths(&f, index, &t.parent_index_path, &t.parent_path, &t.parent_schema_path);
-  // The segment arrays, created by the first hook call from the path strings and shared by all.
-  let mut segments: Option<Val> = None;
-  let mut i = 0;
-  while i < js::array_length(hooks.get()) {
-    let hook = js::get_element(hooks.get(), i)?;
-    i += 1;
-    let (strings, triple) = match &segments {
-      Some(triple) => ([js::undefined(); 3], triple.get()),
-      None => (
-        [js::string(&paths.path), js::string(&paths.schema_path), js::string(&paths.index_path)],
-        js::undefined(),
-      ),
-    };
-    let (hooked, returned) = await_call_returning(
-      h.call_leaf_hook.get(),
-      &[
-        hook,
-        ctx.arr.get(),
-        t.block_data.get(),
-        field_js.get(),
-        triple,
-        strings[0],
-        strings[1],
-        strings[2],
-        t.sibling_doc.get(),
-        t.sibling_fields(),
-        f.name_key(),
-      ],
-    );
-    if segments.is_none() && i < js::array_length(hooks.get()) {
-      segments = Some(Val::from_local(returned)?);
-    }
-    hooked.await?;
-  }
-
-  let needs_default = call_host(
-    &h.leaf_epilogue,
-    &[t.sibling_doc.get(), f.name_key(), js::number(f64::from(f.leaf_flags())), js::boolean(removed_field_value)],
-  )?;
-  if js::truthy(needs_default) {
-    apply_default_value(&ctx, &t.sibling_doc, &f, &field_js).await?;
-  }
-  Ok(Val::Undefined)
 }
 
 /// The rest of a plain leaf's `promise()` once its default value applies.
@@ -925,7 +867,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
       } else {
         None
       };
-      if let Some(end) = all_plain {
+      if let Some((end, hooked)) = all_plain {
         // `rows.forEach((row) => traverseFields({ siblingDoc: row || {}, ... }))` where every
         // field is a plain leaf: the host runs `leafRun` per row and stops where a default value
         // applies; the engine runs that field's default value step, finishes the row and lets
@@ -936,21 +878,34 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
         let rows = Val::from_local(rows)?;
         let mut start_row = js::number(0.0);
         let mut len = js::number(-1.0);
+        // Rows with hooked leaves also need what `hookedLeaf` reads: the `afterReadArgs` array,
+        // `blockData`, `field.fields` and the paths rows are traversed with.
+        let hooked_args = if hooked {
+          Some([ctx.arr.get(), row_trav.block_data.get(), children.node.get(), js::string(path), js::string(schema_path)])
+        } else {
+          None
+        };
         loop {
-          let stopped = call_host(
-            &h.leaf_rows,
-            &[
-              rows.get(),
-              start_row,
-              len,
-              table.keys.get(),
-              table.flags.get(),
-              js::number(f64::from(end)),
-              bits,
-              array_select.get(),
-              ctx.field_promises.get(),
-            ],
-          )?;
+          let mut args = [js::undefined(); 14];
+          args[..9].copy_from_slice(&[
+            rows.get(),
+            start_row,
+            len,
+            table.keys.get(),
+            table.flags.get(),
+            js::number(f64::from(end)),
+            bits,
+            array_select.get(),
+            ctx.field_promises.get(),
+          ]);
+          let argc = match &hooked_args {
+            Some(extra) => {
+              args[9..].copy_from_slice(extra);
+              14
+            }
+            None => 9,
+          };
+          let stopped = call_host(&h.leaf_rows, &args[..argc])?;
           if js::type_of(stopped) == Type::Number {
             break;
           }
@@ -958,6 +913,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
           let row_index = js::get_f64(js::get_element(stopped, 0)?);
           let field_index = js::get_f64(js::get_element(stopped, 1)?) as u32;
           let row = Rc::new(Trav {
+            parent_path: format!("{path}.{}", row_index as u32).into(),
             select: array_select.clone(),
             select_mode: t.select_mode.clone(),
             sibling_doc: Val::from_local(js::get_element(stopped, 2)?)?,
@@ -966,7 +922,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
           let Some(items) = &children.items else { break };
           let promise = spawn(default_value_tail(ctx.clone(), row.clone(), items[field_index as usize].clone()))?;
           js::push(ctx.field_promises.get(), promise)?;
-          leaf_run(&ctx, &row, field_index + 1, end)?;
+          leaf_run(&ctx, &row, field_index + 1, end, hooked)?;
           start_row = js::number(row_index + 1.0);
           len = js::get_element(stopped, 3)?;
         }

@@ -1,0 +1,13 @@
+[package]
+name = "payload-core-validate-live"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Payload's default field validators (`packages/payload/src/fields/validations.ts`) on live JS
+# values, on the payload-core-runtime (RUST_CORE_DESIGN.md strategy B): the validators read the
+# caller's objects through Node-API at the points TS reads them and await where TS awaits.
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-runtime = { path = "../../payload-core-runtime" }

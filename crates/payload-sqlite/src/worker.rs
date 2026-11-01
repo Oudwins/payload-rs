@@ -1,12 +1,12 @@
 //! Connection registry and ordered execution queues.
 //!
 //! The `libsql` binding runs every statement synchronously on the JS thread,
-//! so no two calls ever overlap: work on a client's connection, on its
-//! transaction connections and on any other client of the same database file
-//! happens strictly in call order. Reproducing that per connection is not
-//! enough (two connections of one file running at the same time produce
-//! `SQLITE_BUSY` where libsql cannot), so every database file gets **one
-//! FIFO queue** shared by all ids opened on it, drained by one worker thread.
+//! so no two calls ever overlap: work on any connection of the process
+//! happens strictly in call order. Reproducing that per connection or per
+//! database file is not enough (two connections touching one file at the
+//! same time produce `SQLITE_BUSY` where libsql cannot, and a file can be
+//! reached by several queues through `ATTACH`), so the process has **one
+//! FIFO queue** shared by all ids, drained by one worker thread.
 //!
 //! Ids ([`ConnId`]) address a [`Target`] on that queue:
 //! - a **client** (`Sqlite3Client`): owns `#db`, opened lazily from its path
@@ -15,22 +15,21 @@
 //!
 //! Rust engine code runs SQL on the same queue as a JS client through
 //! [`submit`] / [`call`]: a job queued for any id runs after every job queued
-//! before it for any id of the same database file, and nothing else runs on
-//! that file while the job runs. Jobs must not block on the JS thread (it may
+//! before it for any id, and nothing else runs while the job runs. Jobs must not block on the JS thread (it may
 //! itself be blocked in [`call`]).
 //!
-//! The worker thread of a queue exits when the queue is empty and none of its
-//! targets holds an open SQLite handle (closed clients, finished
+//! The worker thread exits when the queue is empty and no target holds an
+//! open SQLite handle (closed clients, finished
 //! transactions); the next message starts a new one.
 
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Weak, mpsc};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, mpsc};
 
 use crate::client;
-use crate::conn::Conn;
+use crate::conn::{Conn, OpenOptions};
 use crate::error::{ClientError, Result};
 use crate::value::IntMode;
 
@@ -40,8 +39,8 @@ type Job = Box<dyn FnOnce(&mut Session<'_>) + Send>;
 
 /// What an id addresses on its queue.
 pub enum Target {
-  /// `Sqlite3Client`: `#path` and the lazily (re)opened `#db`.
-  Client { path: String, db: Option<Conn> },
+  /// `Sqlite3Client`: `#path`, `#options` and the lazily (re)opened `#db`.
+  Client { path: String, options: OpenOptions, db: Option<Conn> },
   /// `Sqlite3Transaction`: `#database`.
   Transaction(Conn),
 }
@@ -61,7 +60,7 @@ enum Message {
   Drop(ConnId),
 }
 
-/// The ordered queue of one database file.
+/// The process-wide ordered queue.
 pub struct Queue {
   state: Mutex<QueueState>,
   wake: Condvar,
@@ -75,7 +74,7 @@ struct QueueState {
 }
 
 /// A job's view of its id: the connection it addresses, on the worker that
-/// owns every connection of the database file.
+/// owns every connection.
 pub struct Session<'a> {
   id: ConnId,
   queue: &'a Arc<Queue>,
@@ -95,9 +94,9 @@ impl Session<'_> {
   /// transaction) or `#database` of a transaction.
   pub fn conn(&mut self) -> Result<&mut Conn> {
     match self.targets.get_mut(&self.id) {
-      Some(Target::Client { path, db }) => {
+      Some(Target::Client { path, options, db }) => {
         if db.is_none() {
-          *db = Some(Conn::open(path)?);
+          *db = Some(Conn::open_with(path, options)?);
         }
         db.as_mut().ok_or_else(ClientError::connection_not_open)
       }
@@ -142,7 +141,12 @@ impl Session<'_> {
 }
 
 static IDS: LazyLock<Mutex<HashMap<ConnId, Arc<Queue>>>> = LazyLock::new(Default::default);
-static QUEUES: LazyLock<Mutex<HashMap<String, Weak<Queue>>>> = LazyLock::new(Default::default);
+static QUEUE: LazyLock<Arc<Queue>> = LazyLock::new(|| {
+  Arc::new(Queue {
+    state: Mutex::new(QueueState { messages: VecDeque::new(), targets: Some(HashMap::new()), running: false }),
+    wake: Condvar::new(),
+  })
+});
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static RUNNING_WORKERS: AtomicUsize = AtomicUsize::new(0);
 
@@ -160,30 +164,6 @@ fn ids() -> MutexGuard<'static, HashMap<ConnId, Arc<Queue>>> {
 
 fn next_id() -> ConnId {
   NEXT_ID.fetch_add(1, Ordering::Relaxed)
-}
-
-/// The queue key of a database path: the canonical file path, or the path
-/// itself for in-memory / URI databases (which never share a file).
-fn queue_key(path: &str) -> String {
-  if path.starts_with("file:") || path.is_empty() {
-    return path.to_string();
-  }
-  std::fs::canonicalize(path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_string())
-}
-
-fn queue_for(path: &str) -> Arc<Queue> {
-  let key = queue_key(path);
-  let mut queues = lock(&QUEUES);
-  if let Some(queue) = queues.get(&key).and_then(Weak::upgrade) {
-    return queue;
-  }
-  queues.retain(|_, q| q.strong_count() > 0);
-  let queue = Arc::new(Queue {
-    state: Mutex::new(QueueState { messages: VecDeque::new(), targets: Some(HashMap::new()), running: false }),
-    wake: Condvar::new(),
-  });
-  queues.insert(key, Arc::downgrade(&queue));
-  queue
 }
 
 fn push(queue: &Arc<Queue>, message: Message) {
@@ -249,8 +229,8 @@ fn run_worker(queue: &Arc<Queue>, linger: bool) {
   IN_WORKER.with(|w| w.set(was_in_worker));
 }
 
-fn register(path: &str, target: Target) -> ConnId {
-  let queue = queue_for(path);
+fn register(target: Target) -> ConnId {
+  let queue = QUEUE.clone();
   let id = next_id();
   ids().insert(id, queue.clone());
   push(&queue, Message::Adopt(id, target));
@@ -258,19 +238,31 @@ fn register(path: &str, target: Target) -> ConnId {
 }
 
 /// Registers a client (`Sqlite3Client`) whose `#db` is `conn`, opened from
-/// `path`, on the queue of that database file.
+/// `path` without options.
 pub fn register_client(path: &str, conn: Conn) -> ConnId {
-  register(path, Target::Client { path: path.to_string(), db: Some(conn) })
+  register_client_with(path, OpenOptions::default(), conn)
 }
 
-/// `new Database(path)`: opens synchronously on the calling thread (so open
-/// errors surface synchronously, as in the binding) and registers a client.
+/// Registers a client whose `#db` is `conn`, opened from `path` with
+/// `options` (also used to reopen `#db` after `transaction()`).
+pub fn register_client_with(path: &str, options: OpenOptions, conn: Conn) -> ConnId {
+  register(Target::Client { path: path.to_string(), options, db: Some(conn) })
+}
+
+/// [`open_client_with`] without options.
 pub fn open_client(path: &str) -> Result<ConnId> {
-  Ok(register_client(path, Conn::open(path)?))
+  open_client_with(path, &OpenOptions::default())
 }
 
-/// Queues `job` for `id`. It runs after every job queued earlier for any id
-/// on the same database file, and alone on that file.
+/// `new Database(path, opts)`: opens synchronously on the calling thread (so
+/// open errors surface synchronously, as in the binding) and registers a
+/// client.
+pub fn open_client_with(path: &str, options: &OpenOptions) -> Result<ConnId> {
+  Ok(register_client_with(path, options.clone(), Conn::open_with(path, options)?))
+}
+
+/// Queues `job` for `id`. It runs after every job queued earlier for any id,
+/// and alone.
 pub fn submit(id: ConnId, job: impl FnOnce(&mut Session<'_>) + Send + 'static) -> Result<()> {
   let queue = ids().get(&id).cloned().ok_or_else(ClientError::connection_not_open)?;
   push(&queue, Message::Job(id, Box::new(job)));
@@ -301,7 +293,7 @@ pub fn release(id: ConnId) {
   }
 }
 
-/// Whether two ids share a queue (same database file).
+/// Whether two ids share a queue (always, for registered ids: there is one).
 pub fn same_queue(a: ConnId, b: ConnId) -> bool {
   let ids = ids();
   match (ids.get(&a), ids.get(&b)) {
@@ -315,7 +307,7 @@ pub fn open_connections() -> usize {
   ids().len()
 }
 
-/// Number of queues that currently own a worker thread.
+/// Number of queues that currently own a worker thread (0 or 1).
 pub fn live_workers() -> usize {
   RUNNING_WORKERS.load(Ordering::Relaxed)
 }
@@ -324,6 +316,13 @@ pub fn live_workers() -> usize {
 mod tests {
   use super::*;
   use crate::value::{Cell as SqlCell, IntMode, Statement};
+
+  /// The queue is process-wide: tests that observe it run one at a time.
+  static SERIAL: Mutex<()> = Mutex::new(());
+
+  fn serial() -> MutexGuard<'static, ()> {
+    lock(&SERIAL)
+  }
 
   fn temp_db(name: &str) -> String {
     let path = std::env::temp_dir().join(format!("payload-sqlite-worker-{name}-{}.db", std::process::id()));
@@ -345,6 +344,7 @@ mod tests {
 
   #[test]
   fn jobs_run_in_order() {
+    let _serial = serial();
     let id = open_client("file::memory:").unwrap();
     submit(id, |s| {
       s.conn().unwrap().execute_sql("create table t(a)", IntMode::Number).unwrap();
@@ -364,13 +364,14 @@ mod tests {
   }
 
   #[test]
-  fn clients_of_one_file_share_a_queue() {
+  fn all_clients_share_one_queue() {
+    let _serial = serial();
     let path = temp_db("share");
     let a = open_client(&path).unwrap();
     let b = open_client(&path).unwrap();
     let m = open_client("file::memory:").unwrap();
     assert!(same_queue(a, b));
-    assert!(!same_queue(a, m));
+    assert!(same_queue(a, m));
     let tx = call(a, |s| s.begin_transaction("write", IntMode::Number)).unwrap().unwrap();
     assert!(same_queue(a, tx));
     for id in [a, b, m, tx] {
@@ -383,6 +384,7 @@ mod tests {
   /// connection must have finished when the read runs (no SQLITE_BUSY).
   #[test]
   fn commit_then_read_across_connections() {
+    let _serial = serial();
     let path = temp_db("commit-read");
     let client_id = open_client(&path).unwrap();
     exec(client_id, "create table u(a)").unwrap();
@@ -412,8 +414,46 @@ mod tests {
     cleanup(&path);
   }
 
+  /// A file reached through `ATTACH` from another main database: the commit
+  /// on the attaching transaction is done before the other client reads.
+  #[test]
+  fn attached_files_are_ordered_with_their_own_clients() {
+    let _serial = serial();
+    let main_path = temp_db("attach-main");
+    let other_path = temp_db("attach-other");
+    let other = open_client(&other_path).unwrap();
+    exec(other, "create table o(a)").unwrap();
+    let main = open_client(&main_path).unwrap();
+    let attach = format!("attach database '{other_path}' as x");
+    call(main, move |s| s.conn()?.execute_sql(&attach, IntMode::Number)).unwrap().unwrap();
+    let tx = call(main, |s| s.begin_transaction("write", IntMode::Number)).unwrap().unwrap();
+    call(tx, |s| client::tx_execute(s.conn()?, &Statement::sql("insert into x.o values (1)"), IntMode::Number))
+      .unwrap()
+      .unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let commit_done = done_tx.clone();
+    submit(tx, move |s| {
+      let r = s.conn().and_then(|c| client::tx_commit(c, IntMode::Number));
+      let _ = commit_done.send(r.map(|_| SqlCell::Null));
+    })
+    .unwrap();
+    submit(other, move |s| {
+      let r = s.conn().and_then(|c| c.execute_sql("select count(*) from o", IntMode::Number));
+      let _ = done_tx.send(r.map(|rs| rs.rows[0][0].clone()));
+    })
+    .unwrap();
+    assert_eq!(done_rx.recv().unwrap(), Ok(SqlCell::Null));
+    assert_eq!(done_rx.recv().unwrap(), Ok(SqlCell::Number(1.0)));
+    for id in [tx, main, other] {
+      release(id);
+    }
+    cleanup(&main_path);
+    cleanup(&other_path);
+  }
+
   #[test]
   fn finished_transactions_answer_without_sqlite() {
+    let _serial = serial();
     let id = open_client("file::memory:").unwrap();
     let tx = call(id, |s| s.begin_transaction("write", IntMode::Number)).unwrap().unwrap();
     call(tx, |s| {
@@ -434,6 +474,7 @@ mod tests {
 
   #[test]
   fn call_from_a_job_errors_instead_of_deadlocking() {
+    let _serial = serial();
     let id = open_client("file::memory:").unwrap();
     let nested = call(id, move |_| call(id, |_| ()).is_err()).unwrap();
     assert!(nested);
@@ -442,6 +483,7 @@ mod tests {
 
   #[test]
   fn worker_stops_when_no_handle_is_open() {
+    let _serial = serial();
     let path = temp_db("stop");
     let id = open_client(&path).unwrap();
     let queue = ids().get(&id).cloned().unwrap();

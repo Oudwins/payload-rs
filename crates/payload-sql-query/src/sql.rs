@@ -209,6 +209,10 @@ pub fn quote(name: &str) -> String {
 
 /// `@libsql/client` `valueToSql` + libsql binding rules.
 fn bind_value(v: &JsVal) -> Result<SqlValue> {
+  // `value.valueOf()`; an invalid date binds `NaN`, which SQLite stores as NULL
+  if let Some(ms) = v.as_date() {
+    return Ok(SqlValue::Real(ms));
+  }
   Ok(match v {
     JsVal::Null => SqlValue::Null,
     JsVal::Bool(b) => SqlValue::Real(if *b { 1.0 } else { 0.0 }),

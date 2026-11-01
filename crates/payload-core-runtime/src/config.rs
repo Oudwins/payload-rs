@@ -157,13 +157,17 @@ pub mod leaf_flags {
   /// `typeof field.defaultValue !== 'undefined'`: `leafRun` stops at the field when the default
   /// value applies and the engine continues with the `getDefaultValue` step.
   pub const HAS_DEFAULT_VALUE: u32 = 16;
+  /// The field has `afterRead` hooks to run (a hooked leaf, see `FieldDesc::hooked_leaf`):
+  /// `leafRun` runs its whole `promise()` as the host's `hookedLeaf` and pushes its promise.
+  pub const HOOKED: u32 = 32;
 }
 
-/// One step of `traverseFields` over a fields array: a run of consecutive plain leaves
-/// (`start..end`) or a single field going through the full `promise()` port.
+/// One step of `traverseFields` over a fields array: a run of consecutive plain or hooked leaves
+/// (`start..end`, `true` when it contains a hooked leaf) or a single field going through the full
+/// `promise()` port.
 #[derive(Clone, Copy, Debug)]
 pub enum Segment {
-  Run(u32, u32),
+  Run(u32, u32, bool),
   Field(u32),
 }
 
@@ -186,31 +190,34 @@ impl FieldsDesc {
         let mut out = Vec::new();
         let Some(items) = &self.items else { return out.into() };
         let mut run_start: Option<u32> = None;
+        let mut run_hooked = false;
         for (i, f) in items.iter().enumerate() {
           let i = i as u32;
-          if f.leaf.holds(override_access, parent_localized) {
+          let hooked = f.hooked_leaf.holds(override_access, parent_localized);
+          if hooked || f.leaf.holds(override_access, parent_localized) {
             run_start.get_or_insert(i);
+            run_hooked |= hooked;
           } else {
             if let Some(start) = run_start.take() {
-              out.push(Segment::Run(start, i));
+              out.push(Segment::Run(start, i, std::mem::take(&mut run_hooked)));
             }
             out.push(Segment::Field(i));
           }
         }
         if let Some(start) = run_start {
-          out.push(Segment::Run(start, items.len() as u32));
+          out.push(Segment::Run(start, items.len() as u32, run_hooked));
         }
         out.into()
       })
       .clone()
   }
 
-  /// `Some(len)` when, under these conditions, every field is a plain leaf, so whole rows can be
-  /// handed to the host's `leafRows`.
-  pub fn all_plain(&self, override_access: bool, parent_localized: bool) -> Option<u32> {
+  /// `Some((len, hooked))` when, under these conditions, every field is a plain or hooked leaf
+  /// (`hooked`: at least one is), so whole rows can be handed to the host's `leafRows`.
+  pub fn all_plain(&self, override_access: bool, parent_localized: bool) -> Option<(u32, bool)> {
     let items = self.items.as_ref()?;
     match *self.plan(override_access, parent_localized) {
-      [Segment::Run(0, end)] if end as usize == items.len() => Some(end),
+      [Segment::Run(0, end, hooked)] if end as usize == items.len() => Some((end, hooked)),
       _ => None,
     }
   }
@@ -292,6 +299,9 @@ impl FieldDesc {
     }
     if self.has_default_value {
       bits |= leaf_flags::HAS_DEFAULT_VALUE;
+    }
+    if matches!(self.hooked_leaf, Leaf::Yes { .. }) {
+      bits |= leaf_flags::HOOKED;
     }
     bits
   }

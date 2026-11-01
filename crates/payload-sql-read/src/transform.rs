@@ -115,38 +115,14 @@ fn create_blocks_map(data: &Val) -> Result<Val> {
   for (_, rows) in own {
     let Some(rows) = rows.as_arr() else { continue };
     let mut rows = rows.borrow_mut();
-    let sorted = stable_sort(std::mem::take(&mut rows.0), |a, b| {
+    crate::sort::v8_sort(&mut rows.0, |a, b| {
       match (get(a, "_order").unwrap_or_default(), get(b, "_order").unwrap_or_default()) {
         (Val::Num(x), Val::Num(y)) => x - y,
         _ => 0.0,
       }
     });
-    rows.0 = sorted;
   }
   Ok(map)
-}
-
-/// Stable merge sort with a JS comparator (`> 0` means `a` sorts after `b`).
-fn stable_sort(items: Vec<Val>, cmp: impl Fn(&Val, &Val) -> f64 + Copy) -> Vec<Val> {
-  if items.len() <= 1 {
-    return items;
-  }
-  let mut left = items;
-  let right = left.split_off(left.len() / 2);
-  let left = stable_sort(left, cmp);
-  let right = stable_sort(right, cmp);
-  let mut out = Vec::with_capacity(left.len() + right.len());
-  let (mut l, mut r) = (left.into_iter().peekable(), right.into_iter().peekable());
-  while let (Some(a), Some(b)) = (l.peek(), r.peek()) {
-    if cmp(a, b) > 0.0 {
-      out.extend(r.next());
-    } else {
-      out.extend(l.next());
-    }
-  }
-  out.extend(l);
-  out.extend(r);
-  out
 }
 
 struct State<'a> {
@@ -580,7 +556,7 @@ impl State<'_> {
                 set(&row, "id", get(&row, "_uuid")?)?;
                 delete(&row, "_uuid")?;
               }
-              let order = to_number(&get(&row, "_order")?) - 1.0;
+              let order = to_number(&get(&row, "_order")?)? - 1.0;
               let row_result = self.traverse(Traverse {
                 current_table_name: array_table_name.clone(),
                 data_ref: data,
@@ -664,7 +640,7 @@ impl State<'_> {
               let block = self.find_block(field, &get(&row, "blockType")?)?;
               let table_name = self.block_table_name(&block)?;
               if block.truthy() {
-                let order = to_number(&get(&row, "_order")?) - 1.0;
+                let order = to_number(&get(&row, "_order")?)? - 1.0;
                 let block_result = self.traverse(Traverse {
                   current_table_name: table_name,
                   data_ref: row.clone(),
@@ -846,7 +822,7 @@ impl State<'_> {
         if count.truthy() {
           let count_value = get(table, &format!("{field_name}_count"))?;
           if !count_value.is_undefined() {
-            let mut value = to_number(&count_value);
+            let mut value = to_number(&count_value)?;
             if value.is_nan() {
               value = 0.0;
             }
@@ -1013,7 +989,7 @@ impl State<'_> {
                   }
                 };
                 if is_number_id {
-                  val = Val::Num(to_number(&val));
+                  val = Val::Num(to_number(&val)?);
                 }
               }
             }

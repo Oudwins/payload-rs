@@ -1,0 +1,43 @@
+# Stand-in for `libsqlite3-sys` 0.35 (patched in via `[patch.crates-io]` in
+# the workspace `Cargo.toml`) so that `rusqlite` keeps its API but runs on the
+# exact SQLite build of the reference runtime: `@libsql/client@0.14.0` ->
+# `libsql@0.4.7` (libsql-js) -> libsql rev 20147731 with feature `encryption`
+# -> `libsql-ffi` 0.4.1 with `multiple-ciphers` (libSQL 3.45.1 amalgamation
+# compiled through SQLite3 Multiple Ciphers 1.8.1 with libsql-ffi's cmake
+# options). See crates/payload-sqlite/src/lib.rs.
+#
+# The feature list mirrors libsqlite3-sys 0.35 so that every `rusqlite`
+# feature resolves; none of them changes the build.
+[package]
+name = "libsqlite3-sys"
+version = "0.35.0"
+edition = "2021"
+license = "MIT"
+links = "sqlite3"
+publish = false
+
+[lib]
+name = "libsqlite3_sys"
+path = "src/lib.rs"
+
+[dependencies]
+libsql-ffi = { version = "=0.4.1", features = ["multiple-ciphers"] }
+
+[features]
+default = ["min_sqlite_version_3_14_0"]
+buildtime_bindgen = []
+bundled = ["bundled_bindings"]
+bundled-sqlcipher = ["bundled"]
+bundled-sqlcipher-vendored-openssl = ["bundled-sqlcipher"]
+bundled-windows = ["bundled_bindings"]
+bundled_bindings = []
+column_metadata = []
+in_gecko = []
+loadable_extension = []
+min_sqlite_version_3_14_0 = []
+preupdate_hook = ["buildtime_bindgen"]
+session = ["preupdate_hook", "buildtime_bindgen"]
+sqlcipher = []
+unlock_notify = []
+wasm32-wasi-vfs = []
+with-asan = []

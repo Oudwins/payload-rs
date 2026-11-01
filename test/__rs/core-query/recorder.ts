@@ -45,6 +45,8 @@ let totalBytes = 0
 const perFn = new Map<string, number>()
 const seen = new Set<string>()
 let externalSeq = 0
+/** Calls that could not be recorded (unserializable / too large / over the caps). */
+const dropped = { describe: 0, encode: 0, size: 0 }
 
 type ConfigEntry = { id: number; index: ConfigIndex }
 const configs = new Map<object, ConfigEntry>()
@@ -83,7 +85,6 @@ const registerConfig = (payload: any): ConfigEntry | undefined => {
 /** Enumerable keys inherited from the realm's built-in prototypes (normally none). */
 const forInKeys = (value: object | string) => {
   const keys: string[] = []
-  // eslint-disable-next-line guard-for-in
   for (const key in value as object) {
     keys.push(key)
   }
@@ -123,6 +124,7 @@ const emit = (fn: string, record: Record<string, unknown>, dedupe: boolean) => {
   }
   const line = JSON.stringify({ type: 'call', fn, ...record })
   if (line.length > maxRecordBytes) {
+    dropped.size++
     return
   }
   if (dedupe) {
@@ -140,6 +142,9 @@ export const flush = () => {
   if (outFile && lines.length) {
     fs.appendFileSync(outFile, lines.join('\n') + '\n')
     lines.length = 0
+  }
+  if (outFile && (dropped.describe || dropped.encode || dropped.size)) {
+    console.error(`[core-query recorder] not recorded: ${JSON.stringify(dropped)}`)
   }
 }
 
@@ -170,6 +175,7 @@ export const wrapSync = <F extends (...args: any[]) => any>(
     try {
       d = describe(...args)
     } catch {
+      dropped.describe++
       return original.apply(this, args)
     }
     const entry = configFor(d.payload, d.probe)
@@ -205,6 +211,7 @@ export const wrapSync = <F extends (...args: any[]) => any>(
       )
     } catch {
       // unserializable input: not recorded
+      dropped.encode++
     }
     if (threw) {
       throw error
@@ -243,6 +250,7 @@ export const wrapAsync = <F extends (args: any) => Promise<any>>(
         Object.entries(d.cfg ?? {}).map(([k, v]) => [k, encodeCfg(v, entry?.index)]),
       )
     } catch {
+      dropped.describe++
       return original.call(this, args)
     }
     const store: Store = {
@@ -274,6 +282,7 @@ export const wrapAsync = <F extends (args: any) => Promise<any>>(
         )
       } catch {
         // not recorded
+        dropped.encode++
       }
     }
     promise.then(

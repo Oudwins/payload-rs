@@ -21,6 +21,11 @@ use crate::host::{call_fn, change_host, in_op, type_error};
 
 /// The destructured `beforeChange` args shared by the whole traversal.
 struct Ctx {
+  /// `[id, collection, context, data, doc, docWithLocales, errors, global, isValidationOperation,
+  /// mergeLocaleActions, operation, overrideAccess, req, skipHooks, submittedTopLevelFieldNames]`
+  /// for the host's `beforeChangeLeaves` (indices `C_*` in
+  /// packages/engine-rs/src/runtime/beforeChange/index.ts).
+  arr: Val,
   id: Val,
   collection: Val,
   context: Val,
@@ -102,7 +107,29 @@ async fn run(args: Val) -> JsResult<Val> {
 
   call_host(&ch.record_new_doc, &[context.get(), doc_with_locales.get()])?;
 
+  let arr = js::array();
+  let values = [
+    &id,
+    &collection,
+    &context,
+    &data,
+    &doc,
+    &doc_with_locales,
+    &errors,
+    &global,
+    &is_validation_operation,
+    &merge_locale_actions,
+    &operation,
+    &override_access,
+    &req,
+    &skip_hooks,
+    &submitted_top_level_field_names,
+  ];
+  for (i, v) in values.into_iter().enumerate() {
+    js::set_element(arr, i as u32, v.get())?;
+  }
   let ctx = Rc::new(Ctx {
+    arr: Val::from_local(arr)?,
     id,
     collection,
     context,
@@ -200,6 +227,48 @@ async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
     return Ok(Val::Undefined);
   };
   let promises = js::array();
+  if !cfg!(feature = "mutant-reverse-fields") && t.tab_fields.is_none() {
+    // Runs of leaves go to the host in one call each (upstream's `promise()` per field, pushed
+    // in order); other fields are ported tasks.
+    let mut index = 0;
+    while index < items.len() {
+      if !is_leaf(items[index].kind) {
+        let desc = &items[index];
+        let promise = spawn(field_promise(ctx.clone(), t.clone(), desc.clone(), Val::Ref(desc.node.clone()), index))?;
+        js::push(promises, promise)?;
+        index += 1;
+        continue;
+      }
+      let start = index;
+      while index < items.len() && is_leaf(items[index].kind) {
+        index += 1;
+      }
+      call_host(
+        &change_host()?.before_change_leaves,
+        &[
+          ctx.arr.get(),
+          t.fields.node.get(),
+          js::number(start as f64),
+          js::number(index as f64),
+          promises,
+          t.block_data.get(),
+          t.block_fields.get(),
+          t.field_label_path.get(),
+          js::string(&t.parent_index_path),
+          t.parent_is_localized.get(),
+          js::string(&t.parent_path),
+          js::string(&t.parent_schema_path),
+          t.sibling_data.get(),
+          t.sibling_doc.get(),
+          t.sibling_doc_with_locales.get(),
+          t.skip_validation.get(),
+        ],
+      )?;
+    }
+    let all = call_host(&rt::host()?.promise_all, &[promises])?;
+    await_js(all).await?;
+    return Ok(Val::Undefined);
+  }
   let order: Box<dyn Iterator<Item = (usize, &Rc<FieldDesc>)>> = if cfg!(feature = "mutant-reverse-fields") {
     Box::new(items.iter().enumerate().rev())
   } else {
@@ -216,6 +285,15 @@ async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
   let all = call_host(&rt::host()?.promise_all, &[promises])?;
   await_js(all).await?;
   Ok(Val::Undefined)
+}
+
+/// A field whose `promise()` traverses no subfields and calls no editor hooks: the host runs it
+/// (`beforeChangeLeaves`, upstream's `promise.ts` body for such a field).
+fn is_leaf(kind: Kind) -> bool {
+  !matches!(
+    kind,
+    Kind::Array | Kind::Blocks | Kind::Collapsible | Kind::Group | Kind::RichText | Kind::Row | Kind::Tab | Kind::Tabs
+  )
 }
 
 struct Paths {

@@ -20,7 +20,9 @@ export const connect: Connect = async function connect(
   try {
     if (!this.client) {
       this.client = isRustEngineAdapter(this)
-        ? (createRustClient(this.clientConfig) as unknown as SQLiteAdapter['client'])
+        ? (createRustClient(
+            this.clientConfig as Parameters<typeof createRustClient>[0],
+          ) as unknown as SQLiteAdapter['client'])
         : createClient(this.clientConfig)
 
       if (this.busyTimeout > 0) {

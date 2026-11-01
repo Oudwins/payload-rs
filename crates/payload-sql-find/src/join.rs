@@ -10,6 +10,7 @@ use payload_engine::strings::to_snake_case;
 use crate::args::Extra;
 use crate::context::{BuildQueryArgs, ColumnRef, FieldsSource, FindContext, QueryJoin, SelectField, raw_constraint};
 use payload_sql_query::WhereVal;
+use crate::schema::{Decoder, DrizzleSchema};
 use crate::sql::{Sql, escape_name};
 use crate::utils::{append_version_to_query_key, build_version_collection_fields, combine_queries, get_query_drafts_sort};
 
@@ -34,13 +35,27 @@ fn obj(entries: Vec<(String, JsVal)>) -> JsVal {
   JsVal::obj(entries.into_iter().collect::<Obj>())
 }
 
-/// Renders `db.select(fields)` selection: bare column names when the query
-/// has no joins (`isSingleTable`), qualified otherwise.
-pub(crate) fn render_selection<'s>(fields: impl Iterator<Item = &'s SelectField>, single_table: bool) -> Sql {
+/// Renders `db.select(fields)` selection (sqlite `buildSelection`): bare column names when the
+/// query has no joins (`isSingleTable`), qualified otherwise; `SQLiteNumericBigInt` columns are
+/// selected as `cast(<column> as text)`.
+pub(crate) fn render_selection<'s>(
+  schema: &DrizzleSchema,
+  fields: impl Iterator<Item = &'s SelectField>,
+  single_table: bool,
+) -> Sql {
   let parts: Vec<Sql> = fields
     .map(|f| match f {
-      SelectField::Column(c) if single_table => Sql::ident(&c.name),
-      SelectField::Column(c) => c.qualified(),
+      SelectField::Column(c) => {
+        let column = if single_table { Sql::ident(&c.name) } else { c.qualified() };
+        let decoder = schema.column_by_db_name(&c.table_name, &c.name).map(|column| column.decoder);
+        if decoder == Some(Decoder::NumericBigInt) {
+          let mut cast = Sql::raw("cast(");
+          cast.push(&column).push_str(" as text)");
+          cast
+        } else {
+          column
+        }
+      }
       SelectField::Sql(s) => s.clone(),
     })
     .collect();
@@ -130,7 +145,12 @@ pub(crate) fn build_join_field(ctx: &FindContext<'_>, a: &JoinFieldArgs<'_>) -> 
       .columns
       .get(key)
       .ok_or_else(|| EngineError::new("TypeError", format!("Cannot convert undefined or null to object ({key})")))?;
-    Ok(SelectField::Column(ColumnRef { table: alias.clone(), name: column.name.clone(), primary: key == "id" }))
+    Ok(SelectField::Column(ColumnRef {
+      table: alias.clone(),
+      table_name: join_table.db_name.clone(),
+      name: column.name.clone(),
+      primary: key == "id",
+    }))
   };
 
   let mut select_fields = built.select_fields.clone();
@@ -157,7 +177,7 @@ pub(crate) fn build_join_field(ctx: &FindContext<'_>, a: &JoinFieldArgs<'_>) -> 
   };
   let base_query = |order: bool, limit_offset: bool| -> Sql {
     let mut q = Sql::raw("select ");
-    q.push(&render_selection(select_fields.values(), single_table)).push_str(" from ").push(&from);
+    q.push(&render_selection(ctx.schema, select_fields.values(), single_table)).push_str(" from ").push(&from);
     q.push(&render_joins(&built.joins));
     if let Some(w) = &built.where_ {
       q.push_str(" where ").push(w);

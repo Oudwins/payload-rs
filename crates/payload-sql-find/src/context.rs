@@ -74,6 +74,9 @@ pub struct BuildQueryArgs<'a> {
 pub struct ColumnRef {
   /// `getTableName(column.table)`: the alias when the table is aliased.
   pub table: String,
+  /// Database name of the underlying table (`table[OriginalName]`), to find the column's drizzle
+  /// type in the schema.
+  pub table_name: String,
   /// Database column name.
   pub name: String,
   /// `column.primary`

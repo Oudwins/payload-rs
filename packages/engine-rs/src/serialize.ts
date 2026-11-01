@@ -62,6 +62,7 @@ export const engineReadKeys: ReadonlySet<string> = new Set([
   'disableLocalStrategy',
   'drafts',
   'draftsEnabled',
+  'drizzle',
   'enumName',
   'extras',
   'field',
@@ -96,6 +97,7 @@ export const engineReadKeys: ReadonlySet<string> = new Set([
   'min',
   'mode',
   'name',
+  'now',
   'objects',
   'on',
   'options',
@@ -116,6 +118,7 @@ export const engineReadKeys: ReadonlySet<string> = new Set([
   'publishedLocale',
   'query',
   'rawCode',
+  'rawTables',
   'references',
   'relationName',
   'relations',
@@ -140,6 +143,7 @@ export const engineReadKeys: ReadonlySet<string> = new Set([
   'targetField',
   'timestamps',
   'to',
+  'toHexString',
   'toJSON',
   'toString',
   'translations',
@@ -158,6 +162,7 @@ export const engineReadKeys: ReadonlySet<string> = new Set([
   'virtual',
   'where',
   'with',
+  'withMutations',
   // engine-read-keys:end
 ])
 

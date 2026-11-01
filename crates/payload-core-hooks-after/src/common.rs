@@ -6,7 +6,7 @@ use std::cell::OnceCell;
 use std::rc::Rc;
 
 use napi::sys;
-use payload_core_runtime::config::{self, BlockCandidate, BlockDesc, FieldDesc};
+use payload_core_runtime::config::{self, BlockCandidate, BlockDesc, FieldDesc, Kind};
 use payload_core_runtime::host as rt;
 use payload_core_runtime::js::{self, JsResult, Local, Type, Val};
 
@@ -224,4 +224,14 @@ pub fn find_block(req: Local, f: &FieldDesc, block_type: Local) -> JsResult<Opti
     }
   }
   Ok(None)
+}
+
+/// A field whose afterChange / beforeDuplicate `promise()` traverses no subfields and calls no
+/// editor hooks: the host runs its whole `promise()` (`afterChangeLeaves` /
+/// `beforeDuplicateLeaves`).
+pub fn is_leaf(kind: Kind) -> bool {
+  !matches!(
+    kind,
+    Kind::Array | Kind::Blocks | Kind::Collapsible | Kind::Group | Kind::RichText | Kind::Row | Kind::Tab | Kind::Tabs
+  )
 }

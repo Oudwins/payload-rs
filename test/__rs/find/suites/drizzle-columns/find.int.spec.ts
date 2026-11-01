@@ -97,6 +97,37 @@ test.suite('rs find: drizzle columns, relations and connections', { config: './c
     expect(bigintError).toBeInstanceOf(SyntaxError)
   })
 
+  test('should select numeric bigint sort columns as text in select distinct', async ({
+    payload,
+  }) => {
+    const category = await payload.create({ collection: categoriesSlug, data: { name: 'c' } })
+    for (const rank of [3, 1, 2]) {
+      await payload.create({
+        collection: postsSlug,
+        data: { category: category.id, rank, title: `rank ${rank}` },
+      })
+    }
+    // `select` keeps `rank` out of the relational query: only the select distinct reads it
+    const find = () =>
+      payload.db.find({
+        collection: postsSlug,
+        select: { title: true },
+        sort: 'rank',
+        where: { 'category.name': { equals: 'c' } },
+      })
+
+    // sort + join: findMany selects the distinct ids together with the sort column, which drizzle
+    // selects as `cast("posts"."rank" as text)` and maps with BigInt()
+    const result = await compared({ findMany: 1 }, find)
+    expect(result.docs.map((doc: any) => doc.title)).toEqual(['rank 1', 'rank 2', 'rank 3'])
+
+    // a REAL in the column reads as '1.23456789012346e+19': mapping the selected (otherwise
+    // unused) sort column throws
+    await run(payload, `UPDATE posts SET rank = '12345678901234567890' WHERE title = 'rank 2'`)
+    const error = await compared({ findMany: 1 }, () => find().catch((e: unknown) => e))
+    expect(error).toBeInstanceOf(SyntaxError)
+  })
+
   test('should map a reverse one-to-one relation to an object or null', async ({ payload }) => {
     const a = await payload.create({ collection: postsSlug, data: { title: 'with profile' } })
     await payload.create({ collection: postsSlug, data: { title: 'without profile' } })

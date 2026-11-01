@@ -19,7 +19,12 @@ Code:
 | `crates/payload-node/src/runtime.rs`                | `coreRuntimeBinding()` export of the main addon           |
 | `crates/payload-core-runtime/examples/dev_addon.rs` | standalone addon exposing only the runtime                |
 | `packages/engine-rs/src/runtime/index.ts`           | loads the binding, installs host helpers, `afterRead`     |
+| `crates/payload-core-hooks-{validate,change,after}` | beforeValidate, beforeChange, afterChange/beforeDuplicate |
+| `packages/engine-rs/src/runtime/*/`                 | their TS glue (host helpers, leaf `promise()` bodies)     |
+| `packages/engine-rs/src/runtime/hooks.ts`           | entry payload's hook modules load under `PAYLOAD_ENGINE`  |
 | `test/__rs/core-runtime/`                           | differential suites, adversarial config, benchmarks       |
+| `test/__rs/core-hooks-*/`                           | differential suites of the other traversals               |
+| `test/__rs/dispatch/`                               | upstream int suite runner, traversal benchmark, exit probe |
 
 ## 1. What "exact" means here (read from the TS)
 
@@ -247,11 +252,17 @@ interleaving between documents and hooks).
 - **Unnamed row/collapsible/group**: `promise()` touches no data and only calls `traverseFields`,
   so the engine traverses the children inline and pushes a settled promise (`pushSettled`;
   rejected if the nested traversal threw).
-- **Hooked plain leaves** (`hooked_leaf`): a plain leaf except for its hooks is still a task, but
-  its pre-hook reads (`leafPrologue`), each hook iteration (`callLeafHook`: the args object
-  literal, the call, `Promise.resolve(result).then(...)` and the
-  `siblingDoc[name] = hookedValue` continuation inside the reaction job, then `resume`) and the
-  default check (`leafEpilogue`) are one host call each.
+- **Hooked plain leaves** (`hooked_leaf`, flag `HOOKED`): a plain leaf except for its hooks
+  (data field, `afterRead` hooks) has a `promise()` that only does the plain leaf reads, calls and
+  awaits the hooks, and maybe awaits `getDefaultValue`. The host runs it as one JS `async`
+  function (`hookedLeaf`) whose body is that part of `promise.ts`: `getFieldPaths`, the
+  `leafPrologue` reads, `for (const hook of field.hooks.afterRead)` with the same args literal and
+  `await`, the `leafEpilogue` check and `await getDefaultValue(...)` (the upstream function).
+  `FieldsDesc::plan` puts hooked leaves into runs (`Segment::Run(start, end, hooked)`), so
+  `leafRun` calls `hookedLeaf` where `traverseFields` calls `promise()` and pushes its promise; a
+  rows array whose fields are all plain or hooked leaves still goes through `leafRows`, which
+  passes the row paths (`path + '.' + rowIndex`, `schemaPath`). No Rust task, native promise or
+  resume per hooked field remains: V8 runs the hooks loop inline, as upstream does.
 - **`executor::await_call(helper, args)`**: `await f(...)` where the host helper builds the args,
   makes the call and passes the result to `awaitValue` (one napi call instead of three). A
   synchronous throw completes the await with that error without a tick, exactly like a throw
@@ -264,6 +275,24 @@ interleaving between documents and hooks).
   created with `node_api_create_property_key_latin1` instead of a cache over napi handles, string
   field names are recreated from their UTF-16 copy, ASCII strings are created as Latin-1, and
   `getFieldPaths` no longer allocates intermediate vectors.
+
+### Leaf fields of the other traversals run upstream's `promise()` in JS
+
+For beforeValidate, beforeChange, afterChange and beforeDuplicate, every field whose type is not
+`array`, `blocks`, `collapsible`, `group`, `richText`, `row`, `tab` or `tabs` (`is_leaf` in each
+crate: no subfield traversal, no editor hooks) is a leaf. A leaf's `promise()` is a self-contained
+`async` function: sanitization, hooks, access, validation, fallback/default values, merge-locale
+actions. Each crate's `traverse_fields` hands every run of consecutive leaves to one host call
+(`beforeValidateLeaves`, `beforeChangeLeaves`, `afterChangeLeaves`, `beforeDuplicateLeaves`) that
+does `promises.push(leafPromise(...))` per field, in field order, into the traversal's own
+promises array; container fields stay Rust tasks between them. The leaf functions in
+`packages/engine-rs/src/runtime/*/` are upstream's `promise.ts` text, copied verbatim up to the
+subfield `switch` (beforeChange keeps its `point` case and copies the module-private
+`hasInvalidFieldValueShape`/`buildFieldLabel`), with the traversal-constant arguments read from a
+context array the crate builds once per call. Being the upstream code, a leaf is exact by
+construction (reads, writes, awaits, `for...of`, V8 messages); the differential suites check the
+dispatch around it (argument plumbing, order, promise count). Tab traversals (`field.tabs` copies)
+keep the ported path.
 
 Nothing here changes what user code can observe: the same objects, the same property operations
 in the same order (checked with recording proxies, see section 4), the same calls with the same
@@ -432,10 +461,36 @@ Where the time went before, and what removed it (sampling profiles of the releas
   (thread-local + `RefCell` + two napi calls each), `getFieldPaths` allocations, an allocation
   per `napi_call_function`, a handle scope per spawn.
 
-**Conclusion.** Documents without hooks now take about half the CPU time of the TS traversal. Hooked fields stay ~2.7x slower: each still needs its own task, native promise and resume
-callback, and 3–4 host calls (prologue, the hook, epilogue, plus the hooks array read), against
-V8 running the whole `async` function inline. Going further means moving the hooks loop itself
-into JS, which would leave little of the traversal in Rust.
+**Hooked leaves in JS** (`hookedLeaf`, see the fast paths). Same bench, release dev addon,
+measured on the shared machine (load average 4 for the first run, 35-40 for the others):
+
+| afterRead, CPU µs/doc (median)    | TS   | Rust, hooked leaf task (before) | Rust, `hookedLeaf` per field | Rust, hooked leaves in runs |
+| --------------------------------- | ---- | ------------------------------- | ---------------------------- | --------------------------- |
+| 67 visits, sync hook on each leaf | 35.2 | 91.0 (2.71x)                    | 51.1 (1.36x)                 | 35.5 (1.01x)                |
+
+(1.12x in a rerun at load 37, where the no-hook cases measured 0.55-0.62x.)
+
+**All five traversals** (`test/__rs/dispatch/bench.int.spec.ts`: a real payload instance, a
+sanitized 88-leaf document with a group, a collapsible, 2 array rows with 2 nested rows each and 2
+blocks; `plain` has no field hooks, `hooked` a synchronous hook of every traversal on every leaf;
+release `payload-node`, TS and Rust batches alternating, CPU µs per document, machine load 35-43):
+
+| traversal       | TS (plain) | Rust before | Rust now     | TS (hooked) | Rust before | Rust now     |
+| --------------- | ---------- | ----------- | ------------ | ----------- | ----------- | ------------ |
+| beforeValidate  | 98-143     | 3.12x       | 216 (1.51x)  | 97-189      | 6.39x       | 269 (1.42x)  |
+| beforeChange    | 1509-2150  | 1.58x       | 2342 (1.09x) | 1776-2179   | 1.58x       | 2305 (1.06x) |
+| afterChange     | 73-114     | 1.80x       | 185 (1.63x)  | 87-163      | 6.43x       | 203 (1.25x)  |
+| afterRead       | 81-124     | 0.56x       | 85 (0.69x)   | 98-143      | 0.97x       | 146 (1.02x)  |
+| beforeDuplicate | 64-112     | 3.40x       | 162 (1.44x)  | 108-110     | 4.93x       | 155 (1.41x)  |
+
+"before" is the port with one Rust task per field (hooked afterRead leaves already in JS); "now"
+runs leaf `promise()` bodies in JS (section 3). beforeChange is dominated by validation
+(`deepMergeWithSourceArrays` of the doc per field and the validators), identical work in both.
+
+**Conclusion.** afterRead is at or below TS cost. In the other traversals the remaining overhead
+(1.1-1.6x on this document) is in the container fields that are still Rust tasks: each array row,
+block, group and collapsible is a spawned `traverseFields` task with its own native promise,
+`Promise.all` and resume, plus a descriptor lookup and path strings per traversal.
 
 Optimization roadmap status:
 
@@ -455,10 +510,18 @@ Optimization roadmap status:
   helpers and the bit layouts they share with the crate (`leaf_flags`, `leaf_run_bits`, the
   `afterReadArgs` indices) are defined next to each other in that file and in `config.rs` /
   `after_read.rs`; changing one side means changing the other.
-- To switch payload to it (not done; file not owned), in
-  `packages/payload/src/fields/hooks/afterRead/index.ts` select the implementation from
-  `PAYLOAD_ENGINE=rs`. Alternatively, alias the module in a vitest config, as
-  `test/__rs/sqlite/vitest.config.ts` does for libsql.
+- **Dispatch (done).** `packages/payload/src/fields/hooks/{afterRead,beforeValidate,beforeChange,
+  afterChange,beforeDuplicate}/index.ts` select the engine once at module load:
+  `PAYLOAD_CORE_ENGINE=rs|ts` if set, else `PAYLOAD_ENGINE === 'rs'`. Unset, the exported function
+  is upstream's own (same body; only the `export const` binding replaces `export async function`
+  for `afterRead`). Set, it is a forwarder to `packages/engine-rs/src/runtime/hooks.ts`, which
+  each module starts loading with a dynamic `import()` at module load (payload has no
+  `@payloadcms/engine-rs` dependency; the relative specifier is a variable so neither `tsc` nor
+  bundlers follow it). The forwarder calls the Rust function directly (no extra tick); a call
+  made before the import settled waits for it and is counted (`deferredCalls`, 0 in every suite
+  run). `packages/payload/src/fields/validations.ts` does the same for the default validators
+  (`export let` bindings reassigned to forwarders into `packages/engine-rs/src/validate`).
+  `PAYLOAD_RS_CORE_STATS_FILE` makes `hooks.ts` write per-traversal call counts.
 - `engine-rs` imports `relationshipPopulationPromise`, `virtualFieldPopulationPromise` and the
   `afterRead` types from payload sources by relative path, because they are not exported (and
   engine-rs has no installed `payload` link). Exporting them from `payload/internal` would make
@@ -467,6 +530,21 @@ Optimization roadmap status:
   and the operations follow the same rules. Operations are mostly sequential awaits of user hooks
   and DB calls, so the executor model maps directly. DB calls are awaited as the promises the
   `payload-sqlite` binding returns.
+
+### Upstream int suites with the Rust core engine
+
+`node test/__rs/dispatch/runSuites.mjs --all --addon <payload-node.node> --jobs 4` runs every
+baseline file that ran sqlite tests (107 files, `storage-*` excluded) with `PAYLOAD_ENGINE=rs`
+(Rust SQL engine, Rust traversals, Rust validators) and compares each test's status with
+`.rs-baseline/sqlite-all.json` (`--mode core`: Rust traversals and validators on the TS SQL
+adapter; `--mode sql`: the SQL engine only). Result (2026-11-01, debug addon, TZ=UTC): every
+baseline-passing test passes (3302 passed / 80 failed / 126 skipped vs baseline 3269 / 77 / 162;
+the extra passes are the baseline's environmental `select`/`uploads` failures, the 80 failures
+are the baseline's own: `plugin-import-export` 71, `plugin-cloud-storage` 3, `kv` 1, and the 5
+`cli` ones reran green alone, see below). 68,690 traversal calls were served by Rust, 0 waited for
+the dynamic import. `test/cli` failed 5 tests in the parallel run on files another process
+deleted (`test/cli/generated`, shared with concurrent runs) and passes 64/64 alone. Core mode on
+hooks, fields, localization, versions, validate, relationships, joins and lexical: 996/0/27, equal.
 
 ## 7. Known gaps
 
@@ -499,6 +577,17 @@ Optimization roadmap status:
 - No Rust unit tests inside the crate (behaviour is verified end to end through the binding);
   `rustfmt`/`clippy` are not installed in this environment (no repo rustfmt config either), so
   Rust formatting follows the existing 2-space style by hand.
-- Not run: the upstream int suites with payload switched to the Rust `afterRead` (needs the
-  switch in a payload file I don't own, or a vitest alias config). Coverage comes from the
-  differential suites above.
+- Lexical's editor hooks still call payload's TS `beforeValidateTraverseFields` /
+  `afterReadTraverseFields` / `beforeChangeTraverseFields` / `afterChangeTraverseFields` for block
+  and link sub-fields: payload re-exports those from `packages/payload/src/index.ts`, outside the
+  dispatch files. `hooks.ts` exports `beforeValidateTraverseFields` (the Rust drop-in) for that
+  wiring; the other three need Rust `traverseFields` entries first (afterRead's is synchronous
+  and takes `triggerAccessControl`/`triggerHooks`, which the engine's `afterRead` never varies).
+- The dispatch loads `hooks.ts` with a dynamic `import()` of a relative source path: it works
+  where payload runs from source (vitest, `pnpm dev`), not from a published `dist` build (engine-rs
+  is private). A call before that import settles waits for it (extra microtask ticks); none
+  happened in the suite runs (`deferredCalls` 0).
+- Process exit: `Slot`/`Persist` drops during thread-local teardown skip their napi calls
+  (`env()` uses `try_with`, the env cleanup hook clears it, slots use `SLOTS.try_with`).
+  `test/__rs/dispatch/exitProbe.mts` checks natural exit, `process.exit()` and exit with Rust
+  tasks still suspended (all exit 0).

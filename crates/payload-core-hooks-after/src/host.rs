@@ -32,6 +32,11 @@ pub struct Host {
   pub locale_codes: Persist,
   /// `localization.localeCodes.forEach(...)` on a non-array: raises the TypeError.
   pub locale_codes_for_each: Persist,
+  /// afterChange `traverseFields` over a run of leaf fields: pushes upstream's `promise()` of
+  /// each (a JS `async` function) into the traversal's promises array.
+  pub after_change_leaves: Persist,
+  /// The same for beforeDuplicate.
+  pub before_duplicate_leaves: Persist,
 }
 
 thread_local! {
@@ -52,6 +57,8 @@ pub fn install(obj: Local) -> JsResult<()> {
     field_before_duplicate_hooks: f("fieldBeforeDuplicateHooks")?,
     locale_codes: f("localeCodes")?,
     locale_codes_for_each: f("localeCodesForEach")?,
+    after_change_leaves: f("afterChangeLeaves")?,
+    before_duplicate_leaves: f("beforeDuplicateLeaves")?,
   };
   HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
   Ok(())

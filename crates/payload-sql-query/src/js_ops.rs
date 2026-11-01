@@ -2,6 +2,7 @@
 //! `parseInt`/`parseFloat`, `JSON.stringify`, `new Date(...)` / `toISOString()` and the
 //! small regexes from `@payloadcms/drizzle/src/utilities` (dates live in [`crate::js_date`]).
 
+use payload_engine::error::{EngineError, Result};
 use payload_engine::js::JsVal;
 
 /// JS `WhiteSpace` + `LineTerminator` (what `String.prototype.trim` removes).
@@ -15,36 +16,7 @@ pub fn is_js_whitespace(c: char) -> bool {
 
 /// `Number.prototype.toString()` (radix 10).
 pub fn number_to_string(n: f64) -> String {
-  if n.is_nan() {
-    return "NaN".into();
-  }
-  if n == 0.0 {
-    return "0".into();
-  }
-  if n.is_infinite() {
-    return if n > 0.0 { "Infinity".into() } else { "-Infinity".into() };
-  }
-  if n < 0.0 {
-    return format!("-{}", number_to_string(-n));
-  }
-  // Shortest round-trip digits, like V8.
-  let exp_form = format!("{n:e}");
-  let (mantissa, exp) = exp_form.split_once('e').unwrap_or((&exp_form, "0"));
-  let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-  let exp: i32 = exp.parse().unwrap_or(0);
-  let k = digits.len() as i32;
-  let n_pos = exp + 1;
-  if k <= n_pos && n_pos <= 21 {
-    format!("{digits}{}", "0".repeat((n_pos - k) as usize))
-  } else if 0 < n_pos && n_pos <= 21 {
-    format!("{}.{}", &digits[..n_pos as usize], &digits[n_pos as usize..])
-  } else if -6 < n_pos && n_pos <= 0 {
-    format!("0.{}{digits}", "0".repeat((-n_pos) as usize))
-  } else {
-    let e = n_pos - 1;
-    let sign = if e < 0 { '-' } else { '+' };
-    if k == 1 { format!("{digits}e{sign}{}", e.abs()) } else { format!("{}.{}e{sign}{}", &digits[..1], &digits[1..], e.abs()) }
-  }
+  payload_engine::js::num_to_js_string(n)
 }
 
 /// JS `String(value)`.
@@ -106,6 +78,43 @@ fn decimal_prefix(s: &str) -> Option<(f64, usize)> {
   Some((parsed, i))
 }
 
+/// Digits of a power-of-two radix (2, 8, 16) as V8's `InternalStringToIntDouble` converts them:
+/// exact up to 53 significant bits, then rounded half to even (`Infinity` past the double range).
+pub fn pow2_radix_to_f64(digits: &str, radix: u32) -> f64 {
+  let bits_per_digit = radix.trailing_zeros();
+  let mut mantissa: u64 = 0;
+  let mut significant_bits = 0usize;
+  let mut round_bit = false;
+  let mut sticky = false;
+  let mut dropped = 0usize;
+  for c in digits.chars() {
+    let d = c.to_digit(radix).unwrap_or(0);
+    for shift in (0..bits_per_digit).rev() {
+      let bit = (d >> shift) & 1 == 1;
+      if significant_bits == 0 && !bit {
+        continue;
+      }
+      if significant_bits < 53 {
+        mantissa = (mantissa << 1) | u64::from(bit);
+        significant_bits += 1;
+      } else {
+        if dropped == 0 {
+          round_bit = bit;
+        } else {
+          sticky |= bit;
+        }
+        dropped += 1;
+      }
+    }
+  }
+  if round_bit && (sticky || mantissa & 1 == 1) {
+    mantissa += 1;
+  }
+  let exponent = i32::try_from(dropped).unwrap_or(i32::MAX);
+  // `mantissa` may be 2^53 after rounding up; still exact as a double.
+  if exponent > 1100 { f64::INFINITY } else { mantissa as f64 * 2f64.powi(exponent) }
+}
+
 /// JS `StringToNumber` (used by `Number(string)`).
 pub fn string_to_number(s: &str) -> f64 {
   let t = s.trim_matches(is_js_whitespace);
@@ -123,7 +132,7 @@ pub fn string_to_number(s: &str) -> f64 {
     if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
       return f64::NAN;
     }
-    return digits.chars().fold(0.0, |acc, c| acc * radix as f64 + c.to_digit(radix).unwrap_or(0) as f64);
+    return pow2_radix_to_f64(digits, radix);
   }
   match decimal_prefix(t) {
     Some((v, len)) if len == t.len() => v,
@@ -133,6 +142,9 @@ pub fn string_to_number(s: &str) -> f64 {
 
 /// JS `Number(value)`.
 pub fn js_number(v: &JsVal) -> f64 {
+  if let Some(ms) = v.as_date() {
+    return ms;
+  }
   match v {
     JsVal::Undefined | JsVal::Fn(_) => f64::NAN,
     JsVal::Null => 0.0,
@@ -142,6 +154,45 @@ pub fn js_number(v: &JsVal) -> f64 {
     JsVal::Arr(_) => string_to_number(&js_string(v)),
     JsVal::Obj(_) => f64::NAN,
   }
+}
+
+/// Whether `ToPrimitive(value)` throws: an object (or an array item, through `join`) whose own
+/// `toString` is not callable has no usable conversion for either hint (`valueOf` inherited from
+/// `Object.prototype` returns the object itself). Own functions are not called here.
+fn check_to_primitive(v: &JsVal, joining: &mut Vec<usize>) -> Result<()> {
+  if v.typed().is_some() {
+    return Ok(());
+  }
+  match v {
+    JsVal::Obj(o) if o.get("toString").is_some_and(|f| !matches!(f, JsVal::Fn(_))) => {
+      Err(EngineError::new("TypeError", "Cannot convert object to primitive value"))
+    }
+    JsVal::Arr(items) => {
+      let id = std::sync::Arc::as_ptr(items) as usize;
+      if joining.contains(&id) {
+        return Ok(());
+      }
+      joining.push(id);
+      for item in items.iter() {
+        check_to_primitive(item, joining)?;
+      }
+      joining.pop();
+      Ok(())
+    }
+    _ => Ok(()),
+  }
+}
+
+/// JS `Number(value)`, including the `TypeError` of an object without a primitive value.
+pub fn js_number_checked(v: &JsVal) -> Result<f64> {
+  check_to_primitive(v, &mut Vec::new())?;
+  Ok(js_number(v))
+}
+
+/// JS `String(value)`, including the `TypeError` of an object without a primitive value.
+pub fn js_string_checked(v: &JsVal) -> Result<String> {
+  check_to_primitive(v, &mut Vec::new())?;
+  Ok(js_string(v))
 }
 
 /// JS `parseFloat(value)`.
@@ -175,7 +226,7 @@ pub fn parse_int(v: &JsVal) -> f64 {
     // Decimal digits are converted exactly like a decimal literal.
     return sign * digits.parse::<f64>().unwrap_or(f64::NAN);
   }
-  sign * digits.chars().fold(0.0, |acc, c| acc * radix as f64 + c.to_digit(radix).unwrap_or(0) as f64)
+  sign * pow2_radix_to_f64(&digits, radix)
 }
 
 fn json_quote(s: &str, out: &mut String) {
@@ -197,6 +248,14 @@ fn json_quote(s: &str, out: &mut String) {
 }
 
 fn json_write(v: &JsVal, out: &mut String) -> bool {
+  // `Date.prototype.toJSON`: the ISO string, `null` for an invalid date
+  if let Some(ms) = v.as_date() {
+    match to_iso_string(ms) {
+      Ok(iso) => json_quote(&iso, out),
+      Err(_) => out.push_str("null"),
+    }
+    return true;
+  }
   match v {
     JsVal::Undefined | JsVal::Fn(_) => return false,
     JsVal::Null => out.push_str("null"),

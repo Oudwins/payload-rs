@@ -31,6 +31,25 @@ export type Args<T extends JsonObject> = {
   skipValidation?: boolean
 }
 
+type RustCoreHooks = {
+  beforeChange: <T extends JsonObject>(args: Args<T>) => Promise<T>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust core engine (`packages/engine-rs/src/runtime/hooks.ts`), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_PORT.md.
+ */
+const isRustCoreEngine = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustCoreHooksSpecifier = '../../../../../engine-rs/src/runtime/hooks.js'
+let rustCoreHooks: RustCoreHooks | undefined
+const rustCoreHooksLoad: Promise<RustCoreHooks> | undefined = isRustCoreEngine
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustCoreHooksSpecifier).then(
+      (loaded: RustCoreHooks) => (rustCoreHooks = loaded),
+    )
+  : undefined
+void rustCoreHooksLoad?.catch(() => {})
+
 /**
  * This function is responsible for the following actions, in order:
  * - Run condition
@@ -40,77 +59,85 @@ export type Args<T extends JsonObject> = {
  * - Unflatten locales. The input `data` is the normal document for one locale. The output result will become the document with locales.
  */
 
-export const beforeChange = async <T extends JsonObject>({
-  id,
-  collection,
-  context,
-  data: incomingData,
-  doc,
-  docWithLocales,
-  fieldsToValidate: submittedTopLevelFieldNames,
-  global,
-  isValidationOperation,
-  onDataProcessed,
-  operation,
-  overrideAccess,
-  req,
-  skipHooks,
-  skipValidation,
-}: Args<T>): Promise<T> => {
-  const data = deepCopyObjectSimple(incomingData)
-  const mergeLocaleActions: (() => Promise<void> | void)[] = []
-  const errors: ValidationFieldError[] = []
+export const beforeChange: <T extends JsonObject>(args: Args<T>) => Promise<T> = isRustCoreEngine
+  ? (args) =>
+      rustCoreHooks
+        ? rustCoreHooks.beforeChange(args)
+        : rustCoreHooksLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.beforeChange(args)
+          })
+  : async <T extends JsonObject>({
+      id,
+      collection,
+      context,
+      data: incomingData,
+      doc,
+      docWithLocales,
+      fieldsToValidate: submittedTopLevelFieldNames,
+      global,
+      isValidationOperation,
+      onDataProcessed,
+      operation,
+      overrideAccess,
+      req,
+      skipHooks,
+      skipValidation,
+    }: Args<T>): Promise<T> => {
+      const data = deepCopyObjectSimple(incomingData)
+      const mergeLocaleActions: (() => Promise<void> | void)[] = []
+      const errors: ValidationFieldError[] = []
 
-  // Record the first-write flag before traversal mutates `docWithLocales`, so `createdBy` is
-  // stamped reliably.
-  recordNewDoc(context, !docWithLocales || Object.keys(docWithLocales).length === 0)
+      // Record the first-write flag before traversal mutates `docWithLocales`, so `createdBy` is
+      // stamped reliably.
+      recordNewDoc(context, !docWithLocales || Object.keys(docWithLocales).length === 0)
 
-  await traverseFields({
-    id,
-    collection,
-    context,
-    data,
-    doc,
-    docWithLocales,
-    errors,
-    fieldLabelPath: '',
-    fields: (collection?.fields || global?.fields)!,
-    global,
-    isValidationOperation,
-    mergeLocaleActions,
-    operation,
-    overrideAccess: overrideAccess!,
-    parentIndexPath: '',
-    parentIsLocalized: false,
-    parentPath: '',
-    parentSchemaPath: '',
-    req,
-    siblingData: data,
-    siblingDoc: doc,
-    siblingDocWithLocales: docWithLocales,
-    skipHooks,
-    skipValidation,
-    submittedTopLevelFieldNames,
-  })
-
-  if (errors.length > 0) {
-    throw new ValidationError(
-      {
+      await traverseFields({
         id,
-        collection: collection?.slug,
+        collection,
+        context,
+        data,
+        doc,
+        docWithLocales,
         errors,
-        global: global?.slug,
+        fieldLabelPath: '',
+        fields: (collection?.fields || global?.fields)!,
+        global,
+        isValidationOperation,
+        mergeLocaleActions,
+        operation,
+        overrideAccess: overrideAccess!,
+        parentIndexPath: '',
+        parentIsLocalized: false,
+        parentPath: '',
+        parentSchemaPath: '',
         req,
-      },
-      req.t,
-    )
-  }
+        siblingData: data,
+        siblingDoc: doc,
+        siblingDocWithLocales: docWithLocales,
+        skipHooks,
+        skipValidation,
+        submittedTopLevelFieldNames,
+      })
 
-  onDataProcessed?.(data)
+      if (errors.length > 0) {
+        throw new ValidationError(
+          {
+            id,
+            collection: collection?.slug,
+            errors,
+            global: global?.slug,
+            req,
+          },
+          req.t,
+        )
+      }
 
-  for (const action of mergeLocaleActions) {
-    await action()
-  }
+      onDataProcessed?.(data)
 
-  return data
-}
+      for (const action of mergeLocaleActions) {
+        await action()
+      }
+
+      return data
+    }

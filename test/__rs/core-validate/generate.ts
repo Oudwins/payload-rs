@@ -13,13 +13,17 @@
  * records it, and the Rust test checks it runs in the same process time zone).
  *
  * Shim mode (`RS_CORE_VALIDATE_SHIM=1`, needs `PAYLOAD_ENGINE_ADDON` or the shared addon):
- * instead of writing the fixture, runs every case through both the upstream module and the
+ * instead of writing the fixture, runs every case, plus the `exoticValues` (class instances,
+ * `ObjectId`s, getters, proxies, symbols, bigints, ...), through both the upstream module and the
  * Rust-backed drop-in (`packages/engine-rs/src/validate/validations.ts`) and compares the
- * return value or exception, whether the result was a promise / a synchronous throw, every host
- * call (arguments, identity of `req` / `data` / `siblingData` / option filters, and the
- * microtask tick it happened on, counted by a concurrent ticker) and the tick it settled on.
+ * return value or exception (class and message), whether the result was a promise / a
+ * synchronous throw, every host call (arguments, identity of `req` / `data` / `siblingData` /
+ * option filters, and the microtask tick it happened on, counted by a concurrent ticker) and the
+ * tick it settled on. Exits 1 on a mismatch or when nothing was compared. Mutations made while a
+ * validator awaits are covered by `live.ts`.
  */
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -81,6 +85,10 @@ const enc = (v: unknown): unknown => {
     }
     case 'undefined':
       return { $undefined: true }
+    case 'bigint':
+      return { $bigint: String(v) }
+    case 'symbol':
+      return { $symbol: String(v) }
     default:
       return v
   }
@@ -709,6 +717,67 @@ const values: unknown[] = [
   [new Date(0), new Date(NaN)],
 ]
 
+/**
+ * Shim mode only: values `clone` would turn into plain data (class instances, `ObjectId`s,
+ * getters, proxies, own `toString` / `valueOf` / `toJSON` methods, symbols, bigints), made fresh
+ * for every run. The Rust validators must read them through JS exactly like the TS.
+ */
+const ObjectIdImport = createRequire(path.resolve(dirname, '../../../packages/payload/package.json'))(
+  'bson-objectid',
+)
+const ObjectId = 'default' in ObjectIdImport ? ObjectIdImport.default : ObjectIdImport
+const OID = '507f1f77bcf86cd799439011'
+class Labelled {
+  label = 'x'
+  toString() {
+    return '7'
+  }
+}
+const exoticValues: (() => unknown)[] = [
+  () => new ObjectId(OID),
+  () => new ObjectId('m1m1m1m1m1m1'),
+  () => [new ObjectId(OID), 'm1'],
+  () => [new ObjectId(OID), new ObjectId('aaaaaaaaaaaaaaaaaaaaaaaa')],
+  () => ({ relationTo: 'media', value: new ObjectId(OID) }),
+  () => ({ id: OID, toHexString: () => OID }),
+  () => ({ id: Buffer.from('m1m1m1m1m1m1'), toHexString: () => 'not-called' }),
+  () => Buffer.from('m1m1m1m1m1m1'),
+  () => new Labelled(),
+  () => [new Labelled(), 'a'],
+  () => ({ toString: () => '12', valueOf: () => 5 }),
+  () => ({ toJSON: () => 'json!', value: 'a' }),
+  () => [{ toJSON: () => ({ x: 1 }) }],
+  () => ({
+    get length() {
+      record(['getter', 'length'])
+      return 3
+    },
+  }),
+  () => ({
+    relationTo: 'posts',
+    get value() {
+      record(['getter', 'value'])
+      return 1
+    },
+  }),
+  () => new Proxy(['a', 'b'], {}),
+  () => new Proxy({ relationTo: 'posts', value: 2 }, {}),
+  // oxlint-disable-next-line no-sparse-arrays
+  () => [1, , 3],
+  () => Object.assign(['a', 'a'], { some: () => false }),
+  () => new String('abc'),
+  () => new Number(5),
+  () => Object.create(null),
+  () => Symbol('s'),
+  () => [Symbol('s')],
+  () => 10n,
+  () => [10n],
+  () => Object.freeze(['a', 'b']),
+  () => new Date(0),
+  () => ({ toString: () => '2024-01-01' }),
+  () => ({ toString: 5 }),
+]
+
 // ---------------------------------------------------------------------------------------------
 // Field configs
 type Config = { options: Record<string, unknown>; payload: number }
@@ -998,7 +1067,10 @@ if (SHIM) {
 /** Shim mode: upstream vs Rust-backed module on every case (see the header). */
 async function runShimDifferential() {
   const rs = await import('../../../packages/engine-rs/src/validate/validations.js')
-  const implementations = [validatorFns, { ...rs.validations, username: rs.username }] as const
+  const implementations: Record<string, Function>[] = [
+    validatorFns,
+    { ...rs.validations, username: rs.username },
+  ]
   const verbose = process.env.RS_CORE_VALIDATE_VERBOSE === '1'
   // The first `validateJSONSchema` call loads zod (`await import`), which takes extra ticks for
   // whichever implementation runs first.
@@ -1008,8 +1080,9 @@ async function runShimDifferential() {
   })
   let cases = 0
   let mismatches = 0
-  let typeErrorMessageDiffs = 0
   let hostCalls = 0
+  // Every corpus value (cloned per run) plus the exotic ones (made per run).
+  const shimValues = [...values.map((value) => () => clone(value)), ...exoticValues]
   const only = process.env.RS_CORE_VALIDATE_ONLY?.split(',')
   for (const [name, list] of Object.entries(validatorConfigs)) {
     if (only && !only.includes(name)) {
@@ -1017,8 +1090,8 @@ async function runShimDifferential() {
     }
     let validatorMismatches = 0
     for (const [configIndex, { options, payload }] of list.entries()) {
-      for (const [valueIndex, value] of values.entries()) {
-        const outcomes: { error?: unknown; key: string; message?: string }[] = []
+      for (const [valueIndex, makeValue] of shimValues.entries()) {
+        const outcomes: { key: string }[] = []
         for (const fns of implementations) {
           calls = []
           lastFilterResult = undefined
@@ -1052,7 +1125,7 @@ async function runShimDifferential() {
           let result: unknown
           let error: unknown
           try {
-            const returned = fns[name]!(clone(value), { ...caseOptions, req })
+            const returned = fns[name]!(makeValue(), { ...caseOptions, req })
             shape = returned instanceof Promise ? 'promise' : 'sync'
             try {
               result = await returned
@@ -1069,7 +1142,7 @@ async function runShimDifferential() {
           const e = error as Error | undefined
           const resultKey =
             error !== undefined
-              ? `!${e?.name}${e?.name === 'TypeError' ? '' : `:${e?.message}`}`
+              ? `!${e?.name}:${e?.message}`
               : result === true
                 ? true
                 : typeof result === 'string'
@@ -1077,7 +1150,6 @@ async function runShimDifferential() {
                   : `!nonstring:${typeof result}`
           outcomes.push({
             key: JSON.stringify({ calls, result: resultKey, settledTick, shape }),
-            message: e?.message,
           })
           hostCalls += calls.length
         }
@@ -1088,14 +1160,7 @@ async function runShimDifferential() {
           validatorMismatches++
           if (verbose && validatorMismatches <= 5) {
             console.log(
-              `${name} config #${configIndex} ${encStr(options)} value ${encStr(value)} payload ${payload}\n  ts   ${ts.key}\n  rust ${rust.key}`,
-            )
-          }
-        } else if (ts.message !== rust.message) {
-          typeErrorMessageDiffs++
-          if (verbose && typeErrorMessageDiffs <= 20) {
-            console.log(
-              `TypeError message: ${name} #${configIndex} ${encStr(value)}: ${ts.message} | ${rust.message}`,
+              `${name} config #${configIndex} ${encStr(options)} value #${valueIndex} ${String(makeValue)} payload ${payload}\n  ts   ${ts.key}\n  rust ${rust.key}`,
             )
           }
         }
@@ -1105,8 +1170,13 @@ async function runShimDifferential() {
   }
   console.log(
     `shim differential (TZ=${process.env.TZ}): ${cases} cases, ${hostCalls} recorded host calls, ` +
-      `${mismatches} mismatches, ${typeErrorMessageDiffs} TypeError message differences`,
+      `${mismatches} mismatches (results compared with error class and message)`,
   )
+  if (cases === 0 || hostCalls === 0) {
+    console.log('shim differential compared nothing')
+    process.exitCode = 1
+    return
+  }
   process.exitCode = mismatches ? 1 : 0
 }
 

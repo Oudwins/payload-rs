@@ -5,7 +5,7 @@
  * base fields, `generatePasswordSaltHash`, and the `payload` / `payload/shared` re-exports.
  * `PAYLOAD_VALIDATIONS=ts` keeps the upstream module (reference run with the same config).
  *
- *   SQLITE_URL=file:/tmp/rs-validate-host.db PAYLOAD_DATABASE=sqlite \
+ *   SQLITE_URL=file:/tmp/rs-validate.db PAYLOAD_DATABASE=sqlite \
  *     pnpm vitest run --config test/__rs/core-validate/vitest.config.ts test/validate/int.spec.ts
  */
 import type { Plugin } from 'vite'

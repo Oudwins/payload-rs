@@ -42,7 +42,7 @@ export type TextFieldManyValidation = Validate<string[], unknown, unknown, TextF
 
 export type TextFieldSingleValidation = Validate<string, unknown, unknown, TextField>
 
-export const text: TextFieldValidation = (
+export let text: TextFieldValidation = (
   value,
   {
     hasMany,
@@ -108,11 +108,11 @@ export type SlugFieldValidation = Validate<string, unknown, unknown, SlugField>
 // so an empty value is never a user error — `required` only drives the admin asterisk. Uniqueness is
 // enforced in the field's `beforeChange` hook (see generateSlug) rather than here, because draft
 // saves skip validation but still run hooks.
-export const slug: SlugFieldValidation = () => true
+export let slug: SlugFieldValidation = () => true
 
 export type PasswordFieldValidation = Validate<string, unknown, unknown, TextField>
 
-export const password: PasswordFieldValidation = (
+export let password: PasswordFieldValidation = (
   value,
   {
     maxLength: fieldMaxLength,
@@ -155,7 +155,7 @@ export type ConfirmPasswordFieldValidation = Validate<
   TextField
 >
 
-export const confirmPassword: ConfirmPasswordFieldValidation = (
+export let confirmPassword: ConfirmPasswordFieldValidation = (
   value,
   { req: { t }, required, siblingData },
 ) => {
@@ -172,7 +172,7 @@ export const confirmPassword: ConfirmPasswordFieldValidation = (
 
 export type EmailFieldValidation = Validate<string, unknown, { username?: string }, EmailField>
 
-export const email: EmailFieldValidation = (
+export let email: EmailFieldValidation = (
   value,
   {
     collectionSlug,
@@ -225,7 +225,7 @@ export const email: EmailFieldValidation = (
 
 export type UsernameFieldValidation = Validate<string, unknown, { email?: string }, TextField>
 
-export const username: UsernameFieldValidation = (
+export let username: UsernameFieldValidation = (
   value,
   {
     collectionSlug,
@@ -272,7 +272,7 @@ export const username: UsernameFieldValidation = (
 
 export type TextareaFieldValidation = Validate<string, unknown, unknown, TextareaField>
 
-export const textarea: TextareaFieldValidation = (
+export let textarea: TextareaFieldValidation = (
   value,
   {
     maxLength: fieldMaxLength,
@@ -309,7 +309,7 @@ export const textarea: TextareaFieldValidation = (
 
 export type CodeFieldValidation = Validate<string, unknown, unknown, CodeField>
 
-export const code: CodeFieldValidation = (value, { req: { t }, required }) => {
+export let code: CodeFieldValidation = (value, { req: { t }, required }) => {
   if (required && (!value || (typeof value === 'string' && value.length === 0))) {
     return t('validation:required')
   }
@@ -324,7 +324,7 @@ export type JSONFieldValidation = Validate<
   { jsonError?: string } & JSONField
 >
 
-export const json: JSONFieldValidation = async (
+export let json: JSONFieldValidation = async (
   value,
   { jsonError, jsonSchema, req: { t }, required },
 ) => {
@@ -360,7 +360,7 @@ export const json: JSONFieldValidation = async (
 
 export type CheckboxFieldValidation = Validate<boolean, unknown, unknown, CheckboxField>
 
-export const checkbox: CheckboxFieldValidation = (value, { req: { t }, required }) => {
+export let checkbox: CheckboxFieldValidation = (value, { req: { t }, required }) => {
   if ((value && typeof value !== 'boolean') || (required && typeof value !== 'boolean')) {
     return t('validation:trueOrFalse')
   }
@@ -370,7 +370,7 @@ export const checkbox: CheckboxFieldValidation = (value, { req: { t }, required 
 
 export type DateFieldValidation = Validate<Date, unknown, unknown, DateField>
 
-export const date: DateFieldValidation = (
+export let date: DateFieldValidation = (
   value,
   { name, req: { t }, required, siblingData, timezone },
 ) => {
@@ -404,7 +404,7 @@ export const date: DateFieldValidation = (
 
 export type RichTextFieldValidation = Validate<object, unknown, unknown, RichTextField>
 
-export const richText: RichTextFieldValidation = async (value, options) => {
+export let richText: RichTextFieldValidation = async (value, options) => {
   if (!options?.editor) {
     throw new Error('richText field has no editor property.')
   }
@@ -455,7 +455,7 @@ export type NumberFieldManyValidation = Validate<number[], unknown, unknown, Num
 
 export type NumberFieldSingleValidation = Validate<number, unknown, unknown, NumberField>
 
-export const number: NumberFieldValidation = (
+export let number: NumberFieldValidation = (
   value,
   { hasMany, max, maxRows, min, minRows, req: { t }, required },
 ) => {
@@ -499,7 +499,7 @@ export const number: NumberFieldValidation = (
 
 export type ArrayFieldValidation = Validate<unknown[], unknown, unknown, ArrayField>
 
-export const array: ArrayFieldValidation = (value, { maxRows, minRows, req: { t }, required }) => {
+export let array: ArrayFieldValidation = (value, { maxRows, minRows, req: { t }, required }) => {
   return validateArrayLength(value, { maxRows, minRows, required, t })
 }
 
@@ -512,7 +512,7 @@ export type BlocksFieldValidation = Validate<unknown, unknown, unknown, BlocksFi
  *
  * @internal - this may break or be removed at any time
  */
-export async function validateBlocksFilterOptions({
+export let validateBlocksFilterOptions = async function validateBlocksFilterOptions({
   id,
   data,
   filterOptions,
@@ -575,7 +575,7 @@ export async function validateBlocksFilterOptions({
     invalidBlockSlugs,
   }
 }
-export const blocks: BlocksFieldValidation = async (
+export let blocks: BlocksFieldValidation = async (
   value,
   { id, data, filterOptions, maxRows, minRows, req: { t }, req, required, siblingData },
 ) => {
@@ -754,7 +754,7 @@ export type UploadFieldManyValidation = Validate<unknown[], unknown, unknown, Up
 
 export type UploadFieldSingleValidation = Validate<unknown, unknown, unknown, UploadField>
 
-export const upload: UploadFieldValidation = async (value, options) => {
+export let upload: UploadFieldValidation = async (value, options) => {
   const {
     event,
     maxRows,
@@ -857,7 +857,7 @@ export type RelationshipFieldSingleValidation = Validate<
   RelationshipField
 >
 
-export const relationship: RelationshipFieldValidation = async (value, options) => {
+export let relationship: RelationshipFieldValidation = async (value, options) => {
   const {
     event,
     maxRows,
@@ -945,7 +945,7 @@ export type SelectFieldManyValidation = Validate<string[], unknown, unknown, Sel
 
 export type SelectFieldSingleValidation = Validate<string, unknown, unknown, SelectField>
 
-export const select: SelectFieldValidation = async (
+export let select: SelectFieldValidation = async (
   value,
   { data, filterOptions, hasMany, options, req, req: { t }, required, siblingData },
 ) => {
@@ -1019,7 +1019,7 @@ export const select: SelectFieldValidation = async (
 
 export type RadioFieldValidation = Validate<unknown, unknown, unknown, RadioField>
 
-export const radio: RadioFieldValidation = (value, { options, req: { t }, required }) => {
+export let radio: RadioFieldValidation = (value, { options, req: { t }, required }) => {
   if (value) {
     const valueMatchesOption = options.some(
       (option) => option === value || (typeof option !== 'string' && option.value === value),
@@ -1037,7 +1037,7 @@ export type PointFieldValidation = Validate<
   PointField
 >
 
-export const point: PointFieldValidation = (value = ['', ''], { req: { t }, required }) => {
+export let point: PointFieldValidation = (value = ['', ''], { req: { t }, required }) => {
   if (value === null) {
     if (required) {
       return t('validation:required')
@@ -1073,6 +1073,53 @@ export const point: PointFieldValidation = (value = ['', ''], { req: { t }, requ
   }
 
   return true
+}
+
+type RustValidations = Record<string, (...args: unknown[]) => unknown>
+
+/**
+ * Rust validators (`packages/engine-rs/src/validate/validations.ts`), selected once at module
+ * load: `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_PORT.md. This module is
+ * also bundled for the browser, where `process` may not exist.
+ */
+const isRustCoreEngine =
+  typeof process !== 'undefined' &&
+  (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+
+if (isRustCoreEngine) {
+  const rustValidationsSpecifier = '../../../engine-rs/src/validate/validations.js'
+  let rustValidations: RustValidations | undefined
+  const rustValidationsLoad: Promise<RustValidations> = import(
+    /* @vite-ignore */ /* webpackIgnore: true */ rustValidationsSpecifier
+  ).then((loaded: RustValidations) => (rustValidations = loaded))
+  void rustValidationsLoad.catch(() => {})
+  const forwardToRust = <F>(name: string): F =>
+    ((...args: unknown[]) =>
+      rustValidations
+        ? rustValidations[name]!(...args)
+        : rustValidationsLoad.then((loaded) => loaded[name]!(...args))) as F
+
+  text = forwardToRust('text')
+  slug = forwardToRust('slug')
+  password = forwardToRust('password')
+  confirmPassword = forwardToRust('confirmPassword')
+  email = forwardToRust('email')
+  username = forwardToRust('username')
+  textarea = forwardToRust('textarea')
+  code = forwardToRust('code')
+  json = forwardToRust('json')
+  checkbox = forwardToRust('checkbox')
+  date = forwardToRust('date')
+  richText = forwardToRust('richText')
+  number = forwardToRust('number')
+  array = forwardToRust('array')
+  validateBlocksFilterOptions = forwardToRust('validateBlocksFilterOptions')
+  blocks = forwardToRust('blocks')
+  upload = forwardToRust('upload')
+  relationship = forwardToRust('relationship')
+  select = forwardToRust('select')
+  radio = forwardToRust('radio')
+  point = forwardToRust('point')
 }
 
 /**

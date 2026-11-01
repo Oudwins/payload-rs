@@ -20,6 +20,28 @@ pub fn raw_schema_output(root: &JsVal, schema: &RawSchema) -> Json {
     o.insert("blockTableNameIndexes".into(), Json::Array(block_indexes));
     o.insert("rawTableKeys".into(), json!(schema.raw_tables.keys().collect::<Vec<_>>()));
     o.insert("columnDefaults".into(), Json::Array(column_defaults(root, schema)));
+    o.insert("undefinedProperties".into(), Json::Array(undefined_properties(schema)));
+  }
+  out
+}
+
+/// Paths (below `rawTables`) of the own properties holding `undefined` that JSON drops: the
+/// `unique` key of the indexes built for fields (`traverseFields.ts`: `unique = disableUnique !==
+/// true && field.unique`) and for collection compound indexes (`build.ts`: `unique: disableUnique
+/// ? false : index.unique`). Both are stored under their own (deduplicated) name and always end
+/// with `unique`; every other index is stored under a fixed key (`_orderIdx`, `parentIdx`, ...)
+/// that never equals its generated name, or has a boolean `unique`. So an index whose key is its
+/// `name` and that has no `unique` key had `unique: undefined` as its last own key.
+fn undefined_properties(schema: &RawSchema) -> Vec<Json> {
+  let mut out = Vec::new();
+  for (table_key, table) in &schema.raw_tables {
+    let Some(table) = table else { continue };
+    for (index_key, index) in &table.indexes {
+      let Some(index) = index.as_object() else { continue };
+      if !index.contains_key("unique") && index.get("name").and_then(Json::as_str) == Some(index_key.as_str()) {
+        out.push(json!([table_key, "indexes", index_key, "unique"]));
+      }
+    }
   }
   out
 }

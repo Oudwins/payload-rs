@@ -16,6 +16,7 @@ use crate::context::{BuildQueryArgs, FieldsSource, FindContext, SelectField, Whe
 use crate::exec::{Driver, Executor, decode_js, execute_js, js_number_of, js_string_of, query_cells};
 use crate::join::{render_joins, render_selection};
 use crate::relational::{Mode, build_relational_query, push_limit_offset};
+use crate::schema::Decoder;
 use crate::sql::{self, Sql};
 use crate::utils::js_object_key_order;
 
@@ -247,8 +248,17 @@ pub fn find_many_js<C: Executor + ?Sized>(
     trace.distinct = Some(q);
   } else if !built.joins.is_empty() {
     let id_index = select_fields.keys().position(|k| k == "id");
+    // `mapResultRow` maps every selected column (`mapFromDriverValue`, which can throw), not only
+    // the `id` that is read afterwards
+    let decoders: Vec<Option<Decoder>> = select_fields
+      .values()
+      .map(|field| match field {
+        SelectField::Column(c) => ctx.schema.column_by_db_name(&c.table_name, &c.name).map(|column| column.decoder),
+        SelectField::Sql(_) => None,
+      })
+      .collect();
     let mut q = Sql::raw("select distinct ");
-    q.push(&render_selection(select_fields.values(), false)).push_str(" from ").push(&main_from);
+    q.push(&render_selection(ctx.schema, select_fields.values(), false)).push_str(" from ").push(&main_from);
     q.push(&render_joins(&built.joins));
     if let Some(w) = &built.where_ {
       q.push_str(" where ").push(w);
@@ -259,7 +269,25 @@ pub fn find_many_js<C: Executor + ?Sized>(
     }
     push_limit_offset(&mut q, limit, Some(offset));
     let rows = query_cells(conn, &q)?;
-    distinct_result = Some(rows.into_iter().map(|row| decode_id(row, id_index)).collect::<Result<Vec<_>>>()?);
+    let mut ids = Vec::with_capacity(rows.len());
+    for row in rows {
+      // every selected column is mapped in selection order, like `mapResultRow`; only `id` is kept
+      let mut id = JsVal::Undefined;
+      for (i, cell) in row.iter().enumerate() {
+        let is_id = Some(i) == id_index;
+        let decoder = if is_id { Some(id_column.decoder) } else { decoders.get(i).copied().flatten() };
+        let value = match (cell, decoder) {
+          (payload_sqlite::Cell::Null, _) => JsVal::Null,
+          (cell, Some(decoder)) => decode_js(decoder, Driver::from_cell(cell), host)?,
+          (_, None) => JsVal::Undefined,
+        };
+        if is_id {
+          id = value;
+        }
+      }
+      ids.push(id);
+    }
+    distinct_result = Some(ids);
     trace.distinct = Some(q);
   }
 

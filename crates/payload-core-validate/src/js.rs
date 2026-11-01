@@ -531,16 +531,30 @@ pub fn json_stringify_interpolated(v: &JsVal) -> Result<String> {
 
 /// `bson-objectid` `ObjectId.isValid(id)` for JSON-like values.
 ///
-/// Objects are only valid when they duck-type as an ObjectId (`toHexString` function), which
-/// plain data can't, so they are invalid here.
-pub fn object_id_is_valid(v: &JsVal) -> bool {
-  match v {
+/// An object is valid when it is an `ObjectID` / `Buffer` instance (data snapshots never are) or
+/// duck-types as one through a `toHexString` function: that check reads the object's `id`, which
+/// only the live object can answer, so it is an unsupported-value error here (the live
+/// validators in `payload-core-validate-live` call the real `ObjectId.isValid`).
+pub fn object_id_is_valid(v: &JsVal) -> Result<bool> {
+  Ok(match v {
     JsVal::Num(_) => true,
     JsVal::Str(s) => {
       let len = str_len(s);
       len == 12 || (len == 24 && s.bytes().all(|b| b.is_ascii_hexdigit()))
     }
+    JsVal::Obj(o) if o.get("toHexString").is_some_and(JsVal::is_fn) => {
+      return Err(unsupported_function("ObjectId.isValid (toHexString duck typing)"));
+    }
     _ => false,
+  })
+}
+
+/// `new ObjectId(id).toHexString()` of an id `ObjectId.isValid` accepted: only reached for
+/// objects, which need the live `ObjectId` (see [`object_id_is_valid`]).
+pub fn object_id_to_hex_string(v: &JsVal) -> Result<JsVal> {
+  match v {
+    JsVal::Str(s) if str_len(s) == 24 => Ok(JsVal::str(s.to_ascii_lowercase())),
+    _ => Err(unsupported_function("new ObjectId(val).toHexString()")),
   }
 }
 

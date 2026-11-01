@@ -3,7 +3,8 @@
 //! build the schema once, create the tables, then create / find / update / delete through
 //! `SqliteEngine::call_json` on a `payload-sqlite` worker connection, as the napi binding does.
 //!
-//! The fixtures are git-ignored; without them the tests print a message and pass.
+//! The fixtures are git-ignored; a missing fixture fails the tests (regenerate them with the
+//! command above).
 
 use std::sync::Arc;
 
@@ -14,13 +15,10 @@ use serde_json::{Value as Json, json};
 
 fn fixture(name: &str) -> Option<Json> {
   let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../test/__rs/schema/fixtures/{name}.json"));
-  match std::fs::read_to_string(&path) {
-    Ok(text) => Some(serde_json::from_str(&text).expect("parse fixture")),
-    Err(_) => {
-      eprintln!("no fixture {}, skipping", path.display());
-      None
-    }
-  }
+  let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+    panic!("missing fixture {} ({e}); write it with RS_SCHEMA_WRITE_FIXTURES=1 (see the module docs)", path.display())
+  });
+  Some(serde_json::from_str(&text).expect("parse fixture"))
 }
 
 struct Db {
@@ -474,4 +472,191 @@ fn adapter_properties_are_read_at_call_time() {
     .expect("create");
   assert_eq!(created["createdAt"], "2023-11-14T22:13:20.123Z", "{created}");
   assert_eq!(created["updatedAt"], "2023-11-14T22:13:20.123Z", "{created}");
+}
+
+/// Drives stepped calls like the napi binding under `Promise.all`: every call's first step runs
+/// when it is started (in start order), later steps round-robin (one microtask each).
+fn run_concurrently(db: &Db, calls: Vec<(&str, Json)>) -> Vec<Result<Json, Json>> {
+  use payload_sql_engine::stepped::{Step, SteppedCall};
+  let mut results: Vec<Option<Result<Json, Json>>> = calls.iter().map(|_| None).collect();
+  let mut queue = std::collections::VecDeque::new();
+  let mut ops = Vec::new();
+  for (method, args) in calls {
+    let args = json!({ "objects": [], "root": args }).to_string();
+    ops.push(SteppedCall::start(Arc::clone(&db.engine), method.to_string(), args, None, db.id).expect("start"));
+  }
+  for i in 0..ops.len() {
+    queue.push_back(i);
+  }
+  while let Some(i) = queue.pop_front() {
+    match ops[i].resume(&NoHost) {
+      Step::Yielded => queue.push_back(i),
+      Step::Done(result) => {
+        results[i] = Some(result.map(|text| serde_json::from_str(&text).expect("result JSON")).map_err(|e| e.to_json()));
+      }
+    }
+  }
+  results.into_iter().map(|r| r.expect("finished")).collect()
+}
+
+/// test/queues "parallel tasks that complete immediately": concurrent `updateJobs` `$push`es to
+/// one job's log. With libsql every `upsertRow` statement of every call runs before any call's
+/// read-back (the awaits interleave round-robin), so every result already has all entries; run as
+/// atomic calls, the k-th call would only see k entries.
+#[test]
+fn stepped_calls_interleave_at_statement_granularity() {
+  let Some(fixture) = fixture("versions") else { return };
+  let db = open("versions-stepped", &fixture, "number");
+  let job = db.ok("create", json!({ "collection": "payload-jobs", "data": { "input": {}, "queue": "default" } }));
+  let push = |i: usize| {
+    (
+      "updateJobs",
+      json!({
+        "id": job["id"],
+        "data": { "log": { "$push": {
+          "id": format!("{i:024x}"),
+          "executedAt": "2025-01-01T00:00:00.000Z",
+          "completedAt": "2025-01-01T00:00:00.000Z",
+          "taskSlug": "inline",
+          "taskID": format!("task {i}"),
+          "input": {},
+          "state": "succeeded",
+        } } },
+      }),
+    )
+  };
+  let results = run_concurrently(&db, (0..3).map(push).collect());
+  for result in &results {
+    let docs = result.as_ref().unwrap_or_else(|e| panic!("updateJobs failed: {e}"));
+    assert_eq!(docs[0]["log"].as_array().map(Vec::len), Some(3), "{docs}");
+  }
+  assert_eq!(db.sql("select count(*) from payload_jobs_log"), vec![vec![json!(3)]]);
+
+  // the same calls one after another (atomic, as single jobs) see 4, 5 and 6 entries
+  let sequential: Vec<usize> = (3..6)
+    .map(|i| {
+      let (method, args) = push(i);
+      db.ok(method, args)[0]["log"].as_array().map(Vec::len).unwrap_or(0)
+    })
+    .collect();
+  assert_eq!(sequential, vec![4, 5, 6]);
+}
+
+/// libsql runs statements that return rows with `stmt.all()`: an error while stepping them is the
+/// raw native error (`kind: 'native'`), other statements fail with a `SqliteError` cause.
+#[test]
+fn failed_write_statements_have_libsqls_error_kind() {
+  let Some(fixture) = fixture("versions") else { return };
+  let db = open("versions-error-kind", &fixture, "number");
+  let err = db.call("create", json!({ "collection": "text", "data": {} })).expect_err("NOT NULL");
+  let boundary = payload_sql_engine::error_json(&payload_engine::error::EngineError {
+    name: err["name"].as_str().expect("name").to_string(),
+    message: err["message"].as_str().expect("message").to_string(),
+    data: err.get("data").cloned(),
+  });
+  assert_eq!(boundary["name"], "DrizzleQueryError", "{boundary}");
+  assert!(boundary["query"].as_str().is_some_and(|q| q.starts_with("insert into \"text\"") && q.contains(" returning ")), "{boundary}");
+  assert_eq!(
+    boundary["cause"],
+    json!({ "code": "SQLITE_CONSTRAINT_NOTNULL", "kind": "native", "message": "NOT NULL constraint failed: text.text", "rawCode": 1299 })
+  );
+}
+
+/// `updateGlobal` without a global row creates it through `upsertRow`, which sets the caller's
+/// `data.createdAt`; the call reports it with `withMutations`.
+#[test]
+fn update_global_reports_the_created_at_mutation() {
+  let Some(fixture) = fixture("versions") else { return };
+  let db = open("versions-mutations", &fixture, "number");
+  let context = Some(json!({ "now": 1_700_000_000_123.0, "withMutations": true }));
+  let args = json!({ "slug": "draft-global", "data": { "title": { "en": "g1" } } });
+  let created = db.call_with(db.id, "updateGlobal", args.clone(), context.clone()).expect("create path");
+  assert_eq!(created["mutations"], json!([[["data", "createdAt"], "2023-11-14T22:13:20.123Z"]]), "{created}");
+  assert_eq!(created["result"]["globalType"], "draft-global");
+  let updated = db.call_with(db.id, "updateGlobal", args, context).expect("update path");
+  assert_eq!(updated["mutations"], json!([]), "{updated}");
+  // without `withMutations` the result is the plain return value
+  let plain = db.ok("updateGlobal", json!({ "slug": "draft-global", "data": { "title": { "en": "g2" } } }));
+  assert_eq!(plain["globalType"], "draft-global");
+}
+
+/// `describeDrizzleSchema` (test/__rs/find/harness.ts) output for a schema without hooks.
+fn describe(schema: &payload_sql_find::schema::DrizzleSchema) -> Json {
+  use payload_sql_find::schema::{Decoder, RelationKind};
+  let mut out = serde_json::Map::new();
+  for (ts_name, table) in &schema.tables {
+    let mut columns = serde_json::Map::new();
+    for (key, column) in &table.columns {
+      let column_type = match column.decoder {
+        Decoder::Boolean => "SQLiteBoolean",
+        Decoder::Json => "SQLiteTextJson",
+        Decoder::Number => "SQLiteNumericNumber",
+        Decoder::NumericString => "SQLiteNumeric",
+        Decoder::NumericBigInt => "SQLiteNumericBigInt",
+        _ => "SQLiteText",
+      };
+      columns.insert(key.clone(), json!({ "name": column.name, "columnType": column_type, "sqlType": column.sql_type }));
+    }
+    let mut relations = serde_json::Map::new();
+    for (key, relation) in &table.relations {
+      let mut r = json!({
+        "referencedTable": relation.referenced_table,
+        "relationName": relation.relation_name,
+        "sourceTable": relation.source_table,
+      });
+      match &relation.kind {
+        RelationKind::One { fields, references } => {
+          r["type"] = json!("one");
+          r["fields"] = json!(fields);
+          r["references"] = json!(references);
+        }
+        RelationKind::Many => r["type"] = json!("many"),
+        RelationKind::OneWithoutConfig => r["type"] = json!("one-no-config"),
+      }
+      relations.insert(key.clone(), r);
+    }
+    out.insert(ts_name.clone(), json!({ "columns": columns, "dbName": table.db_name, "relations": relations }));
+  }
+  Json::Object(out)
+}
+
+/// A host whose function 7 is a custom column's `fromDriver`.
+struct DecodingHost;
+
+impl payload_engine::host::Host for DecodingHost {
+  fn call(&self, id: u32, arg: &Json) -> payload_engine::error::Result<payload_engine::js::JsVal> {
+    assert_eq!(id, 7);
+    Ok(payload_engine::js::JsVal::str(format!("decoded:{}", arg.as_str().unwrap_or("?"))))
+  }
+}
+
+/// Schema hooks can change drizzle columns (`afterSchemaInit`); with the live schema the engine
+/// decodes a custom column through its `fromDriver` (a JS function, called on the driver's
+/// thread during the step).
+#[test]
+fn live_schema_columns_and_custom_decoders() {
+  use payload_sql_engine::stepped::{Step, SteppedCall};
+  let Some(fixture) = fixture("relationships") else { return };
+  let mut db = open("relationships-live", &fixture, "number");
+  let mut description = describe(db.engine.drizzle_schema());
+  assert_eq!(
+    &payload_sql_find::schema::DrizzleSchema::from_json(&description).expect("from_json"),
+    db.engine.drizzle_schema(),
+    "describe(from_raw) round-trips"
+  );
+  db.ok("create", json!({ "collection": "relation", "data": { "name": "x" } }));
+  description["relation"]["columns"]["name"] =
+    json!({ "name": "name", "columnType": "SQLiteCustomColumn", "sqlType": "text", "fromDriver": 7 });
+  Arc::get_mut(&mut db.engine).expect("no calls in flight").set_live_schema(&json!({ "drizzle": description })).expect("set");
+
+  let args = json!({ "objects": [], "root": { "collection": "relation", "where": {} } }).to_string();
+  let op = SteppedCall::start(Arc::clone(&db.engine), "find".into(), args, None, db.id).expect("start");
+  let result = loop {
+    match op.resume(&DecodingHost) {
+      Step::Yielded => continue,
+      Step::Done(result) => break result.expect("find"),
+    }
+  };
+  let result: Json = serde_json::from_str(&result).expect("result JSON");
+  assert_eq!(result["docs"][0]["name"], "decoded:x", "{result}");
 }

@@ -273,7 +273,12 @@ pub fn built_query(result: &BuildQueryResult, root_table: &str) -> Result<BuiltQ
 }
 
 fn column_ref(column: &Column) -> ColumnRef {
-  ColumnRef { table: column.table.ref_name().to_string(), name: column.name.clone(), primary: column.primary }
+  ColumnRef {
+    table: column.table.ref_name().to_string(),
+    table_name: column.table.name.clone(),
+    name: column.name.clone(),
+    primary: column.primary,
+  }
 }
 
 /// Renders a query-crate SQL tree (`dialect.sqlToQuery`), with the bound

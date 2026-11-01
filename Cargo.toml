@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/payload-core-validate",
+  "crates/payload-core-validate/live",
   "crates/payload-engine",
   "crates/payload-node",
   "crates/payload-sql-query",
@@ -15,6 +16,7 @@ members = [
   "crates/payload-core-hooks-change",
   "crates/payload-core-hooks-after",
   "crates/payload-core-hooks-validate",
+  "crates/payload-core-ops",
   "crates/payload-sql-engine",
 ]
 
@@ -30,3 +32,8 @@ serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision
 
 [profile.release]
 lto = "thin"
+
+# rusqlite's SQLite is the libSQL build of the reference runtime
+# (@libsql/client 0.14.0 -> libsql 0.4.7 -> libsql-ffi 0.4.1 multiple-ciphers).
+[patch.crates-io]
+libsqlite3-sys = { path = "crates/payload-sqlite/libsqlite3-sys" }

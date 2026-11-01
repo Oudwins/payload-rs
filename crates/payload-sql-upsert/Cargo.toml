@@ -7,6 +7,7 @@ version.workspace = true
 [dependencies]
 indexmap.workspace = true
 payload-engine = { path = "../payload-engine" }
+payload-sql-read = { path = "../payload-sql-read" }
 payload-sql-write = { path = "../payload-sql-write" }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde.workspace = true

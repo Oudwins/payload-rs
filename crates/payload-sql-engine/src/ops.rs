@@ -7,7 +7,6 @@ use payload_engine::fields::has_drafts_enabled;
 use payload_engine::js::{JsVal, Obj};
 use payload_engine::strings::to_snake_case;
 use payload_sql_find::context::FindContext;
-use payload_sql_find::exec::LibsqlConn;
 use payload_sql_find::find_many::FindManyResult;
 use payload_sql_find::query::SqlQueryBuilder;
 use payload_sql_query::render::{count_select, find_distinct_select};
@@ -19,9 +18,8 @@ use payload_sql_upsert::value::json_parse;
 use payload_sql_upsert::{IgnoreResult, Operation, UpsertRowArgs, WriteContext, upsert_row};
 use payload_sql_write::SchemaWriteAdapter;
 use payload_sql_write::js::{js_insert, set, to_js_string};
-use payload_sqlite::rusqlite::Connection;
 
-use crate::{EngineOptions, SqliteEngine};
+use crate::{CallEnv, CallOutput, EngineOptions, SqliteEngine};
 use crate::fields::{
   collection_config, field_by_path, global_config, snake_slug, version_collection_fields, version_global_fields,
 };
@@ -32,9 +30,8 @@ pub(crate) fn dispatch(
   options: &EngineOptions,
   method: &str,
   args: &JsVal,
-  conn: &LibsqlConn<'_>,
-  raw: &Connection,
-) -> Result<JsVal> {
+  env: &CallEnv<'_>,
+) -> Result<CallOutput> {
   let root = &engine.root;
   let config = root.get("config");
   let collections = root.get("collections");
@@ -66,9 +63,23 @@ pub(crate) fn dispatch(
     name: &options.query.name,
     blocks_as_json: options.schema.blocks_as_json,
   };
-  let call = Call { engine, root, qa: &qa, find: &find, read: &read, write: &write, conn, raw, options };
+  let call = Call {
+    engine,
+    root,
+    qa: &qa,
+    find: &find,
+    read: &read,
+    write: &write,
+    conn: env.conn,
+    raw: env.raw,
+    host: env.host,
+    steps: env.steps,
+    options,
+    mutations: Default::default(),
+  };
 
-  run(&call, method, args).map_err(untranslated)
+  let result = run(&call, method, args).map_err(untranslated)?;
+  Ok(CallOutput { result, mutations: call.mutations.into_inner() })
 }
 
 /// `handleUpsertError`'s `ValidationError` without `errors[].message`: TS rebuilds the error with
@@ -704,7 +715,9 @@ fn update_many(call: &Call<'_>, args: &JsVal) -> Result<JsVal> {
   wops::update_many(&mut env, &mut ops_host, &wargs, &query, where_arg.truthy(), args.get("limit"), &mut data)
 }
 
-/// `updateGlobal` (updateGlobal.ts)
+/// `updateGlobal` (updateGlobal.ts). Without a global row yet, `upsertRow({ operation: 'create' })`
+/// sets `data.createdAt` on the caller's `data` when it is falsy (after the `findFirst`); that
+/// mutation is reported as `[['data', 'createdAt'], value]` (`CallOutput::mutations`).
 fn update_global(call: &Call<'_>, args: &JsVal) -> Result<JsVal> {
   let slug = str_arg(args, "slug").unwrap_or("undefined");
   let global = global_config(call.root, slug)?;
@@ -714,8 +727,14 @@ fn update_global(call: &Call<'_>, args: &JsVal) -> Result<JsVal> {
   let mut host = read_back(call, fields, args.get("select"), &table);
   let mut exec = call.executor();
   let mut data = args.get("data").clone();
+  let created_at_before = args.get("data").get("createdAt").clone();
   let mut env = write_env(call, &mut exec, fields, &mut host);
-  wops::update_global(&mut env, &wargs, slug, &mut data)
+  let result = wops::update_global(&mut env, &wargs, slug, &mut data);
+  let created_at = data.get("createdAt");
+  if !created_at_before.truthy() && created_at.truthy() {
+    call.mutations.borrow_mut().push((vec!["data".to_string(), "createdAt".to_string()], created_at.clone()));
+  }
+  result
 }
 
 /// `updateVersion` / `updateGlobalVersion` (updateVersion.ts, updateGlobalVersion.ts)

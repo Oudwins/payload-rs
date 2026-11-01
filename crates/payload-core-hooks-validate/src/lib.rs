@@ -31,6 +31,9 @@ pub struct BvHost {
   pub spread_parse_value: Persist,
   pub hook_args: Persist,
   pub editor_hook_args: Persist,
+  /// `traverseFields` over a run of leaf fields: pushes upstream's `promise()` of each (a JS
+  /// `async` function, see `before_validate::is_leaf`) into the traversal's promises array.
+  pub before_validate_leaves: Persist,
 }
 
 thread_local! {
@@ -50,6 +53,7 @@ fn install(obj: Local) -> JsResult<()> {
     spread_parse_value: f("spreadParseValue")?,
     hook_args: f("hookArgs")?,
     editor_hook_args: f("editorHookArgs")?,
+    before_validate_leaves: f("beforeValidateLeaves")?,
   };
   BV_HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
   Ok(())

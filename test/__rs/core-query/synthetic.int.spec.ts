@@ -85,8 +85,32 @@ const wheres = (): any[] => [
   { 'author.team': { equals: 1 }, and: { title: 1 } },
 ]
 
+/**
+ * Upstream quirk: a path callback of `validateSearchParam` may push a nested `validateQueryPaths`
+ * promise after `Promise.all(promises)` started, so its rejection is unhandled. Those are part of
+ * the reference behaviour, not test failures: they are counted here instead of failing the run.
+ */
+const absorbUnhandledRejections = () => {
+  const saved = process.listeners('unhandledRejection')
+  process.removeAllListeners('unhandledRejection')
+  let count = 0
+  const onUnhandled = () => {
+    count++
+  }
+  process.on('unhandledRejection', onUnhandled)
+  return async () => {
+    await new Promise((resolve) => setImmediate(resolve))
+    process.off('unhandledRejection', onUnhandled)
+    for (const listener of saved) {
+      process.on('unhandledRejection', listener as (...args: any[]) => void)
+    }
+    return count
+  }
+}
+
 test.suite('core-query synthetic corpus', { config: './config.ts' }, () => {
   test('records the corpus', async ({ payload }: { payload: Payload }) => {
+    const restoreUnhandled = absorbUnhandledRejections()
     const posts = payload.collections['cq-posts']!.config
     const authors = payload.collections['cq-authors']!.config
     const members = payload.collections['cq-members']!.config
@@ -94,7 +118,11 @@ test.suite('core-query synthetic corpus', { config: './config.ts' }, () => {
     const user = { id: 1, collection: 'cq-members', role: 'editor' }
     const reqs = [
       await createPayloadRequest({ locale: 'en', payload, user: user as any }),
-      await createPayloadRequest({ locale: 'es', payload, user: { ...user, role: 'admin' } as any }),
+      await createPayloadRequest({
+        locale: 'es',
+        payload,
+        user: { ...user, role: 'admin' } as any,
+      }),
       await createPayloadRequest({ locale: 'all', payload }),
     ]
     const versionFields = buildVersionCollectionFields(payload.config, posts, true)
@@ -329,6 +357,10 @@ test.suite('core-query synthetic corpus', { config: './config.ts' }, () => {
     }
     await settle(() => appendVersionToQueryKey({ OR: [{ id: 1 }], 2: 'x', id: 3 } as any))
 
-    expect(true).toBe(true)
+    const unhandled = await restoreUnhandled()
+    console.log(
+      `[core-query synthetic] ${unhandled} unhandled rejections from floating validations`,
+    )
+    expect(unhandled).toBeGreaterThan(0)
   })
 })

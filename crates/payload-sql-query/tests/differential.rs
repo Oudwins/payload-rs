@@ -19,7 +19,7 @@ use std::process::Command;
 
 use payload_engine::error::EngineError;
 use payload_engine::host::Host;
-use payload_engine::js::{JsVal, decode_graph};
+use payload_engine::js::{JsVal, decode_graph, decode_graph_typed};
 use payload_engine::sql::schema::{SchemaInput, SchemaOptions, build_raw_schema};
 use payload_engine::strings::to_snake_case;
 use payload_sql_query::paths::get_field_by_path;
@@ -334,8 +334,9 @@ fn field_through_relationships<'a>(collections: &'a JsVal, fields: &'a JsVal, pa
   None
 }
 
+/// Wheres / sorts keep `Date` and `bigint` values typed, like the local API passes them.
 fn decode(v: Option<&Json>) -> JsVal {
-  v.map(|v| decode_graph(v).expect("decode engine value")).unwrap_or(JsVal::Undefined)
+  v.map(|v| decode_graph_typed(v).expect("decode engine value")).unwrap_or(JsVal::Undefined)
 }
 
 struct TempFile(PathBuf);
@@ -349,10 +350,8 @@ impl Drop for TempFile {
 #[test]
 fn differential_against_ts_adapter() {
   let dir = fixtures_dir();
-  let Ok(entries) = std::fs::read_dir(&dir) else {
-    eprintln!("no fixtures in {}; run test/__rs/query/query.int.spec.ts first", dir.display());
-    return;
-  };
+  let entries = std::fs::read_dir(&dir)
+    .unwrap_or_else(|e| panic!("no fixtures in {} ({e}); run test/__rs/query/query.int.spec.ts first", dir.display()));
   let mut files: Vec<PathBuf> = entries
     .filter_map(|e| e.ok().map(|e| e.path()))
     .filter(|p| p.to_string_lossy().ends_with(".json.gz"))
@@ -361,6 +360,7 @@ fn differential_against_ts_adapter() {
   if let Ok(only) = std::env::var("RS_QUERY_SUITE") {
     files.retain(|p| p.file_name().is_some_and(|n| n.to_string_lossy() == format!("{only}.json.gz")));
   }
+  assert!(!files.is_empty(), "no fixture corpus in {} (run test/__rs/query/query.int.spec.ts)", dir.display());
 
   let mut grand_total = 0;
   let mut grand_matched = 0;
@@ -559,5 +559,6 @@ fn differential_against_ts_adapter() {
   }
 
   println!("== TOTAL: {grand_matched}/{grand_total} matched");
+  assert!(grand_total > 0, "compared zero cases");
   assert_eq!(grand_matched, grand_total, "differential mismatches (see output above)");
 }

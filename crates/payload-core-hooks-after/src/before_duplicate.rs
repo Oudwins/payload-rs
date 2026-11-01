@@ -14,11 +14,16 @@ use payload_core_runtime::executor::{await_js, spawn};
 use payload_core_runtime::host as rt;
 use payload_core_runtime::js::{self, JsResult, Local, Type, Val};
 
-use crate::common::{Paths, Segments, call_hook, find_block, for_each, for_of_list, get_field_paths, or, promise_all};
+use crate::common::{
+  Paths, Segments, call_hook, find_block, for_each, for_of_list, get_field_paths, is_leaf, or, promise_all,
+};
 use crate::host;
 
 /// The destructured `beforeDuplicate` args, constant for the whole traversal.
 struct Ctx {
+  /// `[collection, context, doc, req]` for the host's `beforeDuplicateLeaves` (indices `BD_*` in
+  /// packages/engine-rs/src/runtime/afterChange/binding.ts).
+  arr: Val,
   collection: Val,
   context: Val,
   doc: Val,
@@ -64,7 +69,11 @@ async fn run(args: Val) -> JsResult<Val> {
   let doc = g("doc")?;
   let _override_access = g("overrideAccess")?;
   let req = g("req")?;
-  let ctx = Rc::new(Ctx { collection, context, doc, req });
+  let arr = js::array();
+  for (i, v) in [&collection, &context, &doc, &req].into_iter().enumerate() {
+    js::set_element(arr, i as u32, v.get())?;
+  }
+  let ctx = Rc::new(Ctx { arr: Val::from_local(arr)?, collection, context, doc, req });
 
   // fields: collection!.fields
   let fields = rt::get_named(ctx.collection.get(), "fields")?;
@@ -96,13 +105,41 @@ async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
     return Ok(Val::Undefined);
   };
   let promises = js::array();
-  for (index, desc) in items.iter().enumerate() {
+  let mut index = 0;
+  while index < items.len() {
+    if t.tab_fields.is_none() && is_leaf(items[index].kind) {
+      // A run of leaves: upstream's `promise()` of each, pushed in order by the host.
+      let start = index;
+      while index < items.len() && is_leaf(items[index].kind) {
+        index += 1;
+      }
+      let h = host::host()?;
+      host::call(
+        &h.before_duplicate_leaves,
+        &[
+          ctx.arr.get(),
+          t.fields.node.get(),
+          js::number(start as f64),
+          js::number(index as f64),
+          promises,
+          t.block_data.get(),
+          js::string(&t.parent_index_path),
+          t.parent_is_localized.get(),
+          js::string(&t.parent_path),
+          js::string(&t.parent_schema_path),
+          t.sibling_doc.get(),
+        ],
+      )?;
+      continue;
+    }
+    let desc = &items[index];
     let field_js = match &t.tab_fields {
       Some(arr) => Val::from_local(js::get_element(arr.get(), index as u32)?)?,
       None => Val::Ref(desc.node.clone()),
     };
     let p = spawn(field_promise(ctx.clone(), t.clone(), desc.clone(), field_js, index))?;
     js::push(promises, p)?;
+    index += 1;
   }
   await_js(promise_all(promises)?).await?;
   Ok(Val::Undefined)

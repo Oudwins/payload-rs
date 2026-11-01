@@ -13,7 +13,7 @@
 import type { Payload, PayloadRequest, SanitizedConfig } from 'payload'
 
 import { sqliteAdapter } from '@payloadcms/db-sqlite'
-import { sql } from '@payloadcms/db-sqlite/drizzle'
+import { DrizzleQueryError, sql } from '@payloadcms/db-sqlite/drizzle'
 import { rmSync } from 'node:fs'
 import {
   buildConfig,
@@ -184,7 +184,10 @@ test.suite('withRustEngine', {}, () => {
         key: 'rs-adapter-reference',
       })
       instances.candidate = await getPayload({
-        config: makeConfig(withRustEngine(sqliteAdapter(args(files.candidate)))),
+        // as db-sqlite's PAYLOAD_ENGINE=rs path: errors use its drizzle-orm copy's class
+        config: makeConfig(
+          withRustEngine(sqliteAdapter(args(files.candidate)), { DrizzleQueryError }),
+        ),
         key: 'rs-adapter-candidate',
       })
     } finally {
@@ -359,6 +362,183 @@ test.suite('withRustEngine', {}, () => {
     )
     expect(notNull.error).toMatchObject({ $error: 'DrizzleQueryError' })
     await expectSame((payload) => payload.db.deleteVersions({ where: {} } as never))
+  })
+
+  test('should throw the DrizzleQueryError class of the adapter drizzle-orm copy', async () => {
+    const { candidate, reference } = await both(async (payload) => {
+      try {
+        await payload.db.create({ collection: 'strict', data: {} } as never)
+        return 'resolved'
+      } catch (error) {
+        return {
+          isDrizzleQueryError: error instanceof DrizzleQueryError,
+          name: Object.getPrototypeOf(error).constructor.name,
+        }
+      }
+    })
+    expect(reference).toEqual({ ok: { isDrizzleQueryError: true, name: 'DrizzleQueryError' } })
+    expect(candidate).toEqual(reference)
+  })
+
+  const engineCalls = () => Object.values(getRustEngineStats().calls).reduce((a, b) => a + b, 0)
+
+  test('should honour replaced adapter internals like upstream', async () => {
+    await expectSame((payload) =>
+      payload.create({ collection: 'posts', data: { title: 'spied', views: 1 } }),
+    )
+    const spied = await expectSame(async (payload) => {
+      const db = payload.db as unknown as Record<string, any>
+      const countDistinct = vi.spyOn(db, 'countDistinct')
+      const deleteWhere = vi.spyOn(db, 'deleteWhere').mockImplementation(async () => {})
+      try {
+        const counted = await payload.count({ collection: 'posts' })
+        const found = await payload.find({ collection: 'posts', depth: 0, limit: 1 })
+        const deleted = await payload.db.deleteOne({
+          collection: 'posts',
+          where: { title: { equals: 'spied' } },
+        } as never)
+        const stillThere = await payload.count({
+          collection: 'posts',
+          where: { title: { equals: 'spied' } },
+        })
+        return {
+          countDistinctCalls: countDistinct.mock.calls.length,
+          counted,
+          deleted: (deleted as { title?: string } | null)?.title,
+          deleteWhereCalls: deleteWhere.mock.calls.length,
+          found: found.totalDocs,
+          stillThere,
+        }
+      } finally {
+        countDistinct.mockRestore()
+        deleteWhere.mockRestore()
+      }
+    })
+    expect((spied.ok as { countDistinctCalls: number }).countDistinctCalls).toBeGreaterThan(0)
+    expect(spied.ok).toMatchObject({
+      deleteWhereCalls: 1,
+      stillThere: { totalDocs: 1 },
+    })
+    const before = engineCalls()
+    await expectSame((payload) => payload.count({ collection: 'posts' }))
+    expect(engineCalls()).toBe(before + 1)
+  })
+
+  test('should send upsert through a replaced updateOne like upstream', async () => {
+    const upserted = await expectSame(async (payload) => {
+      const db = payload.db as unknown as Record<string, any>
+      const original = db.updateOne
+      const seen: unknown[] = []
+      db.updateOne = function (this: unknown, args: Record<string, unknown>) {
+        seen.push(args.options)
+        return original.call(this, { ...args, data: { ...(args.data as object), views: 99 } })
+      }
+      try {
+        const doc = await payload.db.upsert({
+          collection: 'posts',
+          // an upsert's insert leaves createdAt to the SQLite column default (the database clock)
+          data: { createdAt: '2026-01-02T03:04:05.678Z', title: 'upserted' },
+          where: { title: { equals: 'upserted' } },
+        } as never)
+        return { seen, views: (doc as { views?: number }).views }
+      } finally {
+        db.updateOne = original
+      }
+    })
+    expect(upserted.ok).toMatchObject({ seen: [{ upsert: true }], views: 99 })
+  })
+
+  test('should run statements through a replaced client execute like upstream', async () => {
+    const executed = await expectSame(async (payload) => {
+      const client = (payload.db as unknown as { drizzle: { $client: Record<string, any> } })
+        .drizzle.$client
+      const statements: unknown[] = []
+      const ownExecute = Object.getOwnPropertyDescriptor(client, 'execute')
+      const execute = client.execute.bind(client)
+      client.execute = async function (...args: [{ args: unknown[]; sql: string }]) {
+        statements.push({ args: args[0].args, sql: args[0].sql })
+        if (args[0].args?.length > 8) {
+          throw new Error('too many bound parameters')
+        }
+        return execute(...args)
+      }
+      try {
+        const small = await payload.find({
+          collection: 'posts',
+          depth: 0,
+          where: { id: { in: [1] } },
+        })
+        let large: unknown
+        try {
+          await payload.find({
+            collection: 'posts',
+            depth: 0,
+            where: { id: { in: Array.from({ length: 10 }, (_, i) => i) } },
+          })
+        } catch (error) {
+          large = { cause: ((error as Error).cause as Error | undefined)?.message }
+        }
+        return { large, small: small.totalDocs, statements }
+      } finally {
+        if (ownExecute) {
+          Object.defineProperty(client, 'execute', ownExecute)
+        } else {
+          delete client.execute
+        }
+      }
+    })
+    expect(executed.ok).toMatchObject({ large: { cause: 'too many bound parameters' } })
+    expect((executed.ok as { statements: unknown[] }).statements.length).toBeGreaterThan(1)
+    const before = engineCalls()
+    await expectSame((payload) => payload.count({ collection: 'posts' }))
+    expect(engineCalls()).toBe(before + 1)
+  })
+
+  test('should set lastWriteTimestamp like upstream markWrite', async () => {
+    const operations: Record<string, (payload: Payload) => Promise<unknown>> = {
+      create: (payload) =>
+        payload.db.create({ collection: 'posts', data: { title: 'mw' } } as never),
+      deleteOneMatch: (payload) =>
+        payload.db.deleteOne({ collection: 'posts', where: { title: { equals: 'mw' } } } as never),
+      deleteOneMissing: (payload) =>
+        payload.db.deleteOne({
+          collection: 'posts',
+          where: { title: { equals: 'missing' } },
+        } as never),
+      deleteVersionsNone: (payload) =>
+        payload.db.deleteVersions({
+          collection: 'posts',
+          where: { parent: { equals: 99999 } },
+        } as never),
+      find: (payload) => payload.db.find({ collection: 'posts', limit: 1 } as never),
+      updateManyNone: (payload) =>
+        payload.db.updateMany({
+          collection: 'posts',
+          data: { views: 1 },
+          where: { title: { equals: 'missing' } },
+        } as never),
+      updateOneMissing: (payload) =>
+        payload.db.updateOne({
+          collection: 'posts',
+          data: { views: 1 },
+          where: { title: { equals: 'missing' } },
+        } as never),
+      uniqueViolation: (payload) =>
+        payload.db.create({ collection: 'posts', data: { title: 'unique' } } as never),
+    }
+    for (const [name, operation] of Object.entries(operations)) {
+      const { candidate, reference } = await both(async (payload) => {
+        const db = payload.db as unknown as { lastWriteTimestamp?: number }
+        db.lastWriteTimestamp = undefined
+        try {
+          await operation(payload)
+        } catch {
+          // the timestamp is compared either way
+        }
+        return db.lastWriteTimestamp
+      })
+      expect({ name, timestamp: candidate }).toEqual({ name, timestamp: reference })
+    }
   })
 
   test('should run engine calls on the transaction connection', async () => {

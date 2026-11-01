@@ -129,7 +129,7 @@ fn create_constraint(alias: Option<&str>, operator: &str, path_segments: &[Strin
     ));
   }
 
-  let mut formatted_value = js_string(&escape_sql_value(&value)?);
+  let mut formatted_value = crate::js_ops::js_string_checked(&escape_sql_value(&value)?)?;
   let mut formatted_operator = operator.clone();
   if operator == "contains" || operator == "like" {
     formatted_operator = "like".into();

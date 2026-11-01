@@ -3,9 +3,8 @@
 //!
 //! Like the TS code, the incoming `data` is mutated in place (array/block row
 //! ids moved to `_uuid`, `_uuid` propagated into groups, localized
-//! relationship objects replaced by their ids, dotted keys expanded).
-
-use std::sync::Arc;
+//! relationship objects replaced by their ids, dotted keys expanded), on the
+//! [`Heap`] so objects shared between several places of `data` stay shared.
 
 use indexmap::{IndexMap, IndexSet};
 use payload_engine::error::{EngineError, Result};
@@ -15,6 +14,7 @@ use payload_engine::strings::to_snake_case;
 
 use crate::adapter::WriteAdapter;
 use crate::field_path::expand_own_dotted_key;
+use crate::heap::{HVal, Heap};
 use crate::js::{self, OBJECT_PROTOTYPE_KEYS, js_entry, js_insert, json_stringify, number_to_string, to_js_string, type_error};
 use crate::small::{
   locale_truthy, locale_val, resolve_block_table_name, transform_numbers, transform_relationship, transform_selects,
@@ -34,6 +34,8 @@ pub(crate) struct Ctx<'a> {
 /// block rows.
 #[derive(Default)]
 pub(crate) struct Shared {
+  /// The mutable object graph of `data`.
+  pub heap: Heap,
   pub blocks: IndexMap<String, Vec<NestedRowToInsert>>,
   pub blocks_to_delete: IndexSet<String>,
   pub numbers: Vec<Obj>,
@@ -83,14 +85,19 @@ fn for_each_items<'a>(v: &'a JsVal, name: &str) -> Result<&'a [JsVal]> {
   }
 }
 
-/// `typeof value === 'object' && value !== null`
+/// `typeof value === 'object' && value !== null` (a `Date` is an object, a `bigint` is not)
 fn is_object(v: &JsVal) -> bool {
-  matches!(v, JsVal::Obj(_) | JsVal::Arr(_))
+  !v.is_null() && v.is_object_like()
+}
+
+/// `typeof value === 'object'` (`null` included)
+fn is_typeof_object(v: &JsVal) -> bool {
+  v.is_object_like()
 }
 
 /// `value && typeof value === 'object' && key in value`
 fn has_op(v: &JsVal, key: &str) -> bool {
-  matches!(v, JsVal::Obj(o) if o.contains_key(key))
+  v.typed().is_none() && matches!(v, JsVal::Obj(o) if o.contains_key(key))
 }
 
 /// `if (!locales[locale]) locales[locale] = {}` followed by `locales[locale]`.
@@ -111,15 +118,15 @@ pub(crate) fn traverse_fields(
   sh: &mut Shared,
   lvl: &mut Level<'_>,
   a: Args<'_>,
-  data: &mut JsVal,
+  data: &HVal,
 ) -> Result<()> {
   let mut fields_matched = false;
 
   if let Some(RowValue::Value(uuid)) = lvl.row.get("_uuid")
     && uuid.truthy()
   {
-    let uuid = uuid.clone();
-    js::set(data, "_uuid", uuid)?;
+    let uuid = sh.heap.value_of(uuid);
+    sh.heap.set(data, "_uuid", uuid)?;
   }
 
   let fields = a.fields.clone();
@@ -129,7 +136,9 @@ pub(crate) fn traverse_fields(
     }
 
     let name = to_js_string(field.get("name"));
-    if !js::get(data, &name)?.is_undefined() {
+    // `fieldData = data[field.name]`
+    let field_data_ref = sh.heap.get(data, &name)?;
+    if !field_data_ref.is_undefined() {
       fields_matched = true;
     }
 
@@ -153,39 +162,40 @@ pub(crate) fn traverse_fields(
       };
 
       if is_localized {
-        if let Some(value) = js::get_mut(data, &name)
-          && is_object(value)
-        {
-          for locale_key in js::keys(value)? {
-            let Some(locale_value) = js::get_mut(value, &locale_key) else { continue };
-            let args = ArrayArgs {
-              locale: Some(&locale_key),
-              within_array_or_block_locale: Some(&locale_key),
-              ..array_args
-            };
-            let (rows, push) = if has_op(locale_value, "$push") {
-              let Some(push_data) = js::get_mut(locale_value, "$push") else { continue };
-              (js::with_wrapped(push_data, |d| transform_array(ctx, sh, args, d))?, true)
-            } else if matches!(locale_value, JsVal::Arr(_)) {
-              (transform_array(ctx, sh, args, locale_value)?, false)
-            } else {
-              continue;
-            };
-            let target = if push { &mut *lvl.arrays_to_push } else { &mut *lvl.arrays };
-            js_entry(target, &table_key).extend(rows);
+        let value = sh.heap.get(data, &name)?;
+        if value.is_object() {
+          for (locale_key, locale_value) in sh.heap.entries(&value)? {
+            let mut locale_data = locale_value.clone();
+            let mut push = false;
+            if locale_value.is_object() && sh.heap.has(&locale_value, "$push")? {
+              locale_data = sh.heap.get(&locale_value, "$push")?;
+              push = true;
+              if sh.heap.array_len(&locale_data).is_none() {
+                locale_data = sh.heap.new_array(vec![locale_data]);
+              }
+            }
+            if sh.heap.array_len(&locale_data).is_some() {
+              let args = ArrayArgs {
+                locale: Some(&locale_key),
+                within_array_or_block_locale: Some(&locale_key),
+                ..array_args
+              };
+              let rows = transform_array(ctx, sh, args, &locale_data)?;
+              let target = if push { &mut *lvl.arrays_to_push } else { &mut *lvl.arrays };
+              js_entry(target, &table_key).extend(rows);
+            }
           }
         }
       } else {
-        let value = js::get(data, &name)?;
-        let push = value.is_object_like() && js::has(value, "$push")?;
-        let rows = match js::get_mut(data, &name) {
-          Some(value) if push => match js::get_mut(value, "$push") {
-            Some(push_data) => js::with_wrapped(push_data, |d| transform_array(ctx, sh, array_args, d))?,
-            None => transform_array(ctx, sh, array_args, &mut JsVal::arr(vec![JsVal::Undefined]))?,
-          },
-          Some(value) => transform_array(ctx, sh, array_args, value)?,
-          None => transform_array(ctx, sh, array_args, &mut JsVal::Undefined)?,
-        };
+        let mut value = sh.heap.get(data, &name)?;
+        let mut push = false;
+        // `typeof value === 'object' && '$push' in value` (`null` throws)
+        if (value.is_object() || matches!(value, HVal::Prim(JsVal::Null))) && sh.heap.has(&value, "$push")? {
+          let push_data = sh.heap.get(&value, "$push")?;
+          value = if sh.heap.array_len(&push_data).is_some() { push_data } else { sh.heap.new_array(vec![push_data]) };
+          push = true;
+        }
+        let rows = transform_array(ctx, sh, array_args, &value)?;
         let target = if push { &mut *lvl.arrays_to_push } else { &mut *lvl.arrays };
         js_entry(target, &table_key).extend(rows);
       }
@@ -215,34 +225,28 @@ pub(crate) fn traverse_fields(
       };
 
       if is_localized {
-        if let Some(value) = js::get_mut(data, &name)
-          && is_object(value)
-        {
-          for locale_key in js::keys(value)? {
-            if let Some(locale_data) = js::get_mut(value, &locale_key)
-              && matches!(locale_data, JsVal::Arr(_))
-            {
+        let value = sh.heap.get(data, &name)?;
+        if value.is_object() {
+          for (locale_key, locale_data) in sh.heap.entries(&value)? {
+            if sh.heap.array_len(&locale_data).is_some() {
               let args = BlocksArgs {
                 locale: Some(&locale_key),
                 within_array_or_block_locale: Some(&locale_key),
                 ..blocks_args
               };
-              transform_blocks(ctx, sh, args, locale_data)?;
+              transform_blocks(ctx, sh, args, &locale_data)?;
             }
           }
         }
-      } else if let Some(value) = js::get_mut(data, &name)
-        && matches!(value, JsVal::Arr(_))
-      {
-        transform_blocks(ctx, sh, blocks_args, value)?;
+      } else if sh.heap.array_len(&field_data_ref).is_some() {
+        transform_blocks(ctx, sh, blocks_args, &field_data_ref)?;
       }
       continue;
     }
 
     if field_type == "group" || field_type == "tab" {
-      if is_object(js::get(data, &name)?) {
-        let id = js::get(data, "id")?;
-        let uuid = if id.truthy() { id.clone() } else { js::get(data, "_uuid")?.clone() };
+      let group_data = sh.heap.get(data, &name)?;
+      if group_data.is_object() {
         let column_prefix = format!("{column_name}_");
         let field_prefix = format!("{field_name}_");
         let child_path = format!("{path}{name}.");
@@ -259,30 +263,35 @@ pub(crate) fn traverse_fields(
           path: &child_path,
           within_array_or_block_locale: a.within_array_or_block_locale,
         };
-        let Some(group_data) = js::get_mut(data, &name) else { continue };
+        // `data.id || data._uuid`
+        let uuid = |heap: &Heap| -> Result<HVal> {
+          let id = heap.get(data, "id")?;
+          if id.truthy() { Ok(id) } else { heap.get(data, "_uuid") }
+        };
 
         if is_localized {
-          for locale_key in js::keys(group_data)? {
-            let Some(locale_data) = js::get_mut(group_data, &locale_key) else { continue };
+          for (locale_key, locale_data) in sh.heap.entries(&group_data)? {
             // preserve array ID if there is
-            js::set(locale_data, "_uuid", uuid.clone())?;
+            let uuid = uuid(&sh.heap)?;
+            sh.heap.set(&locale_data, "_uuid", uuid)?;
             let args = Args {
               forced_locale: Some(&locale_key),
               within_array_or_block_locale: Some(&locale_key),
               ..child_args
             };
-            traverse_fields(ctx, sh, lvl, args, locale_data)?;
+            traverse_fields(ctx, sh, lvl, args, &locale_data)?;
           }
         } else {
           // preserve array ID if there is
-          js::set(group_data, "_uuid", uuid)?;
-          traverse_fields(ctx, sh, lvl, child_args, group_data)?;
+          let uuid = uuid(&sh.heap)?;
+          sh.heap.set(&group_data, "_uuid", uuid)?;
+          traverse_fields(ctx, sh, lvl, child_args, &group_data)?;
         }
       }
       continue;
     }
 
-    let mut field_data = js::get(data, &name)?.clone();
+    let mut field_data = sh.heap.snapshot(&field_data_ref);
 
     if field_type == "relationship" || field_type == "upload" {
       let relationship_path = format!("{path}{name}");
@@ -386,7 +395,7 @@ pub(crate) fn traverse_fields(
 
       let path_val = JsVal::str(relationship_path.as_str());
       if is_localized && (polymorphic || has_many) {
-        if field_data.is_object_like() {
+        if is_typeof_object(&field_data) {
           for (locale_key, locale_data) in js::entries(&field_data)? {
             if locale_data.is_null() {
               sh.relationships_to_delete
@@ -406,27 +415,38 @@ pub(crate) fn traverse_fields(
         let base_row = js::obj([("locale", locale_val(a.within_array_or_block_locale)), ("path", path_val)]);
         transform_relationship(&base_row, &field_data, field, &mut sh.relationships);
         continue;
-      } else if !is_localized && field_data.truthy() && js::has(&field_data, "id").unwrap_or(false) && field_data.get("id").truthy()
+      } else if !is_localized
+        && field_data_ref.is_object()
+        && sh.heap.has(&field_data_ref, "id")?
+        && sh.heap.get(&field_data_ref, "id")?.truthy()
       {
-        field_data = field_data.get("id").clone();
-      } else if is_localized && field_data.is_object_like() {
-        let locale_keys = js::keys(&field_data)?;
-        if let Some(target) = js::get_mut(data, &name) {
-          for locale_key in locale_keys {
-            let locale_data = js::get(target, &locale_key)?.clone();
-            if locale_data.truthy() && is_object(&locale_data) && js::has(&locale_data, "id")? && locale_data.get("id").truthy() {
-              js::set(target, &locale_key, locale_data.get("id").clone())?;
+        let id = sh.heap.get(&field_data_ref, "id")?;
+        field_data = sh.heap.snapshot(&id);
+      } else if is_localized {
+        // `typeof fieldData === 'object'` (`null` throws in `Object.entries`)
+        if field_data_ref.is_object() || matches!(field_data_ref, HVal::Prim(JsVal::Null)) {
+          for (locale_key, locale_data) in sh.heap.entries(&field_data_ref)? {
+            if locale_data.is_object() || matches!(locale_data, HVal::Prim(JsVal::Null)) {
+              if locale_data.is_object()
+                && sh.heap.has(&locale_data, "id")?
+                && sh.heap.get(&locale_data, "id")?.truthy()
+              {
+                let id = sh.heap.get(&locale_data, "id")?;
+                sh.heap.set(&field_data_ref, &locale_key, id)?;
+              }
+            } else {
+              sh.heap.set(&field_data_ref, &locale_key, locale_data)?;
             }
           }
+          field_data = sh.heap.snapshot(&field_data_ref);
         }
-        field_data = js::get(data, &name)?.clone();
       }
     }
 
     if field_type == "text" && field.get("hasMany").truthy() {
       let text_path = JsVal::str(format!("{path}{name}"));
       if is_localized {
-        if field_data.is_object_like() {
+        if is_typeof_object(&field_data) {
           for (locale_key, locale_data) in js::entries(&field_data)? {
             if let Some(items) = locale_data.as_arr() {
               let base_row = js::obj([("locale", JsVal::str(locale_key.as_str())), ("path", text_path.clone())]);
@@ -452,7 +472,7 @@ pub(crate) fn traverse_fields(
     if field_type == "number" && field.get("hasMany").truthy() {
       let number_path = JsVal::str(format!("{path}{name}"));
       if is_localized {
-        if field_data.is_object_like() {
+        if is_typeof_object(&field_data) {
           for (locale_key, locale_data) in js::entries(&field_data)? {
             if let Some(items) = locale_data.as_arr() {
               let base_row = js::obj([("locale", JsVal::str(locale_key.as_str())), ("path", number_path.clone())]);
@@ -487,8 +507,9 @@ pub(crate) fn traverse_fields(
       js_entry(&mut sh.selects, &select_table_name);
 
       let id = if a.inside_array_or_block {
-        let uuid = js::get(data, "_uuid")?;
-        if uuid.truthy() { uuid.clone() } else { js::get(data, "id")?.clone() }
+        let uuid = sh.heap.get(data, "_uuid")?;
+        let id = if uuid.truthy() { uuid } else { sh.heap.get(data, "id")? };
+        sh.heap.snapshot(&id)
       } else {
         JsVal::Undefined
       };
@@ -543,16 +564,18 @@ pub(crate) fn traverse_fields(
           && !n.is_nan()
         {
           formatted = RowValue::Value(JsVal::str(js::iso_string(n)?));
+        } else if let Some(ms) = value.as_date() {
+          formatted = RowValue::Value(JsVal::str(js::iso_string(ms)?));
         }
       }
 
       if !value.is_undefined() {
         if value.truthy() && field_type == "point" && ctx.adapter.name() != "sqlite" {
-          formatted = RowValue::Sql(SqlExpr::GeomFromGeoJson(json_stringify(&value).unwrap_or_default()));
+          formatted = RowValue::Sql(SqlExpr::GeomFromGeoJson(json_stringify(&value)?.unwrap_or_default()));
         }
 
         if field_type == "text" && value.truthy() && value.as_str().is_none() {
-          formatted = RowValue::Value(json_stringify(&value).map(JsVal::str).unwrap_or(JsVal::Undefined));
+          formatted = RowValue::Value(json_stringify(&value)?.map(JsVal::str).unwrap_or(JsVal::Undefined));
         }
 
         if field_type == "number"
@@ -591,8 +614,8 @@ pub(crate) fn traverse_fields(
 
   // Handle dot-notation paths when no fields matched
   if !fields_matched {
-    for key in js::keys(data)? {
-      if expand_own_dotted_key(&key, data)? {
+    for key in sh.heap.keys(data)? {
+      if expand_own_dotted_key(&mut sh.heap, &key, data)? {
         traverse_fields(ctx, sh, lvl, a, data)?;
       }
     }
@@ -616,17 +639,21 @@ pub(crate) fn transform_array(
   ctx: &Ctx<'_>,
   sh: &mut Shared,
   a: ArrayArgs<'_>,
-  data: &mut JsVal,
+  data: &HVal,
 ) -> Result<Vec<NestedRowToInsert>> {
   let mut new_rows = Vec::new();
   let array_table_name = a.array_table_name.ok_or_else(missing_table_error)?;
   let has_uuid = ctx.adapter.table_has_uuid(array_table_name).ok_or_else(missing_table_error)?;
 
-  let JsVal::Arr(rows) = data else { return Ok(new_rows) };
-  let rows = Arc::make_mut(rows);
+  let Some(len) = sh.heap.array_len(data) else { return Ok(new_rows) };
   let field_name = to_js_string(a.field.get("name"));
 
-  for (i, array_row) in rows.iter_mut().enumerate() {
+  // `data.forEach`: the length is read once, elements when they are visited
+  for i in 0..len {
+    if sh.heap.array_len(data).is_none_or(|current| i >= current) {
+      continue;
+    }
+    let array_row = sh.heap.item(data, i);
     let mut new_row = NestedRowToInsert::default();
     new_row.row.insert("_order".into(), RowValue::Value(JsVal::Num((i + 1) as f64)));
 
@@ -634,9 +661,10 @@ pub(crate) fn transform_array(
     // unique, and our ids within arrays are not unique. So move the ID to a
     // uuid field for storage and allow the database to generate a serial id.
     if has_uuid {
-      let id = js::get(array_row, "id")?.clone();
+      let id = sh.heap.get(&array_row, "id")?;
+      let id = sh.heap.snapshot(&id);
       js_insert(&mut new_row.row, "_uuid", RowValue::Value(id));
-      js::delete(array_row, "id")?;
+      sh.heap.delete(&array_row, "id")?;
     }
 
     // `newRow.locales[locale] = { _locale: locale }`: assigning an object to
@@ -674,7 +702,7 @@ pub(crate) fn transform_array(
       path: &path,
       within_array_or_block_locale: a.within_array_or_block_locale,
     };
-    traverse_fields(ctx, sh, &mut lvl, args, array_row)?;
+    traverse_fields(ctx, sh, &mut lvl, args, &array_row)?;
 
     new_rows.push(new_row);
   }
@@ -698,13 +726,23 @@ fn payload_block(adapter: &dyn WriteAdapter, block_type: &str) -> Option<JsVal> 
 }
 
 /// `transformBlocks` (blocks.ts)
-pub(crate) fn transform_blocks(ctx: &Ctx<'_>, sh: &mut Shared, a: BlocksArgs<'_>, data: &mut JsVal) -> Result<()> {
-  let JsVal::Arr(rows) = data else { return Ok(()) };
-  let rows = Arc::make_mut(rows);
+pub(crate) fn transform_blocks(ctx: &Ctx<'_>, sh: &mut Shared, a: BlocksArgs<'_>, data: &HVal) -> Result<()> {
+  let Some(len) = sh.heap.array_len(data) else { return Ok(()) };
   let field_name = to_js_string(a.field.get("name"));
 
-  for (i, block_row) in rows.iter_mut().enumerate() {
-    let Some(block_type_raw) = js::get(block_row, "blockType")?.as_str().map(str::to_string) else { continue };
+  // `data.forEach`: the length is read once, elements when they are visited
+  for i in 0..len {
+    if sh.heap.array_len(data).is_none_or(|current| i >= current) {
+      continue;
+    }
+    let block_row = sh.heap.item(data, i);
+    let block_type = sh.heap.get(&block_row, "blockType")?;
+    let Some(block_type_raw) = (match &block_type {
+      HVal::Prim(JsVal::Str(s)) => Some(s.to_string()),
+      _ => None,
+    }) else {
+      continue;
+    };
 
     let matched_block = payload_block(ctx.adapter, &block_type_raw).or_else(|| {
       a.field
@@ -736,9 +774,10 @@ pub(crate) fn transform_blocks(ctx: &Ctx<'_>, sh: &mut Shared, a: BlocksArgs<'_>
 
     // Same as arrays: move the non-unique ID to `_uuid`.
     if has_uuid {
-      let id = js::get(block_row, "id")?.clone();
+      let id = sh.heap.get(&block_row, "id")?;
+      let id = sh.heap.snapshot(&id);
       js_insert(&mut new_row.row, "_uuid", RowValue::Value(id));
-      js::delete(block_row, "id")?;
+      sh.heap.delete(&block_row, "id")?;
     }
 
     let path = format!("{}{}.{}.", a.path, field_name, i);
@@ -758,7 +797,7 @@ pub(crate) fn transform_blocks(ctx: &Ctx<'_>, sh: &mut Shared, a: BlocksArgs<'_>
         path: &path,
         within_array_or_block_locale: a.within_array_or_block_locale,
       };
-      traverse_fields(ctx, sh, &mut lvl, args, block_row)?;
+      traverse_fields(ctx, sh, &mut lvl, args, &block_row)?;
     }
 
     js_entry(&mut sh.blocks, &block_table_name).push(new_row);

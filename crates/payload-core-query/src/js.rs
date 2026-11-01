@@ -3,7 +3,6 @@
 //! `Object.entries` and the error type shared by every function of the crate.
 
 use std::cell::RefCell;
-use std::rc::Rc;
 
 use payload_engine::error::EngineError;
 use payload_engine::js::JsVal;
@@ -12,17 +11,11 @@ use payload_sql_read::jsstr::JsStr;
 use payload_sql_read::props;
 use payload_sql_read::value::{Builtin, JsObject};
 
-/// The live `errors` array of the query validation (`{ path: string }[]`).
-pub type Errors = Rc<RefCell<Vec<String>>>;
-
 /// A thrown JS value.
 #[derive(Clone, Debug)]
 pub enum JsError {
   /// An error constructed by the ported code (`TypeError`, `APIError`, ...).
   Engine(EngineError),
-  /// `new QueryError(errors)`: the message is fixed at construction, `data`
-  /// keeps pointing at the (possibly still growing) errors array.
-  Query { message: String, errors: Errors },
   /// A value thrown by host code (access functions), passed through as is.
   Thrown(Val),
 }
@@ -38,31 +31,16 @@ impl JsError {
     JsError::Engine(EngineError::api(message))
   }
 
-  pub fn query(errors: &Errors) -> Self {
-    let paths = errors.borrow();
-    let message = format!(
-      "The following path{} cannot be queried: {}",
-      if paths.len() == 1 { "" } else { "s" },
-      paths.join(", ")
-    );
-    JsError::Query { message, errors: errors.clone() }
-  }
-
   pub fn name(&self) -> String {
     match self {
       JsError::Engine(e) => e.name.clone(),
-      JsError::Query { .. } => "QueryError".into(),
       JsError::Thrown(v) => get(v, "name").ok().and_then(|n| val_str(&n)).unwrap_or_default(),
     }
   }
 
-  /// `error.data` as seen from JS: the live errors (`{ path }[]`) of a
-  /// `QueryError`, `null` for other `APIError`s, `undefined` otherwise.
+  /// `error.data` as seen from JS: `null` for `APIError`s, `undefined` otherwise.
   pub fn data(&self) -> Val {
     match self {
-      JsError::Query { errors, .. } => {
-        Val::new_arr(errors.borrow().iter().map(|p| new_obj([("path".to_string(), Val::str(p))])).collect())
-      }
       JsError::Engine(e) if e.name == "APIError" => Val::Null,
       JsError::Engine(_) => Val::Undefined,
       JsError::Thrown(v) => get_opt(v, "data"),
@@ -72,7 +50,6 @@ impl JsError {
   pub fn message(&self) -> String {
     match self {
       JsError::Engine(e) => e.message.clone(),
-      JsError::Query { message, .. } => message.clone(),
       JsError::Thrown(v) => get(v, "message").ok().and_then(|n| val_str(&n)).unwrap_or_default(),
     }
   }
@@ -272,38 +249,10 @@ pub fn new_obj(entries: impl IntoIterator<Item = (String, Val)>) -> Val {
   Val::from_obj(o)
 }
 
-/// `isNestedRelationshipQuery`: a plain object (prototype `Object.prototype`
-/// or `null`). `Date` instances are not; other class instances are not
-/// representable in [`Val`].
-pub fn is_nested_relationship_query(v: &Val) -> bool {
-  matches!(v, Val::Obj(_))
-}
-
-/// `hasWhereAccessResult`: `result && typeof result === 'object'`
-pub fn has_where_access_result(v: &Val) -> bool {
-  v.truthy() && is_object_type(v)
-}
-
 /// `['and', 'or'].includes(key.toLowerCase())`
 pub fn is_and_or(key: &str) -> bool {
   let lower = key.to_lowercase();
   lower == "and" || lower == "or"
-}
-
-/// `SAFE_FIELD_PATH_REGEX` (`/^\w+(?:\.\w+)*$/`)
-pub fn is_safe_field_path(path: &str) -> bool {
-  !path.is_empty()
-    && path.split('.').all(|segment| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
-}
-
-/// `deepCopyObjectSimple(value)` of a JSON-like config value.
-pub fn deep_copy_simple(v: &JsVal) -> Val {
-  Val::from_js(v)
-}
-
-/// A config value used as data (read only), e.g. `defaultSort`.
-pub fn from_config(v: &JsVal) -> Val {
-  Val::from_js(v)
 }
 
 /// `value === string`

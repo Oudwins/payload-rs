@@ -77,8 +77,8 @@ impl Drop for Slot {
 /// thread teardown) do not call into a dead env.
 pub fn register_env_cleanup(env: sys::napi_env) {
   unsafe extern "C" fn cleanup(_arg: *mut c_void) {
-    ENV.with(|e| e.set(ptr::null_mut()));
-    CLEANUP_REGISTERED.with(|r| r.set(false));
+    let _ = ENV.try_with(|e| e.set(ptr::null_mut()));
+    let _ = CLEANUP_REGISTERED.try_with(|r| r.set(false));
   }
   if CLEANUP_REGISTERED.with(|r| r.replace(true)) {
     return;
@@ -96,8 +96,10 @@ pub fn set_env(env: sys::napi_env) {
   ENV.with(|e| e.set(env));
 }
 
+/// The current env, or null once the thread's locals are being destroyed (drops of persistent
+/// handles during thread-local teardown then skip their napi calls).
 pub fn env() -> sys::napi_env {
-  ENV.with(|e| e.get())
+  ENV.try_with(|e| e.get()).unwrap_or(ptr::null_mut())
 }
 
 #[derive(Clone, Copy, Debug)]

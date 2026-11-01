@@ -6,8 +6,8 @@ use payload_engine::js::{JsVal, Obj};
 use payload_sql_find::args::QueryConfig;
 use payload_sql_find::build_args::{BuildFindManyArgs, build_find_many_args};
 use payload_sql_find::context::{FieldsSource, FindContext};
-use payload_engine::host::NoHost;
-use payload_sql_find::exec::{LibsqlConn, execute_js};
+use payload_engine::host::Host;
+use payload_sql_find::exec::{Executor as FindExecutor, execute_js};
 use payload_sql_find::find_many::{FindManyArgs, FindManyResult, find_many_js};
 use payload_sql_find::query::map_columns_to_alias;
 use payload_sql_find::relational::{Mode, build_relational_query};
@@ -21,6 +21,7 @@ use payload_sql_upsert::{Executor, FindArgsShape, SqlFragment, UpsertHost};
 use payload_sql_write::SchemaWriteAdapter;
 use payload_sqlite::rusqlite::Connection;
 
+use crate::stepped::Steps;
 use crate::{EngineOptions, SqliteEngine};
 use crate::convert::{fragment_to_find_sql, render_find_sql, render_fragment, val_to_js};
 
@@ -35,10 +36,16 @@ pub(crate) struct Call<'a> {
   pub find: &'a FindContext<'a>,
   pub read: &'a ReadAdapter<'a>,
   pub write: &'a SchemaWriteAdapter<'a>,
-  /// The session's connection as libsql (`client.execute` / `tx.execute`): find statements.
-  pub conn: &'a LibsqlConn<'a>,
+  /// The call's connection as libsql (`client.execute` / `tx.execute`): find statements.
+  pub conn: &'a dyn FindExecutor,
   /// The same connection for the write path's executor.
   pub raw: &'a Connection,
+  /// JS functions (custom column `fromDriver`).
+  pub host: &'a dyn Host,
+  /// Statement scheduling of the write path.
+  pub steps: &'a dyn Steps,
+  /// Caller-visible mutations of the arguments to report (`CallOutput::mutations`).
+  pub mutations: std::cell::RefCell<Vec<(Vec<String>, JsVal)>>,
 }
 
 /// Arguments of `findMany()` (find/findMany.ts), owned.
@@ -122,7 +129,7 @@ impl<'a> Call<'a> {
         versions: spec.versions,
         where_: &spec.where_,
       },
-      &NoHost,
+      self.host,
       &mut |row| self.transform(Val::from_js(&row), &spec.fields, &spec.joins, &spec.table_name),
       None,
     )
@@ -149,14 +156,16 @@ impl<'a> Call<'a> {
   /// `db.query[tableName].findFirst(config)`: the raw drizzle row, `None` for `undefined`.
   pub fn find_first_raw(&self, table_name: &str, config: &QueryConfig) -> Result<Option<JsVal>> {
     let built = build_relational_query(&self.engine.drizzle, table_name, config, Mode::First)?;
-    let row = execute_js(self.conn, &built, Mode::First, &NoHost)?;
+    let row = execute_js(self.conn, &built, Mode::First, self.host)?;
     Ok(if row.is_undefined() { None } else { Some(row) })
   }
 
   /// Runs a query-crate select on the executor (statements fail like drizzle's `DrizzleQueryError`).
   pub fn select_rows(&self, exec: &mut Executor<'_>, select: &Select) -> Result<Vec<Vec<(String, JsVal)>>> {
     let q = crate::convert::query_to_fragment(select.render()?);
-    exec.query_raw(&q).map_err(|e| e.into_engine_error())
+    let rows = exec.query_raw(&q).map_err(|e| e.into_engine_error());
+    self.steps.after_write_statement(exec.statements.len());
+    rows
   }
 }
 
@@ -224,7 +233,8 @@ impl UpsertHost for ReadBack<'_> {
     })
   }
 
-  fn find_first(&mut self, _exec: &mut Executor<'_>, where_: &SqlFragment) -> Result<Option<JsVal>> {
+  fn find_first(&mut self, exec: &mut Executor<'_>, where_: &SqlFragment) -> Result<Option<JsVal>> {
+    self.call.steps.before_read(exec.statements.len());
     let mut config = self.call.read_back_args(self.fields, &self.select, &self.table_name)?;
     config.where_ = Some(fragment_to_find_sql(where_)?);
     // the executor's statements and this read run on the same connection, in order
@@ -253,6 +263,7 @@ impl OpsHost for Ops<'_> {
   /// `selectDistinct({ joins, selectFields, tableName, where, query })`: `query.limit(1)` for
   /// updateOne / deleteOne, `query.orderBy(orderBy)` for updateMany.
   fn select_distinct_ids(&mut self, exec: &mut Executor<'_>, _query: &BuiltQuery, limit: Option<i64>) -> Result<Vec<JsVal>> {
+    self.call.steps.before_read(exec.statements.len());
     let built = self.built.as_ref().ok_or_else(|| EngineError::internal("selectDistinct without buildQuery"))?;
     let main = self.call.qa.table_req(Some(&self.table_name), "id")?;
     check_join_aliases(&built.joins)?;
@@ -293,17 +304,19 @@ impl OpsHost for Ops<'_> {
       .collect()
   }
 
-  fn find_many(&mut self, _exec: &mut Executor<'_>) -> Result<Vec<JsVal>> {
+  fn find_many(&mut self, exec: &mut Executor<'_>) -> Result<Vec<JsVal>> {
+    self.call.steps.before_read(exec.statements.len());
     let spec = self.find_spec.as_ref().ok_or_else(|| EngineError::internal("findMany without arguments"))?;
     Ok(self.call.find_many(spec)?.docs)
   }
 
   fn find_first_to_delete(
     &mut self,
-    _exec: &mut Executor<'_>,
+    exec: &mut Executor<'_>,
     distinct_id: Option<&JsVal>,
     _where: Option<&SqlFragment>,
   ) -> Result<Option<JsVal>> {
+    self.call.steps.before_read(exec.statements.len());
     let config = match distinct_id {
       // `findFirst({ where: eq(this.tables[tableName].id, selectDistinctResult[0].id) })`
       Some(id) => {
