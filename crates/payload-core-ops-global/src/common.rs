@@ -12,9 +12,10 @@ pub fn has_hooks(config: Local, name: &str) -> JsResult<bool> {
   Ok(js::truthy(opt(opt(get(config, "hooks")?, name)?, "length")?))
 }
 
-/// `config.hooks[name]`, as the loop `for (const hook of ...)` iterates.
-pub fn hooks_of(config: Local, name: &str) -> JsResult<ForOf> {
-  ForOf::new(get(get(config, "hooks")?, name)?)
+/// `config.hooks[name]`, as the loop `for (const hook of <config_expr>.hooks.<name>)` iterates
+/// (`config_expr` is the TS source text of `config`, for V8's `... is not iterable`).
+pub fn hooks_of(config: Local, name: &str, config_expr: &str) -> JsResult<ForOf> {
+  ForOf::of(get(get(config, "hooks")?, name)?, &format!("{config_expr}.hooks.{name}"))
 }
 
 /// `for (const hook of hooks) { target = (await hook(build(target))) || target }`.
@@ -47,13 +48,14 @@ pub async fn replace_loop(
 pub async fn config_hooks(
   config: &Val,
   name: &str,
+  config_expr: &str,
   target: Val,
   build: impl FnMut(Local) -> JsResult<Local>,
 ) -> JsResult<Val> {
   if !has_hooks(config.get(), name)? {
     return Ok(target);
   }
-  let hooks = hooks_of(config.get(), name)?;
+  let hooks = hooks_of(config.get(), name, config_expr)?;
   replace_loop(hooks, target, "hook", build).await
 }
 

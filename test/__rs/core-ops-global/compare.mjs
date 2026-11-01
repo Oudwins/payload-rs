@@ -5,10 +5,21 @@
  *   node test/__rs/core-ops-global/compare.mjs <out> <suite...>
  *
  * Per suite, every case of the `ts` run (key: test file, test name, call sequence number in the
- * test) is compared event for event with the same case of each candidate run present (`rs`,
- * `full`). A case whose candidate log differs is a diff, unless the second reference run (`ts2`)
- * differs from `ts` too (then it is `unstable`: the TS run is not reproducible there). Cases only
- * one side has are diffs. Per-test outcomes of the candidate must equal the reference's.
+ * test) is compared event for event with the same case of the candidate run (`rs`). A case whose
+ * candidate log differs from `ts` is checked against every reference run, and only counted as not
+ * a diff when the candidate equals one of them:
+ * - `unstable`: the candidate log equals the case's log in the second reference run (`ts2`);
+ * - `idOrder`: equal to a reference log once record ids are numbered per case by first appearance
+ *   (ids of documents created concurrently, e.g. `Promise.all(payload.create(...))` racing
+ *   password hashing on the thread pool, are assigned in completion order), and values of fields
+ *   that are random by construction but too short for trace.ts' token canonicalization
+ *   (`apiKey` / `apiKeyLast4` of generated API keys: their random tails can be shorter than the
+ *   24 hex characters trace.ts tokenizes) are numbered the same way (snapshot bookkeeping keys
+ *   such as `$id` are left alone);
+ * - `reordered`: the multiset of the test's case logs (ids numbered as above) equals that of a
+ *   reference run (concurrent calls of one test settling in a different interleaving).
+ * Anything else is a diff; cases only one side has are diffs. Per-test outcomes of the candidate
+ * must equal the reference's.
  *
  * Exits 1 on any diff, changed outcome, missing report or trace, a reference case that ran Rust or
  * a candidate case that ran TS, or when a suite compared no case.
@@ -22,7 +33,7 @@ if (!out || suites.length === 0) {
   process.exit(2)
 }
 
-const CANDIDATES = ['rs', 'full']
+const CANDIDATES = ['rs']
 const MAX_SHOWN = Number(process.env.RS_OPS_GLOBAL_SHOW ?? 6)
 const failures = []
 const fail = (message) => failures.push(message)
@@ -77,6 +88,62 @@ const firstDiff = (a, b) => {
   return -1
 }
 
+/**
+ * The case log with record ids numbered by first appearance: values of `id` keys anywhere in the
+ * events are collected, then every equal number or string in the log becomes `{"$idn":n}`.
+ */
+const RANDOM_KEYS = new Set(['apiKey', 'apiKeyLast4'])
+const normalizeIDs = (log) => {
+  const events = log.map((e) => JSON.parse(e))
+  const ids = new Set()
+  const collect = (v) => {
+    if (Array.isArray(v)) {
+      v.forEach(collect)
+    } else if (v && typeof v === 'object') {
+      for (const [k, x] of Object.entries(v)) {
+        if (k.startsWith('$') && k !== '$a') {
+          continue
+        }
+        if (
+          (k === 'id' || RANDOM_KEYS.has(k)) &&
+          (typeof x === 'number' || typeof x === 'string')
+        ) {
+          ids.add(`${typeof x}:${x}`)
+        }
+        collect(x)
+      }
+    }
+  }
+  events.forEach(collect)
+  const order = new Map()
+  const replace = (v) => {
+    if (typeof v === 'number' || typeof v === 'string') {
+      const key = `${typeof v}:${v}`
+      if (ids.has(key)) {
+        if (!order.has(key)) {
+          order.set(key, order.size)
+        }
+        return { $idn: order.get(key) }
+      }
+      return v
+    }
+    if (Array.isArray(v)) {
+      return v.map(replace)
+    }
+    if (v && typeof v === 'object') {
+      const out = {}
+      for (const [k, x] of Object.entries(v)) {
+        out[k] = k.startsWith('$') && k !== '$a' ? x : replace(x)
+      }
+      return out
+    }
+    return v
+  }
+  return events.map((e) => JSON.stringify(replace(e)))
+}
+
+const sameLog = (a, b) => !!a && !!b && firstDiff(a, b) === -1
+
 const clip = (s) => (s === undefined ? '(none)' : s.length > 1500 ? `${s.slice(0, 1500)}...` : s)
 
 const rows = []
@@ -110,20 +177,31 @@ for (const suite of suites) {
       fail(`${suite} ${mode}: missing report`)
       continue
     }
-    // A test whose reference run is not reproducible (any of its cases differs between `ts` and
-    // `ts2`, e.g. concurrent logins racing password hashing on the thread pool) has every case
-    // counted as unstable when it differs: its interleaving is not determined by the code.
-    const unstableTests = new Set()
-    for (const [key, entry] of ref) {
-      const again = ref2?.get(key)
-      if (!again || firstDiff(entry.log, again.log) !== -1) {
-        unstableTests.add(`${entry.file}|${entry.test}`)
-      }
-    }
     const perOp = {}
     const stat = (op) =>
-      (perOp[op] ??= { compared: 0, diffs: 0, equal: 0, events: 0, rejections: 0, unstable: 0 })
+      (perOp[op] ??= {
+        compared: 0,
+        diffs: 0,
+        equal: 0,
+        events: 0,
+        idOrder: 0,
+        rejections: 0,
+        reordered: 0,
+        unstable: 0,
+      })
     let shown = 0
+    const showDiff = (entry, key, other, at) => {
+      if (shown++ < MAX_SHOWN) {
+        console.log(`\n[${suite} ${mode}] DIFF ${entry.op} ${key} at event ${at}`)
+        for (let i = Math.max(0, at - 2); i < at; i++) {
+          console.log(`  =  ${clip(entry.log[i])}`)
+        }
+        console.log(`  ts ${clip(entry.log[at])}`)
+        console.log(`  ${mode} ${clip(other.log[at])}`)
+      }
+    }
+    // Cases that match no reference run case by case, per test: decided by the multiset check.
+    const pendingByTest = new Map()
     for (const [key, entry] of ref) {
       const s = stat(entry.op)
       const other = cand.get(key)
@@ -139,30 +217,49 @@ for (const suite of suites) {
       }
       s.compared++
       s.events += entry.log.length
-      if (
-        entry.log.some(
-          (e) => e.includes('"ev":"outcome","ok":false'),
-        )
-      ) {
+      if (entry.log.some((e) => e.includes('"ev":"outcome","ok":false'))) {
         s.rejections++
       }
-      const at = firstDiff(entry.log, other.log)
-      if (at === -1) {
+      if (sameLog(entry.log, other.log)) {
         s.equal++
         continue
       }
-      if (unstableTests.has(`${entry.file}|${entry.test}`)) {
+      const again = ref2?.get(key)
+      if (sameLog(again?.log, other.log)) {
         s.unstable++
         continue
       }
-      s.diffs++
-      if (shown++ < MAX_SHOWN) {
-        console.log(`\n[${suite} ${mode}] DIFF ${entry.op} ${key} at event ${at}`)
-        for (let i = Math.max(0, at - 2); i < at; i++) {
-          console.log(`  =  ${clip(entry.log[i])}`)
+      const otherIDs = normalizeIDs(other.log)
+      if (
+        sameLog(normalizeIDs(entry.log), otherIDs) ||
+        (again && sameLog(normalizeIDs(again.log), otherIDs))
+      ) {
+        s.idOrder++
+        continue
+      }
+      const testKey = `${entry.file}|${entry.test}`
+      if (!pendingByTest.has(testKey)) {
+        pendingByTest.set(testKey, [])
+      }
+      pendingByTest.get(testKey).push({ at: firstDiff(entry.log, other.log), entry, key, other })
+    }
+    const testLogs = (cases, testKey) =>
+      [...cases.values()]
+        .filter((e) => `${e.file}|${e.test}` === testKey)
+        .map((e) => `${e.op}\n${normalizeIDs(e.log).join('\n')}`)
+        .sort()
+    for (const [testKey, pending] of pendingByTest) {
+      const candLogs = testLogs(cand, testKey)
+      const matches = [ref, ref2]
+        .filter(Boolean)
+        .some((r) => sameLog(testLogs(r, testKey), candLogs))
+      for (const { at, entry, key, other } of pending) {
+        if (matches) {
+          stat(entry.op).reordered++
+        } else {
+          stat(entry.op).diffs++
+          showDiff(entry, key, other, at)
         }
-        console.log(`  ts ${clip(entry.log[at])}`)
-        console.log(`  ${mode} ${clip(other.log[at])}`)
       }
     }
     for (const [key, entry] of cand) {
@@ -194,7 +291,16 @@ for (const suite of suites) {
         }
         return acc
       },
-      { compared: 0, diffs: 0, equal: 0, events: 0, rejections: 0, unstable: 0 },
+      {
+        compared: 0,
+        diffs: 0,
+        equal: 0,
+        events: 0,
+        idOrder: 0,
+        rejections: 0,
+        reordered: 0,
+        unstable: 0,
+      },
     )
     rows.push({ changed, mode, perOp, suite, total })
     if (total.diffs > 0) {
@@ -213,12 +319,12 @@ for (const suite of suites) {
 }
 
 console.log(
-  '\n| suite | mode | cases compared | equal | diffs | unstable | events | rejecting cases | outcomes changed |',
+  '\n| suite | mode | cases compared | equal | diffs | unstable (= ts2) | id order | reordered | events | rejecting cases | outcomes changed |',
 )
-console.log('| --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+console.log('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
 for (const { changed, mode, suite, total } of rows) {
   console.log(
-    `| ${suite} | ${mode} | ${total.compared} | ${total.equal} | ${total.diffs} | ${total.unstable} | ${total.events} | ${total.rejections} | ${changed} |`,
+    `| ${suite} | ${mode} | ${total.compared} | ${total.equal} | ${total.diffs} | ${total.unstable} | ${total.idOrder} | ${total.reordered} | ${total.events} | ${total.rejections} | ${changed} |`,
   )
 }
 const ops = {}

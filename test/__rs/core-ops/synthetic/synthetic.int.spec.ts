@@ -131,6 +131,16 @@ const seed = async (payload: Payload) => {
 
 const isoDate = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 const objectID = /^[0-9a-f]{24}$/
+const embeddedObjectID = /(?:^|[^0-9a-f])[0-9a-f]{24}(?:$|[^0-9a-f])/
+const embeddedObjectIDs = /(?<![0-9a-f])[0-9a-f]{24}(?![0-9a-f])/g
+const objectIDNumbers = new Map<string, number>()
+const numberObjectIDs = (text: string): string =>
+  text.replace(embeddedObjectIDs, (id) => {
+    if (!objectIDNumbers.has(id)) {
+      objectIDNumbers.set(id, objectIDNumbers.size)
+    }
+    return `<oid ${objectIDNumbers.get(id)}>`
+  })
 
 /** JSON of an outcome with run-dependent values (timestamps, upload paths) normalized. */
 const normalize = (value: unknown): string =>
@@ -142,6 +152,11 @@ const normalize = (value: unknown): string =>
     // array / block row ids are generated from the clock
     if (typeof v === 'string' && objectID.test(v)) {
       return '<objectid>'
+    }
+    // MongoDB document ids inside strings (`req.context` steps): numbered by first appearance in
+    // the run, so equality between them is still compared
+    if (typeof v === 'string' && embeddedObjectID.test(v)) {
+      return numberObjectIDs(v)
     }
     if (typeof v === 'bigint') {
       return `${v}n`
@@ -158,11 +173,11 @@ const outcomes: string[] = []
 const record = async (label: string, call: () => Promise<unknown>): Promise<void> => {
   try {
     const result = await call()
-    outcomes.push(`${label} ok ${normalize(result)}`)
+    outcomes.push(`${numberObjectIDs(label)} ok ${normalize(result)}`)
   } catch (error) {
     const e = error as Record<string, unknown>
     outcomes.push(
-      `${label} error ${String(e?.constructor && (e.constructor as { name: string }).name)} ${normalize(
+      `${numberObjectIDs(label)} error ${String(e?.constructor && (e.constructor as { name: string }).name)} ${normalize(
         {
           data: e?.data,
           message: e?.message,

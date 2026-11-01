@@ -74,7 +74,6 @@ import { isolateObjectProperty } from '../../../payload/src/utilities/isolateObj
 import { killTransaction } from '../../../payload/src/utilities/killTransaction.js'
 import { resolvePublishAllLocales } from '../../../payload/src/utilities/resolvePublishAllLocales.js'
 import { resolveSelect } from '../../../payload/src/utilities/resolveSelect.js'
-import { runValidationLifecycle } from '../../../payload/src/utilities/runValidationLifecycle.js'
 import { sanitizeInternalFields } from '../../../payload/src/utilities/sanitizeInternalFields.js'
 import { sanitizePermissions } from '../../../payload/src/utilities/sanitizePermissions.js'
 import { sanitizeSelect } from '../../../payload/src/utilities/sanitizeSelect.js'
@@ -706,29 +705,9 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
       draftVersion: newestDraft,
       entityType: 'global',
     }),
-  globalRunValidationLifecycle: (
-    docWithLocales: Any,
-    globalConfig: Any,
-    incomingData: Any,
-    onValidationData: Any,
-    originalDoc: Any,
-    overrideAccess: Any,
-    req: Any,
-    skipMutationHooks: Any,
-    validationOperation: Any,
-  ) =>
-    runValidationLifecycle({
-      collection: null,
-      docWithLocales,
-      global: globalConfig,
-      incomingData,
-      onValidationData,
-      originalDoc,
-      overrideAccess,
-      req,
-      skipMutationHooks,
-      validationOperation,
-    }),
+  /** `beforeValidate(args)` / `beforeChange(args)` of runValidationLifecycle (payload's exports). */
+  fieldTraversal: (name: Any, args: Any) =>
+    name === 'beforeValidate' ? beforeValidate(args) : beforeChange(args),
   globalTypeDoc: (slug: Any) => ({ globalType: slug }),
   globalValidateAfterRead: (req: Any, docWithLocales: Any, draft: Any, globalConfig: Any) =>
     afterRead({

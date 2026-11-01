@@ -93,7 +93,7 @@ fn renders_like_drizzle() {
     built.sql.sql,
     "select \"id\", \"title\", (select coalesce(json_group_array(json_array(\"_order\", \"id\", \"text\")), json_array()) as \"data\" from (select * from \"posts_arr\" \"posts_arr\" where \"posts_arr\".\"_parent_id\" = \"posts\".\"id\" order by \"posts_arr\".\"_order\" asc) \"posts_arr\") as \"arr\", (select coalesce(json_group_array(json_array(\"localized\", \"_locale\")), json_array()) as \"data\" from \"posts_locales\" \"posts__locales\" where \"posts__locales\".\"_parent_id\" = \"posts\".\"id\") as \"_locales\" from \"posts\" \"posts\" order by \"posts\".\"created_at\" desc limit ?"
   );
-  assert_eq!(built.sql.params, vec![json!(10)]);
+  assert_eq!(built.sql.to_json()["params"], json!([10]));
 
   let rows = execute(&conn(), &built, Mode::Many).expect("execute");
   assert_eq!(

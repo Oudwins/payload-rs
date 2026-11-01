@@ -9,7 +9,7 @@
 
 use payload_engine::error::{EngineError, Result};
 use payload_engine::js::{JsVal, Obj};
-use payload_engine::sql::schema::RawSchema;
+use crate::sql::Schema;
 use payload_sql_write::js::{js_insert, set};
 
 use crate::sql::{Executor, Returning, SqlFragment, and, build_update, eq, ident, in_array, is_null, or, require_table};
@@ -84,7 +84,7 @@ impl WriteArgs {
 /// The engine-level arguments shared by every upsert-driving operation.
 pub struct Env<'e, 'c> {
   pub exec: &'e mut Executor<'c>,
-  pub schema: &'e RawSchema,
+  pub schema: Schema<'e>,
   pub opts: &'e AdapterOptions,
   pub ctx: WriteContext<'e>,
   pub host: &'e mut dyn UpsertHost,
@@ -144,7 +144,7 @@ pub struct CreateVersionArgs {
 /// `{ ...versionData }`
 fn spread(value: &JsVal) -> Obj {
   match value {
-    JsVal::Obj(o) => (**o).clone(),
+    JsVal::Obj(o) => (***o).clone(),
     JsVal::Arr(a) => a.iter().enumerate().map(|(i, v)| (i.to_string(), v.clone())).collect(),
     _ => Obj::new(),
   }
@@ -238,7 +238,7 @@ pub struct UpdateOneArgs {
 /// `select "id" from "t" [where ...] [order by ...] [limit ?]`
 fn select_ids(
   exec: &mut Executor<'_>,
-  schema: &RawSchema,
+  schema: Schema<'_>,
   table_name: &str,
   where_: Option<&SqlFragment>,
   order_by: Option<&SqlFragment>,
@@ -290,7 +290,7 @@ pub fn update_one(
       }
       let t = require_table(env.schema, &args.table_name)?;
       let sql = build_update(t, &rti.row, q.where_.as_ref(), &Returning::All)?;
-      let keys: Vec<&str> = t.columns().map(|(k, _)| k.as_str()).collect();
+      let keys = Returning::All.keys(t);
       let docs = env.exec.query_columns(t, &keys, &sql).map_err(|e| e.into_engine_error())?;
       return match docs.into_iter().next() {
         None => Ok(JsVal::Null),
@@ -496,7 +496,7 @@ fn same_value_zero(a: &JsVal, b: &JsVal) -> bool {
 /// `deleteOne` (packages/drizzle/src/deleteOne.ts)
 pub fn delete_one(
   exec: &mut Executor<'_>,
-  schema: &RawSchema,
+  schema: Schema<'_>,
   ops_host: &mut dyn OpsHost,
   args: &WriteArgs,
   query: &BuiltQuery,
@@ -515,7 +515,7 @@ pub fn delete_one(
 /// `deleteMany` (packages/drizzle/src/deleteMany.ts)
 pub fn delete_many(
   exec: &mut Executor<'_>,
-  schema: &RawSchema,
+  schema: Schema<'_>,
   ops_host: &mut dyn OpsHost,
   args: &WriteArgs,
   query: &BuiltQuery,
@@ -534,7 +534,7 @@ pub fn delete_many(
 /// `findMany` docs.
 pub fn delete_versions(
   exec: &mut Executor<'_>,
-  schema: &RawSchema,
+  schema: Schema<'_>,
   ops_host: &mut dyn OpsHost,
   args: &WriteArgs,
 ) -> Result<JsVal> {

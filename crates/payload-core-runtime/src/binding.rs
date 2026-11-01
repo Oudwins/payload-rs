@@ -19,7 +19,6 @@ fn run<const N: usize>(
   body: Body<N>,
 ) -> sys::napi_value {
   js::set_env(env);
-  executor::count_entry();
   let (args, _) = js::callback_args::<N>(env, info);
   match catch_unwind(AssertUnwindSafe(|| body(args))) {
     Ok(Ok(v)) => v.0,
@@ -130,6 +129,11 @@ export!(probe, 2, |[value, frozen]| {
   Ok(out)
 });
 
+/// Version of the host-helper contract between the core runtime family (this crate and the field
+/// hook crates built into the same addon: payload-core-hooks-validate, -change, -after) and
+/// `packages/engine-rs/src/runtime`, which checks it at load.
+pub const API_VERSION: u32 = 2;
+
 /// Builds the binding object.
 pub fn create() -> JsResult<Local> {
   let o = js::object();
@@ -155,6 +159,7 @@ pub fn create() -> JsResult<Local> {
   add!("benchTsfn", bench_tsfn);
   add!("benchProxyLoad", bench_proxy_load);
   add!("benchProxyGet", bench_proxy_get);
+  js::set_named(o, "apiVersion", js::number(f64::from(API_VERSION)))?;
   Ok(o)
 }
 

@@ -157,7 +157,7 @@ async fn read_version(data: Val, ctx: Ctx) -> JsResult<Val> {
 /// `async (doc) => { const docRef = doc; for (const hook of globalConfig.hooks.afterRead) {
 /// docRef.version = (await hook({ ... doc: doc.version ... })) || doc.version } return docRef }`
 async fn after_read_hooks(doc: Val, ctx: Ctx) -> JsResult<Val> {
-  let mut hooks = hooks_of(ctx.global_config.get(), "afterRead")?;
+  let mut hooks = hooks_of(ctx.global_config.get(), "afterRead", "globalConfig")?;
   while let Some(hook) = hooks.next()? {
     let hook = val(hook)?;
     let body = async {

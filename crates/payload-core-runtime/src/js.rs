@@ -91,9 +91,32 @@ thread_local! {
 }
 
 /// Records the env of the napi call that is currently running. Every exported entry point and
-/// every resume callback sets it before touching JS.
+/// every resume callback sets it before touching JS. Also counts the call: every Node-API entry
+/// into a core engine crate (runtime, field hooks, validators, query, operations) goes through
+/// here, so tests can tell whether a run reached the engine at all (see [`entries`]).
 pub fn set_env(env: sys::napi_env) {
   ENV.with(|e| e.set(env));
+  ENTRIES.with(|e| e.set(e.get() + 1));
+}
+
+thread_local! {
+  static ENTRIES: Cell<u64> = const { Cell::new(0) };
+}
+
+/// [`set_env`] for finalizers: garbage collection runs them at any time, which is not a call into
+/// the engine, so they are not counted.
+pub fn set_env_uncounted(env: sys::napi_env) {
+  ENV.with(|e| e.set(env));
+}
+
+/// Takes back one [`set_env`] count (for entries that are not engine work, like `stats`).
+pub fn uncount_entry() {
+  ENTRIES.with(|e| e.set(e.get().saturating_sub(1)));
+}
+
+/// Number of Node-API entries into the core engine crates on this thread ([`set_env`] calls).
+pub fn entries() -> u64 {
+  ENTRIES.with(|e| e.get())
 }
 
 /// The current env, or null once the thread's locals are being destroyed (drops of persistent

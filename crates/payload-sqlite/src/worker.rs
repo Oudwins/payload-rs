@@ -65,6 +65,8 @@ enum Message {
   Adopt(ConnId, Target),
   Job(ConnId, Job),
   Drop(ConnId),
+  /// Work that needs no connection id (finalizing a kept statement).
+  Run(Box<dyn FnOnce() + Send>),
 }
 
 /// The process-wide ordered queue.
@@ -253,6 +255,9 @@ fn run_worker(queue: &Arc<Queue>, linger: bool) {
         // file) down with it.
         let _ = catch_unwind(AssertUnwindSafe(|| job(&mut session)));
       }
+      Message::Run(job) => {
+        let _ = catch_unwind(AssertUnwindSafe(job));
+      }
     }
   }
   RUNNING_WORKERS.fetch_sub(1, Ordering::Relaxed);
@@ -268,6 +273,10 @@ fn register(path: &str, target: Target) -> ConnId {
 }
 
 /// The database SQLite opens for `path` (`sqlite3_open_v2` with `SQLITE_OPEN_URI`).
+///
+/// `createClient` (`config::resolve_config`) passes `:memory:` for a private in-memory database
+/// and a file name otherwise (also `:memory:?cache=shared`, which SQLite opens as a file of that
+/// name, as the binding does); `file:` URIs come only from the raw `open_client` API.
 fn database_of(path: &str, id: ConnId) -> Database {
   // only `file:` paths are URIs; any other path is a file name, `?` included
   let (file, query) = match path.strip_prefix("file:") {
@@ -288,9 +297,13 @@ fn database_of(path: &str, id: ConnId) -> Database {
   Database::File(canonical_file(Path::new(file)))
 }
 
-/// `dir/name` with `dir` canonicalized: the same before and after SQLite
-/// creates the file.
+/// The file's canonical path (symlinks resolved, as SQLite's unix VFS does) when it exists,
+/// otherwise `dir/name` with `dir` canonicalized: the same before and after SQLite creates a file
+/// that is not a symlink.
 fn canonical_file(file: &Path) -> PathBuf {
+  if let Ok(canonical) = std::fs::canonicalize(file) {
+    return canonical;
+  }
   let dir = match file.parent() {
     Some(dir) if !dir.as_os_str().is_empty() => dir,
     _ => Path::new("."),
@@ -341,6 +354,12 @@ pub fn submit(id: ConnId, job: impl FnOnce(&mut Session<'_>) + Send + 'static) -
   Ok(())
 }
 
+/// Finalizes a statement kept by `conn::with_statement_retention` as a job of the queue, after
+/// every job queued earlier (the binding finalizes it from the JS thread, between statements).
+pub fn release_statement(statement: u64) {
+  push(&QUEUE, Message::Run(Box::new(move || crate::conn::release_statement(statement))));
+}
+
 /// Queues `f` and blocks until it ran. Must not be called from a job (that
 /// would wait for itself); doing so returns an error instead of deadlocking.
 pub fn call<T: Send + 'static>(id: ConnId, f: impl FnOnce(&mut Session<'_>) -> T + Send + 'static) -> Result<T> {
@@ -376,7 +395,6 @@ pub fn same_database(a: ConnId, b: ConnId) -> bool {
     _ => false,
   }
 }
-
 
 /// Number of registered ids (diagnostics / leak tests).
 pub fn open_connections() -> usize {
@@ -450,11 +468,35 @@ mod tests {
     let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned();
     let b = open_client(&format!("{}/./{name}", dir.display())).unwrap();
     let other = open_client(&other_path).unwrap();
+    // a symlink to the file is the same database (SQLite resolves it)
+    let link = format!("{path}.link");
+    std::os::unix::fs::symlink(&path, &link).unwrap();
+    let linked = open_client(&link).unwrap();
+    // the paths `createClient` resolves `file:` URLs to (`config::resolve_config`)
+    let created = |url: &str| {
+      let config = crate::config::ClientConfig {
+        url: url.to_string(),
+        int_mode_json: "\"number\"".to_string(),
+        is_auth_token_valid: true,
+        is_encryption_key_valid: true,
+        ..Default::default()
+      };
+      let target = crate::config::resolve_config(&config).unwrap();
+      register_unopened_client(&target.path, target.options)
+    };
+    let c = created(&format!("file:{path}"));
+    let c_memory = created(":memory:");
+    let c_memory2 = created("file::memory:");
+    // raw `open_client` URIs
     let m = open_client("file::memory:").unwrap();
     let m2 = open_client(":memory:").unwrap();
     let shared = open_client("file::memory:?cache=shared").unwrap();
     let shared2 = open_client("file::memory:?cache=shared").unwrap();
     assert!(same_database(a, b));
+    assert!(same_database(a, linked));
+    assert!(same_database(a, c));
+    assert!(!same_database(c_memory, c_memory2));
+    assert!(!same_database(c_memory, m2));
     assert!(!same_database(a, other));
     assert!(!same_database(a, m));
     assert!(!same_database(m, m2));
@@ -468,12 +510,51 @@ mod tests {
     let mtx = call(m, |s| s.begin_transaction("write", IntMode::Number)).unwrap().unwrap();
     assert!(same_database(m, mtx));
     assert!(!same_database(m2, mtx));
-    for id in [a, b, other, m, m2, shared, shared2, tx, mtx] {
+    for id in [a, b, other, linked, c, c_memory, c_memory2, m, m2, shared, shared2, tx, mtx] {
       release(id);
     }
     assert!(!same_database(a, b));
+    let _ = std::fs::remove_file(&link);
     cleanup(&path);
     cleanup(&other_path);
+  }
+
+  /// The binding keeps a statement whose step failed with `SQLITE_BUSY` active until its JS
+  /// object is collected: a failed `BEGIN IMMEDIATE` on the client makes the client's next read
+  /// hold a shared lock, so the open transaction cannot commit until the statement is released.
+  #[test]
+  fn busy_statements_stay_active_until_released() {
+    let _serial = serial();
+    let path = temp_db("busy-kept");
+    let client_id = open_client(&path).unwrap();
+    exec(client_id, "create table t(a)").unwrap();
+    let begin = |id| call(id, |s| crate::conn::with_statement_retention(|| s.begin_transaction("write", IntMode::Number))).unwrap();
+    let (a, kept) = begin(client_id);
+    let a = a.unwrap();
+    assert!(kept.is_empty());
+    let (b, kept) = begin(client_id);
+    assert!(matches!(b, Err(ClientError::Sqlite { ref code, .. }) if code == "SQLITE_BUSY"));
+    assert_eq!(kept.len(), 1);
+    exec(client_id, "select count(*) from t").unwrap();
+    call(a, |s| client::tx_execute(s.conn()?, &Statement::sql("insert into t values (1)"), IntMode::Number))
+      .unwrap()
+      .unwrap();
+    let commit = call(a, |s| client::tx_commit(s.conn()?, IntMode::Number)).unwrap();
+    assert!(matches!(commit, Err(ClientError::Sqlite { ref code, .. }) if code == "SQLITE_BUSY"));
+    release_statement(kept[0]);
+    call(a, |s| client::tx_commit(s.conn()?, IntMode::Number)).unwrap().unwrap();
+    assert_eq!(crate::conn::retained_statements(), 0);
+    // without retention (engine statements) a failed statement is finalized at once
+    let (c, kept) = begin(client_id);
+    let c = c.unwrap();
+    let failed = call(client_id, |s| s.begin_transaction("write", IntMode::Number)).unwrap();
+    assert!(failed.is_err());
+    assert_eq!(crate::conn::retained_statements(), 0);
+    assert!(kept.is_empty());
+    for id in [c, a, client_id] {
+      release(id);
+    }
+    cleanup(&path);
   }
 
   /// `createClient`'s open runs as a queued job: after the commit queued

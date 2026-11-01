@@ -67,7 +67,7 @@ async fn run_logout(incoming_args: Val) -> JsResult<Val> {
   let should_commit = truthy(&init_transaction(&req).await?);
 
   let body: JsResult<Val> = async {
-    args = config_hooks(&collection_config, "afterLogout", args.clone(), |args| {
+    args = config_hooks(&collection_config, "afterLogout", "collectionConfig", args.clone(), |args| {
       call("afterLogoutHookArgs", &[args, req.get()])
     })
     .await?;
@@ -138,7 +138,7 @@ async fn run_me(args: Val) -> JsResult<Val> {
     }
 
     // me hook - Collection
-    let mut hooks = ForOf::new(path(&collection, &["config", "hooks", "me"])?.get())?;
+    let mut hooks = ForOf::of(path(&collection, &["config", "hooks", "me"])?.get(), "collection.config.hooks.me")?;
     while let Some(me_hook) = hooks.next()? {
       let me_hook = val(me_hook)?;
       let mut done = false;
@@ -169,7 +169,7 @@ async fn run_me(args: Val) -> JsResult<Val> {
 
   // After Me - Collection
   if js::truthy(crate::host::opt(crate::host::opt(path(&collection, &["config", "hooks"])?.get(), "afterMe")?, "length")?) {
-    let hooks = crate::common::hooks_of(path(&collection, &["config"])?.get(), "afterMe")?;
+    let hooks = crate::common::hooks_of(path(&collection, &["config"])?.get(), "afterMe", "collection.config")?;
     result = replace_loop(hooks, result, "hook", |result| {
       call("afterMeHookArgs", &[collection.get(), req.get(), result])
     })
@@ -246,7 +246,7 @@ pub fn apply_user_read_access(
     let mut user_with_read_access = await_js(p).await?;
 
     if js::truthy(crate::host::opt(crate::host::opt(g(&collection, "hooks")?, "afterRead")?, "length")?) {
-      let hooks = crate::common::hooks_of(collection.get(), "afterRead")?;
+      let hooks = crate::common::hooks_of(collection.get(), "afterRead", "collection")?;
       user_with_read_access = replace_loop(hooks, user_with_read_access, "hook", |doc| {
         call("userAfterReadHookArgs", &[collection.get(), req.get(), doc, override_access.get()])
       })

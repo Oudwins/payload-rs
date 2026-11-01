@@ -29,6 +29,7 @@ import fs from 'node:fs'
 import type { CompareOptions, Difference } from './compare.js'
 import type { ReportOption, ShadowRecord } from './report.js'
 
+import { registerTransparentClientMethod } from '../adapter/index.js'
 import { createClockTapes, installClockReplay } from './clock.js'
 import { compareValues, errorShape, NORMALISATIONS } from './compare.js'
 import { createReporter, truncateForReport } from './report.js'
@@ -1123,19 +1124,29 @@ function createShadowInstance({
         continue
       }
       originalMethods[method] = original
-      client[method] = function candidateClientCall(...callArgs: unknown[]) {
+      /** The test's override of the reference client's method, when this call must run it. */
+      const redirectedOverride = (): AnyFn | undefined => {
         const override = referenceClient?.[method]
-        if (
-          typeof override === 'function' &&
+        return typeof override === 'function' &&
           referenceClientWrappers[method] &&
           override !== referenceClientWrappers[method] &&
           inShadowedCall.getStore() === 'candidate' &&
           !isMirroringRaw.getStore()
-        ) {
+          ? override
+          : undefined
+      }
+      const candidateClientCall = function (...callArgs: unknown[]) {
+        const override = redirectedOverride()
+        if (override) {
           return override.apply(referenceClient, callArgs)
         }
         return original.apply(client, callArgs)
       }
+      client[method] = candidateClientCall
+      // a Rust engine candidate (withRustEngine) keeps running its data methods in Rust while this
+      // wrapper only forwards; when it would run a test's override, the engine adapter runs the
+      // upstream TS method instead, whose statements go through it
+      registerTransparentClientMethod(candidateClientCall, () => !redirectedOverride())
     }
   }
 

@@ -126,9 +126,10 @@ export const createOpsHost = (
       // the loop body's error wins
     }
   },
-  /** `<expr>.map(callback)`: V8's errors for a nullish value or a non-callable `map`. */
   filterWith: (array: Any, callback: Any) => array.filter(callback),
   findWith: (array: Any, callback: Any) => array.find(callback),
+  /** `<expr>.map(callback)`: V8's errors for a nullish value or a non-callable `map`. */
+  dateTime: (value: Any) => new Date(value).getTime(),
   mapWith: (array: Any, expr: string, callback: Any) => {
     if (array === null || array === undefined) {
       throw new TypeError(`Cannot read properties of ${array} (reading 'map')`)
@@ -140,7 +141,6 @@ export const createOpsHost = (
     return Reflect.apply(map, array, [callback])
   },
   /** `name in o` for a primitive `o` (throws V8's TypeError). */
-  dateTime: (value: Any) => new Date(value).getTime(),
   hasIn: (o: Any, name: string) => name in o,
   lessThan: (a: Any, b: Any) => a < b,
   now: () => new Date().getTime(),

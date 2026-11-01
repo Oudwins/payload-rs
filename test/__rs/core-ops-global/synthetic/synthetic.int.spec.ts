@@ -125,10 +125,30 @@ test.suite('core-ops-global synthetic', { config: './config.ts' }, () => {
           where: { 'version.title': { equals: 'allowed' } } as Any,
         }),
       )
-      await run('countGlobalVersions', () => payload.countGlobalVersions({ ...base, context }))
+      // The Local API reads `options.global` (not `slug`).
+      await run('countGlobalVersions', () =>
+        payload.countGlobalVersions({ ...base, context, global: 'hooked' as Any }),
+      )
+      await run('countGlobalVersions', () =>
+        payload.countGlobalVersions({
+          ...base,
+          context,
+          global: 'hooked' as Any,
+          where: { 'version.title': { equals: 'allowed' } } as Any,
+        }),
+      )
       const versionID = versions?.docs?.[0]?.id
       await run('findGlobalVersionByID', () =>
         payload.findGlobalVersionByID({ ...base, id: versionID ?? 'missing', context }),
+      )
+      // beforeRead hooks returning `{ version: doc }`, so the lookup reaches afterRead and the
+      // afterRead hook loop under every context of the matrix.
+      await run('findGlobalVersionByIDAfterRead', () =>
+        payload.findGlobalVersionByID({
+          ...base,
+          id: versionID ?? 'missing',
+          context: { ...context, beforeReadWrapsVersion: true },
+        }),
       )
       await run('findGlobalVersionByID', () =>
         payload.findGlobalVersionByID({ ...base, id: '', context, disableErrors: true }),
@@ -149,7 +169,10 @@ test.suite('core-ops-global synthetic', { config: './config.ts' }, () => {
       )
       const req = await createPayloadRequest({ context, payload, user })
       await run('docAccess', () =>
-        docAccessOperation({ globalConfig: payload.globals.config.find((g) => g.slug === 'hooked')!, req }),
+        docAccessOperation({
+          globalConfig: payload.globals.config.find((g) => g.slug === 'hooked')!,
+          req,
+        }),
       )
     }
 
@@ -164,9 +187,16 @@ test.suite('core-ops-global synthetic', { config: './config.ts' }, () => {
       payload.findGlobal({ slug: 'plain' as Any, showHiddenFields: true }),
     )
     await run('findGlobalVersions', () => payload.findGlobalVersions({ slug: 'plain' as Any }))
-    await run('countGlobalVersions', () => payload.countGlobalVersions({ slug: 'plain' as Any }))
+    await run('countGlobalVersions', () => payload.countGlobalVersions({ global: 'plain' as Any }))
 
-    for (const name of ['findGlobal', 'updateGlobal', 'findGlobalVersions', 'validateGlobal']) {
+    for (const name of [
+      'findGlobal',
+      'updateGlobal',
+      'findGlobalVersions',
+      'validateGlobal',
+      'countGlobalVersions',
+      'findGlobalVersionByIDAfterRead',
+    ]) {
       assert.ok((outcomes[name]?.ok ?? 0) > 0, `${name}: no call succeeded`)
       assert.ok((outcomes[name]?.error ?? 0) > 0, `${name}: no call failed`)
     }
@@ -254,7 +284,9 @@ test.suite('core-ops-global synthetic', { config: './config.ts' }, () => {
         )
         await run('logout', () => logoutOperation({ collection: users, req }))
         await run('logout', () => logoutOperation({ allSessions: true, collection: users, req }))
-        await run('logout', () => logoutOperation({ collection: payload.collections.verified, req }))
+        await run('logout', () =>
+          logoutOperation({ collection: payload.collections.verified, req }),
+        )
       }
 
       const reqInit = await createPayloadRequest({ context, payload })
@@ -262,7 +294,12 @@ test.suite('core-ops-global synthetic', { config: './config.ts' }, () => {
       await run('init', () => initOperation({ collection: 'verified', req: reqInit }))
 
       await run('forgotPassword', () =>
-        payload.forgotPassword({ collection: 'users', context, data: { email }, disableEmail: true }),
+        payload.forgotPassword({
+          collection: 'users',
+          context,
+          data: { email },
+          disableEmail: true,
+        }),
       )
       const token: Any = await run('forgotPassword', () =>
         payload.forgotPassword({ collection: 'users', context, data: { email } }),
@@ -290,10 +327,21 @@ test.suite('core-ops-global synthetic', { config: './config.ts' }, () => {
         }),
       )
       await run('unlock', () =>
-        payload.unlock({ collection: 'users', context, data: { email }, overrideAccess: false, user: login?.user } as Any),
+        payload.unlock({
+          collection: 'users',
+          context,
+          data: { email },
+          overrideAccess: false,
+          user: login?.user,
+        } as Any),
       )
       await run('unlock', () =>
-        payload.unlock({ collection: 'users', context, data: { email: 'nobody@x.com' }, overrideAccess: true }),
+        payload.unlock({
+          collection: 'users',
+          context,
+          data: { email: 'nobody@x.com' },
+          overrideAccess: true,
+        }),
       )
     }
 
@@ -351,10 +399,21 @@ test.suite('core-ops-global synthetic', { config: './config.ts' }, () => {
       payload.login({ collection: 'usernames' as Any, data: { password: 'x' } as Any }),
     )
     await run('forgotPassword', () =>
-      payload.forgotPassword({ collection: 'usernames' as Any, data: { username: 'someone' } as Any }),
+      payload.forgotPassword({
+        collection: 'usernames' as Any,
+        data: { username: 'someone' } as Any,
+      }),
     )
 
-    for (const name of ['login', 'forgotPassword', 'resetPassword', 'unlock', 'logout', 'me', 'refresh']) {
+    for (const name of [
+      'login',
+      'forgotPassword',
+      'resetPassword',
+      'unlock',
+      'logout',
+      'me',
+      'refresh',
+    ]) {
       assert.ok((outcomes[name]?.ok ?? 0) > 0, `${name}: no call succeeded`)
       assert.ok((outcomes[name]?.error ?? 0) > 0, `${name}: no call failed`)
     }

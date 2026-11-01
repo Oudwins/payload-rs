@@ -30,7 +30,7 @@ use std::collections::HashMap;
 
 use payload_engine::error::{EngineError, Result};
 use payload_engine::host::Host;
-use payload_engine::js::{JsVal, decode_graph_typed, encode_value};
+use payload_engine::js::{JsVal, decode_graph_typed, encode_value_text, write_encoded, write_json_string};
 use payload_engine::sql::schema::{RawSchema, SchemaInput, SchemaOptions, build_raw_schema, resolve_path};
 use payload_sql_find::exec::{Executor, LibsqlConn};
 use payload_sql_find::schema::DrizzleSchema;
@@ -88,6 +88,7 @@ impl EngineOptions {
 }
 
 /// The state of one adapter instance.
+#[derive(Clone)]
 pub struct SqliteEngine {
   /// `{ config, collections: { [slug]: { config, customIDType } }, blocks }`, decoded once.
   root: JsVal,
@@ -161,6 +162,12 @@ impl SqliteEngine {
 
   pub fn schema(&self) -> &RawSchema {
     &self.schema
+  }
+
+  /// The schema the write path builds statements from: the raw tables and the live drizzle
+  /// tables (columns added or replaced by `afterSchemaInit` are written like drizzle writes them).
+  pub fn write_schema(&self) -> payload_sql_upsert::sql::Schema<'_> {
+    payload_sql_upsert::sql::Schema { raw: &self.schema, drizzle: Some(&self.drizzle) }
   }
 
   pub fn drizzle_schema(&self) -> &DrizzleSchema {
@@ -271,11 +278,28 @@ impl SqliteEngine {
       None => false,
     };
     if !with_mutations {
-      return Ok(encode_value(&output.result).to_string());
+      return Ok(encode_value_text(&output.result));
     }
-    let mutations: Vec<Json> =
-      output.mutations.iter().map(|(path, value)| json!([path, encode_value(value)])).collect();
-    Ok(json!({ "result": encode_value(&output.result), "mutations": mutations }).to_string())
+    let mut out = String::from(r#"{"result":"#);
+    write_encoded(&output.result, &mut out);
+    out.push_str(r#","mutations":["#);
+    for (i, (path, value)) in output.mutations.iter().enumerate() {
+      if i > 0 {
+        out.push(',');
+      }
+      out.push_str("[[");
+      for (j, key) in path.iter().enumerate() {
+        if j > 0 {
+          out.push(',');
+        }
+        write_json_string(key, &mut out);
+      }
+      out.push_str("],");
+      write_encoded(value, &mut out);
+      out.push(']');
+    }
+    out.push_str("]}");
+    Ok(out)
   }
 
   /// Runs one adapter method on `env`. Failed write-path statements become `DrizzleQueryError`s

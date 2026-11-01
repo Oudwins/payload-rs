@@ -11,4 +11,5 @@ version.workspace = true
 [dependencies]
 napi = { version = "3", features = ["napi10"] }
 payload-core-ops = { path = "../payload-core-ops" }
+payload-core-ops-write = { path = "../payload-core-ops-write" }
 payload-core-runtime = { path = "../payload-core-runtime" }

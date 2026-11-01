@@ -162,7 +162,7 @@ impl WhereColumn {
     match self {
       WhereColumn::Column(c) => c.qualified(),
       WhereColumn::Null => Sql::raw("null"),
-      WhereColumn::Param(v) => Sql::param(serde_json::Value::String(v.clone())),
+      WhereColumn::Param(v) => Sql::param(payload_engine::js::JsVal::str(v.as_str())),
     }
   }
 }

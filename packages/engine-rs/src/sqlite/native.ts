@@ -15,7 +15,14 @@ export type NativeError = {
   rawCode?: number
 }
 
-export type NativeOutcome<T> = { error: NativeError; ok?: undefined } | { error?: undefined; ok: T }
+/**
+ * `retained`: statements a failed step left active (`SQLITE_BUSY`), as native objects whose
+ * garbage collection finalizes them, like the `libsql` binding's `Statement` (see `unwrap`).
+ */
+export type NativeOutcome<T> = { retained?: unknown[] } & (
+  | { error: NativeError; ok?: undefined }
+  | { error?: undefined; ok: T }
+)
 
 export type NativeResultSet = {
   columns: string[]

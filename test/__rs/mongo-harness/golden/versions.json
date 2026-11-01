@@ -1,0 +1,1138 @@
+{
+  "drafts lifecycle": {
+    "create": {
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "updatedAt": "2025-01-01T00:07:35.000Z",
+      "title": "v1",
+      "localizedTitle": "v1-en",
+      "rel": {
+        "createdAt": "2025-01-01T00:00:03.000Z",
+        "updatedAt": "2025-01-01T00:00:04.000Z",
+        "title": "target-0",
+        "localizedTitle": "target-en-0",
+        "number": 0,
+        "kitchenRefs": {
+          "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+          "hasNextPage": false
+        },
+        "kitchenArrayRefs": {
+          "docs": ["<oid:129>", "<oid:45>"],
+          "hasNextPage": false
+        },
+        "localizedRefs": {
+          "docs": ["<oid:66>"],
+          "hasNextPage": false
+        },
+        "id": "<oid:1>"
+      },
+      "array": [
+        {
+          "text": "v1",
+          "id": "<oid:139>"
+        }
+      ],
+      "_status": "draft",
+      "id": "<oid:140>"
+    },
+    "draft1": {
+      "title": "draft-1",
+      "localizedTitle": "v1-en",
+      "rel": {
+        "createdAt": "2025-01-01T00:00:03.000Z",
+        "updatedAt": "2025-01-01T00:00:04.000Z",
+        "title": "target-0",
+        "localizedTitle": "target-en-0",
+        "number": 0,
+        "kitchenRefs": {
+          "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+          "hasNextPage": false
+        },
+        "kitchenArrayRefs": {
+          "docs": ["<oid:129>", "<oid:45>"],
+          "hasNextPage": false
+        },
+        "localizedRefs": {
+          "docs": ["<oid:66>"],
+          "hasNextPage": false
+        },
+        "id": "<oid:1>"
+      },
+      "array": [
+        {
+          "text": "v1",
+          "id": "<oid:139>"
+        }
+      ],
+      "updatedAt": "2025-01-01T00:07:36.000Z",
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "_status": "draft",
+      "id": "<oid:140>"
+    },
+    "autosave1": {
+      "title": "autosave-1",
+      "localizedTitle": "v1-en",
+      "rel": {
+        "createdAt": "2025-01-01T00:00:03.000Z",
+        "updatedAt": "2025-01-01T00:00:04.000Z",
+        "title": "target-0",
+        "localizedTitle": "target-en-0",
+        "number": 0,
+        "kitchenRefs": {
+          "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+          "hasNextPage": false
+        },
+        "kitchenArrayRefs": {
+          "docs": ["<oid:129>", "<oid:45>"],
+          "hasNextPage": false
+        },
+        "localizedRefs": {
+          "docs": ["<oid:66>"],
+          "hasNextPage": false
+        },
+        "id": "<oid:1>"
+      },
+      "array": [
+        {
+          "text": "v1",
+          "id": "<oid:139>"
+        }
+      ],
+      "updatedAt": "2025-01-01T00:07:37.000Z",
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "_status": "draft",
+      "id": "<oid:140>"
+    },
+    "autosave2": {
+      "title": "autosave-2",
+      "localizedTitle": "v1-en",
+      "rel": {
+        "createdAt": "2025-01-01T00:00:03.000Z",
+        "updatedAt": "2025-01-01T00:00:04.000Z",
+        "title": "target-0",
+        "localizedTitle": "target-en-0",
+        "number": 0,
+        "kitchenRefs": {
+          "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+          "hasNextPage": false
+        },
+        "kitchenArrayRefs": {
+          "docs": ["<oid:129>", "<oid:45>"],
+          "hasNextPage": false
+        },
+        "localizedRefs": {
+          "docs": ["<oid:66>"],
+          "hasNextPage": false
+        },
+        "id": "<oid:1>"
+      },
+      "array": [
+        {
+          "text": "v1",
+          "id": "<oid:139>"
+        }
+      ],
+      "updatedAt": "2025-01-01T00:07:38.000Z",
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "_status": "draft",
+      "id": "<oid:140>"
+    },
+    "draftEs": {
+      "title": "autosave-2",
+      "localizedTitle": "draft-es",
+      "rel": {
+        "createdAt": "2025-01-01T00:00:03.000Z",
+        "updatedAt": "2025-01-01T00:00:04.000Z",
+        "title": "target-0",
+        "localizedTitle": "target-es-0",
+        "number": 0,
+        "kitchenRefs": {
+          "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+          "hasNextPage": false
+        },
+        "kitchenArrayRefs": {
+          "docs": ["<oid:129>", "<oid:45>"],
+          "hasNextPage": false
+        },
+        "localizedRefs": {
+          "docs": [],
+          "hasNextPage": false
+        },
+        "id": "<oid:1>"
+      },
+      "array": [
+        {
+          "text": "v1",
+          "id": "<oid:139>"
+        }
+      ],
+      "updatedAt": "2025-01-01T00:07:39.000Z",
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "_status": "draft",
+      "id": "<oid:140>"
+    },
+    "publishedRead": {
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "updatedAt": "2025-01-01T00:07:35.000Z",
+      "title": "v1",
+      "localizedTitle": "v1-en",
+      "rel": {
+        "createdAt": "2025-01-01T00:00:03.000Z",
+        "updatedAt": "2025-01-01T00:00:04.000Z",
+        "title": "target-0",
+        "localizedTitle": "target-en-0",
+        "number": 0,
+        "kitchenRefs": {
+          "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+          "hasNextPage": false
+        },
+        "kitchenArrayRefs": {
+          "docs": ["<oid:129>", "<oid:45>"],
+          "hasNextPage": false
+        },
+        "localizedRefs": {
+          "docs": ["<oid:66>"],
+          "hasNextPage": false
+        },
+        "id": "<oid:1>"
+      },
+      "array": [
+        {
+          "text": "v1",
+          "id": "<oid:139>"
+        }
+      ],
+      "_status": "draft",
+      "id": "<oid:140>"
+    },
+    "draftRead": {
+      "title": "autosave-2",
+      "localizedTitle": "v1-en",
+      "rel": {
+        "createdAt": "2025-01-01T00:00:03.000Z",
+        "updatedAt": "2025-01-01T00:00:04.000Z",
+        "title": "target-0",
+        "localizedTitle": "target-en-0",
+        "number": 0,
+        "kitchenRefs": {
+          "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+          "hasNextPage": false
+        },
+        "kitchenArrayRefs": {
+          "docs": ["<oid:129>", "<oid:45>"],
+          "hasNextPage": false
+        },
+        "localizedRefs": {
+          "docs": ["<oid:66>"],
+          "hasNextPage": false
+        },
+        "id": "<oid:1>"
+      },
+      "array": [
+        {
+          "text": "v1",
+          "id": "<oid:139>"
+        }
+      ],
+      "updatedAt": "2025-01-01T00:07:39.000Z",
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "_status": "draft",
+      "id": "<oid:140>"
+    },
+    "queryDrafts": {
+      "docs": [
+        {
+          "title": "autosave-2",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:39.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft",
+          "id": "<oid:140>"
+        }
+      ],
+      "totalDocs": 1,
+      "limit": 10,
+      "totalPages": 1,
+      "page": 1,
+      "pagingCounter": 1,
+      "hasPrevPage": false,
+      "hasNextPage": false,
+      "prevPage": null,
+      "nextPage": null
+    },
+    "queryDraftsWhere": {
+      "docs": [
+        {
+          "title": "autosave-2",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:39.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft",
+          "id": "<oid:140>"
+        }
+      ],
+      "totalDocs": 1,
+      "limit": 10,
+      "totalPages": 1,
+      "page": 1,
+      "pagingCounter": 1,
+      "hasPrevPage": false,
+      "hasNextPage": false,
+      "prevPage": null,
+      "nextPage": null
+    },
+    "publishedWhere": {
+      "docs": [],
+      "totalDocs": 0,
+      "limit": 10,
+      "totalPages": 1,
+      "page": 1,
+      "pagingCounter": 1,
+      "hasPrevPage": false,
+      "hasNextPage": false,
+      "prevPage": null,
+      "nextPage": null
+    },
+    "publish": {
+      "title": "published-2",
+      "localizedTitle": "v1-en",
+      "rel": {
+        "createdAt": "2025-01-01T00:00:03.000Z",
+        "updatedAt": "2025-01-01T00:00:04.000Z",
+        "title": "target-0",
+        "localizedTitle": "target-en-0",
+        "number": 0,
+        "kitchenRefs": {
+          "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+          "hasNextPage": false
+        },
+        "kitchenArrayRefs": {
+          "docs": ["<oid:129>", "<oid:45>"],
+          "hasNextPage": false
+        },
+        "localizedRefs": {
+          "docs": ["<oid:66>"],
+          "hasNextPage": false
+        },
+        "id": "<oid:1>"
+      },
+      "array": [
+        {
+          "text": "v1",
+          "id": "<oid:139>"
+        }
+      ],
+      "updatedAt": "2025-01-01T00:07:41.000Z",
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "_status": "published",
+      "id": "<oid:140>"
+    }
+  },
+  "findVersions": {
+    "docs": [
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "published-2",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:41.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "published"
+        },
+        "createdAt": "2025-01-01T00:07:41.000Z",
+        "updatedAt": "2025-01-01T00:07:41.000Z",
+        "latest": true,
+        "autosave": false,
+        "id": "<oid:141>"
+      },
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "autosave-2",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:39.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:39.000Z",
+        "updatedAt": "2025-01-01T00:07:39.000Z",
+        "autosave": false,
+        "id": "<oid:142>"
+      },
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "autosave-2",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:38.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:37.000Z",
+        "updatedAt": "2025-01-01T00:07:38.000Z",
+        "autosave": true,
+        "id": "<oid:143>"
+      },
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "draft-1",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:36.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:36.000Z",
+        "updatedAt": "2025-01-01T00:07:36.000Z",
+        "autosave": false,
+        "id": "<oid:144>"
+      },
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "v1",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:35.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:35.000Z",
+        "updatedAt": "2025-01-01T00:07:35.000Z",
+        "autosave": false,
+        "id": "<oid:145>"
+      }
+    ],
+    "totalDocs": 5,
+    "limit": 10,
+    "totalPages": 1,
+    "page": 1,
+    "pagingCounter": 1,
+    "hasPrevPage": false,
+    "hasNextPage": false,
+    "prevPage": null,
+    "nextPage": null
+  },
+  "findVersions where latest": {
+    "docs": [
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "published-2",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:41.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "published"
+        },
+        "createdAt": "2025-01-01T00:07:41.000Z",
+        "updatedAt": "2025-01-01T00:07:41.000Z",
+        "latest": true,
+        "autosave": false,
+        "id": "<oid:141>"
+      }
+    ],
+    "totalDocs": 1,
+    "limit": 10,
+    "totalPages": 1,
+    "page": 1,
+    "pagingCounter": 1,
+    "hasPrevPage": false,
+    "hasNextPage": false,
+    "prevPage": null,
+    "nextPage": null
+  },
+  "findVersions where version.title": {
+    "docs": [
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "autosave-2",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:39.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:39.000Z",
+        "updatedAt": "2025-01-01T00:07:39.000Z",
+        "autosave": false,
+        "id": "<oid:142>"
+      },
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "autosave-2",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:38.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:37.000Z",
+        "updatedAt": "2025-01-01T00:07:38.000Z",
+        "autosave": true,
+        "id": "<oid:143>"
+      }
+    ],
+    "totalDocs": 2,
+    "limit": 10,
+    "totalPages": 1,
+    "page": 1,
+    "pagingCounter": 1,
+    "hasPrevPage": false,
+    "hasNextPage": false,
+    "prevPage": null,
+    "nextPage": null
+  },
+  "countVersions": {
+    "totalDocs": 5
+  },
+  "findVersionByID + restore": {
+    "after": {
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "updatedAt": "2025-01-01T00:07:47.000Z",
+      "title": "v1",
+      "localizedTitle": "v1-en",
+      "rel": {
+        "createdAt": "2025-01-01T00:00:03.000Z",
+        "updatedAt": "2025-01-01T00:00:04.000Z",
+        "title": "target-0",
+        "localizedTitle": "target-en-0",
+        "number": 0,
+        "kitchenRefs": {
+          "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+          "hasNextPage": false
+        },
+        "kitchenArrayRefs": {
+          "docs": ["<oid:129>", "<oid:45>"],
+          "hasNextPage": false
+        },
+        "localizedRefs": {
+          "docs": ["<oid:66>"],
+          "hasNextPage": false
+        },
+        "id": "<oid:1>"
+      },
+      "array": [
+        {
+          "text": "v1",
+          "id": "<oid:139>"
+        }
+      ],
+      "_status": "draft",
+      "id": "<oid:140>"
+    },
+    "byID": {
+      "parent": "<oid:140>",
+      "version": {
+        "title": "v1",
+        "localizedTitle": "v1-en",
+        "rel": {
+          "createdAt": "2025-01-01T00:00:03.000Z",
+          "updatedAt": "2025-01-01T00:00:04.000Z",
+          "title": "target-0",
+          "localizedTitle": "target-en-0",
+          "number": 0,
+          "kitchenRefs": {
+            "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+            "hasNextPage": false
+          },
+          "kitchenArrayRefs": {
+            "docs": ["<oid:129>", "<oid:45>"],
+            "hasNextPage": false
+          },
+          "localizedRefs": {
+            "docs": ["<oid:66>"],
+            "hasNextPage": false
+          },
+          "id": "<oid:1>"
+        },
+        "array": [
+          {
+            "text": "v1",
+            "id": "<oid:139>"
+          }
+        ],
+        "updatedAt": "2025-01-01T00:07:35.000Z",
+        "createdAt": "2025-01-01T00:07:35.000Z",
+        "_status": "draft"
+      },
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "updatedAt": "2025-01-01T00:07:35.000Z",
+      "autosave": false,
+      "id": "<oid:145>"
+    },
+    "restored": {
+      "title": "v1",
+      "localizedTitle": "v1-en",
+      "rel": {
+        "createdAt": "2025-01-01T00:00:03.000Z",
+        "updatedAt": "2025-01-01T00:00:04.000Z",
+        "title": "target-0",
+        "localizedTitle": "target-en-0",
+        "number": 0,
+        "kitchenRefs": {
+          "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+          "hasNextPage": false
+        },
+        "kitchenArrayRefs": {
+          "docs": ["<oid:129>", "<oid:45>"],
+          "hasNextPage": false
+        },
+        "localizedRefs": {
+          "docs": ["<oid:66>"],
+          "hasNextPage": false
+        },
+        "id": "<oid:1>"
+      },
+      "array": [
+        {
+          "text": "v1",
+          "id": "<oid:139>"
+        }
+      ],
+      "updatedAt": "2025-01-01T00:07:47.000Z",
+      "createdAt": "2025-01-01T00:07:35.000Z",
+      "_status": "draft",
+      "id": "<oid:140>"
+    }
+  },
+  "maxPerDoc enforcement": {
+    "docs": [
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "bulk-5",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:54.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:54.000Z",
+        "updatedAt": "2025-01-01T00:07:54.000Z",
+        "latest": true,
+        "autosave": false,
+        "id": "<oid:146>"
+      },
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "bulk-4",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:53.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:53.000Z",
+        "updatedAt": "2025-01-01T00:07:53.000Z",
+        "autosave": false,
+        "id": "<oid:147>"
+      },
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "bulk-3",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:52.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:52.000Z",
+        "updatedAt": "2025-01-01T00:07:52.000Z",
+        "autosave": false,
+        "id": "<oid:148>"
+      },
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "bulk-2",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:51.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:51.000Z",
+        "updatedAt": "2025-01-01T00:07:51.000Z",
+        "autosave": false,
+        "id": "<oid:149>"
+      },
+      {
+        "parent": "<oid:140>",
+        "version": {
+          "title": "bulk-1",
+          "localizedTitle": "v1-en",
+          "rel": {
+            "createdAt": "2025-01-01T00:00:03.000Z",
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": ["<oid:129>", "<oid:45>", "<oid:15>"],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": ["<oid:129>", "<oid:45>"],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": ["<oid:66>"],
+              "hasNextPage": false
+            },
+            "id": "<oid:1>"
+          },
+          "array": [
+            {
+              "text": "v1",
+              "id": "<oid:139>"
+            }
+          ],
+          "updatedAt": "2025-01-01T00:07:50.000Z",
+          "createdAt": "2025-01-01T00:07:35.000Z",
+          "_status": "draft"
+        },
+        "createdAt": "2025-01-01T00:07:50.000Z",
+        "updatedAt": "2025-01-01T00:07:50.000Z",
+        "autosave": false,
+        "id": "<oid:150>"
+      }
+    ],
+    "totalDocs": 5,
+    "limit": 20,
+    "totalPages": 1,
+    "page": 1,
+    "pagingCounter": 1,
+    "hasPrevPage": false,
+    "hasNextPage": false,
+    "prevPage": null,
+    "nextPage": null
+  },
+  "versioned (no drafts) collection": {
+    "doc": {
+      "createdAt": "2025-01-01T00:07:55.000Z",
+      "updatedAt": "2025-01-01T00:07:57.000Z",
+      "title": "v2",
+      "localizedTitle": {
+        "en": "en",
+        "es": "es"
+      },
+      "id": "<oid:151>"
+    },
+    "versions": {
+      "docs": [
+        {
+          "parent": "<oid:151>",
+          "version": {
+            "title": "v1",
+            "localizedTitle": {
+              "en": "en"
+            },
+            "updatedAt": "2025-01-01T00:07:55.000Z",
+            "createdAt": "2025-01-01T00:07:55.000Z"
+          },
+          "createdAt": "2025-01-01T00:07:55.000Z",
+          "updatedAt": "2025-01-01T00:07:55.000Z",
+          "id": "<oid:152>"
+        },
+        {
+          "parent": "<oid:151>",
+          "version": {
+            "title": "v2",
+            "localizedTitle": {
+              "en": "en"
+            },
+            "updatedAt": "2025-01-01T00:07:56.000Z",
+            "createdAt": "2025-01-01T00:07:55.000Z"
+          },
+          "createdAt": "2025-01-01T00:07:56.000Z",
+          "updatedAt": "2025-01-01T00:07:56.000Z",
+          "id": "<oid:153>"
+        },
+        {
+          "parent": "<oid:151>",
+          "version": {
+            "title": "v2",
+            "localizedTitle": {
+              "en": "en",
+              "es": "es"
+            },
+            "updatedAt": "2025-01-01T00:07:57.000Z",
+            "createdAt": "2025-01-01T00:07:55.000Z"
+          },
+          "createdAt": "2025-01-01T00:07:57.000Z",
+          "updatedAt": "2025-01-01T00:07:57.000Z",
+          "id": "<oid:154>"
+        }
+      ],
+      "totalDocs": 3,
+      "limit": 10,
+      "totalPages": 1,
+      "page": 1,
+      "pagingCounter": 1,
+      "hasPrevPage": false,
+      "hasNextPage": false,
+      "prevPage": null,
+      "nextPage": null
+    }
+  }
+}

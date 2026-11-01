@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use payload_engine::error::{EngineError, Result};
-use payload_engine::js::{JsVal, Obj, TypedValue};
+use payload_engine::js::{Items, JsVal, Obj, Props, TypedValue};
 
 use crate::js::{OBJECT_PROTOTYPE_KEYS, is_array_index, js_insert, to_js_string, type_error};
 
@@ -360,9 +360,9 @@ impl Heap {
     // Registered before the contents are exported, so references from inside (cycles) get the
     // same container.
     if node.is_array {
-      let mut target = Arc::new(Vec::new());
+      let mut target = Arc::new(Items::default());
       memo.insert(id, JsVal::Arr(target.clone()));
-      let items: Vec<JsVal> = node.items.iter().map(|item| self.export_with(item, memo)).collect();
+      let items = Items::from(node.items.iter().map(|item| self.export_with(item, memo)).collect::<Vec<_>>());
       memo.remove(&id);
       match Arc::get_mut(&mut target) {
         Some(slot) => *slot = items,
@@ -372,9 +372,9 @@ impl Heap {
       memo.insert(id, JsVal::Arr(target.clone()));
       JsVal::Arr(target)
     } else {
-      let mut target = Arc::new(Obj::new());
+      let mut target = Arc::new(Props::default());
       memo.insert(id, JsVal::Obj(target.clone()));
-      let props: Obj = node.props.iter().map(|(k, item)| (k.clone(), self.export_with(item, memo))).collect();
+      let props = Props::from(node.props.iter().map(|(k, item)| (k.clone(), self.export_with(item, memo))).collect::<Obj>());
       memo.remove(&id);
       match Arc::get_mut(&mut target) {
         Some(slot) => *slot = props,

@@ -30,7 +30,7 @@ use napi::{Env, JsValue, Result, sys};
 use napi_derive::napi;
 use payload_engine::error::EngineError;
 use payload_engine::host::Host;
-use payload_engine::js::{JsVal, decode_graph};
+use payload_engine::js::{JsVal, decode_graph_typed};
 use payload_sql_engine::SqliteEngine as Engine;
 use payload_sql_engine::stepped::{Step, SteppedCall};
 use payload_sqlite::worker;
@@ -45,7 +45,9 @@ fn to_napi_error(error: EngineError) -> napi::Error {
 }
 
 /// Calls registered JS functions through `callFunction(id, argJson)`, which returns the result
-/// encoded with `serializeForEngine` (or `{ $hostError }` when the function threw).
+/// encoded with `serializeForEngine` (or `{ $hostError }` when the function threw). Results are
+/// decoded typed: a `Date` or `bigint` a custom column's `fromDriver` / `toDriver` returns stays one
+/// (decoded like drizzle returns it, bound like libsql's `valueToSql` binds it).
 struct CallbackHost<'a, 'env> {
   callback: &'a Function<'env, FnArgs<(u32, String)>, String>,
 }
@@ -61,7 +63,7 @@ impl Host for CallbackHost<'_, '_> {
     if graph.get("$hostError").is_some() {
       return Err(EngineError::new("HostError", format!("JS function {id} threw")));
     }
-    decode_graph(&graph)
+    decode_graph_typed(&graph)
   }
 }
 
@@ -106,14 +108,20 @@ impl SqliteEngineJs {
   }
 
   /// The live schema after the schema hooks (`{ drizzle, rawTables? }`, see
-  /// `SqliteEngine::set_live_schema`). Must be called before the first `call` (during `init`).
+  /// `SqliteEngine::set_live_schema`). Calls already in progress finish on the schema they started
+  /// with (like TS calls that captured the previous drizzle instance); later calls use the new one.
   #[napi]
   pub fn set_live_schema(&mut self, description_json: String) -> Result<()> {
     let description = parse_json(&description_json, "live schema").map_err(to_napi_error)?;
-    let engine = Arc::get_mut(&mut self.engine).ok_or_else(|| {
-      to_napi_error(EngineError::internal("setLiveSchema: engine calls are in progress"))
-    })?;
-    engine.set_live_schema(&description).map_err(to_napi_error)
+    match Arc::get_mut(&mut self.engine) {
+      Some(engine) => engine.set_live_schema(&description).map_err(to_napi_error),
+      None => {
+        let mut engine = (*self.engine).clone();
+        engine.set_live_schema(&description).map_err(to_napi_error)?;
+        self.engine = Arc::new(engine);
+        Ok(())
+      }
+    }
   }
 
   /// Tells the engine which payload-sqlite client belongs to this adapter: `call` then rejects

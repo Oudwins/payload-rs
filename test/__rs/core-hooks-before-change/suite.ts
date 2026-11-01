@@ -474,12 +474,14 @@ export const registerBeforeChangeSuite = ({
             }
             for (const set of sets) {
               const inputJSON = JSON.stringify(set.factory())
-              // beforeChange (sequential, concurrent), then the exported traverseFields
+              // beforeChange (sequential, concurrent), then the exported traverseFields with root
+              // and with nested-call arguments
               for (const [concurrent, traverse] of [
                 [false, false],
                 [true, false],
                 [false, true],
-              ]) {
+                [false, 'nested'],
+              ] as [boolean, 'nested' | boolean][]) {
                 const run = (engine: 'rs' | 'ts'): Promise<RunOutcome> =>
                   runBeforeChange({
                     collection: target.collection,
@@ -518,7 +520,7 @@ export const registerBeforeChangeSuite = ({
                 )
                 if (diff) {
                   stats.diffs.push(
-                    `${target.slug} [${variant.name}, ${set.label}${concurrent ? ', concurrent' : ''}${traverse ? ', traverseFields' : ''}] ${diff}`,
+                    `${target.slug} [${variant.name}, ${set.label}${concurrent ? ', concurrent' : ''}${traverse ? `, traverseFields${traverse === 'nested' ? ' nested' : ''}` : ''}] ${diff}`,
                   )
                 }
               }

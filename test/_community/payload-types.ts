@@ -62,24 +62,24 @@ export type SupportedTimezones =
   | 'Pacific/Fiji';
 /**
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "LexicalNodes_B3F9E488".
+ * via the `definition` "LexicalNodes_5A95F605".
  */
-export type LexicalNodes_B3F9E488 =
+export type LexicalNodes_5A95F605 =
   | SerializedTextNode
   | SerializedTabNode
   | SerializedLineBreakNode
-  | SerializedParagraphNode<LexicalNodes_B3F9E488>
+  | SerializedParagraphNode<LexicalNodes_5A95F605>
   | SerializedHorizontalRuleNode
   | SerializedUploadNode<'media'>
-  | SerializedQuoteNode<LexicalNodes_B3F9E488>
+  | SerializedQuoteNode<LexicalNodes_5A95F605>
   | SerializedRelationshipNode<
       'posts' | 'payload-kv' | 'users' | 'payload-locked-documents' | 'payload-preferences' | 'payload-migrations'
     >
-  | SerializedAutoLinkNode<LexicalNodes_B3F9E488, LexicalLinkFields>
-  | SerializedLinkNode<LexicalNodes_B3F9E488, LexicalLinkFields>
-  | SerializedListNode<LexicalNodes_B3F9E488>
-  | SerializedListItemNode<LexicalNodes_B3F9E488>
-  | SerializedHeadingNode<LexicalNodes_B3F9E488>;
+  | SerializedAutoLinkNode<LexicalNodes_5A95F605, LexicalLinkFields>
+  | SerializedLinkNode<LexicalNodes_5A95F605, LexicalLinkFields>
+  | SerializedListNode<LexicalNodes_5A95F605>
+  | SerializedListItemNode<LexicalNodes_5A95F605>
+  | SerializedHeadingNode<LexicalNodes_5A95F605>;
 /**
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "LexicalNodes_3DE324E4".
@@ -120,7 +120,7 @@ export interface Config {
     'payload-llm-instructions': PayloadLlmInstructionsSelect<false> | PayloadLlmInstructionsSelect<true>;
   };
   db: {
-    defaultIDType: number;
+    defaultIDType: string;
   };
   fallbackLocale: null;
   globals: {
@@ -166,16 +166,16 @@ export interface UserAuthOperations {
  * via the `definition` "posts".
  */
 export interface Post {
-  id: number;
+  id: string;
   title?: string | null;
-  content?: LexicalRichText<LexicalNodes_B3F9E488> | null;
+  content?: LexicalRichText<LexicalNodes_5A95F605> | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -185,14 +185,14 @@ export interface Post {
  * via the `definition` "users".
  */
 export interface User {
-  id: number;
+  id: string;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -219,14 +219,14 @@ export interface User {
  * via the `definition` "media".
  */
 export interface Media {
-  id: number;
+  id: string;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -287,7 +287,7 @@ export interface Media {
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
-  id: number;
+  id: string;
   key: string;
   data:
     | {
@@ -304,24 +304,24 @@ export interface PayloadKv {
  * via the `definition` "payload-locked-documents".
  */
 export interface PayloadLockedDocument {
-  id: number;
+  id: string;
   document?:
     | ({
         relationTo: 'posts';
-        value: number | Post;
+        value: string | Post;
       } | null)
     | ({
         relationTo: 'media';
-        value: number | Media;
+        value: string | Media;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   globalSlug?: string | null;
   user: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   };
   updatedAt: string;
   createdAt: string;
@@ -331,10 +331,10 @@ export interface PayloadLockedDocument {
  * via the `definition` "payload-preferences".
  */
 export interface PayloadPreference {
-  id: number;
+  id: string;
   user: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   };
   key?: string | null;
   value?:
@@ -354,7 +354,7 @@ export interface PayloadPreference {
  * via the `definition` "payload-migrations".
  */
 export interface PayloadMigration {
-  id: number;
+  id: string;
   name?: string | null;
   batch?: number | null;
   updatedAt: string;
@@ -373,11 +373,11 @@ export interface PayloadLlmInstruction {
   systemInstructions?: LexicalRichText<LexicalNodes_3DE324E4> | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -551,15 +551,15 @@ export interface PayloadLlmInstructionsSelect<T extends boolean = true> {
  * via the `definition` "menu".
  */
 export interface Menu {
-  id: number;
+  id: string;
   globalText?: string | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt?: string | null;
   createdAt?: string | null;

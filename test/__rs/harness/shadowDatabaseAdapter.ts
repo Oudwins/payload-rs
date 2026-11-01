@@ -43,9 +43,22 @@ export const candidateURL = (url = referenceURL()) => {
   return ext ? `${url.slice(0, -ext.length)}.candidate${ext}` : `${url}.candidate`
 }
 
-/** Same options as the `sqlite` entry of test/dbAdapters.ts. */
-export const sqliteArgs = (url: string) =>
-  ({ autoIncrement: true, client: { url } }) satisfies Parameters<SqliteAdapterFactory>[0]
+/**
+ * Same options as the test/dbAdapters.ts entry PAYLOAD_DATABASE selects: `sqlite-uuid` /
+ * `sqlite-uuidv7` (`idType`), otherwise `sqlite` (also for `sqlite-shadow`). With
+ * PAYLOAD_RS_SQLITE_TRANSACTIONS=true plus `transactionOptions: {}`, which is how users enable
+ * transactions on sqlite (the matrix variant `transactions`, test/__rs/adapter/runSuites.mjs).
+ */
+export const sqliteArgs = (url: string): Parameters<SqliteAdapterFactory>[0] => {
+  const database = process.env.PAYLOAD_DATABASE
+  const args: Parameters<SqliteAdapterFactory>[0] =
+    database === 'sqlite-uuid' || database === 'sqlite-uuidv7'
+      ? { client: { url }, idType: database === 'sqlite-uuid' ? 'uuid' : 'uuidv7' }
+      : { autoIncrement: true, client: { url } }
+  return process.env.PAYLOAD_RS_SQLITE_TRANSACTIONS === 'true'
+    ? { ...args, transactionOptions: {} }
+    : args
+}
 
 /**
  * The upstream TS `sqliteAdapter`, even when PAYLOAD_ENGINE=rs is set (which

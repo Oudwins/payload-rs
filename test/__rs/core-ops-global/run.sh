@@ -4,7 +4,8 @@
 # SQLite file, with RS_OPS_GLOBAL_TRACE recording every global / auth operation case (trace.ts):
 #
 #   ts   reference: PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE / PAYLOAD_OPS_GLOBAL_ENGINE unset (all TS)
-#   ts2  the reference again (cases where TS differs from itself are counted as unstable)
+#   ts2  the reference again (a candidate case that differs from ts is accepted only when it equals
+#        another reference run, see compare.mjs)
 #   rs   PAYLOAD_OPS_GLOBAL_ENGINE=rs: the Rust global / auth operations, everything else TS
 #
 # then compare.mjs (exits non-zero on any diff, on a changed test outcome, on a missing report,
@@ -14,8 +15,9 @@
 #     test/__rs/core-ops-global/run.sh globals versions auth
 #
 # OUT (default /tmp/rs-ops-global), DB (default /tmp/rs-ops-global-auth.db), MODES (default
-# "ts ts2 rs"; add `full` for PAYLOAD_ENGINE=rs: Rust SQL engine, traversals and all operations),
-# RS_OPS_GLOBAL_MUTANT (rs / full runs only), TZ (default UTC).
+# "ts ts2 rs"), RS_OPS_GLOBAL_MUTANT (rs runs only), TZ (default UTC). The whole Rust engine
+# (PAYLOAD_ENGINE=rs) is checked by the upstream suites (test/__rs/adapter/runSuites.mjs), not
+# here: its SQL adapter settles after a different number of microtasks, which these traces record.
 set -u
 source /tmp/penv.sh
 cd "$(dirname "$0")/../../.."
@@ -25,6 +27,15 @@ DB=${DB:-/tmp/rs-ops-global-auth.db}
 MUTANT=${RS_OPS_GLOBAL_MUTANT:-}
 unset RS_OPS_GLOBAL_MUTANT
 mkdir -p "$OUT"
+# RS_CORE_DB=mongodb: the same runs on MongoDB (test/__rs/core-mongo), each mode on its own
+# database (named after the run, dropped afterwards).
+CONFIG=test/__rs/core-ops-global/vitest.config.ts
+SCRIPT=test:int:sqlite
+if [ "${RS_CORE_DB:-sqlite}" = mongodb ]; then
+  export PAYLOAD_DATABASE=mongodb
+  CONFIG=test/__rs/core-mongo/vitest.core-ops-global.config.ts
+  SCRIPT=test:int
+fi
 for suite in "$@"; do
   spec="test/$suite/int.spec.ts"
   [ -f "$spec" ] || spec="$suite"
@@ -37,14 +48,16 @@ for suite in "$@"; do
       unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE PAYLOAD_OPS_GLOBAL_ENGINE
       case "$mode" in
         rs) export PAYLOAD_OPS_GLOBAL_ENGINE=rs ;;
-        full) export PAYLOAD_ENGINE=rs ;;
       esac
       if [ -n "$MUTANT" ] && [ "$mode" != ts ] && [ "$mode" != ts2 ]; then
         export RS_OPS_GLOBAL_MUTANT=$MUTANT
       fi
+      mongo_db="coremongo_opsg_${tag//[^a-zA-Z0-9]/_}_${mode}_$$"
       RS_OPS_GLOBAL_TRACE="$OUT/$mode/$tag" SQLITE_URL="file:$DB" \
-        pnpm test:int:sqlite --config test/__rs/core-ops-global/vitest.config.ts "$spec" \
+        MONGODB_URL="$(node test/__rs/core-mongo/db.mjs url "$mongo_db")" \
+        pnpm "$SCRIPT" --config "$CONFIG" "$spec" \
         --reporter=json --outputFile="$OUT/$mode/$tag/report.json" > "$OUT/$mode/$tag/vitest.log" 2>&1
+      [ "$PAYLOAD_DATABASE" = mongodb ] && node test/__rs/core-mongo/db.mjs drop "$mongo_db"
     )
     echo "$suite $mode: $(node -e 'const r=require(process.argv[1]);console.log(`passed ${r.numPassedTests} failed ${r.numFailedTests} pending ${r.numPendingTests+r.numTodoTests}`)' "$OUT/$mode/$tag/report.json" 2>/dev/null || echo 'no report')"
   done

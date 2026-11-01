@@ -1338,7 +1338,7 @@ pub struct MergeLocaleState {
 }
 
 unsafe extern "C" fn finalize_state(env: sys::napi_env, data: *mut c_void, _hint: *mut c_void) {
-  js::set_env(env);
+  js::set_env_uncounted(env);
   drop(unsafe { Box::from_raw(data as *mut MergeLocaleState) });
 }
 

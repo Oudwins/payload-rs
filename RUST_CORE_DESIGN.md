@@ -257,16 +257,16 @@ interleaving between documents and hooks).
   so the engine traverses the children inline and pushes a settled promise (`pushSettled`;
   rejected if the nested traversal threw).
 - **Hooked plain leaves** (`hooked_leaf`, flag `HOOKED`): a plain leaf except for its hooks
-  (data field, `afterRead` hooks) has a `promise()` that only does the plain leaf reads, calls and
-  awaits the hooks, and maybe awaits `getDefaultValue`. The host runs it as one JS `async`
-  function (`hookedLeaf`) whose body is that part of `promise.ts`: `getFieldPaths`, the
-  `leafPrologue` reads, `for (const hook of field.hooks.afterRead)` with the same args literal and
-  `await`, the `leafEpilogue` check and `await getDefaultValue(...)` (the upstream function).
-  `FieldsDesc::plan` puts hooked leaves into runs (`Segment::Run(start, end, hooked)`), so
-  `leafRun` calls `hookedLeaf` where `traverseFields` calls `promise()` and pushes its promise; a
-  rows array whose fields are all plain or hooked leaves still goes through `leafRows`, which
-  passes the row paths (`path + '.' + rowIndex`, `schemaPath`). No Rust task, native promise or
-  resume per hooked field remains: V8 runs the hooks loop inline, as upstream does.
+  (data field, `afterRead` hooks). `FieldsDesc::plan` puts hooked leaves into runs
+  (`Segment::Run(start, end, hooked)`), and `leafRun` calls **upstream's own `promise()`**
+  (`afterRead/promise.ts`, imported by the glue) for such a field, with the args literal
+  `traverseFields` builds (the `afterReadArgs` values, the traversal's `blockData`, `fields`,
+  parent paths, `fieldDepth`, `parentIsLocalized`, `select`, `selectMode`, `triggerAccessControl`
+  / `triggerHooks` `true`), and pushes its promise; a rows array whose fields are all plain or
+  hooked leaves still goes through `leafRows`, which passes the row paths
+  (`path + '.' + rowIndex`, `schemaPath`) and the rows' `fieldDepth` / `parentIsLocalized` /
+  `selectMode`. No copy of upstream code and no Rust task, native promise or resume per hooked
+  field remains: V8 runs upstream's function, hooks loop included.
 - **`executor::await_call(helper, args)`**: `await f(...)` where the host helper builds the args,
   makes the call and passes the result to `awaitValue` (one napi call instead of three). A
   synchronous throw completes the await with that error without a tick, exactly like a throw
@@ -302,33 +302,34 @@ await/resume round trip:
 The body returns `Tail::Await(x, v)` / `Tail::Return(v)`; mutation test:
 `mutant-tail-skip-tick` (feature of payload-core-runtime: return `x` itself, one tick less).
 
-### Leaf fields of the other traversals run upstream's `promise()` in JS
+### Leaf fields of the other traversals run upstream's own `promise()` in JS
 
 For beforeValidate, beforeChange, afterChange and beforeDuplicate, every field whose type is not
 `array`, `blocks`, `collapsible`, `group`, `richText`, `row`, `tab` or `tabs` (`is_leaf` in each
-crate: no subfield traversal, no editor hooks) is a leaf. A leaf's `promise()` is a self-contained
-`async` function: sanitization, hooks, access, validation, fallback/default values, merge-locale
-actions. Each crate's `traverse_fields` hands every run of consecutive leaves to one host call
-(`beforeValidateLeaves`, `beforeChangeLeaves`, `afterChangeLeaves`, `beforeDuplicateLeaves`) that
-does `promises.push(leafPromise(...))` per field, in field order, into the traversal's own
-promises array; container fields stay Rust tasks between them. The leaf functions in
-`packages/engine-rs/src/runtime/*/` are upstream's `promise.ts` text, copied verbatim up to the
-subfield `switch` (beforeChange keeps its `point` case and copies the module-private
-`hasInvalidFieldValueShape`/`buildFieldLabel`), with the traversal-constant arguments read from a
-context array the crate builds once per call. Being the upstream code, a leaf is exact by
-construction (reads, writes, awaits, `for...of`, V8 messages); the differential suites check the
-dispatch around it (argument plumbing, order, promise count). Tab traversals (`field.tabs` copies)
-keep the ported path.
+crate: no subfield traversal, no editor hooks) is a leaf. Each crate's `traverse_fields` hands
+every run of consecutive leaves to one host call (`beforeValidateLeaves`, `beforeChangeLeaves`,
+`afterChangeLeaves`, `beforeDuplicateLeaves`) that does `promises.push(promise({...}))` per field,
+in field order, into the traversal's own promises array; container fields stay Rust tasks between
+them. `promise` there is **upstream's exported `promise` of
+`packages/payload/src/fields/hooks/<traversal>/promise.ts` itself** (imported by the glue in
+`packages/engine-rs/src/runtime/*/`), called with the args object upstream's `traverseFields`
+builds: same keys in the same order, with the traversal-constant values read from a context array
+the crate builds once per call (`[id, collection, context, ...]`) and the per-call ones
+(`blockData`, parent paths, `parentIsLocalized`, `siblingData`/`siblingDoc`, ...) passed by the
+crate. No copy of upstream code is involved, so a leaf is upstream by construction (reads,
+writes, awaits, `for...of`, V8 messages, module-private helpers such as beforeChange's
+`hasInvalidFieldValueShape`); the differential suites check the dispatch around it (argument
+plumbing, order, promise count). Tab traversals (`field.tabs` copies) keep the ported path.
 
 A `traverseFields` call whose fields array contains only leaves (rows of arrays/blocks of leaf
-fields, groups and collapsibles of leaves, collections without containers) runs upstream's
-`traverseFields.ts` body in JS as well (`beforeValidateLeafTraversal`, `beforeChangeLeafTraversal`,
-`afterChangeLeafTraversal`, `beforeDuplicateLeafTraversal`: `unflattenData` where upstream has it,
-`fields.forEach` pushing the leaf `promise()`, `await Promise.all(promises)`), called where the
-crate would spawn its `traverse_fields`. The crates keep the field promises of container fields
-(arrays, blocks, groups, collapsibles, rows, tabs, rich text) and every traversal that contains
-one. Mutation test: BV `M13` (the leaf traversal returns `Promise.all` without its own async
-function).
+fields, groups and collapsibles of leaves, collections without containers) calls **upstream's
+exported `traverseFields`** of the same module (`beforeValidateLeafTraversal`,
+`beforeChangeLeafTraversal`, `afterChangeLeafTraversal`, `beforeDuplicateLeafTraversal`: one
+host call with the args literal of the crate's call), where the crate would spawn its
+`traverse_fields`. The crates keep the field promises of container fields (arrays, blocks,
+groups, collapsibles, rows, tabs, rich text) and every traversal that contains one. Mutation
+test: BV `M13` (the leaf promises are pushed and `Promise.all` is returned without
+`traverseFields`' own async function).
 
 Nothing here changes what user code can observe: the same objects, the same property operations
 in the same order (checked with recording proxies, see section 4), the same calls with the same
@@ -550,6 +551,33 @@ napi trampolines, against ~5 µs for the same work in V8). beforeValidate's cont
 heaviest (sanitization reads, fallback/`isRestoringVersion` checks, hooks/access/`onFieldAccess`
 probes before every subfield traversal).
 
+**Phase F (leaves call upstream's own functions).** With the leaf copies replaced by upstream's
+`promise()` / `traverseFields` (section 3) and afterRead's hooked leaves calling upstream's
+`promise()`, `test/__rs/dispatch/bench.int.spec.ts` with the release build, RS/TS (CPU µs/doc RS
+vs TS), at machine load ~44 and then ~12:
+
+| traversal       | plain, load 44     | plain, load 12     | hooked, load 44    | hooked, load 12    |
+| --------------- | ------------------ | ------------------ | ------------------ | ------------------ |
+| beforeValidate  | 1.33 (167 / 125)   | 1.34 (96 / 72)     | 1.50 (207 / 138)   | 1.33 (125 / 94)    |
+| beforeChange    | 1.26 (2478 / 1965) | 1.14 (1294 / 1139) | 1.04 (1930 / 1847) | 1.01 (1450 / 1434) |
+| afterChange     | 1.35 (125 / 92)    | 1.29 (96 / 74)     | 1.24 (203 / 164)   | 1.29 (128 / 99)    |
+| afterRead       | 0.75 (64 / 86)     | 0.68 (48 / 70)     | 1.19 (162 / 137)   | 1.20 (99 / 83)     |
+| beforeDuplicate | 1.43 (106 / 74)    | 1.31 (77 / 59)     | 1.35 (153 / 113)   | 1.27 (97 / 76)     |
+
+The leaves now do exactly upstream's work, so their cost equals TS; what is above 1.0 is the
+container part that runs in Rust (Node-API crossings, see above). afterRead's hooked leaves lost
+the speed of the previous `hookedLeaf`, which skipped parts of `promise()` (it was a reduced
+copy, exact only for the fields the decoded config classified as hooked plain leaves); calling
+upstream's `promise()` is exact by construction instead (hooked afterRead went from 0.87 to 1.20).
+The numbers carry the ±0.15 noise noted above.
+
+Operations (release build, synthetic suites, summed test durations TS vs RS in separate
+processes, two rounds at load ~30 then ~12): read operations 12.5 / 8.3 s and 6.1 / 10.4 s, write
+operations 9.1 / 9.3 s and 9.9 / 7.7 s, global/auth operations 20.6 / 18.4 s and 15.5 / 15.0 s.
+Process-to-process noise on this shared machine is larger than the TS/RS difference: no
+operation family is measurably slower or faster than TS. Debug builds (what the differential
+runs use) are 1.5-2.5x slower; the checked-in `payload-engine.node` should be a release build.
+
 Optimization roadmap status:
 
 1. Batch descriptor-driven no-callback subtrees: done as plain-leaf runs, plain array rows and
@@ -563,7 +591,11 @@ Optimization roadmap status:
 
 - `payload-node` exports `coreRuntimeBinding()` (`crates/payload-node/src/runtime.rs`).
   `packages/engine-rs/src/runtime/index.ts` loads it from `PAYLOAD_CORE_RUNTIME_ADDON`, else
-  `PAYLOAD_ENGINE_ADDON`, else `packages/engine-rs/payload-engine.node`. It installs the host
+  `PAYLOAD_ENGINE_ADDON`, else `packages/engine-rs/payload-engine.node`, and checks its
+  `apiVersion` (crates/payload-core-runtime `binding::API_VERSION`, the host-helper contract of
+  the runtime and of the field hook crates built into the same addon) at load: an addon built
+  from other sources fails there with "rebuild it" instead of at the first missing or changed
+  helper. The operation bindings carry their own versions (RUST_OPS_DESIGN.md). It installs the host
   helpers once and exports `afterRead(args)`, a drop-in with the upstream signature. Host
   helpers and the bit layouts they share with the crate (`leaf_flags`, `leaf_run_bits`, the
   `afterReadArgs` indices) are defined next to each other in that file and in `config.rs` /
@@ -600,13 +632,15 @@ Optimization roadmap status:
   `getFieldByPath`, `combineQueries`, `prefixWherePaths` and `sanitizeWhereQuery` on live JS values
   with the same executor rules. `coreQueryBinding()` (payload-node, or the `query_addon` example)
   must come from the same addon file as `coreRuntimeBinding()` (shared executor and slot table);
-  its `init(host)` installs the helpers of `test/__rs/core-query/glue.ts` once per process (a
+  its `init(host)` installs the helpers of `packages/engine-rs/src/query/index.ts` once per process (a
   second `init` replaces them for every user of that addon instance). Destructuring patterns
   (`const { joinPath } = join`, the args of each export) and argument-dependent expressions
   (`getFieldByPath`'s `` `${localizedPath ? `${localizedPath}.` : ''}${segment}` `` in its first
   iteration, `incomingPath.replace(/__/g, '.')` for a non-string path) run as host code, so V8's
-  messages and ToString calls happen where upstream's do. payload selects it only through
-  `test/__rs/core-query/vitest.upstream.config.ts` (module redirects), not yet by flag.
+  messages and ToString calls happen where upstream's do. The Rust read operations call it
+  directly (`getCoreOps()` installs this host first); `test/__rs/core-query/glue.ts` re-exports
+  the module for the harnesses, and `test/__rs/core-query/vitest.upstream.config.ts` redirects
+  payload's query utilities to it for the upstream suites.
 - `engine-rs` imports `relationshipPopulationPromise`, `virtualFieldPopulationPromise` and the
   `afterRead` types from payload sources by relative path, because they are not exported (and
   engine-rs has no installed `payload` link). Exporting them from `payload/internal` would make
@@ -642,14 +676,32 @@ the file makes 0 engine calls). `test/lexical/lexical.int.spec.ts` alone through
 (`afterReadTraverseFields` 580, `beforeChangeTraverseFields` 75, `afterChangeTraverseFields` 75
 calls, 0 deferred).
 
+### MongoDB
+
+The core engine on `@payloadcms/db-mongodb` (TS mongoose adapter, `PAYLOAD_CORE_ENGINE=rs`) is
+verified in RUST_OPS_DESIGN.md section 8: upstream suites (`test/__rs/core-mongo/runSuites.mjs`),
+the in-process field hook and query differentials on a Mongo-backed payload
+(`test/__rs/core-mongo/runDifferentials.sh`), the operation shadow / trace harnesses with
+`RS_CORE_DB=mongodb`, and MongoDB-shaped inputs (`test/__rs/core-mongo/objectid/`). No core-crate
+change was needed. Network I/O makes the TS reference nondeterministic wherever upstream runs
+database work concurrently, so these harnesses deliver database results in call order
+(`RS_ORDERED_IO`, `test/__rs/dispatch/settle.ts`) and wait for in-flight database calls before a
+run is snapshotted.
+
 ### Differential harnesses: the reference is upstream TS
 
 The four harnesses (`core-runtime`, `core-hooks-{before-validate,before-change,after}`) import the
 `upstream<Name>` exports and upstream's `traverseFields` modules, never the dispatching exports,
 and `test/__rs/dispatch/engineGuard.ts` checks every run: a TS run must not call the Rust core
-engine at all (`stats().entries`, every exported engine function call except `stats`, plus
-`tasks`; this also catches nested dispatch such as relationship population reaching a Rust
-`afterRead` when `PAYLOAD_ENGINE` is set), and a Rust run must. The `run.sh` scripts unset
+engine at all, and a Rust run must. The count is `stats().entries + tasks`, where `entries` is
+every Node-API entry into any core crate of the addon (`js::set_env`: every export of the runtime,
+field hook, query and operation bindings, every native of the default validators, resume
+callbacks and native callbacks; GC finalizers use `set_env_uncounted`, and `stats` itself is
+taken back). So a reference run that reaches Rust in any way fails: nested dispatch such as
+relationship population reaching a Rust `afterRead`, or the Rust validators payload's
+`validations.ts` installs when `PAYLOAD_ENGINE`/`PAYLOAD_CORE_ENGINE` is set (checked:
+`PAYLOAD_CORE_ENGINE=rs` on the beforeChange synthetic suite fails with "the TS reference run
+called the Rust core engine 4 times"). The `run.sh` scripts unset
 `PAYLOAD_ENGINE`/`PAYLOAD_CORE_ENGINE`. Each harness also compares the exported `traverseFields`
 (TS vs the Rust entry) on the same inputs. The live query harness refuses to start when a TS
 reference function is the Rust port (e.g. under `vitest.upstream.config.ts`).
@@ -688,9 +740,11 @@ reference function is the Rust port (e.g. under `vitest.upstream.config.ts`).
 - Rich text sub-fields: other editors than lexical (and `recursivelyPopulateFieldsForGraphQL` in
   richtext-lexical, outside its hooks) still import payload's TS `*TraverseFields`. The
   afterRead entry does not model `triggerAccessControl`/`triggerHooks = false` and the entries do
-  not model non-string paths: those calls run upstream's `traverseFields` (exact, but TS). The
-  `beforeValidateTraverseFields` entry converts non-string paths with `String()`. Path strings
-  reach Rust as UTF-8 (a lone surrogate in a parent path would not round-trip).
+  not model non-string paths: those calls run upstream's `traverseFields` (exact, but TS; the
+  beforeValidate drop-in now destructures in TS like the others, checked by
+  `test/__rs/core-hooks-before-validate/entry.int.spec.ts` with Symbol/number/nullish/object
+  paths and a throwing getter). Path strings reach Rust as UTF-8 (a lone surrogate in a parent
+  path would not round-trip).
 - Live query port: a non-string path that has its own working `split` (getLocalizedPaths /
   getFieldByPath) or `replace` (exported validateSearchParam) raises an engine error after calling
   it, where upstream would continue with the returned value. Without such a method the V8

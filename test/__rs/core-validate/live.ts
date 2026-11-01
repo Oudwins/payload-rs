@@ -570,13 +570,16 @@ const scenarios: Scenario[] = [
           [Symbol('d'), {}],
         ].map(([name, siblingData]) => {
           try {
-            return fns.date(new Date(0) as any, {
-              name,
-              req: req(),
-              required: true,
-              siblingData,
-              timezone: true,
-            } as any)
+            return fns.date(
+              new Date(0) as any,
+              {
+                name,
+                req: req(),
+                required: true,
+                siblingData,
+                timezone: true,
+              } as any,
+            )
           } catch (err) {
             return `!${(err as Error).name}:${(err as Error).message}`
           }
@@ -625,24 +628,228 @@ const scenarios: Scenario[] = [
             fns.text('hello', { maxLength: 2, req: req() } as any),
             fns.array([1], { minRows: 3, req: req() } as any),
             fns.number(5, { max: 1, req: req() } as any),
-            await fns.relationship([1, 2] as any, {
-              filterOptions: () => ({ title: { equals: 'x' } }),
-              relationTo: 'posts',
-              req: req(),
-              siblingData: {},
-            } as any),
+            await fns.relationship(
+              [1, 2] as any,
+              {
+                filterOptions: () => ({ title: { equals: 'x' } }),
+                relationTo: 'posts',
+                req: req(),
+                siblingData: {},
+              } as any,
+            ),
             await fns.validateBlocksFilterOptions({
               filterOptions: ['a'],
               req: req(),
               value: [{ blockType: 'a' }, { blockType: 'b' }],
             } as any),
-            await fns.select(['a', 'a'] as any, { hasMany: true, options: ['a'], req: req() } as any),
+            await fns.select(
+              ['a', 'a'] as any,
+              { hasMany: true, options: ['a'], req: req() } as any,
+            ),
           ]
         } finally {
           for (const [target, key] of installed) {
             delete (target as any)[key]
           }
         }
+      },
+    }),
+  },
+  {
+    // `.push` is Array.prototype.push: `Set(O, len, v)` then `Set(O, 'length', len + 1)`, so a
+    // setter that defines nothing still grows the length; a getter-only index makes it throw.
+    name: '.push with an index setter that defines nothing / a getter-only index',
+    run: (fns, { log, req }) => ({
+      call: async () => {
+        const quietReq = () => ({
+          ...req(),
+          t: (key: string, vars?: unknown) => i18n.t(key as any, vars as any),
+        })
+        // No array writes while the index accessors are installed: results go into an object.
+        let results: Record<string, unknown> = {}
+        const capture = async (key: string, f: () => unknown) => {
+          try {
+            results[key] = await f()
+          } catch (err) {
+            results[key] = `!${(err as Error).name}:${(err as Error).message}`
+          }
+        }
+        const runAll = async () => {
+          await capture('select', () =>
+            fns.select(
+              ['a', 'a'] as any,
+              { hasMany: true, options: ['a'], req: quietReq() } as any,
+            ),
+          )
+          await capture('relationship', () =>
+            fns.relationship(
+              1 as any,
+              {
+                filterOptions: {},
+                relationTo: 'posts',
+                req: {
+                  ...quietReq(),
+                  payloadDataLoader: {
+                    find: (args: any) => {
+                      results.find = `${args.where.and[0].id.in.length} ${args.where.and.length}`
+                      return Promise.resolve({ docs: [] })
+                    },
+                  },
+                },
+                siblingData: {},
+              } as any,
+            ),
+          )
+          await capture('blocks', () =>
+            fns
+              .validateBlocksFilterOptions({
+                filterOptions: ['a'],
+                req: quietReq(),
+                value: [{ blockType: 'b' }],
+              } as any)
+              .then((r: any) => `${r.invalidBlockSlugs.length} ${r.allBlockSlugs.length}`),
+          )
+        }
+        const proto = Array.prototype as any
+        Object.defineProperty(proto, '0', { configurable: true, get() {}, set() {} })
+        try {
+          await runAll()
+        } finally {
+          delete proto['0']
+        }
+        const before = results
+        results = {}
+        Object.defineProperty(proto, '1', { configurable: true, get: () => 'getter' })
+        try {
+          await runAll()
+        } finally {
+          delete proto['1']
+        }
+        log('done')
+        return [before, results]
+      },
+    }),
+  },
+  {
+    // `event === 'onChange'` and isValidID's `type === 'number'` compare UTF-16 code units.
+    name: 'string literals against non-Latin-1 strings with the same low bytes',
+    run: (fns, { req }) => ({
+      call: async () => {
+        const out: unknown[] = []
+        out.push(
+          await fns.relationship(
+            'x' as any,
+            {
+              event: 'ůnChange',
+              filterOptions: {},
+              relationTo: 'posts',
+              req: req(),
+              siblingData: {},
+            } as any,
+          ),
+        )
+        const request = req()
+        request.payload.collections.posts.customIDType = 'nŵmber'
+        out.push(
+          await fns.relationship(
+            5 as any,
+            { event: 'onChange', relationTo: 'posts', req: request } as any,
+          ),
+        )
+        request.payload.collections.posts.customIDType = 'Ŵext'
+        out.push(
+          await fns.relationship(
+            'abc' as any,
+            { event: 'onChange', relationTo: 'posts', req: request } as any,
+          ),
+        )
+        return out
+      },
+    }),
+  },
+  {
+    // map / filter read the length before ArraySpeciesCreate's `constructor` read.
+    name: 'a constructor getter that resizes the array during .map / .filter',
+    run: (fns, { log, req }) => ({
+      call: async () => {
+        const rows: any[] = [{ blockType: 'a' }, { blockType: 'b' }]
+        Object.defineProperty(rows, 'constructor', {
+          get() {
+            log('constructor', rows.length)
+            if (rows.length < 4) {
+              rows.push({ blockType: 'c' })
+            }
+            return Array
+          },
+        })
+        const values: any[] = [1, 2]
+        Object.defineProperty(values, 'constructor', {
+          get() {
+            log('values constructor', values.length)
+            values.length = 1
+            return undefined
+          },
+        })
+        return [
+          await fns
+            .validateBlocksFilterOptions({ filterOptions: ['a'], req: req(), value: rows } as any)
+            .then((r: any) => [r.allBlockSlugs, r.invalidBlockSlugs]),
+          await fns.relationship(
+            values as any,
+            { event: 'onChange', relationTo: 'posts', req: req() } as any,
+          ),
+        ]
+      },
+    }),
+  },
+  {
+    // Array.isArray throws for a revoked proxy, where the TS calls it.
+    name: 'revoked proxies as the value and as relationTo (revoked by a getter between rows)',
+    run: (fns, { log, req }) => ({
+      call: async () => {
+        const out: unknown[] = []
+        const capture = async (f: () => unknown) => {
+          try {
+            out.push(await f())
+          } catch (err) {
+            out.push(`!${(err as Error).name}:${(err as Error).message}`)
+          }
+        }
+        const revokedValue = Proxy.revocable({ relationTo: 'posts', value: 1 }, {})
+        revokedValue.revoke()
+        await capture(() =>
+          fns.relationship(revokedValue.proxy as any, { relationTo: ['posts'], req: req() } as any),
+        )
+        await capture(() => fns.text(revokedValue.proxy as any, { req: req() } as any))
+        await capture(() =>
+          fns.json(revokedValue.proxy as any, { jsonSchema: {}, req: req() } as any),
+        )
+        const relationTo = Proxy.revocable(['posts'], {})
+        const rows = [
+          {
+            get relationTo() {
+              log('row 1 relationTo')
+              relationTo.revoke()
+              return 'posts'
+            },
+            value: 1,
+          },
+          { relationTo: 'posts', value: 2 },
+        ]
+        await capture(() =>
+          fns.relationship(
+            rows as any,
+            { event: 'onChange', relationTo: relationTo.proxy, req: req() } as any,
+          ),
+        )
+        const live = Proxy.revocable({ relationTo: 'posts', value: 'x' }, {})
+        await capture(() =>
+          fns.relationship(
+            live.proxy as any,
+            { event: 'onChange', relationTo: ['posts'], req: req() } as any,
+          ),
+        )
+        return out
       },
     }),
   },
@@ -664,17 +871,23 @@ const scenarios: Scenario[] = [
           fns.text('ab', { maxLength: 2, req: req() } as any),
           fns.number([1, 'x'] as any, { hasMany: true, req: req() } as any),
           fns.radio('b', { options: ['a', { value: 'b' }], req: req() } as any),
-          await fns.select(['a', 'a', 'b'] as any, {
-            hasMany: true,
-            options: ['a', 'b'],
-            req: req(),
-          } as any),
-          await fns.relationship([1, 9] as any, {
-            filterOptions: () => true,
-            relationTo: ['posts'],
-            req: req(),
-            siblingData: {},
-          } as any),
+          await fns.select(
+            ['a', 'a', 'b'] as any,
+            {
+              hasMany: true,
+              options: ['a', 'b'],
+              req: req(),
+            } as any,
+          ),
+          await fns.relationship(
+            [1, 9] as any,
+            {
+              filterOptions: () => true,
+              relationTo: ['posts'],
+              req: req(),
+              siblingData: {},
+            } as any,
+          ),
           await fns.validateBlocksFilterOptions({
             filterOptions: ['a'],
             req: req(),

@@ -13,9 +13,116 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use indexmap::IndexMap;
 use serde_json::Value as Json;
 
+pub use crate::bson::BsonValue;
+use crate::bson::{base64_decode, base64_encode, object_id_bytes_from_hex, object_id_to_hex};
 use crate::error::{EngineError, Result};
 
 pub type Obj = IndexMap<String, JsVal>;
+
+/// The items of a [`JsVal::Arr`] (derefs to `Vec<JsVal>`). Dropping it frees nested containers
+/// iteratively, so arbitrarily deep values (V8's `JSON.parse` has no depth limit) never overflow
+/// the stack.
+#[derive(Clone, Default)]
+pub struct Items(Vec<JsVal>);
+
+/// The properties of a [`JsVal::Obj`] (derefs to [`Obj`]); dropped iteratively like [`Items`].
+#[derive(Clone, Default)]
+pub struct Props(Obj);
+
+impl Items {
+  pub fn into_vec(mut self) -> Vec<JsVal> {
+    std::mem::take(&mut self.0)
+  }
+}
+
+impl Props {
+  pub fn into_obj(mut self) -> Obj {
+    std::mem::take(&mut self.0)
+  }
+}
+
+impl From<Vec<JsVal>> for Items {
+  fn from(items: Vec<JsVal>) -> Self {
+    Items(items)
+  }
+}
+
+impl From<Obj> for Props {
+  fn from(props: Obj) -> Self {
+    Props(props)
+  }
+}
+
+impl std::ops::Deref for Items {
+  type Target = Vec<JsVal>;
+  fn deref(&self) -> &Vec<JsVal> {
+    &self.0
+  }
+}
+
+impl std::ops::DerefMut for Items {
+  fn deref_mut(&mut self) -> &mut Vec<JsVal> {
+    &mut self.0
+  }
+}
+
+impl std::ops::Deref for Props {
+  type Target = Obj;
+  fn deref(&self) -> &Obj {
+    &self.0
+  }
+}
+
+impl std::ops::DerefMut for Props {
+  fn deref_mut(&mut self) -> &mut Obj {
+    &mut self.0
+  }
+}
+
+impl Drop for Items {
+  fn drop(&mut self) {
+    if self.0.iter().any(owns_nested) {
+      drop_iteratively(std::mem::take(&mut self.0));
+    }
+  }
+}
+
+impl Drop for Props {
+  fn drop(&mut self) {
+    if self.0.values().any(owns_nested) {
+      drop_iteratively(self.0.drain(..).map(|(_, v)| v).collect());
+    }
+  }
+}
+
+/// Whether dropping `value` frees a container that holds containers (a drop that would recurse).
+fn owns_nested(value: &JsVal) -> bool {
+  match value {
+    JsVal::Arr(a) => Arc::strong_count(a) == 1 && a.iter().any(|v| matches!(v, JsVal::Arr(_) | JsVal::Obj(_))),
+    JsVal::Obj(o) => Arc::strong_count(o) == 1 && o.values().any(|v| matches!(v, JsVal::Arr(_) | JsVal::Obj(_))),
+    _ => false,
+  }
+}
+
+/// Drops values without recursion: the contents of containers this is the last owner of are moved
+/// into the work list before the (then empty) container is freed.
+fn drop_iteratively(mut pending: Vec<JsVal>) {
+  while let Some(value) = pending.pop() {
+    match value {
+      JsVal::Arr(a) => {
+        if let Some(mut items) = Arc::into_inner(a) {
+          pending.append(&mut items.0);
+        }
+      }
+      JsVal::Obj(o) => {
+        if let Some(mut props) = Arc::into_inner(o) {
+          pending.extend(props.0.drain(..).map(|(_, v)| v));
+        }
+      }
+      _ => {}
+    }
+  }
+}
 
 /// A JS value.
 ///
@@ -30,8 +137,8 @@ pub enum JsVal {
   Bool(bool),
   Num(f64),
   Str(Arc<str>),
-  Arr(Arc<Vec<JsVal>>),
-  Obj(Arc<Obj>),
+  Arr(Arc<Items>),
+  Obj(Arc<Props>),
   Fn(u32),
 }
 
@@ -43,6 +150,12 @@ impl std::fmt::Debug for JsVal {
     fn write(v: &JsVal, f: &mut std::fmt::Formatter<'_>, ancestors: &mut Vec<usize>) -> std::fmt::Result {
       if let Some(typed) = v.typed() {
         return write!(f, "{typed:?}");
+      }
+      if let Some(bson) = v.bson() {
+        return write!(f, "{bson:?}");
+      }
+      if let Some(id) = v.as_host_object() {
+        return write!(f, "HostObject({id})");
       }
       let id = v.identity();
       if id.is_some_and(|id| ancestors.contains(&id)) {
@@ -100,8 +213,18 @@ pub enum TypedValue {
   BigInt(Arc<str>),
 }
 
+/// What a registered typed object stands for.
+#[derive(Clone)]
+enum Registered {
+  Typed(TypedValue),
+  Bson(BsonValue),
+  /// A JS object the host keeps for one call (a mongoose `ClientSession`, an error), by the id
+  /// the host gave it; encoded `{ "$hostObject": id }`. Only the host that issued it reads it.
+  HostObject(u32),
+}
+
 struct TypedRegistry {
-  entries: HashMap<usize, (Weak<Obj>, TypedValue)>,
+  entries: HashMap<usize, (Weak<Props>, Registered)>,
   prune_at: usize,
 }
 
@@ -115,7 +238,21 @@ fn typed_registry() -> &'static Mutex<TypedRegistry> {
 impl JsVal {
   /// A new typed value (see [`TypedValue`]).
   pub fn typed_value(value: TypedValue) -> JsVal {
-    let obj = Arc::new(Obj::new());
+    JsVal::register(Registered::Typed(value))
+  }
+
+  /// A new BSON value (see [`BsonValue`]).
+  pub fn bson_value(value: BsonValue) -> JsVal {
+    JsVal::register(Registered::Bson(value))
+  }
+
+  /// A handle to a JS object the host keeps for the current call (see `Registered::HostObject`).
+  pub fn host_object(id: u32) -> JsVal {
+    JsVal::register(Registered::HostObject(id))
+  }
+
+  fn register(value: Registered) -> JsVal {
+    let obj = Arc::new(Props::default());
     let mut registry = typed_registry().lock().unwrap_or_else(|e| e.into_inner());
     if registry.entries.len() >= registry.prune_at {
       // The `Weak` keeps the allocation (and so the address) reserved until the entry is pruned.
@@ -139,6 +276,38 @@ impl JsVal {
 
   /// The [`TypedValue`] this object stands for, if it was created by [`JsVal::typed_value`].
   pub fn typed(&self) -> Option<TypedValue> {
+    match self.registered()? {
+      Registered::Typed(value) => Some(value),
+      Registered::Bson(_) | Registered::HostObject(_) => None,
+    }
+  }
+
+  /// The [`BsonValue`] this object stands for, if it was created by [`JsVal::bson_value`].
+  pub fn bson(&self) -> Option<BsonValue> {
+    match self.registered()? {
+      Registered::Bson(value) => Some(value),
+      Registered::Typed(_) | Registered::HostObject(_) => None,
+    }
+  }
+
+  /// The id of a host object handle ([`JsVal::host_object`]).
+  pub fn as_host_object(&self) -> Option<u32> {
+    match self.registered()? {
+      Registered::HostObject(id) => Some(id),
+      Registered::Typed(_) | Registered::Bson(_) => None,
+    }
+  }
+
+  /// The boundary encoding of a BSON value or host object handle, `None` for anything else.
+  fn bson_encoding(&self) -> Option<Json> {
+    Some(match self.registered()? {
+      Registered::Bson(value) => encode_bson(&value),
+      Registered::HostObject(id) => serde_json::json!({ "$hostObject": id }),
+      Registered::Typed(_) => return None,
+    })
+  }
+
+  fn registered(&self) -> Option<Registered> {
     let JsVal::Obj(o) = self else { return None };
     if !o.is_empty() || !TYPED_IN_USE.load(Ordering::Acquire) {
       return None;
@@ -166,11 +335,11 @@ impl JsVal {
   }
 
   pub fn obj(o: Obj) -> Self {
-    JsVal::Obj(Arc::new(o))
+    JsVal::Obj(Arc::new(Props(o)))
   }
 
   pub fn arr(a: Vec<JsVal>) -> Self {
-    JsVal::Arr(Arc::new(a))
+    JsVal::Arr(Arc::new(Items(a)))
   }
 
   /// `value[key]`, `undefined` when missing or not an object.
@@ -367,7 +536,10 @@ impl JsVal {
         JsVal::Obj(_) => match v.typed() {
           Some(TypedValue::BigInt(d)) => d.to_string(),
           Some(TypedValue::Date(ms)) => date_to_js_string(ms),
-          None => "[object Object]".into(),
+          None => match v.bson() {
+            Some(bson) => bson.to_js_string(),
+            None => "[object Object]".into(),
+          },
         },
         JsVal::Fn(_) => "function".into(),
       }
@@ -398,6 +570,9 @@ impl JsVal {
         }
         TypedValue::BigInt(s) => num_to_json(s.parse::<f64>().unwrap_or(f64::NAN)),
       });
+    }
+    if let Some(bson) = self.bson() {
+      return Ok(bson.to_json());
     }
     let id = self.identity();
     if let Some(id) = id {
@@ -671,23 +846,37 @@ fn local_time_zone(_ms: f64) -> (i64, String) {
 /// `Date`s decode to their ISO string (`null` when invalid) and `bigint`s to numbers, as before
 /// the typed encoding existed. Use [`decode_graph_typed`] to keep them as [`TypedValue`]s.
 pub fn decode_graph(json: &Json) -> Result<JsVal> {
-  decode_graph_with(json, false)
+  decode_graph_with(json, false, false)
 }
 
 /// [`decode_graph`], but `Date`s and `bigint`s decode to [`TypedValue`]s
 /// ([`JsVal::date`] / [`JsVal::bigint`]), so their JS type survives the round trip.
 pub fn decode_graph_typed(json: &Json) -> Result<JsVal> {
-  decode_graph_with(json, true)
+  decode_graph_with(json, true, false)
 }
 
-fn decode_graph_with(json: &Json, typed: bool) -> Result<JsVal> {
+/// [`decode_graph_typed`] that also decodes the BSON markers of the MongoDB boundary
+/// (`$oid`, `$regex`, `$decimal`, `$binary`, `$buffer`, `$hostObject`, see [`crate::bson`]) into
+/// [`BsonValue`]s / host object handles. The other decoders keep those keys as plain data.
+pub fn decode_graph_bson(json: &Json) -> Result<JsVal> {
+  decode_graph_with(json, true, true)
+}
+
+/// Decodes a tree in the boundary encoding (no `objects` / `$ref`s, as `encode_value` writes it and
+/// as host results are sent) with dates, bigints and BSON markers typed.
+pub fn decode_value_bson(json: &Json) -> Result<JsVal> {
+  let mut decoder = Decoder { objects: &[], refs: Vec::new(), typed: true, bson: true };
+  decoder.decode(json)
+}
+
+fn decode_graph_with(json: &Json, typed: bool, bson: bool) -> Result<JsVal> {
   let objects = json
     .get("objects")
     .and_then(|o| o.as_array())
     .ok_or_else(|| EngineError::internal("serialized graph is missing `objects`"))?;
   let root = json.get("root").ok_or_else(|| EngineError::internal("serialized graph is missing `root`"))?;
 
-  let mut decoder = Decoder { objects, refs: vec![RefState::Pending; objects.len()], typed };
+  let mut decoder = Decoder { objects, refs: vec![RefState::Pending; objects.len()], typed, bson };
   decoder.decode(root)
 }
 
@@ -705,15 +894,57 @@ struct Decoder<'a> {
   objects: &'a [Json],
   refs: Vec<RefState>,
   typed: bool,
+  /// Decode the BSON markers ([`BSON_KEYS`]); otherwise they are plain keys, as before they
+  /// existed.
+  bson: bool,
 }
 
-/// The single key of a marker object (`{"$fn": 1}`, ...), `None` for a plain object.
-fn marker_key(o: &serde_json::Map<String, Json>) -> Option<&str> {
-  if o.len() != 1 {
-    return None;
+/// Keys of the BSON boundary encoding (see [`crate::bson`]), decoded by the bson decoders only.
+const BSON_KEYS: [&str; 6] = ["$binary", "$buffer", "$decimal", "$hostObject", "$oid", "$regex"];
+
+impl Decoder<'_> {
+  /// The single key of a marker object (`{"$fn": 1}`, ...), `None` for a plain object.
+  fn marker_key<'o>(&self, o: &'o serde_json::Map<String, Json>) -> Option<&'o str> {
+    if o.len() != 1 {
+      return None;
+    }
+    let key = o.keys().next()?.as_str();
+    let is_marker = BASE_RESERVED_KEYS.contains(&key) || (self.bson && BSON_KEYS.contains(&key));
+    is_marker.then_some(key)
   }
-  let key = o.keys().next()?.as_str();
-  RESERVED_KEYS.contains(&key).then_some(key)
+}
+
+/// Encodes a [`BsonValue`] (see [`crate::bson`]).
+fn encode_bson(value: &BsonValue) -> Json {
+  match value {
+    BsonValue::ObjectId(bytes) => serde_json::json!({ "$oid": object_id_to_hex(bytes) }),
+    BsonValue::RegExp { source, flags } => serde_json::json!({ "$regex": { "source": &**source, "flags": &**flags } }),
+    BsonValue::Decimal128(s) => serde_json::json!({ "$decimal": &**s }),
+    BsonValue::Binary { sub_type, bytes } => {
+      serde_json::json!({ "$binary": { "base64": base64_encode(bytes), "subType": sub_type } })
+    }
+    BsonValue::Buffer(bytes) => serde_json::json!({ "$buffer": base64_encode(bytes) }),
+  }
+}
+
+/// Decodes the value `v` of the BSON marker `key`.
+fn decode_bson(key: &str, v: &Json) -> Option<JsVal> {
+  Some(match key {
+    "$oid" => JsVal::object_id(object_id_bytes_from_hex(v.as_str()?)?),
+    "$regex" => {
+      let o = v.as_object()?;
+      JsVal::regexp(o.get("source")?.as_str()?, o.get("flags")?.as_str()?)
+    }
+    "$decimal" => JsVal::decimal128(v.as_str()?),
+    "$binary" => {
+      let o = v.as_object()?;
+      let sub_type = u8::try_from(o.get("subType")?.as_u64()?).ok()?;
+      JsVal::binary(sub_type, base64_decode(o.get("base64")?.as_str()?)?)
+    }
+    "$buffer" => JsVal::buffer(base64_decode(v.as_str()?)?),
+    "$hostObject" => JsVal::host_object(u32::try_from(v.as_u64()?).ok()?),
+    _ => return None,
+  })
 }
 
 /// Writes the decoded contents of a shared container into the allocation that references to it
@@ -736,7 +967,7 @@ impl Decoder<'_> {
       Json::Number(n) => JsVal::Num(n.as_f64().unwrap_or(f64::NAN)),
       Json::String(s) => JsVal::str(s.as_str()),
       Json::Array(a) => JsVal::arr(self.decode_items(a)?),
-      Json::Object(o) => match marker_key(o) {
+      Json::Object(o) => match self.marker_key(o) {
         Some(key) => {
           let v = &o[key];
           match key {
@@ -764,6 +995,9 @@ impl Decoder<'_> {
               }
             }
             "$obj" => JsVal::obj(self.decode_entries(v.as_object().into_iter().flatten())?),
+            key if BSON_KEYS.contains(&key) => {
+              decode_bson(key, v).ok_or_else(|| EngineError::internal(format!("malformed {key} value: {v}")))?
+            }
             _ => self.decode_ref(v.as_u64().unwrap_or(u64::MAX) as usize)?,
           }
         }
@@ -799,22 +1033,22 @@ impl Decoder<'_> {
     }
     let value = match json {
       Json::Array(items) => {
-        let target = Arc::new(Vec::new());
+        let target = Arc::new(Items::default());
         self.refs[id] = RefState::InProgress(Some(JsVal::Arr(target.clone())));
         let items = self.decode_items(items)?;
         // SAFETY: see `fill`.
-        unsafe { fill(&target, items) };
+        unsafe { fill(&target, Items(items)) };
         JsVal::Arr(target)
       }
-      Json::Object(o) if marker_key(o).is_none_or(|key| key == "$obj") => {
-        let target = Arc::new(Obj::new());
+      Json::Object(o) if self.marker_key(o).is_none_or(|key| key == "$obj") => {
+        let target = Arc::new(Props::default());
         self.refs[id] = RefState::InProgress(Some(JsVal::Obj(target.clone())));
-        let entries = match marker_key(o) {
+        let entries = match self.marker_key(o) {
           Some(_) => self.decode_entries(o["$obj"].as_object().into_iter().flatten())?,
           None => self.decode_entries(o.iter())?,
         };
         // SAFETY: see `fill`.
-        unsafe { fill(&target, entries) };
+        unsafe { fill(&target, Props(entries)) };
         JsVal::Obj(target)
       }
       // typed values and other markers: nothing inside can refer back to them
@@ -828,7 +1062,26 @@ impl Decoder<'_> {
   }
 }
 
-const RESERVED_KEYS: [&str; 7] = ["$bigint", "$date", "$fn", "$num", "$obj", "$ref", "$undefined"];
+/// Keys of the boundary encoding every decoder reads.
+const BASE_RESERVED_KEYS: [&str; 7] = ["$bigint", "$date", "$fn", "$num", "$obj", "$ref", "$undefined"];
+
+/// Keys a user object whose only key is one of them is `$obj`-escaped for: the base keys and the
+/// BSON keys (escaping is lossless, so this does not change what any decoder returns).
+const RESERVED_KEYS: [&str; 13] = [
+  "$bigint",
+  "$binary",
+  "$buffer",
+  "$date",
+  "$decimal",
+  "$fn",
+  "$hostObject",
+  "$num",
+  "$obj",
+  "$oid",
+  "$ref",
+  "$regex",
+  "$undefined",
+];
 
 /// Encodes a value in the `serializeForEngine` format (as a tree, without `$ref`s), for values
 /// handed back to TS (decoded by `deserializeFromEngine` in packages/engine-rs).
@@ -865,6 +1118,9 @@ fn encode_tree(v: &JsVal, ancestors: &mut Vec<usize>) -> Json {
           Some(TypedValue::BigInt(s)) => return serde_json::json!({ "$bigint": &*s }),
           None => {}
         }
+        if let Some(encoded) = v.bson_encoding() {
+          return encoded;
+        }
       }
       ancestors.extend(id);
       let out: serde_json::Map<String, Json> = o.iter().map(|(k, item)| (k.clone(), encode_tree(item, ancestors))).collect();
@@ -876,6 +1132,163 @@ fn encode_tree(v: &JsVal, ancestors: &mut Vec<usize>) -> Json {
       }
     }
   }
+}
+
+/// [`encode_value`] as JSON text, built without recursion (values of any depth). A negative zero
+/// is written as `-0`, so `JSON.parse` gives back `-0` exactly.
+pub fn encode_value_text(v: &JsVal) -> String {
+  let mut out = String::new();
+  write_encoded(v, &mut out);
+  out
+}
+
+/// Appends the [`encode_value_text`] of `v` to `out`.
+pub fn write_encoded(v: &JsVal, out: &mut String) {
+  enum Work<'a> {
+    Value(&'a JsVal),
+    Text(&'static str),
+    Key(&'a str, bool),
+    /// leaves the container whose identity was pushed onto `ancestors`
+    Leave,
+  }
+  let mut ancestors: std::collections::HashSet<usize> = std::collections::HashSet::new();
+  let mut path: Vec<usize> = Vec::new();
+  let mut work = vec![Work::Value(v)];
+  while let Some(item) = work.pop() {
+    let value = match item {
+      Work::Text(text) => {
+        out.push_str(text);
+        continue;
+      }
+      Work::Key(key, first) => {
+        if !first {
+          out.push(',');
+        }
+        write_json_string(key, out);
+        out.push(':');
+        continue;
+      }
+      Work::Leave => {
+        if let Some(id) = path.pop() {
+          ancestors.remove(&id);
+        }
+        continue;
+      }
+      Work::Value(value) => value,
+    };
+    let id = value.identity();
+    if id.is_some_and(|id| ancestors.contains(&id)) {
+      out.push_str(r#"{"$undefined":true}"#);
+      continue;
+    }
+    match value {
+      JsVal::Undefined => out.push_str(r#"{"$undefined":true}"#),
+      JsVal::Null => out.push_str("null"),
+      JsVal::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+      JsVal::Num(n) if !n.is_finite() => {
+        out.push_str(r#"{"$num":""#);
+        out.push_str(&num_to_js_string(*n));
+        out.push_str(r#""}"#);
+      }
+      JsVal::Num(n) => write_json_number(*n, out),
+      JsVal::Str(s) => write_json_string(s, out),
+      JsVal::Fn(id) => {
+        out.push_str(r#"{"$fn":"#);
+        out.push_str(&id.to_string());
+        out.push('}');
+      }
+      JsVal::Arr(a) => {
+        if let Some(id) = id {
+          ancestors.insert(id);
+          path.push(id);
+        }
+        out.push('[');
+        work.push(Work::Leave);
+        work.push(Work::Text("]"));
+        for (i, item) in a.iter().enumerate().rev() {
+          work.push(Work::Value(item));
+          if i > 0 {
+            work.push(Work::Text(","));
+          }
+        }
+      }
+      JsVal::Obj(o) => {
+        if o.is_empty() {
+          match value.typed() {
+            Some(TypedValue::Date(ms)) => {
+              out.push_str(r#"{"$date":"#);
+              match date_to_iso_string(ms) {
+                Some(iso) => write_json_string(&iso, out),
+                None => out.push_str("null"),
+              }
+              out.push('}');
+              continue;
+            }
+            Some(TypedValue::BigInt(s)) => {
+              out.push_str(r#"{"$bigint":"#);
+              write_json_string(&s, out);
+              out.push('}');
+              continue;
+            }
+            None => {}
+          }
+          if let Some(encoded) = value.bson_encoding() {
+            out.push_str(&encoded.to_string());
+            continue;
+          }
+        }
+        if let Some(id) = id {
+          ancestors.insert(id);
+          path.push(id);
+        }
+        let escaped = o.len() == 1 && o.keys().next().is_some_and(|k| RESERVED_KEYS.contains(&k.as_str()));
+        out.push_str(if escaped { r#"{"$obj":{"# } else { "{" });
+        work.push(Work::Leave);
+        work.push(Work::Text(if escaped { "}}" } else { "}" }));
+        for (i, (key, item)) in o.iter().enumerate().rev() {
+          work.push(Work::Value(item));
+          work.push(Work::Key(key, i == 0));
+        }
+      }
+    }
+  }
+}
+
+/// A finite number as JSON text that `JSON.parse` reads back exactly (`-0` included).
+fn write_json_number(n: f64, out: &mut String) {
+  if n == 0.0 && n.is_sign_negative() {
+    out.push_str("-0");
+  } else {
+    out.push_str(&num_to_js_string(n));
+  }
+}
+
+/// `JSON.stringify(string)`
+pub fn write_json_string(s: &str, out: &mut String) {
+  out.push('"');
+  let mut start = 0;
+  for (i, b) in s.bytes().enumerate() {
+    let escape = match b {
+      b'"' => "\\\"",
+      b'\\' => "\\\\",
+      b'\n' => "\\n",
+      b'\r' => "\\r",
+      b'\t' => "\\t",
+      0x08 => "\\b",
+      0x0c => "\\f",
+      0..=0x1f => "",
+      _ => continue,
+    };
+    out.push_str(&s[start..i]);
+    if escape.is_empty() {
+      out.push_str(&format!("\\u{b:04x}"));
+    } else {
+      out.push_str(escape);
+    }
+    start = i + 1;
+  }
+  out.push_str(&s[start..]);
+  out.push('"');
 }
 
 const MS_PER_DAY: i64 = 86_400_000;

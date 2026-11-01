@@ -319,6 +319,18 @@ const snapShallow = (c: Case, args: Any): unknown => {
   return out
 }
 
+/** bson / bson-objectid ObjectId instances: compared by class and hex value (their own keys are
+ * buffers or bson 7's `i0..i3` numbers, which differ between processes for generated ids). */
+const isObjectID = (v: Any): boolean => {
+  const proto = Object.getPrototypeOf(v)
+  return (
+    proto !== Object.prototype &&
+    proto !== null &&
+    (proto?.constructor?.name === 'ObjectId' || proto?.constructor?.name === 'ObjectID') &&
+    typeof v.toHexString === 'function'
+  )
+}
+
 const snap = (c: Case, v: Any, depth = 0, stack = new Set<object>(), fresh = false): unknown => {
   if (v === undefined) {
     return { $u: 1 }
@@ -359,6 +371,12 @@ const snap = (c: Case, v: Any, depth = 0, stack = new Set<object>(), fresh = fal
   }
   if (typeof Headers !== 'undefined' && v instanceof Headers) {
     return { $headers: [...v.entries()].map(([k, x]) => [k, normalizeString(c, x)]) }
+  }
+  if (isObjectID(v)) {
+    return {
+      $class: Object.getPrototypeOf(v).constructor.name,
+      $oid: normalizeString(c, v.toHexString()),
+    }
   }
   let id = c.ids.get(v)
   if (id === undefined) {

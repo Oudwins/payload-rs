@@ -84,6 +84,7 @@ import {
 } from '../../../payload/src/utilities/checkDocumentLockStatus.js'
 import { commitTransaction } from '../../../payload/src/utilities/commitTransaction.js'
 import { deepCopyObjectSimple } from '../../../payload/src/utilities/deepCopyObject.js'
+import { deepMergeWithSourceArraysIgnoringUndefined } from '../../../payload/src/utilities/deepMerge.js'
 import { flattenDataByLocale } from '../../../payload/src/utilities/flattenDataByLocale.js'
 import { getTopLevelFieldNames } from '../../../payload/src/utilities/getTopLevelFieldNames.js'
 import {
@@ -99,9 +100,9 @@ import { isolateObjectProperty } from '../../../payload/src/utilities/isolateObj
 import { killTransaction } from '../../../payload/src/utilities/killTransaction.js'
 import { resolvePublishAllLocales } from '../../../payload/src/utilities/resolvePublishAllLocales.js'
 import { resolveSelect } from '../../../payload/src/utilities/resolveSelect.js'
-import { runValidationLifecycle } from '../../../payload/src/utilities/runValidationLifecycle.js'
 import { sanitizeInternalFields } from '../../../payload/src/utilities/sanitizeInternalFields.js'
 import { sanitizeSelect } from '../../../payload/src/utilities/sanitizeSelect.js'
+import { toValidationResult } from '../../../payload/src/utilities/toValidationResult.js'
 import {
   buildAllLocalesPublicationHookDoc,
   getAllLocalesPublicationStatus,
@@ -218,6 +219,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
   initTransaction: (req: Any) => initTransaction(req),
   killTransaction: (req: Any) => killTransaction(req),
   shareFileOperationScope: (owner: Any, req: Any) => shareFileOperationScope({ owner, req }),
+  /** `await unlinkTempFiles({ collectionConfig, config, req }).catch(log)` */
   unlinkTempFilesCaught: (collectionConfig: Any, config: Any, req: Any) =>
     unlinkTempFiles({
       collectionConfig,
@@ -2023,7 +2025,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
       collection,
       req,
     }),
-  /** `req.context ??= {}; (req.context._payloadManagedDeletedUploads ??= new Set())` */
+  /** Removes this operation's marked identities from `req.context._payloadManagedDeletedUploads`. */
   clearMarkedManagedDeletes: (args: Any, markedManagedDeletes: Set<string>) => {
     const managedDeletedUploads = args.req.context?._payloadManagedDeletedUploads as
       | Set<string>
@@ -2035,6 +2037,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
       delete args.req.context._payloadManagedDeletedUploads
     }
   },
+  /** `req.context ??= {}; (req.context._payloadManagedDeletedUploads ??= new Set())` */
   managedDeletedUploadsOf: (req: Any) => {
     req.context ??= {}
     return (req.context._payloadManagedDeletedUploads ??= new Set())
@@ -2047,7 +2050,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
       message: message ?? (error instanceof Error ? error.message : 'Unknown error'),
     })
   },
-  /** The upload branch of `runBeforeDeleteWork` after its awaits. */
+  /** `deletedFilesByID.get(doc.id) ?? []` */
   deletedFilesOf: (deletedFilesByID: Map<Any, Any>, doc: Any) => deletedFilesByID.get(doc.id) ?? [],
   getLockedDocumentIds: (collectionConfig: Any, docs: Any, overrideLock: Any, req: Any) =>
     getLockedDocumentIds({
@@ -2346,62 +2349,147 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
     payload.config.localization ? payload.config.localization.defaultLocale : locale!,
 
   // ---------------------------------------------------------------- validate.ts
-  runValidationLifecycle: (
+  /**
+   * The `beforeValidation` and `validateData` arrows of validate.ts's `runValidationLifecycle({...})`
+   * call (an object literal, so the arrows keep their upstream names).
+   */
+  validateLifecycleCallbacks: (collectionConfig: Any, id: Any, originalDoc: Any, req: Any) => ({
+    beforeValidation: ({ data }: Any) => {
+      if (!collectionConfig.auth) {
+        return
+      }
+
+      if (id === undefined) {
+        ensureUsernameOrEmail({
+          authOptions: collectionConfig.auth,
+          collectionSlug: collectionConfig.slug,
+          data,
+          operation: 'create',
+          req,
+        })
+      } else {
+        ensureUsernameOrEmail({
+          authOptions: collectionConfig.auth,
+          collectionSlug: collectionConfig.slug,
+          data,
+          operation: 'update',
+          originalDoc,
+          req,
+        })
+      }
+    },
+    validateData: ({ data }: Any) =>
+      validateUniqueConstraints({
+        id,
+        collection: collectionConfig,
+        data,
+        req,
+      }),
+  }),
+
+  // ---------------------------------------------------------------- runValidationLifecycle.ts
+  // (crates/payload-core-ops-write validation_lifecycle.rs; also used by the global validate)
+  /** `deepCopyObjectSimple(incomingData ?? {})` */
+  deepMergeWithSourceArraysIgnoringUndefined: (originalDoc: Any, data: Any) =>
+    deepMergeWithSourceArraysIgnoringUndefined(originalDoc, data),
+  lifecycleCopyIncomingData: (incomingData: Any) => deepCopyObjectSimple(incomingData ?? {}),
+  /** `{ data }` */
+  dataArg: (data: Any) => ({ data }),
+  lifecycleBeforeValidateArgs: (
     id: Any,
-    collectionConfig: Any,
-    docWithLocales: Any,
-    incomingData: Any,
-    onValidationData: Any,
+    collection: Any,
+    req: Any,
+    data: Any,
+    originalDoc: Any,
+    global: Any,
+    validationOperation: Any,
+    overrideAccess: Any,
+  ) => ({
+    id,
+    collection,
+    context: req.context,
+    data,
+    doc: originalDoc,
+    global,
+    operation: validationOperation,
+    overrideAccess,
+    req,
+  }),
+  /** `for (const hook of <hooks> ?? [])` over a value that is neither nullish nor a plain array. */
+  *forOfNullishOr(hooks: Any) {
+    for (const hook of hooks ?? []) {
+      yield hook
+    }
+  },
+  lifecycleCollectionHookArgs: (
+    collection: Any,
+    req: Any,
+    data: Any,
+    validationOperation: Any,
+    originalDoc: Any,
+  ) => ({
+    collection,
+    context: req.context,
+    data,
+    operation: validationOperation,
+    originalDoc,
+    req,
+  }),
+  lifecycleGlobalCreateError: () =>
+    new Error('Global validation does not support the create operation.'),
+  lifecycleGlobalHookArgs: (
+    req: Any,
+    data: Any,
+    global: Any,
+    validationOperation: Any,
     originalDoc: Any,
     overrideAccess: Any,
+  ) => ({
+    context: req.context,
+    data,
+    global,
+    operation: validationOperation,
+    originalDoc,
+    overrideAccess,
+    req,
+  }),
+  /** The `beforeChange({...})` args; `onDataProcessed` stores into `processed[0]`. */
+  lifecycleBeforeChangeArgs: (
+    id: Any,
+    collection: Any,
     req: Any,
-    skipMutationHooks: Any,
+    data: Any,
+    originalDoc: Any,
+    docWithLocales: Any,
+    global: Any,
     validationOperation: Any,
-  ) =>
-    runValidationLifecycle({
-      id,
-      beforeValidation: ({ data }: Any) => {
-        if (!collectionConfig.auth) {
-          return
-        }
-
-        if (id === undefined) {
-          ensureUsernameOrEmail({
-            authOptions: collectionConfig.auth,
-            collectionSlug: collectionConfig.slug,
-            data,
-            operation: 'create',
-            req,
-          })
-        } else {
-          ensureUsernameOrEmail({
-            authOptions: collectionConfig.auth,
-            collectionSlug: collectionConfig.slug,
-            data,
-            operation: 'update',
-            originalDoc,
-            req,
-          })
-        }
-      },
-      collection: collectionConfig,
-      docWithLocales,
-      global: null,
-      incomingData,
-      onValidationData,
-      originalDoc,
-      overrideAccess,
-      req,
-      skipMutationHooks,
-      validateData: ({ data }: Any) =>
-        validateUniqueConstraints({
-          id,
-          collection: collectionConfig,
-          data,
-          req,
-        }),
-      validationOperation,
-    }),
+    overrideAccess: Any,
+    skipMutationHooks: Any,
+    processed: Any[],
+  ) => ({
+    id,
+    collection,
+    context: req.context,
+    data: id === undefined ? data : { ...data, id },
+    doc: originalDoc,
+    docWithLocales,
+    global,
+    isValidationOperation: true,
+    onDataProcessed: (result: Any) => {
+      processed[0] = deepCopyObjectSimple(result)
+    },
+    operation: validationOperation,
+    overrideAccess,
+    req,
+    skipHooks: skipMutationHooks,
+  }),
+  /** `return toValidationResult({ error, req })` */
+  lifecycleValidationResult: (error: Any, req: Any) => toValidationResult({ error, req }),
+  /** `return { errors: [], valid: true }` */
+  lifecycleValid: () => ({
+    errors: [],
+    valid: true,
+  }),
   setValidationOperation: (args: Any) => {
     args.req.operation = args.validationOperation ?? 'validate'
   },

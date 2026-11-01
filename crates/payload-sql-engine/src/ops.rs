@@ -543,7 +543,7 @@ fn write_env<'e, 'c>(
 ) -> Env<'e, 'c> {
   Env {
     exec,
-    schema: &call.engine.schema,
+    schema: call.engine.write_schema(),
     opts: &call.options.upsert,
     ctx: WriteContext { adapter: call.write, fields },
     host,
@@ -586,7 +586,7 @@ fn create_global(call: &Call<'_>, args: &JsVal) -> Result<JsVal> {
   let mut exec = call.executor();
   let mut data = args.get("data").clone();
   let ctx = WriteContext { adapter: call.write, fields };
-  let outcome = upsert_row(&mut exec, &call.engine.schema, &call.options.upsert, &ctx, &mut host, &upsert, &mut data)?;
+  let outcome = upsert_row(&mut exec, call.engine.write_schema(), &call.options.upsert, &ctx, &mut host, &upsert, &mut data)?;
   if wargs.returning_false {
     return Ok(JsVal::Null);
   }
@@ -805,7 +805,7 @@ fn delete_one(call: &Call<'_>, args: &JsVal) -> Result<JsVal> {
   let mut ops_host =
     Ops { call, fields, table_name: table, built: Some(result), select: args.get("select").clone(), find_spec: None };
   let mut exec = call.executor();
-  wops::delete_one(&mut exec, &call.engine.schema, &mut ops_host, &wargs, &query)
+  wops::delete_one(&mut exec, call.engine.write_schema(), &mut ops_host, &wargs, &query)
 }
 
 /// `deleteMany` (deleteMany.ts)
@@ -831,7 +831,7 @@ fn delete_many(call: &Call<'_>, args: &JsVal) -> Result<JsVal> {
   let wargs = write_args(call, args, table.clone())?;
   let mut ops_host = Ops { call, fields, table_name: table, built: Some(result), select: JsVal::Undefined, find_spec: Some(spec) };
   let mut exec = call.executor();
-  wops::delete_many(&mut exec, &call.engine.schema, &mut ops_host, &wargs, &query)?;
+  wops::delete_many(&mut exec, call.engine.write_schema(), &mut ops_host, &wargs, &query)?;
   Ok(JsVal::Undefined)
 }
 
@@ -867,5 +867,5 @@ fn delete_versions(call: &Call<'_>, args: &JsVal) -> Result<JsVal> {
   let wargs = write_args(call, args, table.clone())?;
   let mut ops_host = Ops { call, fields: &fields, table_name: table, built: None, select: JsVal::Undefined, find_spec: Some(spec) };
   let mut exec = call.executor();
-  wops::delete_versions(&mut exec, &call.engine.schema, &mut ops_host, &wargs)
+  wops::delete_versions(&mut exec, call.engine.write_schema(), &mut ops_host, &wargs)
 }

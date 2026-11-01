@@ -62,14 +62,19 @@ type EngineState = {
   /**
    * Errors thrown by JS functions the engine called during `call`, per registry function id in
    * throw order; the engine fails the call with `HostError` `JS function <id> threw`, and the
-   * caller gets the function's own error (first one of that id).
+   * caller gets the function's own error (first one of that id). Cleared whenever no engine call
+   * is in flight (`inFlight`), so an error no call claimed cannot reach a later call.
    */
   hostErrors: [id: number, error: unknown][]
+  /** Engine calls started and not finished yet (`callEngine`). */
+  inFlight: number
   /**
    * The drizzle instance whose schema `setLiveSchema` was given (`connect` after a re-init builds
    * a new one).
    */
   liveSchemaDrizzle?: unknown
+  /** A drizzle instance whose live schema the engine cannot take (`setLiveSchema` failed for it). */
+  liveSchemaFailure?: { drizzle: unknown; reason: string }
   registry: FunctionRegistry
 }
 
@@ -295,7 +300,7 @@ const createEngineState = ({
   }
   isCreated = true
 
-  return { engine, hostErrors, registry, root }
+  return { engine, hostErrors, inFlight: 0, registry, root }
 }
 
 const toInitError = ({ error, hostErrors }: { error: unknown; hostErrors: unknown[] }): unknown => {
@@ -347,15 +352,21 @@ const callEngine = async ({
       return callUpstream({ adapter, args, glue, method, reason: txReason })
     }
   }
+  // before upstream's synchronous mutations, so a call that cannot use the engine runs the upstream
+  // method on unmutated arguments
+  const liveSchemaReason = sendLiveSchema({ adapter, state })
+  if (liveSchemaReason) {
+    return callUpstream({ adapter, args, glue, method, reason: liveSchemaReason })
+  }
   mutateArgsBeforeTransaction({ adapter, args, method })
   const db = await getTransactionDB({ adapter, req })
-  if (transactionID) {
-    // a pending `transactionID` (or a session that changed meanwhile): the upstream method repeats
-    // the mutations above, idempotent except `createGlobal`'s `data.createdAt` stamp
-    const txReason = findConnectionReason(db)
-    if (txReason) {
-      return callUpstream({ adapter, args, glue, method, reason: txReason })
-    }
+  // a pending `transactionID` (or a session that changed meanwhile), or a `connect` that built a
+  // new drizzle instance meanwhile: the upstream method repeats the mutations above, idempotent
+  // except `createGlobal`'s `data.createdAt` stamp
+  const lateReason =
+    (transactionID ? findConnectionReason(db) : undefined) ?? sendLiveSchema({ adapter, state })
+  if (lateReason) {
+    return callUpstream({ adapter, args, glue, method, reason: lateReason })
   }
   mutateDataAfterTransaction({ adapter, args, method })
   const connId = getSqliteConnId(db.session.tx ?? db.session.client)
@@ -378,17 +389,8 @@ const callEngine = async ({
   )
   recordStats(() => (stats.calls[method] = (stats.calls[method] ?? 0) + 1))
   let resultJson: string
+  state.inFlight++
   try {
-    if (state.liveSchemaDrizzle !== adapter.drizzle) {
-      state.engine.setLiveSchema(
-        describeLiveSchema({
-          db: adapter.drizzle,
-          rawTables: adapter.rawTables,
-          registry: state.registry,
-        }),
-      )
-      state.liveSchemaDrizzle = adapter.drizzle
-    }
     resultJson = await state.engine.call(method, argsJson, connId, callContextJson(adapter))
   } catch (error) {
     const parsed = parseEngineError(error)
@@ -408,6 +410,10 @@ const callEngine = async ({
       error: parsed as never,
       req,
     })
+  } finally {
+    if (--state.inFlight === 0) {
+      state.hostErrors.length = 0
+    }
   }
   const { mutations, result: resultTree } = JSON.parse(resultJson) as {
     mutations: [string[], unknown][]
@@ -419,11 +425,69 @@ const callEngine = async ({
       state.registry,
     )
   }
+  if (isDeleteWithoutResult) {
+    // whether a document was deleted is all that is needed: no decoding (the tree of `null` is
+    // `null`)
+    if (resultTree !== null) {
+      markWrite(adapter)
+    }
+    return null
+  }
   const result = deserializeFromEngine(resultTree, state.registry)
   if (isMarkedWrite({ args, method, result })) {
     markWrite(adapter)
   }
-  return isDeleteWithoutResult ? null : result
+  return result
+}
+
+/** `setLiveSchema`'s message while calls hold the engine (crates/payload-node/src/engine.rs). */
+const callsInProgress = /engine calls are in progress/
+
+/**
+ * Gives the engine the live schema of `adapter.drizzle` when it has not seen that drizzle instance
+ * yet (first call, `connect` after a re-init or hot reload). Never fails the caller's operation:
+ * returns why the call must run the upstream TS method instead when the engine cannot take it.
+ * - `setLiveSchema` while other engine calls hold the engine (an engine that needs exclusive
+ *   access for it): this call runs upstream, a later call sends the schema again.
+ * - a schema that cannot be described or that the engine rejects: every call on that drizzle
+ *   instance runs upstream.
+ * Calls already running keep the schema they started with.
+ */
+const sendLiveSchema = ({ adapter, state }: { adapter: AnyObject; state: EngineState }) => {
+  const drizzle = adapter.drizzle
+  if (state.liveSchemaDrizzle === drizzle) {
+    return undefined
+  }
+  const failure = state.liveSchemaFailure
+  if (failure && failure.drizzle === drizzle) {
+    return failure.reason
+  }
+  let description: string
+  try {
+    description = describeLiveSchema({
+      db: drizzle,
+      rawTables: adapter.rawTables,
+      registry: state.registry,
+    })
+  } catch {
+    const reason = 'live schema: not describable'
+    state.liveSchemaFailure = { drizzle, reason }
+    return reason
+  }
+  try {
+    state.engine.setLiveSchema(description)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (callsInProgress.test(message)) {
+      return 'live schema: engine calls in progress'
+    }
+    const reason = 'live schema: rejected by the engine'
+    state.liveSchemaFailure = { drizzle, reason }
+    return reason
+  }
+  state.liveSchemaDrizzle = drizzle
+  state.liveSchemaFailure = undefined
+  return undefined
 }
 
 const isThenable = (value: unknown) =>
@@ -567,13 +631,7 @@ const isReplacedClientMethod = (method: unknown, original: unknown) => {
     return true
   }
   const isTransparent = transparentClientMethods.get(method)
-  if (isTransparent) {
-    return !isTransparent()
-  }
-  // Transitional: the shadow harness's candidate wrapper (packages/engine-rs/src/shadow) forwards
-  // to the original unless the reference client was overridden, which the engine cannot follow
-  // anyway (ENGINE_STATUS.md #1); it should register itself with registerTransparentClientMethod.
-  return method.name !== 'candidateClientCall'
+  return isTransparent ? !isTransparent() : true
 }
 
 /** Upstream `markWrite` (`lastWriteTimestamp`, read-replica routing). */
@@ -654,6 +712,8 @@ const isMarkedWriteError = ({
 const isInitialJobClaim = (data: AnyObject | undefined) =>
   typeof data === 'object' &&
   data !== null &&
+  typeof data.processingToken === 'string' &&
+  typeof data.processingUntil === 'string' &&
   Object.keys(data).every(
     (field) => field === 'processingToken' || field === 'processingUntil' || field === 'updatedAt',
   )
@@ -739,14 +799,16 @@ const mutateArgsBeforeTransaction = ({
       delete data.log
     }
   } else if (method === 'createGlobal') {
-    if (
-      adapter.payload.globals.config.find((config: { slug: string }) => config.slug === args.slug)
-    ) {
-      args.data.createdAt = new Date().toISOString()
-    }
+    const globalConfig = adapter.payload.globals.config.find(
+      (config: { slug: string }) => config.slug === args.slug,
+    )
+    // upstream reads `globalConfig.slug` (TypeError for an unknown slug) before the stamp
+    void globalConfig.slug
+    args.data.createdAt = new Date().toISOString()
   } else if (method === 'createVersion') {
-    const collection = adapter.payload.collections[args.collectionSlug]
-    if (collection?.config.versions.drafts) {
+    // upstream: `this.payload.collections[collectionSlug].config` (TypeError for an unknown slug)
+    const collection = adapter.payload.collections[args.collectionSlug].config
+    if (collection.versions.drafts) {
       if (typeof args.select === 'object') {
         args.select.updatedAt = true
       }

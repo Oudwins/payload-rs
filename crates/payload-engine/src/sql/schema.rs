@@ -71,7 +71,7 @@ impl RawTable {
 }
 
 /// The schema state produced by [`build_raw_schema`].
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct RawSchema {
   /// `None` mirrors TS keys that were assigned `undefined` and never filled.
   pub raw_tables: IndexMap<String, Option<RawTable>>,

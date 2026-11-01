@@ -147,6 +147,7 @@ pub fn find_many_js<C: Executor + ?Sized>(
   transform: &mut dyn FnMut(JsVal) -> Result<JsVal>,
   trace: Option<&mut FindManyTrace>,
 ) -> Result<FindManyResult<JsVal>> {
+  let is_traced = trace.is_some();
   let mut local_trace = FindManyTrace::default();
   let trace = trace.unwrap_or(&mut local_trace);
   let page = args.page.unwrap_or(1.0);
@@ -314,7 +315,7 @@ pub fn find_many_js<C: Executor + ?Sized>(
       }
       let ordered_ids = js_object_key_order(ordered_id_map.keys().cloned().collect());
       ordered_ids_len = Some(ordered_ids.len() as f64);
-      let params: Vec<Json> = ordered_ids.into_iter().map(Json::String).collect();
+      let params: Vec<JsVal> = ordered_ids.into_iter().map(JsVal::str).collect();
       find_many_args.where_ = Some(sql::in_array(&Sql::column(&main_table.ts_name, &id_column.name), &params));
     }
     None => {
@@ -391,7 +392,10 @@ pub fn find_many_js<C: Executor + ?Sized>(
     has_next_page = false;
   }
 
-  trace.raw_docs = raw_docs.iter().map(JsVal::to_json).collect();
+  // the JSON copy (recursive) only for callers that asked for a trace (tests)
+  if is_traced {
+    trace.raw_docs = raw_docs.iter().map(JsVal::to_json).collect();
+  }
   let docs = raw_docs.into_iter().map(|doc| transform(doc)).collect::<Result<Vec<_>>>()?;
 
   Ok(FindManyResult {

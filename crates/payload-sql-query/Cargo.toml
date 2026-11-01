@@ -12,4 +12,5 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+payload-sql-find = { path = "../payload-sql-find" }
 rusqlite = { version = "0.37", features = ["bundled"] }

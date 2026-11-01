@@ -1112,12 +1112,17 @@ if (isRustCoreEngine) {
     validateBlocksFilterOptions: typeof validateBlocksFilterOptions
   }
   const { createRequire } = process.getBuiltinModule('node:module')
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../../engine-rs/payload-engine.node'
+  const nodePath = process.getBuiltinModule('node:path')
+  const envAddonPath = process.env.PAYLOAD_CORE_RUNTIME_ADDON ?? process.env.PAYLOAD_ENGINE_ADDON
+  // A path from the environment is relative to the working directory, not to this module.
+  const addonPath = envAddonPath
+    ? nodePath.resolve(process.cwd(), envAddonPath)
+    : '../../../engine-rs/payload-engine.node'
   const addon = createRequire(import.meta.url)(addonPath) as {
-    validateBinding: (deps: object) => RustValidations
+    validateBinding?: (deps: object) => RustValidations
+  }
+  if (typeof addon.validateBinding !== 'function') {
+    throw new Error(`The engine addon at ${addonPath} does not export validateBinding`)
   }
   const rust = addon.validateBinding({ ObjectId, validateJSONSchema })
   if ('init' in rust) {

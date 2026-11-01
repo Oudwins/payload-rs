@@ -19,7 +19,7 @@ async fn run(args: Val) -> JsResult<Val> {
     unpack::<6>(call("countGlobalVersionsArgs", &[args.get()])?)?;
 
   // beforeOperation - Global
-  config_hooks(&global, "beforeOperation", args, |args| {
+  config_hooks(&global, "beforeOperation", "global", args, |args| {
     call(
       "globalBeforeOperationReqArgs",
       &[args, req.get(), global.get(), js::string("countVersions"), override_access.get()],

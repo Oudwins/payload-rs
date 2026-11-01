@@ -54,7 +54,14 @@ export!(delete_by_id_export, 1, |[args]| delete_by_id::delete_by_id(args));
 export!(duplicate_export, 1, |[args]| duplicate::duplicate(args));
 export!(restore_version_export, 1, |[args]| restore_version::restore_version(args));
 export!(validate_export, 1, |[args]| validate::validate(args));
-export!(stats_export, 0, |[]| Ok(js::number(host::calls() as f64)));
+export!(stats_export, 0, |[]| {
+  // `stats` calls are not engine work
+  payload_core_runtime::js::uncount_entry();
+  Ok(js::number(host::calls() as f64))
+});
+
+/// Version of the binding / host-helper contract with `packages/engine-rs/src/ops-write`.
+pub const API_VERSION: u32 = 1;
 
 /// Builds the binding object.
 pub fn create() -> JsResult<Local> {
@@ -75,6 +82,8 @@ pub fn create() -> JsResult<Local> {
   add!("restoreVersion", restore_version_export);
   add!("validate", validate_export);
   add!("stats", stats_export);
+  // The host helper set this build expects (packages/engine-rs/src/ops-write/index.ts checks it).
+  js::set_named(o, "apiVersion", js::number(f64::from(API_VERSION)))?;
   Ok(o)
 }
 

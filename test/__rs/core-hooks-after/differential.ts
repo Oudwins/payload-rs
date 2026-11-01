@@ -25,6 +25,7 @@ import { traverseFields as afterChangeTraverseFieldsTS } from '../../../packages
 import { upstreamBeforeDuplicate as beforeDuplicateTS } from '../../../packages/payload/src/fields/hooks/beforeDuplicate/index.js'
 import { createPayloadRequest } from '../../../packages/payload/src/utilities/createPayloadRequest.js'
 import { assertDistinctEngines, startEngineRun } from '../dispatch/engineGuard.js'
+import { settleRun, trackDatabaseIO } from '../dispatch/settle.js'
 
 assertDistinctEngines('afterChange', afterChangeTS, afterChangeRS)
 assertDistinctEngines(
@@ -315,6 +316,7 @@ const finish = async (
     await new Promise((resolve) => setImmediate(resolve))
     await new Promise((resolve) => setTimeout(resolve, 0))
   }
+  await settleRun({ activity: () => recorder.current?.events.length ?? 0, payload: req.payload })
   const current = recorder.current!
   lastThrown = current.thrown
   const result = {
@@ -433,12 +435,13 @@ export const runAfterChange = async ({
    * `afterChange` passes it, instead of `afterChange`; `siblingFields` also passes the fields as
    * `siblingFields` (only an external caller can).
    */
-  traverse?: 'fields' | 'siblingFields'
+  traverse?: 'fields' | 'nested' | 'siblingFields'
   variant: RequestVariant
 }): Promise<RunOutcome> => {
   const afterChange = engine === 'ts' ? afterChangeTS : afterChangeRS
   const traverseFields = engine === 'ts' ? afterChangeTraverseFieldsTS : afterChangeTraverseFieldsRS
   const engineRun = startEngineRun(engine, 'afterChange')
+  trackDatabaseIO(payload)
   const req = await makeRequest(payload, variant)
   const cases = makeCases()
   recorder.current = { events: [], ids: new WeakMap(), nextID: 0, req, thrown: [] }
@@ -448,7 +451,9 @@ export const runAfterChange = async ({
     invoke: (c) =>
       traverse
         ? traverseFields({
-            blockData: undefined,
+            // 'nested': the arguments of a nested call (lexical's sub-field traversals)
+            blockData:
+              traverse === 'nested' ? { id: 'block-data', blockType: 'nestedBlock' } : undefined,
             collection: collection ?? null,
             context: req.context,
             data: c.data,
@@ -456,10 +461,10 @@ export const runAfterChange = async ({
             fields: (collection ?? global)!.fields,
             global: global ?? null,
             operation,
-            parentIndexPath: '',
-            parentIsLocalized: false,
-            parentPath: '',
-            parentSchemaPath: '',
+            parentIndexPath: traverse === 'nested' ? '1-2' : '',
+            parentIsLocalized: traverse === 'nested',
+            parentPath: traverse === 'nested' ? 'outer.0' : '',
+            parentSchemaPath: traverse === 'nested' ? 'outer' : '',
             previousDoc: c.previousDoc,
             previousSiblingDoc: c.previousDoc,
             req,
@@ -506,6 +511,7 @@ export const runBeforeDuplicate = async ({
 }): Promise<RunOutcome> => {
   const beforeDuplicate = engine === 'ts' ? beforeDuplicateTS : beforeDuplicateRS
   const engineRun = startEngineRun(engine, 'beforeDuplicate')
+  trackDatabaseIO(payload)
   const req = await makeRequest(payload, variant)
   const docs = makeDocs()
   recorder.current = { events: [], ids: new WeakMap(), nextID: 0, req, thrown: [] }

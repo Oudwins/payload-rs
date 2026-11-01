@@ -1,0 +1,13 @@
+[package]
+name = "payload-mongo-transform"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Port of packages/db-mongodb/src/utilities/transform.ts (read / write transform, in place) and the
+# pure db-mongodb utilities (isObjectID, handleError, getEntity, getDBName). See src/lib.rs.
+
+[dependencies]
+indexmap.workspace = true
+payload-engine = { path = "../payload-engine" }
+serde_json.workspace = true

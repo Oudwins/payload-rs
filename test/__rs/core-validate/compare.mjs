@@ -1,6 +1,6 @@
 // Compares per-test outcomes of two vitest JSON reports (run-upstream.sh output).
 // Usage: node test/__rs/core-validate/compare.mjs <reference.json> <candidate.json>
-// Exits 1 when any test's status differs or a test exists in only one report.
+// Exits 1 when any test's status differs, a test exists in only one report, or none ran.
 import fs from 'node:fs'
 
 const load = (file) => {
@@ -37,4 +37,7 @@ console.log(
 for (const diff of diffs) {
   console.log(`  ${diff}`)
 }
-process.exitCode = diffs.length ? 1 : 0
+if (reference.size === 0) {
+  console.log('  no test ran in the reference')
+}
+process.exitCode = diffs.length || reference.size === 0 ? 1 : 0

@@ -28,5 +28,5 @@ pub use render::{
   FindDistinctSelect, FindIdsSelect, IdRows, count_select, docs_by_ids_select, find_distinct_select, find_ids_select, js_id_key, ordered_unique_ids,
   prune_select_fields,
 };
-pub use sql::{Column, Expr, Join, JoinType, Operand, Query, Select, Sql, SqlValue, TableRef};
+pub use sql::{Column, Expr, Join, JoinType, Operand, Query, Select, Sql, SqlValue, TableRef, bind_value};
 pub use where_val::WhereVal;

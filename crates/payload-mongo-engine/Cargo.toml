@@ -1,0 +1,19 @@
+[package]
+name = "payload-mongo-engine"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# The data methods of `@payloadcms/db-mongodb` (`find.ts` ... `updateJobs.ts`) composed from the
+# schema / query / transform / joins ports. Database I/O is a host op executed by the TS host on the
+# adapter's mongoose models (packages/engine-rs/MONGO_ENGINE_CONTRACT.md). No Node dependency: the
+# napi binding lives in crates/payload-node/src/mongo_engine.rs.
+
+[dependencies]
+indexmap.workspace = true
+payload-engine = { path = "../payload-engine" }
+payload-mongo-joins = { path = "../payload-mongo-joins" }
+payload-mongo-query = { path = "../payload-mongo-query" }
+payload-mongo-schema = { path = "../payload-mongo-schema" }
+payload-mongo-transform = { path = "../payload-mongo-transform" }
+serde_json.workspace = true

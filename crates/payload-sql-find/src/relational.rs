@@ -5,7 +5,7 @@
 //! selection tree needed to map rows back (`mapRelationalRow`).
 
 use payload_engine::error::{EngineError, Result};
-use payload_engine::js::num_to_json;
+use payload_engine::js::JsVal;
 
 use crate::args::{OrderBy, QueryConfig, With};
 use crate::schema::{Decoder, DrizzleSchema, Relation};
@@ -282,9 +282,9 @@ pub(crate) fn select_query(
 /// `offset` check of `buildSelectQuery`.
 pub(crate) fn push_limit_offset(out: &mut Sql, limit: Option<f64>, offset: Option<f64>) {
   if let Some(limit) = limit.filter(|l| *l >= 0.0) {
-    out.push_str(" limit ").push_param(num_to_json(limit));
+    out.push_str(" limit ").push_param(JsVal::Num(limit));
   }
   if let Some(offset) = offset.filter(|o| *o != 0.0 && !o.is_nan()) {
-    out.push_str(" offset ").push_param(num_to_json(offset));
+    out.push_str(" offset ").push_param(JsVal::Num(offset));
   }
 }

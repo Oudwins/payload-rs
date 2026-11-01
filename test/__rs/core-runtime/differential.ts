@@ -25,9 +25,14 @@ import { traverseFields as afterReadTraverseFieldsTS } from '../../../packages/p
 import { getSelectMode } from '../../../packages/payload/src/utilities/getSelectMode.js'
 import { createPayloadRequest } from '../../../packages/payload/src/utilities/createPayloadRequest.js'
 import { assertDistinctEngines, startEngineRun } from '../dispatch/engineGuard.js'
+import { settleRun, trackDatabaseIO } from '../dispatch/settle.js'
 
 assertDistinctEngines('afterRead', afterReadTS, afterReadRS)
-assertDistinctEngines('afterRead traverseFields', afterReadTraverseFieldsTS, afterReadTraverseFieldsRS)
+assertDistinctEngines(
+  'afterRead traverseFields',
+  afterReadTraverseFieldsTS,
+  afterReadTraverseFieldsRS,
+)
 
 export type Engine = 'rs' | 'ts'
 
@@ -426,14 +431,17 @@ export const runAfterRead = async ({
   /**
    * Call the exported (synchronous) `traverseFields`, what rich text editor hooks call, with the
    * arguments `afterRead` passes it, then await the promise arrays the way `afterRead` does (the
-   * same harness code for both engines), instead of `afterRead`.
+   * same harness code for both engines), instead of `afterRead`. `'nested'`: with the arguments
+   * of a nested call (what lexical's block and link sub-field traversals pass): non-empty parent
+   * paths, `fieldDepth` 1, `blockData`, `parentIsLocalized: true`.
    */
-  traverse?: boolean
+  traverse?: 'nested' | boolean
   variant: Variant
 }): Promise<RunOutcome> => {
   const afterRead = engine === 'ts' ? afterReadTS : afterReadRS
   const traverseFields = engine === 'ts' ? afterReadTraverseFieldsTS : afterReadTraverseFieldsRS
   const engineRun = startEngineRun(engine, 'afterRead')
+  trackDatabaseIO(payload)
   const req = await createPayloadRequest({
     context: { rsDifferential: true },
     fallbackLocale: variant.fallbackLocale as any,
@@ -460,7 +468,9 @@ export const runAfterRead = async ({
     const fieldPromises: Promise<void>[] = []
     const populationPromises: Promise<void>[] = []
     const select = variant.select as any
+    const nested = traverse === 'nested'
     traverseFields({
+      blockData: nested ? { id: 'block-data', blockType: 'nestedBlock' } : undefined,
       collection: collection ?? null,
       context: req.context,
       currentDepth: 1,
@@ -468,7 +478,7 @@ export const runAfterRead = async ({
       doc,
       draft: variant.draft ?? false,
       fallbackLocale: (variant.fallbackLocale ?? req.fallbackLocale) as any,
-      fieldDepth: 0,
+      fieldDepth: nested ? 1 : 0,
       fieldPromises,
       fields: (collection ?? global)!.fields,
       findMany: variant.findMany!,
@@ -476,10 +486,10 @@ export const runAfterRead = async ({
       global: global ?? null,
       locale: variant.locale ?? req.locale!,
       overrideAccess: variant.overrideAccess,
-      parentIndexPath: '',
-      parentIsLocalized: false,
-      parentPath: '',
-      parentSchemaPath: '',
+      parentIndexPath: nested ? '1-2' : '',
+      parentIsLocalized: nested,
+      parentPath: nested ? 'outer.0' : '',
+      parentSchemaPath: nested ? 'outer' : '',
       populationPromises,
       req,
       select,
@@ -499,21 +509,21 @@ export const runAfterRead = async ({
     traverse
       ? runTraverseFields(doc)
       : afterRead({
-      collection: collection ?? null,
-      context: req.context,
-      depth: variant.depth,
-      doc,
-      draft: variant.draft ?? false,
-      fallbackLocale: (variant.fallbackLocale ?? req.fallbackLocale) as any,
-      findMany: variant.findMany,
-      flattenLocales: variant.flattenLocales,
-      global: global ?? null,
-      locale: variant.locale ?? req.locale!,
-      overrideAccess: variant.overrideAccess,
-      req,
-      select: variant.select as any,
-      showHiddenFields: variant.showHiddenFields,
-    })
+          collection: collection ?? null,
+          context: req.context,
+          depth: variant.depth,
+          doc,
+          draft: variant.draft ?? false,
+          fallbackLocale: (variant.fallbackLocale ?? req.fallbackLocale) as any,
+          findMany: variant.findMany,
+          flattenLocales: variant.flattenLocales,
+          global: global ?? null,
+          locale: variant.locale ?? req.locale!,
+          overrideAccess: variant.overrideAccess,
+          req,
+          select: variant.select as any,
+          showHiddenFields: variant.showHiddenFields,
+        })
   const outcome: RunOutcome = { contextAfter: undefined, docs: undefined, events: [], identity: [] }
   try {
     let results: unknown[]
@@ -532,6 +542,7 @@ export const runAfterRead = async ({
   }
   // let stray settle events land before snapshotting
   await new Promise((resolve) => setTimeout(resolve, 0))
+  await settleRun({ activity: () => recorder.current?.events.length ?? 0, payload })
   isTracing = false
   outcome.docs = docs.map((doc) => snap(doc))
   outcome.contextAfter = Object.entries(req.context).map(([key, value]) => [key, snap(value, 8)])

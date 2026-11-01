@@ -60,7 +60,7 @@ async fn run(args: Val) -> JsResult<Val> {
 
     // beforeValidate - Collection
     if has_hooks(collection_config.get(), "beforeValidate")? {
-      let hooks = hooks_of(collection_config.get(), "beforeValidate")?;
+      let hooks = hooks_of(collection_config.get(), "beforeValidate", "collectionConfig")?;
       await_loop(hooks, "hook", || call("resetPasswordBeforeValidateArgs", &[args.get(), req.get(), user.get()])).await?;
     }
 
@@ -86,7 +86,7 @@ async fn run(args: Val) -> JsResult<Val> {
     sid = gv(&session, "sid")?;
 
     // beforeLogin - Collection
-    user = config_hooks(&collection_config, "beforeLogin", user.clone(), |user| {
+    user = config_hooks(&collection_config, "beforeLogin", "collectionConfig", user.clone(), |user| {
       call("loginHookArgs", &[args.get(), user, js::undefined(), js::boolean(false)])
     })
     .await?;
@@ -94,7 +94,7 @@ async fn run(args: Val) -> JsResult<Val> {
     set(req.get(), "user", user.get())?;
 
     // afterLogin - Collection
-    user = config_hooks(&collection_config, "afterLogin", user.clone(), |user| {
+    user = config_hooks(&collection_config, "afterLogin", "collectionConfig", user.clone(), |user| {
       call("loginHookArgs", &[args.get(), user, token.get(), js::boolean(true)])
     })
     .await?;

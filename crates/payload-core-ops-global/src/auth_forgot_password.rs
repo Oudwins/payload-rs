@@ -139,7 +139,7 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
 
     // afterForgotPassword - Collection
     if has_hooks(collection_config.get(), "afterForgotPassword")? {
-      let hooks = hooks_of(collection_config.get(), "afterForgotPassword")?;
+      let hooks = hooks_of(collection_config.get(), "afterForgotPassword", "collectionConfig")?;
       crate::common::await_loop(hooks, "hook", || call("afterForgotPasswordHookArgs", &[args.get(), req.get()])).await?;
     }
 

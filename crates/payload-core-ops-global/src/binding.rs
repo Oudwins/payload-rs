@@ -70,6 +70,9 @@ export!(access_export, auth_small::access);
 export!(auth_export, auth_small::auth);
 export!(auth_init_export, auth_small::init);
 
+/// Version of the binding / host-helper contract with `packages/engine-rs/src/ops-global`.
+pub const API_VERSION: u32 = 1;
+
 /// Builds the binding object.
 pub fn create() -> JsResult<Local> {
   let o = js::object();
@@ -99,6 +102,8 @@ pub fn create() -> JsResult<Local> {
   add!("access", access_export);
   add!("auth", auth_export);
   add!("authInit", auth_init_export);
+  // The host helper set this build expects (packages/engine-rs/src/ops-global/index.ts checks it).
+  js::set_named(o, "apiVersion", js::number(f64::from(API_VERSION)))?;
   Ok(o)
 }
 

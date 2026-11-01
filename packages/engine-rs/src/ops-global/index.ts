@@ -17,6 +17,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 
 import { getCoreOps } from '../ops/index.js'
+import { getCoreOpsWrite } from '../ops-write/index.js'
 import { createOpsGlobalHost } from './host.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- drop-ins keep the upstream generics */
@@ -48,18 +49,25 @@ const operationNames = [
 type OperationName = (typeof operationNames)[number]
 
 export type CoreOpsGlobalBinding = {
+  /** Host-helper contract version (crates/payload-core-ops-global/src/binding.rs `API_VERSION`). */
+  apiVersion?: number
   init: (host: Record<string, unknown>) => void
 } & Record<OperationName, (args: unknown) => Promise<unknown>>
 
 let binding: CoreOpsGlobalBinding | undefined
+
+/** The binding contract this host implements (crates/payload-core-ops-global/src/binding.rs). */
+const CORE_OPS_GLOBAL_API_VERSION = 1
 
 export const getOpsGlobal = (): CoreOpsGlobalBinding => {
   if (binding) {
     return binding
   }
   // Installs the core runtime host and the collection operations' host (executeAccess,
-  // buildBeforeOperation / buildAfterOperation and their helpers) on the same addon instance.
+  // buildBeforeOperation / buildAfterOperation and their helpers) on the same addon instance, and
+  // the write operations' host (the global validate runs their `runValidationLifecycle` port).
   getCoreOps()
+  getCoreOpsWrite()
   const require = createRequire(import.meta.url)
   const addonPath =
     process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
@@ -70,6 +78,11 @@ export const getOpsGlobal = (): CoreOpsGlobalBinding => {
     throw new Error(`The engine addon at ${addonPath} has no coreOpsGlobalBinding export`)
   }
   const created = addon.coreOpsGlobalBinding()
+  if (created.apiVersion !== CORE_OPS_GLOBAL_API_VERSION) {
+    throw new Error(
+      `The engine addon at ${addonPath} has core global/auth ops API version ${created.apiVersion}, expected ${CORE_OPS_GLOBAL_API_VERSION}; rebuild it`,
+    )
+  }
   created.init(createOpsGlobalHost())
   binding = created
   return created

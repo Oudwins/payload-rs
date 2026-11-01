@@ -18,18 +18,11 @@ import type {
   PayloadRequest,
 } from '../../../../payload/src/types/index.js'
 
-import type { TypeWithID } from '../../../../payload/src/collections/config/types.js'
-import type { JsonValue } from '../../../../payload/src/types/index.js'
-
-import {
-  fieldAffectsData,
-  valueIsValueWithRelation,
-} from '../../../../payload/src/fields/config/types.js'
-import { getFieldPaths } from '../../../../payload/src/fields/getFieldPaths.js'
 import { cloneDataFromOriginalDoc } from '../../../../payload/src/fields/hooks/beforeChange/cloneDataFromOriginalDoc.js'
-import { getFallbackValue } from '../../../../payload/src/fields/hooks/beforeValidate/getFallbackValue.js'
 import { getExistingRowDoc } from '../../../../payload/src/fields/hooks/beforeChange/getExistingRowDoc.js'
+import { promise as upstreamPromise } from '../../../../payload/src/fields/hooks/beforeValidate/promise.js'
 import { stripNullRows } from '../../../../payload/src/fields/hooks/beforeValidate/stripNullRows.js'
+import { traverseFields as upstreamTraverseFields } from '../../../../payload/src/fields/hooks/beforeValidate/traverseFields.js'
 import { unflattenData } from '../../../../payload/src/utilities/unflattenData.js'
 import { getCoreRuntime } from '../index.js'
 
@@ -70,15 +63,54 @@ const C_OVERRIDE_ACCESS = 8
 const C_REQ = 9
 
 /**
- * `beforeValidate/promise.ts` for a leaf field (crates/payload-core-hooks-validate `is_leaf`: no
- * subfield traversal, no editor hooks): upstream's body verbatim up to `// Traverse subfields`,
- * whose `switch` has no case for a leaf. `beforeValidateLeaves` calls it where `traverseFields`
- * calls `promise()`.
+ * Upstream's `promise()` of a leaf field (crates/payload-core-hooks-validate `is_leaf`: no subfield
+ * traversal, no editor hooks), called with the args object upstream's `traverseFields` builds
+ * (same keys, same order). The traversal-constant values come from the run context array `c`.
  */
-const beforeValidateLeaf = async <T>(
+const leafPromise = (
   c: any[],
-  field: any,
+  fields: any[],
   fieldIndex: number,
+  blockData: any,
+  docForHooks: any,
+  parentIndexPath: string,
+  parentIsLocalized: any,
+  parentPath: string,
+  parentSchemaPath: string,
+  siblingData: any,
+  siblingDoc: any,
+): Promise<void> =>
+  upstreamPromise({
+    id: c[C_ID],
+    blockData,
+    collection: c[C_COLLECTION],
+    context: c[C_CONTEXT],
+    data: c[C_DATA],
+    doc: c[C_DOC],
+    docForHooks,
+    field: fields[fieldIndex],
+    fieldIndex,
+    global: c[C_GLOBAL],
+    onFieldAccess: c[C_ON_FIELD_ACCESS],
+    operation: c[C_OPERATION],
+    overrideAccess: c[C_OVERRIDE_ACCESS],
+    parentIndexPath,
+    parentIsLocalized,
+    parentPath,
+    parentSchemaPath,
+    req: c[C_REQ],
+    siblingData,
+    siblingDoc,
+    siblingFields: fields,
+  })
+
+/**
+ * A `traverseFields` call whose fields are all leaves (the crate's `traverse`): upstream's own
+ * `traverseFields.ts`, with the arguments the crate's call has.
+ */
+const beforeValidateLeafTraversal = (
+  c: any[],
+  fields: any[],
   blockData: any,
   docForHooks: any,
   parentIndexPath: string,
@@ -86,352 +118,29 @@ const beforeValidateLeaf = async <T>(
   parentSchemaPath: string,
   siblingData: any,
   siblingDoc: any,
-  siblingFields: any,
-): Promise<void> => {
-  const id = c[C_ID]
-  const collection = c[C_COLLECTION]
-  const context = c[C_CONTEXT]
-  const data = c[C_DATA]
-  const doc = c[C_DOC]
-  const global = c[C_GLOBAL]
-  const onFieldAccess = c[C_ON_FIELD_ACCESS]
-  const operation = c[C_OPERATION]
-  const overrideAccess = c[C_OVERRIDE_ACCESS]
-  const req = c[C_REQ]
-  const { indexPath, path, schemaPath } = getFieldPaths({
-    field,
-    index: fieldIndex,
+  parentIsLocalized: any,
+): Promise<void> =>
+  upstreamTraverseFields({
+    id: c[C_ID],
+    blockData,
+    collection: c[C_COLLECTION],
+    context: c[C_CONTEXT],
+    data: c[C_DATA],
+    doc: c[C_DOC],
+    docForHooks,
+    fields,
+    global: c[C_GLOBAL],
+    onFieldAccess: c[C_ON_FIELD_ACCESS],
+    operation: c[C_OPERATION],
+    overrideAccess: c[C_OVERRIDE_ACCESS],
     parentIndexPath,
+    parentIsLocalized,
     parentPath,
     parentSchemaPath,
+    req: c[C_REQ],
+    siblingData,
+    siblingDoc,
   })
-
-  const pathSegments = path ? path.split('.') : []
-  const schemaPathSegments = schemaPath ? schemaPath.split('.') : []
-  const indexPathSegments = indexPath ? indexPath.split('-').filter(Boolean)?.map(Number) : []
-  const policyDoc = path === '_status' && docForHooks ? docForHooks : doc
-  const policySiblingDoc =
-    path === '_status' && docForHooks ? (docForHooks as JsonObject) : siblingDoc
-
-  if (fieldAffectsData(field)) {
-    if (field.name === 'id') {
-      if (field.type === 'number' && typeof siblingData[field.name] === 'string') {
-        const value = siblingData[field.name] as string
-
-        siblingData[field.name] = parseFloat(value)
-      }
-
-      if (
-        field.type === 'text' &&
-        typeof siblingData[field.name]?.toString === 'function' &&
-        typeof siblingData[field.name] !== 'string'
-      ) {
-        siblingData[field.name] = siblingData[field.name].toString()
-      }
-    }
-
-    // Sanitize incoming data
-    switch (field.type) {
-      case 'array':
-      case 'blocks': {
-        // Handle cases of arrays being intentionally set to 0
-        if (siblingData[field.name] === '0' || siblingData[field.name] === 0) {
-          siblingData[field.name] = []
-        }
-
-        break
-      }
-
-      case 'checkbox': {
-        if (siblingData[field.name] === 'true') {
-          siblingData[field.name] = true
-        }
-        if (siblingData[field.name] === 'false') {
-          siblingData[field.name] = false
-        }
-        if (siblingData[field.name] === '') {
-          siblingData[field.name] = false
-        }
-
-        break
-      }
-
-      case 'number': {
-        if (typeof siblingData[field.name] === 'string') {
-          const value = siblingData[field.name] as string
-          const trimmed = value.trim()
-          siblingData[field.name] = trimmed.length === 0 ? null : parseFloat(trimmed)
-        }
-
-        break
-      }
-
-      case 'point': {
-        if (Array.isArray(siblingData[field.name])) {
-          siblingData[field.name] = (siblingData[field.name] as string[]).map((coordinate, i) => {
-            if (typeof coordinate === 'string') {
-              const value = siblingData[field.name][i] as string
-              const trimmed = value.trim()
-              return trimmed.length === 0 ? null : parseFloat(trimmed)
-            }
-            return coordinate
-          })
-        }
-
-        break
-      }
-      case 'relationship':
-      case 'upload': {
-        if (
-          siblingData[field.name] === '' ||
-          siblingData[field.name] === 'none' ||
-          siblingData[field.name] === 'null' ||
-          siblingData[field.name] === null
-        ) {
-          if (field.hasMany === true) {
-            siblingData[field.name] = []
-          } else {
-            siblingData[field.name] = null
-          }
-        }
-
-        const value = siblingData[field.name]
-
-        if (Array.isArray(field.relationTo)) {
-          if (Array.isArray(value)) {
-            value.forEach((relatedDoc: { relationTo: string; value: JsonValue }, i) => {
-              const relatedCollection = req.payload.collections?.[relatedDoc.relationTo]?.config
-
-              if (
-                typeof relatedDoc.value === 'object' &&
-                relatedDoc.value &&
-                'id' in relatedDoc.value
-              ) {
-                relatedDoc.value = relatedDoc.value.id
-              }
-
-              if (relatedCollection?.fields) {
-                const relationshipIDField = relatedCollection.fields.find(
-                  (collectionField) =>
-                    fieldAffectsData(collectionField) && collectionField.name === 'id',
-                )
-                if (relationshipIDField?.type === 'number') {
-                  siblingData[field.name][i] = {
-                    ...relatedDoc,
-                    value: parseFloat(relatedDoc.value as string),
-                  }
-                }
-              }
-            })
-          }
-          if (field.hasMany !== true && valueIsValueWithRelation(value)) {
-            const relatedCollection = req.payload.collections?.[value.relationTo]?.config
-
-            if (typeof value.value === 'object' && value.value && 'id' in value.value) {
-              value.value = (value.value as TypeWithID).id
-            }
-
-            if (relatedCollection?.fields) {
-              const relationshipIDField = relatedCollection.fields.find(
-                (collectionField) =>
-                  fieldAffectsData(collectionField) && collectionField.name === 'id',
-              )
-              if (relationshipIDField?.type === 'number') {
-                siblingData[field.name] = { ...value, value: parseFloat(value.value as string) }
-              }
-            }
-          }
-        } else {
-          if (Array.isArray(value)) {
-            value.forEach((relatedDoc: unknown, i) => {
-              const relatedCollection = Array.isArray(field.relationTo)
-                ? undefined
-                : req.payload.collections?.[field.relationTo]?.config
-
-              if (typeof relatedDoc === 'object' && relatedDoc && 'id' in relatedDoc) {
-                value[i] = relatedDoc.id
-              }
-
-              if (relatedCollection?.fields) {
-                const relationshipIDField = relatedCollection.fields.find(
-                  (collectionField) =>
-                    fieldAffectsData(collectionField) && collectionField.name === 'id',
-                )
-                if (relationshipIDField?.type === 'number') {
-                  siblingData[field.name][i] = parseFloat(relatedDoc as string)
-                }
-              }
-            })
-          }
-          if (field.hasMany !== true && value) {
-            const relatedCollection = req.payload.collections?.[field.relationTo]?.config
-
-            if (typeof value === 'object' && value && 'id' in value) {
-              siblingData[field.name] = value.id
-            }
-
-            if (relatedCollection?.fields) {
-              const relationshipIDField = relatedCollection.fields.find(
-                (collectionField) =>
-                  fieldAffectsData(collectionField) && collectionField.name === 'id',
-              )
-              if (relationshipIDField?.type === 'number') {
-                siblingData[field.name] = parseFloat(value as string)
-              }
-            }
-          }
-        }
-        break
-      }
-      case 'richText': {
-        if (typeof siblingData[field.name] === 'string') {
-          try {
-            const richTextJSON = JSON.parse(siblingData[field.name] as string)
-            siblingData[field.name] = richTextJSON
-          } catch {
-            // Disregard this data as it is not valid.
-            // Will be reported to user by field validation
-          }
-        }
-
-        break
-      }
-
-      default: {
-        break
-      }
-    }
-
-    // ensure the fallback value is only computed one time
-    // either here or when access control returns false
-    const fallbackResult: { executed: boolean; value: unknown } = {
-      executed: false,
-      value: undefined,
-    }
-    if (typeof siblingData[field.name!] === 'undefined' && !req.context?.isRestoringVersion) {
-      fallbackResult.value = await getFallbackValue({ field, req, siblingDoc })
-      fallbackResult.executed = true
-    }
-
-    // Execute hooks
-    if ('hooks' in field && field.hooks?.beforeValidate) {
-      for (const hook of field.hooks.beforeValidate) {
-        const hookedValue = await hook({
-          blockData,
-          collection,
-          context,
-          data: data as Partial<T>,
-          field,
-          global,
-          indexPath: indexPathSegments,
-          operation,
-          originalDoc: policyDoc,
-          overrideAccess,
-          path: pathSegments,
-          previousSiblingDoc: policySiblingDoc,
-          previousValue: policySiblingDoc[field.name],
-          req,
-          schemaPath: schemaPathSegments,
-          siblingData,
-          siblingFields: siblingFields!,
-          value:
-            typeof siblingData[field.name] === 'undefined'
-              ? fallbackResult.value
-              : siblingData[field.name],
-        })
-
-        if (hookedValue !== undefined) {
-          siblingData[field.name] = hookedValue
-        }
-      }
-    }
-
-    let accessResult = true
-
-    // Execute access control
-    if (field.access && field.access[operation]) {
-      accessResult = overrideAccess
-        ? true
-        : await field.access[operation](
-            collection
-              ? {
-                  id,
-                  blockData,
-                  collection,
-                  data: data as Partial<T>,
-                  doc: policyDoc,
-                  req,
-                  siblingData,
-                }
-              : {
-                  id,
-                  blockData,
-                  data: data as Partial<T>,
-                  doc: policyDoc,
-                  global: global!,
-                  req,
-                  siblingData,
-                },
-          )
-
-      if (!accessResult) {
-        delete siblingData[field.name!]
-      }
-    }
-
-    onFieldAccess?.({ accessResult, path })
-
-    if (typeof siblingData[field.name!] === 'undefined' && !req.context?.isRestoringVersion) {
-      const isDocumentValueAllowed =
-        operation === 'update' || operation === 'validate' || accessResult
-
-      siblingData[field.name!] =
-        !fallbackResult.executed || !isDocumentValueAllowed
-          ? await getFallbackValue({ field, isDocumentValueAllowed, req, siblingDoc })
-          : fallbackResult.value
-    }
-  }
-}
-
-/**
- * `beforeValidate/traverseFields.ts` for a fields array made only of leaf fields (the crate's
- * `traverse`): upstream's body, with `promise()` being the leaf body above.
- */
-const beforeValidateLeafTraversal = async (
-  c: any[],
-  fields: any[],
-  blockData: unknown,
-  docForHooks: unknown,
-  parentIndexPath: string,
-  parentPath: string,
-  parentSchemaPath: string,
-  siblingData: any,
-  siblingDoc: unknown,
-): Promise<void> => {
-  unflattenData(siblingData)
-
-  const promises: Promise<void>[] = []
-
-  fields.forEach((field, fieldIndex) => {
-    promises.push(
-      beforeValidateLeaf(
-        c,
-        field,
-        fieldIndex,
-        blockData,
-        docForHooks,
-        parentIndexPath,
-        parentPath,
-        parentSchemaPath,
-        siblingData,
-        siblingDoc,
-        fields,
-      ),
-    )
-  })
-
-  await Promise.all(promises)
-}
 
 export const getBeforeValidateBinding = (): BeforeValidateBinding => {
   if (binding) {
@@ -452,6 +161,7 @@ export const getBeforeValidateBinding = (): BeforeValidateBinding => {
   const created = addon.hooksBeforeValidateBinding()
   created.init({
     /** `promises.push(promise({...}))` of `traverseFields` for the leaf fields `start..end`. */
+    beforeValidateLeafTraversal,
     beforeValidateLeaves: (
       c: any[],
       fields: any[],
@@ -465,26 +175,26 @@ export const getBeforeValidateBinding = (): BeforeValidateBinding => {
       parentSchemaPath: string,
       siblingData: unknown,
       siblingDoc: unknown,
+      parentIsLocalized: unknown,
     ) => {
       for (let fieldIndex = start; fieldIndex < end; fieldIndex++) {
         promises.push(
-          beforeValidateLeaf(
+          leafPromise(
             c,
-            fields[fieldIndex],
+            fields,
             fieldIndex,
             blockData,
             docForHooks,
             parentIndexPath,
+            parentIsLocalized,
             parentPath,
             parentSchemaPath,
             siblingData,
             siblingDoc,
-            fields,
           ),
         )
       }
     },
-    beforeValidateLeafTraversal,
     cloneDataFromOriginalDoc,
     // The args object literal of the rich text editor hooks in `promise.ts` (same key order).
     editorHookArgs: (
@@ -582,6 +292,75 @@ export const getBeforeValidateBinding = (): BeforeValidateBinding => {
 export const beforeValidate = <T extends JsonObject>(args: BeforeValidateArgs<T>): Promise<T> =>
   getBeforeValidateBinding().beforeValidate(args) as Promise<T>
 
-/** Drop-in for `traverseFields` from `payload/src/fields/hooks/beforeValidate/traverseFields.ts`. */
-export const traverseFields = (args: Record<string, unknown>): Promise<void> =>
-  getBeforeValidateBinding().traverseFields(args)
+export type BeforeValidateTraverseFieldsArgs = Parameters<typeof upstreamTraverseFields>[0]
+
+/**
+ * Drop-in for `traverseFields` from `payload/src/fields/hooks/beforeValidate/traverseFields.ts`
+ * (exported by payload as `beforeValidateTraverseFields`). The parameter is destructured with
+ * upstream's pattern (a throwing getter rejects, as in the async function); a path that is not a
+ * string runs upstream's own function (the port works on string paths), as do the other
+ * traversals' drop-ins.
+ */
+export const traverseFields = (args: BeforeValidateTraverseFieldsArgs): Promise<void> => {
+  let destructured: BeforeValidateTraverseFieldsArgs
+  try {
+    const {
+      id,
+      blockData,
+      collection,
+      context,
+      data,
+      doc,
+      docForHooks,
+      fields,
+      global,
+      onFieldAccess,
+      operation,
+      overrideAccess,
+      parentIndexPath,
+      parentIsLocalized,
+      parentPath,
+      parentSchemaPath,
+      req,
+      siblingData,
+      siblingDoc,
+    } = args
+    destructured = {
+      id,
+      blockData,
+      collection,
+      context,
+      data,
+      doc,
+      docForHooks,
+      fields,
+      global,
+      onFieldAccess,
+      operation,
+      overrideAccess,
+      parentIndexPath,
+      parentIsLocalized,
+      parentPath,
+      parentSchemaPath,
+      req,
+      siblingData,
+      siblingDoc,
+    }
+  } catch (error) {
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- the thrown value, unchanged
+    return Promise.reject(error)
+  }
+  if (
+    typeof destructured.parentIndexPath !== 'string' ||
+    typeof destructured.parentPath !== 'string' ||
+    typeof destructured.parentSchemaPath !== 'string'
+  ) {
+    return upstreamTraverseFields(destructured)
+  }
+  try {
+    return getBeforeValidateBinding().traverseFields(destructured)
+  } catch (error) {
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- the thrown value, unchanged
+    return Promise.reject(error)
+  }
+}

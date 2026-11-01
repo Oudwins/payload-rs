@@ -74,7 +74,12 @@ const afterReadTraverseFields: typeof upstreamAfterReadTraverseFields = isRustCo
       if (rustCoreHooks) {
         return rustCoreHooks.afterReadTraverseFields(args)
       }
-      void rustCoreHooksLoad!.then((loaded) => loaded.recordDeferredCall())
+      // A load failure is already handled on `rustCoreHooksLoad`; this derived promise must not
+      // add an unhandled rejection of its own.
+      void rustCoreHooksLoad!.then(
+        (loaded) => loaded.recordDeferredCall(),
+        () => {},
+      )
       return upstreamAfterReadTraverseFields(args)
     }
   : upstreamAfterReadTraverseFields

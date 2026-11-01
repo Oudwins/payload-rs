@@ -49,21 +49,45 @@ impl<E: Executor + ?Sized> Executor for &E {
   }
 }
 
-/// `valueToSql` of `@libsql/client` for the parameter values the find module
-/// produces (JS numbers and booleans bind as REAL, objects cannot be bound).
-pub fn bind_value(param: &Param) -> BindValue {
-  match param {
-    Json::Null => BindValue::Null,
-    Json::Bool(b) => BindValue::Real(if *b { 1.0 } else { 0.0 }),
-    Json::Number(n) => BindValue::Real(n.as_f64().unwrap_or(f64::NAN)),
-    Json::String(s) => BindValue::Text(s.clone()),
-    Json::Array(_) | Json::Object(_) => BindValue::Invalid,
+/// `valueToSql` of `@libsql/client` (intMode `number`) for one driver value: JS numbers and
+/// booleans bind as REAL, a `bigint` as a 64-bit integer, a `Date` its time value; non-finite
+/// numbers and too large `bigint`s are `RangeError`s, `undefined` a `TypeError`; other objects
+/// reach the binding, which rejects them.
+pub fn bind_value(param: &Param) -> std::result::Result<BindValue, ClientError> {
+  match param.typed() {
+    // `value.valueOf()`: an invalid date binds `NaN` (stored as NULL)
+    Some(TypedValue::Date(ms)) => return Ok(BindValue::Real(ms)),
+    Some(TypedValue::BigInt(decimal)) => {
+      return decimal.parse::<i64>().map(BindValue::Integer).map_err(|_| {
+        ClientError::Range("bigint is too large to be represented as a 64-bit integer and passed as argument".into())
+      });
+    }
+    None => {}
   }
+  Ok(match param {
+    JsVal::Null => BindValue::Null,
+    JsVal::Bool(b) => BindValue::Real(if *b { 1.0 } else { 0.0 }),
+    JsVal::Num(n) if !n.is_finite() => {
+      return Err(ClientError::Range("Only finite numbers (not Infinity or NaN) can be passed as arguments".into()));
+    }
+    JsVal::Num(n) => BindValue::Real(*n),
+    JsVal::Str(s) => BindValue::Text(s.to_string()),
+    JsVal::Undefined => return Err(ClientError::Type("undefined cannot be passed as argument to the database".into())),
+    JsVal::Arr(_) | JsVal::Obj(_) | JsVal::Fn(_) => BindValue::Invalid,
+  })
 }
 
-/// The libsql statement for `sql` (`{ sql, args: params }`).
+/// The libsql statement for `sql` (`{ sql, args: params.map(valueToSql) }`); a conversion error
+/// is raised when the statement is executed, where `executeStmt` throws it.
 pub fn statement(sql: &Sql) -> Statement {
-  Statement::with_args(sql.sql.clone(), sql.params.iter().map(bind_value).collect())
+  let mut args = Vec::with_capacity(sql.params.len());
+  for param in &sql.params {
+    match bind_value(param) {
+      Ok(value) => args.push(value),
+      Err(error) => return Statement { error: Some(error), ..Statement::with_args(sql.sql.clone(), Vec::new()) },
+    }
+  }
+  Statement::with_args(sql.sql.clone(), args)
 }
 
 fn run_on_conn(
@@ -115,6 +139,8 @@ pub struct QueuedConn {
 
 impl Executor for QueuedConn {
   fn query_cells(&self, sql: &Sql) -> std::result::Result<Vec<Vec<Cell>>, ClientError> {
+    // converted here (plain data for the job); a conversion error is raised by `execute` after
+    // the connection checks, like `executeStmt`
     let stmt = statement(sql);
     let int_mode = self.int_mode;
     worker::call(self.id, move |session| {
@@ -142,8 +168,9 @@ impl Executor for rusqlite::Connection {
       },
       other => ClientError::Error { message: other.to_string(), code: None },
     };
+    let params = sql.params.iter().map(to_sql_value).collect::<std::result::Result<Vec<_>, _>>()?;
     let mut stmt = self.prepare(&sql.sql).map_err(failure)?;
-    let params = sql.params.iter().map(to_sql_value).collect::<Result<Vec<_>>>().map_err(|_| ClientError::invalid_bind())?;
+    let params = params.into_iter().collect::<Option<Vec<_>>>().ok_or_else(ClientError::invalid_bind)?;
     let column_count = stmt.column_count();
     let mut rows = stmt.query(rusqlite::params_from_iter(params)).map_err(failure)?;
     let mut out = Vec::new();
@@ -202,10 +229,10 @@ pub fn client_error_json(err: &ClientError) -> Json {
 /// `` `Failed query: ${query}\nparams: ${params}` `` and `data` carries
 /// `{ query, params, cause }` with `cause` in [`client_error_json`] form.
 pub fn drizzle_query_error(sql: &Sql, cause: &ClientError) -> EngineError {
-  let params = JsVal::from_json(&Json::Array(sql.params.clone())).to_js_string();
+  let params = JsVal::arr(sql.params.clone()).to_js_string();
   EngineError::new("DrizzleQueryError", format!("Failed query: {}\nparams: {params}", sql.sql)).with_data(json!({
     "query": sql.sql,
-    "params": sql.params,
+    "params": sql.params.iter().map(encode_value).collect::<Vec<_>>(),
     "cause": client_error_json(cause),
   }))
 }
@@ -371,17 +398,16 @@ pub fn query_rows<C: Executor + ?Sized>(conn: &C, sql: &Sql) -> Result<Vec<Vec<J
   Ok(query_cells(conn, sql)?.iter().map(|row| cells_to_js(row).iter().map(JsVal::to_json).collect()).collect())
 }
 
-/// Converts a bound parameter the way the libsql client binds JS values:
-/// every JS number (and boolean) is bound as REAL; objects can't be bound.
-pub fn to_sql_value(param: &Json) -> Result<SqlValue> {
-  Ok(match param {
-    Json::Null => SqlValue::Null,
-    Json::Bool(b) => SqlValue::Real(if *b { 1.0 } else { 0.0 }),
-    Json::Number(n) => SqlValue::Real(n.as_f64().unwrap_or(f64::NAN)),
-    Json::String(s) => SqlValue::Text(s.clone()),
-    Json::Array(_) | Json::Object(_) => {
-      return Err(EngineError::new("Error", "SQLite3 can only bind numbers, strings, bigints, buffers, and null"));
-    }
+/// A driver value bound the way the libsql client binds it ([`bind_value`]); `None` for a value
+/// the binding rejects once the statement is prepared.
+pub fn to_sql_value(param: &Param) -> std::result::Result<Option<SqlValue>, ClientError> {
+  Ok(match bind_value(param)? {
+    BindValue::Null => Some(SqlValue::Null),
+    BindValue::Real(n) => Some(SqlValue::Real(n)),
+    BindValue::Integer(n) => Some(SqlValue::Integer(n)),
+    BindValue::Text(s) => Some(SqlValue::Text(s)),
+    BindValue::Blob(b) => Some(SqlValue::Blob(b)),
+    BindValue::Invalid => None,
   })
 }
 

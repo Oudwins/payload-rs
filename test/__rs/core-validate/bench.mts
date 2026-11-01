@@ -1,13 +1,21 @@
 /**
- * Per-call cost of the default validators: upstream `validations.ts` (TS) vs the Rust-backed
- * module (`packages/engine-rs/src/validate/validations.ts`). 100k calls per case after a warmup,
- * alternating TS / Rust rounds; prints the median ns per call of 5 rounds and the RS/TS ratio.
- * Time is the process CPU time (user + system), so machine load does not count.
+ * Per-call cost of the default validators: upstream `validations.ts` (TS) vs Rust-backed
+ * validators. 100k calls per case (`BENCH_CALLS`), rounds alternating between the sides; prints
+ * the fastest round's ns per call (`BENCH_ROUNDS`, default 7: the minimum is the estimate least
+ * inflated by machine load) and each Rust side's ratio to TS. Time is the process CPU time
+ * (user + system).
  *
  *   PAYLOAD_ENGINE_ADDON=/tmp/x.node pnpm tsx test/__rs/core-validate/bench.mts [case...]
+ *   BENCH_ADDONS=/tmp/old.node,/tmp/new.node pnpm tsx test/__rs/core-validate/bench.mts
  *
- * PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE must be unset (the TS side is the upstream module).
+ * Without `BENCH_ADDONS` the Rust side is `packages/engine-rs/src/validate/validations.ts`
+ * (`BENCH_RS_MODULE`: another drop-in); with it, each addon's `validateBinding` is measured in
+ * the same process. PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE must be unset (the reference is TS).
  */
+import { createRequire } from 'node:module'
+import path from 'node:path'
+
+import { validateJSONSchema } from '../../../packages/payload/src/fields/validateJSONSchema.js'
 import { translations as languages } from '../../../packages/translations/src/exports/all.js'
 import { initI18n } from '../../../packages/translations/src/utilities/init.js'
 
@@ -17,12 +25,23 @@ if (process.env.PAYLOAD_ENGINE || process.env.PAYLOAD_CORE_ENGINE) {
 }
 
 const ts = await import('../../../packages/payload/src/fields/validations.js')
-// BENCH_RS_MODULE: another Rust-backed drop-in (e.g. an older build's glue) to measure.
-const rs = await import(
-  process.env.BENCH_RS_MODULE ?? '../../../packages/engine-rs/src/validate/validations.js'
-)
-if ((ts.text as unknown) === rs.text) {
-  console.error('both sides are the same module')
+const sides: [string, typeof ts][] = [['TS', ts]]
+if (process.env.BENCH_ADDONS) {
+  const require = createRequire(new URL('../../../packages/payload/package.json', import.meta.url))
+  const ObjectIdImport = require('bson-objectid')
+  const ObjectId = 'default' in ObjectIdImport ? ObjectIdImport.default : ObjectIdImport
+  for (const addon of process.env.BENCH_ADDONS.split(',')) {
+    const binding = require(path.resolve(addon)).validateBinding({ ObjectId, validateJSONSchema })
+    sides.push([path.basename(addon), binding])
+  }
+} else {
+  const rs = await import(
+    process.env.BENCH_RS_MODULE ?? '../../../packages/engine-rs/src/validate/validations.js'
+  )
+  sides.push(['RS', rs as any])
+}
+if (sides.slice(1).some(([, m]) => (m.text as unknown) === ts.text)) {
+  console.error('a Rust side is the TS module')
   process.exit(1)
 }
 
@@ -38,6 +57,17 @@ const i18n = await initI18n({
 
 const req = { payload: { collections: {}, config: { collections: [] }, db: {} }, t: i18n.t } as any
 const opts = (extra: Record<string, unknown>) => ({ req, required: false, ...extra }) as any
+// A request shaped like a running Payload's: sanitized config defaults, collections, db.
+const sanitizedReq = {
+  payload: {
+    collections: { posts: { config: { slug: 'posts' }, customIDType: undefined } },
+    config: { collections: [{ slug: 'posts' }], defaultMaxTextLength: 40000 },
+    db: { defaultIDType: 'number' },
+  },
+  t: i18n.t,
+} as any
+const sanitizedOpts = (extra: Record<string, unknown>) =>
+  ({ req: sanitizedReq, required: false, ...extra }) as any
 
 type Case = { async?: boolean; name: string; run: (m: typeof ts) => unknown }
 
@@ -77,9 +107,20 @@ const cases: Case[] = [
     run: (m) => m.relationship('abc', opts({ relationTo: 'posts' })),
   },
   { name: 'json', async: true, run: (m) => m.json('{}', opts({})) },
+  { name: 'text sanitized', run: (m) => m.text('hello', sanitizedOpts({ required: true })) },
+  {
+    name: 'relationship poly',
+    async: true,
+    run: (m) =>
+      m.relationship(
+        { relationTo: 'posts', value: 5 } as any,
+        sanitizedOpts({ relationTo: ['posts'] }),
+      ),
+  },
 ]
 
-const N = 100_000
+const N = Number(process.env.BENCH_CALLS ?? 100_000)
+const ROUNDS = Number(process.env.BENCH_ROUNDS ?? 7)
 const selected = process.argv.slice(2)
 
 const measure = async (c: Case, m: typeof ts): Promise<number> => {
@@ -97,36 +138,45 @@ const measure = async (c: Case, m: typeof ts): Promise<number> => {
   return ((used.user + used.system) * 1000) / N
 }
 
-const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!
 const rows: string[] = []
 let compared = 0
 for (const c of cases) {
   if (selected.length && !selected.includes(c.name)) {
     continue
   }
-  const tsResult = await c.run(ts)
-  const rsResult = await c.run(rs as any)
-  if (tsResult !== rsResult) {
-    console.error(`${c.name}: results differ`, tsResult, rsResult)
+  const results = []
+  for (const [, m] of sides) {
+    results.push(await c.run(m))
+  }
+  if (results.some((result) => result !== results[0])) {
+    console.error(`${c.name}: results differ`, results)
     process.exit(1)
   }
-  await measure(c, ts)
-  await measure(c, rs as any)
-  const tsTimes: number[] = []
-  const rsTimes: number[] = []
-  for (let round = 0; round < 5; round++) {
-    tsTimes.push(await measure(c, ts))
-    rsTimes.push(await measure(c, rs as any))
+  const best = sides.map(() => Infinity)
+  for (const [, m] of sides) {
+    await measure(c, m)
   }
-  const t = median(tsTimes)
-  const r = median(rsTimes)
+  for (let round = 0; round < ROUNDS; round++) {
+    for (const [i, [, m]] of sides.entries()) {
+      best[i] = Math.min(best[i]!, await measure(c, m))
+    }
+  }
   compared++
+  const tsTime = best[0]!
   rows.push(
-    `| ${c.name.padEnd(16)} | ${t.toFixed(0).padStart(7)} | ${r.toFixed(0).padStart(7)} | ${(r / t).toFixed(2).padStart(6)}x |`,
+    `| ${c.name.padEnd(18)} | ${best.map((t) => t.toFixed(0).padStart(7)).join(' | ')} | ${best
+      .slice(1)
+      .map((t) => `${(t / tsTime).toFixed(2)}x`.padStart(7))
+      .join(' | ')} |`,
   )
 }
-console.log('| case             | TS ns   | RS ns   | ratio   |')
-console.log('|------------------|---------|---------|---------|')
+const names = sides.map(([name]) => name)
+console.log(
+  `| case               | ${names.map((n) => `${n} ns`.padStart(7)).join(' | ')} | ${names
+    .slice(1)
+    .map((n) => `/${n}`.padStart(7))
+    .join(' | ')} |`,
+)
 console.log(rows.join('\n'))
 if (!compared) {
   console.error('no case ran')

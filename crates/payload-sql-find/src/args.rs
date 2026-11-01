@@ -128,7 +128,7 @@ impl QueryConfig {
         Json::Object(
           extras
             .iter()
-            .map(|(k, e)| (k.clone(), json!({ "sql": e.sql.sql, "params": e.sql.params, "alias": e.alias })))
+            .map(|(k, e)| (k.clone(), json!({ "sql": e.sql.sql, "params": e.sql.to_json()["params"], "alias": e.alias })))
             .collect(),
         ),
       );

@@ -12,8 +12,7 @@ import type { AfterReadArgs } from '../../../payload/src/fields/hooks/afterRead/
 import type { JsonObject } from '../../../payload/src/types/index.js'
 
 import { MissingEditorProp } from '../../../payload/src/errors/MissingEditorProp.js'
-import { getDefaultValue } from '../../../payload/src/fields/getDefaultValue.js'
-import { getFieldPaths } from '../../../payload/src/fields/getFieldPaths.js'
+import { promise as upstreamPromise } from '../../../payload/src/fields/hooks/afterRead/promise.js'
 import { relationshipPopulationPromise } from '../../../payload/src/fields/hooks/afterRead/relationshipPopulationPromise.js'
 import { traverseFields as upstreamTraverseFields } from '../../../payload/src/fields/hooks/afterRead/traverseFields.js'
 import { virtualFieldPopulationPromise } from '../../../payload/src/fields/hooks/afterRead/virtualFieldPopulationPromise.js'
@@ -28,6 +27,11 @@ export type CoreRuntimeBinding = {
    * layout followed by the `TRAV_*` entries (after_read.rs `traverse_fields_entry`).
    */
   afterReadTraverseFields: (destructured: unknown[]) => void
+  /**
+   * Host-helper contract version of the core runtime and the field hook crates in the same addon
+   * (crates/payload-core-runtime/src/binding.rs `API_VERSION`), checked at load.
+   */
+  apiVersion?: number
   benchCallJs: (fn: () => unknown, n: number) => number
   benchGetProperty: (obj: object, key: string, n: number) => number
   benchJsonRoundTrip: (json: string) => string
@@ -47,6 +51,9 @@ export type CoreRuntimeBinding = {
 }
 
 let binding: CoreRuntimeBinding | undefined
+
+/** The contract this glue implements (crates/payload-core-runtime/src/binding.rs `API_VERSION`). */
+const CORE_RUNTIME_API_VERSION = 2
 
 /** The `pathSegments`, `schemaPathSegments` and `indexPathSegments` of `promise.ts`. */
 const pathSegments = (path: string, schemaPath: string, indexPath: string): unknown[][] => [
@@ -121,13 +128,16 @@ const leafRun = (
   select: any,
   fieldPromises: Promise<void>[],
   // Only for runs with hooked leaves: the `afterReadArgs` array, the traversal's `blockData`,
-  // `fields` (= `siblingFields`) and parent paths.
+  // `fields` (= `siblingFields`), parent paths, `fieldDepth`, `parentIsLocalized`, `selectMode`.
   c?: any[],
   blockData?: unknown,
   fields?: any[],
   parentIndexPath?: string,
   parentPath?: string,
   parentSchemaPath?: string,
+  fieldDepth?: number,
+  parentIsLocalized?: unknown,
+  selectMode?: unknown,
 ): number => {
   for (let i = start; i < end; i++) {
     const fieldFlags = flags[i]!
@@ -136,17 +146,16 @@ const leafRun = (
       promise = hookedLeaf(
         c!,
         blockData,
-        fields![i],
+        fields!,
         i,
+        fieldDepth!,
         parentIndexPath!,
+        parentIsLocalized,
         parentPath!,
         parentSchemaPath!,
-        siblingDoc,
-        fields,
-        keys[i]!,
-        fieldFlags,
-        bits,
         select,
+        selectMode,
+        siblingDoc,
       )
     } else if (fieldFlags & AFFECTS_DATA) {
       try {
@@ -243,82 +252,59 @@ const leafEpilogue = (
 
 /**
  * `promise()` of a plain leaf data field with `afterRead` hooks (crates/payload-core-runtime
- * config.rs `hooked_leaf`, flag `HOOKED`), as one `async` function with the body of
- * `afterRead/promise.ts` for such a field: `getFieldPaths`, the hidden check,
- * `stripUnselectedFields` and hoisting reads, the hooks loop (each hook awaited, args object
- * literal in the same key order) and the default value step (`getDefaultValue` awaited).
- * `leafRun` calls it where `traverseFields` calls `promise()` and pushes its promise. `c` is the
+ * config.rs `hooked_leaf`, flag `HOOKED`): upstream's own `promise` of `afterRead/promise.ts`,
+ * called with the args literal upstream's `traverseFields` builds (same keys, same order;
+ * `triggerAccessControl`/`triggerHooks` are `true`, the only values the port runs with). `leafRun`
+ * calls it where `traverseFields` calls `promise()` and pushes its promise. `c` is the
  * `afterReadArgs` array.
  */
-const hookedLeaf = async (
+const hookedLeaf = (
   c: any[],
   blockData: unknown,
-  field: any,
+  fields: any[],
   fieldIndex: number,
+  fieldDepth: number,
   parentIndexPath: string,
+  parentIsLocalized: unknown,
   parentPath: string,
   parentSchemaPath: string,
+  select: unknown,
+  selectMode: unknown,
   siblingDoc: any,
-  siblingFields: unknown,
-  key: PropertyKey,
-  fieldFlags: number,
-  bits: number,
-  select: any,
-): Promise<void> => {
-  const { indexPath, path, schemaPath } = getFieldPaths({
-    field,
-    index: fieldIndex,
+): Promise<void> =>
+  upstreamPromise({
+    blockData,
+    collection: c[ARG_COLLECTION],
+    context: c[ARG_CONTEXT],
+    currentDepth: c[ARG_CURRENT_DEPTH],
+    depth: c[ARG_DEPTH],
+    doc: c[ARG_DOC],
+    draft: c[ARG_DRAFT],
+    fallbackLocale: c[ARG_FALLBACK_LOCALE],
+    field: fields[fieldIndex],
+    fieldDepth,
+    fieldIndex,
+    fieldPromises: c[ARG_FIELD_PROMISES],
+    findMany: c[ARG_FIND_MANY],
+    flattenLocales: c[ARG_FLATTEN_LOCALES],
+    global: c[ARG_GLOBAL],
+    locale: c[ARG_LOCALE],
+    overrideAccess: c[ARG_OVERRIDE_ACCESS],
     parentIndexPath,
+    parentIsLocalized,
     parentPath,
     parentSchemaPath,
-  })
-  const [segments, schemaSegments, indexSegments] = pathSegments(path, schemaPath, indexPath)
-  const state = leafPrologue(siblingDoc, key, fieldFlags, bits, select)
-  if (state === LEAF_UNSELECTED) {
-    return
-  }
-  if ('hooks' in field && field.hooks?.afterRead) {
-    for (const hook of field.hooks.afterRead) {
-      const hookedValue = await hook({
-        blockData,
-        collection: c[ARG_COLLECTION],
-        context: c[ARG_CONTEXT],
-        currentDepth: c[ARG_CURRENT_DEPTH],
-        data: c[ARG_DOC],
-        depth: c[ARG_DEPTH],
-        draft: c[ARG_DRAFT],
-        field,
-        findMany: c[ARG_FIND_MANY],
-        global: c[ARG_GLOBAL],
-        indexPath: indexSegments,
-        operation: 'read',
-        originalDoc: c[ARG_DOC],
-        overrideAccess: c[ARG_OVERRIDE_ACCESS],
-        path: segments,
-        req: c[ARG_REQ],
-        schemaPath: schemaSegments,
-        showHiddenFields: c[ARG_SHOW_HIDDEN_FIELDS],
-        siblingData: siblingDoc,
-        siblingFields,
-        value: siblingDoc[key],
-      })
-
-      if (hookedValue !== undefined) {
-        siblingDoc[key] = hookedValue
-      }
-    }
-  }
-  if (leafEpilogue(siblingDoc, key, fieldFlags, state === LEAF_REMOVED)) {
-    const req = c[ARG_REQ]
-    siblingDoc[key] = await getDefaultValue({
-      defaultValue: field.defaultValue,
-      locale: c[ARG_LOCALE],
-      req,
-      user: req.user,
-      value: siblingDoc[key],
-    })
-  }
-}
+    populate: c[ARG_POPULATE],
+    populationPromises: c[ARG_POPULATION_PROMISES],
+    req: c[ARG_REQ],
+    select,
+    selectMode,
+    showHiddenFields: c[ARG_SHOW_HIDDEN_FIELDS],
+    siblingDoc,
+    siblingFields: fields,
+    triggerAccessControl: true,
+    triggerHooks: true,
+  } as any)
 
 /**
  * The array field's `rows.forEach((row, rowIndex) => traverseFields({ siblingDoc: row || {},
@@ -336,13 +322,17 @@ const leafRows = (
   bits: number,
   select: any,
   fieldPromises: Promise<void>[],
-  // Only for rows with hooked leaves: the `afterReadArgs` array, `blockData`, `field.fields`
-  // and the array field's `path` / `schemaPath`.
+  // Only for rows with hooked leaves: the `afterReadArgs` array, `blockData`, `field.fields`,
+  // the array field's `path` / `schemaPath` and the rows' `fieldDepth`, `parentIsLocalized` and
+  // `selectMode`.
   c?: any[],
   blockData?: unknown,
   fields?: any[],
   path?: string,
   schemaPath?: string,
+  fieldDepth?: number,
+  parentIsLocalized?: unknown,
+  selectMode?: unknown,
 ): [number, number, unknown, number] | -1 => {
   const len = length < 0 ? rows.length : length
   for (let rowIndex = startRow; rowIndex < len; rowIndex++) {
@@ -364,6 +354,9 @@ const leafRows = (
             '',
             path + '.' + rowIndex,
             schemaPath,
+            fieldDepth,
+            parentIsLocalized,
+            selectMode,
           )
         : leafRun(siblingDoc, keys, flags, 0, end, bits, select, fieldPromises)
       if (stopped >= 0) {
@@ -389,6 +382,11 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
     '../../payload-engine.node'
   const addon = require(addonPath) as { coreRuntimeBinding: () => CoreRuntimeBinding }
   const created = addon.coreRuntimeBinding()
+  if (created.apiVersion !== CORE_RUNTIME_API_VERSION) {
+    throw new Error(
+      `The engine addon at ${addonPath} has core runtime API version ${created.apiVersion}, expected ${CORE_RUNTIME_API_VERSION}; rebuild it`,
+    )
+  }
   const resume = created.resume
   // `await value`: PromiseResolve(%Promise%, value) + a reaction that resumes the Rust task.
   const awaitValue = (value: unknown, token: number) => {

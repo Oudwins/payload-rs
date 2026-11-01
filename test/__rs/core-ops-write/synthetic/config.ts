@@ -114,6 +114,9 @@ const fieldHook =
     if (context?.throwIn === `field:${name}`) {
       throw new OpsWriteHookError(`field ${name} threw`)
     }
+    if (context?.fieldReplace === name && typeof value === 'string') {
+      return `${value}~`
+    }
     return value
   }
 
@@ -208,6 +211,18 @@ const Accounts: CollectionConfig = {
   hooks: collectionHooks,
 }
 
+/** `ensureUsernameOrEmail` (validate's `beforeValidation`) throws when neither is given here. */
+const Usernames: CollectionConfig = {
+  slug: 'usernames',
+  access: { ...access, admin: () => true },
+  auth: {
+    // neither required: `ensureUsernameOrEmail` itself requires one of them
+    loginWithUsername: { allowEmailLogin: true, requireEmail: false, requireUsername: false },
+  },
+  fields: [{ name: 'name', type: 'text' }],
+  hooks: collectionHooks,
+}
+
 const Restricted: CollectionConfig = {
   slug: 'restricted',
   access,
@@ -238,7 +253,7 @@ export const syntheticSlugs = [
 
 export default buildConfigWithDefaults({
   config: {
-    collections: [Hooked, Drafts, Trashable, Accounts, Restricted, NoBulkDelete],
+    collections: [Hooked, Drafts, Trashable, Accounts, Usernames, Restricted, NoBulkDelete],
     localization: { defaultLocale: 'en', fallback: true, locales: ['en', 'es'] },
   },
 })

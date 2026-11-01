@@ -20,6 +20,11 @@ members = [
   "crates/payload-core-ops-global",
   "crates/payload-core-ops-write",
   "crates/payload-sql-engine",
+  "crates/payload-mongo-query",
+  "crates/payload-mongo-engine",
+  "crates/payload-mongo-joins",
+  "crates/payload-mongo-schema",
+  "crates/payload-mongo-transform",
 ]
 
 [workspace.package]

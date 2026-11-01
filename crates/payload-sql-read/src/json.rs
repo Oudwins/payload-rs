@@ -25,10 +25,285 @@ pub fn parse(text: &str) -> Result<Val> {
   parse_units(&units)
 }
 
-/// `JSON.parse(text)` as an engine value (see [`Val::to_js`]): JS key order, any nesting depth,
-/// numbers rounded like V8 (`1e400` is `Infinity`).
+/// `JSON.parse(text)` as an engine value (see [`Val::to_js`]): JS key order, any nesting depth
+/// (iterative, like V8), numbers rounded like V8 (`1e400` is `Infinity`), lone surrogates as
+/// U+FFFD. Valid input is parsed straight into the engine value; for invalid input the UTF-16
+/// parser reports V8's exact `SyntaxError`.
 pub fn parse_to_js(text: &str) -> Result<payload_engine::js::JsVal> {
-  Ok(parse(text)?.to_js())
+  match direct::parse(text) {
+    Some(value) => Ok(value),
+    None => Ok(parse(text)?.to_js()),
+  }
+}
+
+/// A `JSON.parse` that builds engine values directly from UTF-8 text. It accepts exactly the
+/// grammar of [`parse_units`] and gives up (`None`) on the first error.
+mod direct {
+  use payload_engine::js::{JsVal, Obj};
+
+  enum Frame {
+    Arr(Vec<JsVal>),
+    Obj(Obj, String),
+  }
+
+  struct Parser<'a> {
+    text: &'a str,
+    s: &'a [u8],
+    i: usize,
+  }
+
+  impl Parser<'_> {
+    fn peek(&self) -> Option<u8> {
+      self.s.get(self.i).copied()
+    }
+
+    fn ws(&mut self) {
+      while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+        self.i += 1;
+      }
+    }
+
+    fn eat(&mut self, c: u8) -> Option<()> {
+      self.ws();
+      (self.peek() == Some(c)).then(|| self.i += 1)
+    }
+
+    fn literal(&mut self, word: &str, value: JsVal) -> Option<JsVal> {
+      let end = self.i + word.len();
+      (self.s.get(self.i..end) == Some(word.as_bytes())).then(|| {
+        self.i = end;
+        value
+      })
+    }
+
+    fn hex4(&mut self) -> Option<u16> {
+      let digits = std::str::from_utf8(self.s.get(self.i..self.i + 4)?).ok()?;
+      if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+      }
+      self.i += 4;
+      u16::from_str_radix(digits, 16).ok()
+    }
+
+    /// The cursor is on the opening quote.
+    fn string(&mut self) -> Option<String> {
+      self.i += 1;
+      let start = self.i;
+      loop {
+        match self.peek()? {
+          b'"' => {
+            let out = self.text[start..self.i].to_string();
+            self.i += 1;
+            return Some(out);
+          }
+          b'\\' => break,
+          c if c < 0x20 => return None,
+          _ => self.i += 1,
+        }
+      }
+      // escapes: collect UTF-16 code units (a lone surrogate becomes U+FFFD)
+      let mut units: Vec<u16> = self.text[start..self.i].encode_utf16().collect();
+      loop {
+        match self.peek()? {
+          b'"' => {
+            self.i += 1;
+            return Some(String::from_utf16_lossy(&units));
+          }
+          b'\\' => {
+            self.i += 1;
+            let unit = match self.peek()? {
+              b'"' => 0x22,
+              b'\\' => 0x5c,
+              b'/' => 0x2f,
+              b'b' => 0x08,
+              b'f' => 0x0c,
+              b'n' => 0x0a,
+              b'r' => 0x0d,
+              b't' => 0x09,
+              b'u' => {
+                self.i += 1;
+                units.push(self.hex4()?);
+                continue;
+              }
+              _ => return None,
+            };
+            units.push(unit);
+            self.i += 1;
+          }
+          c if c < 0x20 => return None,
+          _ => {
+            let run_start = self.i;
+            while self.peek().is_some_and(|c| c != b'"' && c != b'\\' && c >= 0x20) {
+              self.i += 1;
+            }
+            units.extend(self.text[run_start..self.i].encode_utf16());
+          }
+        }
+      }
+    }
+
+    fn number(&mut self) -> Option<JsVal> {
+      let start = self.i;
+      let digits = |p: &mut Self| {
+        let from = p.i;
+        while p.peek().is_some_and(|c| c.is_ascii_digit()) {
+          p.i += 1;
+        }
+        p.i > from
+      };
+      if self.peek() == Some(b'-') {
+        self.i += 1;
+      }
+      match self.peek()? {
+        b'0' => {
+          self.i += 1;
+          if self.peek().is_some_and(|c| c.is_ascii_digit()) {
+            return None;
+          }
+        }
+        b'1'..=b'9' => {
+          digits(self);
+        }
+        _ => return None,
+      }
+      if self.peek() == Some(b'.') {
+        self.i += 1;
+        if !digits(self) {
+          return None;
+        }
+      }
+      if matches!(self.peek(), Some(b'e' | b'E')) {
+        self.i += 1;
+        if matches!(self.peek(), Some(b'+' | b'-')) {
+          self.i += 1;
+        }
+        if !digits(self) {
+          return None;
+        }
+      }
+      Some(JsVal::Num(self.text[start..self.i].parse::<f64>().unwrap_or(f64::NAN)))
+    }
+
+    fn property_key(&mut self) -> Option<String> {
+      self.ws();
+      if self.peek() != Some(b'"') {
+        return None;
+      }
+      let key = self.string()?;
+      self.eat(b':')?;
+      Some(key)
+    }
+  }
+
+  /// `CreateDataProperty(obj, key, value)`: an existing key keeps its position, array-index keys
+  /// are ordered first (ascending).
+  fn define(obj: &mut Obj, key: String, value: JsVal) {
+    if let Some(slot) = obj.get_mut(&key) {
+      *slot = value;
+      return;
+    }
+    match array_index(&key) {
+      Some(index) => {
+        let position =
+          obj.keys().position(|k| array_index(k).is_none_or(|other| other > index)).unwrap_or(obj.len());
+        obj.shift_insert(position, key, value);
+      }
+      None => {
+        obj.insert(key, value);
+      }
+    }
+  }
+
+  fn array_index(key: &str) -> Option<u32> {
+    if key.is_empty() || key.len() > 10 || (key.len() > 1 && key.starts_with('0')) {
+      return None;
+    }
+    if !key.bytes().all(|b| b.is_ascii_digit()) {
+      return None;
+    }
+    let n: u64 = key.parse().ok()?;
+    (n < u64::from(u32::MAX)).then_some(n as u32)
+  }
+
+  pub(super) fn parse(text: &str) -> Option<JsVal> {
+    let mut p = Parser { text, s: text.as_bytes(), i: 0 };
+    let mut stack: Vec<Frame> = Vec::new();
+    'value: loop {
+      p.ws();
+      let mut value = match p.peek()? {
+        b'{' => {
+          p.i += 1;
+          p.ws();
+          if p.peek() == Some(b'}') {
+            p.i += 1;
+            JsVal::obj(Obj::new())
+          } else {
+            let key = p.property_key()?;
+            stack.push(Frame::Obj(Obj::new(), key));
+            continue 'value;
+          }
+        }
+        b'[' => {
+          p.i += 1;
+          p.ws();
+          if p.peek() == Some(b']') {
+            p.i += 1;
+            JsVal::arr(Vec::new())
+          } else {
+            stack.push(Frame::Arr(Vec::new()));
+            continue 'value;
+          }
+        }
+        b'"' => JsVal::str(p.string()?),
+        b't' => p.literal("true", JsVal::Bool(true))?,
+        b'f' => p.literal("false", JsVal::Bool(false))?,
+        b'n' => p.literal("null", JsVal::Null)?,
+        b'-' | b'0'..=b'9' => p.number()?,
+        _ => return None,
+      };
+      loop {
+        match stack.last_mut() {
+          None => {
+            p.ws();
+            return (p.i == p.s.len()).then_some(value);
+          }
+          Some(Frame::Arr(items)) => {
+            items.push(value);
+            p.ws();
+            match p.peek()? {
+              b',' => {
+                p.i += 1;
+                continue 'value;
+              }
+              b']' => {
+                p.i += 1;
+                let Some(Frame::Arr(items)) = stack.pop() else { return None };
+                value = JsVal::arr(items);
+              }
+              _ => return None,
+            }
+          }
+          Some(Frame::Obj(obj, key)) => {
+            define(obj, std::mem::take(key), value);
+            p.ws();
+            match p.peek()? {
+              b',' => {
+                p.i += 1;
+                *key = p.property_key()?;
+                continue 'value;
+              }
+              b'}' => {
+                p.i += 1;
+                let Some(Frame::Obj(obj, _)) = stack.pop() else { return None };
+                value = JsVal::obj(obj);
+              }
+              _ => return None,
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 /// `JSON.parse(text)` for any JS string.

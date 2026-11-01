@@ -145,6 +145,10 @@ pub fn js_number(v: &JsVal) -> f64 {
   if let Some(ms) = v.as_date() {
     return ms;
   }
+  // `Number(bigint)`: the nearest double (decimal digits round half to even)
+  if let Some(digits) = v.as_bigint() {
+    return digits.parse::<f64>().unwrap_or(f64::NAN);
+  }
   match v {
     JsVal::Undefined | JsVal::Fn(_) => f64::NAN,
     JsVal::Null => 0.0,

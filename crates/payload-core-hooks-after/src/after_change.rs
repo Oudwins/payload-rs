@@ -186,6 +186,7 @@ fn traverse_fields(ctx: &Rc<Ctx>, trav: Trav) -> JsResult<Local> {
         trav.sibling_data.get(),
         trav.sibling_doc.get(),
         trav.sibling_fields.get(),
+        trav.parent_is_localized.get(),
       ],
     );
   }
@@ -223,6 +224,7 @@ async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Tail> {
           t.sibling_data.get(),
           t.sibling_doc.get(),
           t.sibling_fields.get(),
+          t.parent_is_localized.get(),
         ],
       )?;
       continue;

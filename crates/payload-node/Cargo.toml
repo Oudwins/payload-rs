@@ -21,6 +21,8 @@ payload-core-runtime = { path = "../payload-core-runtime" }
 payload-core-validate = { path = "../payload-core-validate" }
 payload-core-validate-live = { path = "../payload-core-validate/live" }
 payload-engine = { path = "../payload-engine" }
+payload-mongo-engine = { path = "../payload-mongo-engine" }
+payload-mongo-schema = { path = "../payload-mongo-schema" }
 payload-sql-engine = { path = "../payload-sql-engine" }
 payload-sqlite = { path = "../payload-sqlite" }
 serde_json.workspace = true

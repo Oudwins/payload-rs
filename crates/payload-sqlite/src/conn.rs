@@ -9,8 +9,12 @@
 //! `SQLITE_OK: not an error`, JS numbers bind as REAL, text is read up to the
 //! first NUL, `rowsAffected` uses the `total_changes` delta, ...
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_int};
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 use rusqlite::ffi;
 use rusqlite::{Connection, OpenFlags};
@@ -118,12 +122,104 @@ unsafe extern "C" fn record_statement(
 /// Finalizes a prepared statement on drop.
 struct StmtGuard(*mut ffi::sqlite3_stmt);
 
+// SAFETY: SQLite is built thread safe (serialized); a guard only moves between the queue's
+// worker threads and the retained-statement table, and is finalized exactly once.
+unsafe impl Send for StmtGuard {}
+
+/// Statements a failed step left active (see [`with_statement_retention`]), by retained id: the
+/// address of their connection handle and the statement.
+static RETAINED: LazyLock<Mutex<HashMap<u64, (usize, StmtGuard)>>> = LazyLock::new(Default::default);
+static NEXT_RETAINED: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+  /// Ids retained by the statements of the current [`with_statement_retention`] call.
+  static RETAINING: RefCell<Option<Vec<u64>>> = const { RefCell::new(None) };
+}
+
+fn retained_table() -> std::sync::MutexGuard<'static, HashMap<u64, (usize, StmtGuard)>> {
+  RETAINED.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Runs `f` (statements of `@libsql/client` calls) with the `libsql` binding's statement
+/// lifetime: `executeStmt` prepares a JS `Statement` per call and drops it, and the binding
+/// finalizes the SQLite statement only when that object is garbage collected. A statement whose
+/// step failed while leaving it active (`sqlite3_stmt_busy`: `SQLITE_BUSY` from the lock request
+/// of `BEGIN IMMEDIATE` / a write, which SQLite leaves resumable) therefore keeps its connection's
+/// locks until then: e.g. after a failed `BEGIN IMMEDIATE` on the client, a read on the client
+/// keeps a shared lock and the open transaction's `COMMIT` fails with `SQLITE_BUSY`. Such
+/// statements are kept (not finalized) and their ids returned; the caller finalizes each with
+/// [`release_statement`] when the JS object standing for it is collected. Statements outside
+/// this call (the engine's) are finalized at once.
+pub fn with_statement_retention<T>(f: impl FnOnce() -> T) -> (T, Vec<u64>) {
+  struct Restore(Option<Vec<u64>>);
+  impl Drop for Restore {
+    fn drop(&mut self) {
+      let previous = self.0.take();
+      RETAINING.with(|r| *r.borrow_mut() = previous);
+    }
+  }
+  let restore = Restore(RETAINING.with(|r| r.replace(Some(Vec::new()))));
+  let out = f();
+  let ids = RETAINING.with(|r| r.borrow_mut().take()).unwrap_or_default();
+  drop(restore);
+  (out, ids)
+}
+
+/// Finalizes a statement kept by [`with_statement_retention`] (no-op when its connection was
+/// closed meanwhile, which finalized it).
+pub fn release_statement(id: u64) {
+  let released = retained_table().remove(&id);
+  drop(released);
+}
+
+/// Number of statements kept by [`with_statement_retention`] (diagnostics / tests).
+pub fn retained_statements() -> usize {
+  retained_table().len()
+}
+
+/// Finalizes every kept statement of connection `db` (before it closes).
+fn release_statements_of(db: *mut ffi::sqlite3) {
+  let released: Vec<_> = {
+    let mut table = retained_table();
+    let ids: Vec<u64> = table.iter().filter(|(_, (handle, _))| *handle == db as usize).map(|(id, _)| *id).collect();
+    ids.into_iter().filter_map(|id| table.remove(&id)).collect()
+  };
+  drop(released);
+}
+
+/// Drops `guard` (finalizes the statement), or keeps it when a [`with_statement_retention`] call
+/// is running and the failed step left the statement active.
+fn finish_failed(db: *mut ffi::sqlite3, guard: StmtGuard) {
+  // SAFETY: live statement.
+  let is_active = unsafe { ffi::sqlite3_stmt_busy(guard.0) } != 0;
+  let guard = if is_active {
+    RETAINING.with(|r| match r.borrow_mut().as_mut() {
+      Some(ids) => {
+        let id = NEXT_RETAINED.fetch_add(1, Ordering::Relaxed);
+        retained_table().insert(id, (db as usize, guard));
+        ids.push(id);
+        None
+      }
+      None => Some(guard),
+    })
+  } else {
+    Some(guard)
+  };
+  drop(guard);
+}
+
 impl Drop for StmtGuard {
   fn drop(&mut self) {
     // SAFETY: the pointer came from `sqlite3_prepare_v2` and is finalized once.
     unsafe {
       ffi::sqlite3_finalize(self.0);
     }
+  }
+}
+
+impl Drop for Conn {
+  fn drop(&mut self) {
+    self.drop_connection();
   }
 }
 
@@ -203,8 +299,17 @@ impl Conn {
 
   /// `db.close()`.
   pub fn close(&mut self) {
-    self.conn = None;
+    self.drop_connection();
     self.retired = false;
+  }
+
+  /// Drops the SQLite handle, after finalizing the statements kept for it.
+  fn drop_connection(&mut self) {
+    if let Some(conn) = &self.conn {
+      // SAFETY: the handle is live until `conn` drops below.
+      release_statements_of(unsafe { conn.handle() });
+    }
+    self.conn = None;
   }
 
   /// Releases the SQLite handle of a transaction connection that is no
@@ -213,7 +318,7 @@ impl Conn {
   /// `libsql` binding only frees it on garbage collection.
   pub fn retire(&mut self) {
     if self.conn.is_some() && !self.in_transaction() {
-      self.conn = None;
+      self.drop_connection();
       self.retired = true;
     }
   }
@@ -389,7 +494,11 @@ impl Conn {
             raw_rows.push((0..column_count).map(|i| Self::read_column(raw, i)).collect::<Vec<_>>());
           }
           ffi::SQLITE_DONE => break,
-          _ => return Err(Self::native_error(db)),
+          _ => {
+            let error = Self::native_error(db);
+            finish_failed(db, guard);
+            return Err(error);
+          }
         }
       }
       drop(guard);
@@ -408,7 +517,11 @@ impl Conn {
         match unsafe { ffi::sqlite3_step(raw) } {
           ffi::SQLITE_ROW => continue,
           ffi::SQLITE_DONE => break,
-          _ => return Err(Self::sqlite_error(db)),
+          _ => {
+            let error = Self::sqlite_error(db);
+            finish_failed(db, guard);
+            return Err(error);
+          }
         }
       }
       drop(guard);

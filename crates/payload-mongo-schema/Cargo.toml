@@ -1,0 +1,16 @@
+[package]
+name = "payload-mongo-schema"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Port of `@payloadcms/db-mongodb`'s `models/*` (buildSchema, buildCollectionSchema,
+# buildGlobalModel, schemaBuildContext) and the model building of `init.ts`: the sanitized config ->
+# the exact sequence of mongoose calls upstream makes (`new Schema`, `schema.add`, `schema.index`,
+# discriminators, plugins, `connection.model`), replayed on the real mongoose by
+# packages/engine-rs/src/mongo-schema.
+
+[dependencies]
+indexmap.workspace = true
+payload-engine = { path = "../payload-engine" }
+serde_json.workspace = true

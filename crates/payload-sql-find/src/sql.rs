@@ -6,16 +6,29 @@
 //! `buildQueryFromSourceParams`) for the SQLite dialect: identifiers are
 //! wrapped in double quotes, parameters render as `?`.
 
+use payload_engine::js::JsVal;
 use serde_json::{Value as Json, json};
 
-/// A bound parameter value, as the libsql driver would receive it after
-/// `encoder.mapToDriverValue()`.
-pub type Param = Json;
+/// A parameter value as drizzle hands it to the libsql client (after
+/// `encoder.mapToDriverValue()`, before the client's `valueToSql`, which runs when the
+/// statement is executed: [`crate::exec::bind_value`]).
+pub type Param = JsVal;
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Sql {
   pub sql: String,
   pub params: Vec<Param>,
+}
+
+/// Same text and params of the same encoded value.
+impl PartialEq for Sql {
+  fn eq(&self, other: &Sql) -> bool {
+    self.sql == other.sql
+      && self.params.len() == other.params.len()
+      && self.params.iter().zip(&other.params).all(|(a, b)| {
+        payload_engine::js::encode_value(a) == payload_engine::js::encode_value(b)
+      })
+  }
 }
 
 impl Sql {
@@ -76,14 +89,15 @@ impl Sql {
     self.sql.is_empty() && self.params.is_empty()
   }
 
+  /// `{ sql, params }` with the params as `JSON.stringify` sees them.
   pub fn to_json(&self) -> Json {
-    json!({ "sql": self.sql, "params": self.params })
+    json!({ "sql": self.sql, "params": self.params.iter().map(JsVal::to_json).collect::<Vec<_>>() })
   }
 
-  /// Reads `{ sql, params }` (the output of `dialect.sqlToQuery()`).
+  /// Reads `{ sql, params }` (the output of `dialect.sqlToQuery()`, plain JSON params).
   pub fn from_json(value: &Json) -> Option<Sql> {
     let sql = value.get("sql")?.as_str()?.to_string();
-    let params = value.get("params").and_then(|p| p.as_array()).cloned().unwrap_or_default();
+    let params = value.get("params").and_then(|p| p.as_array()).into_iter().flatten().map(JsVal::from_json).collect();
     Some(Sql { sql, params })
   }
 }

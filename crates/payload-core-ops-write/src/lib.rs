@@ -27,5 +27,6 @@ pub mod update;
 pub mod update_by_id;
 pub mod update_document;
 pub mod validate;
+pub mod validation_lifecycle;
 
 pub use binding::create_binding;

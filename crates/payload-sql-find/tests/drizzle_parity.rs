@@ -99,11 +99,11 @@ fn empty_find_first_is_undefined_and_bigint_numeric_reads_as_text() {
   let conn = memory_conn();
   let exec = LibsqlConn { conn: &conn, in_transaction: false, int_mode: IntMode::Number };
   let mut config = QueryConfig::default();
-  config.where_ = Some(Sql { sql: "\"posts\".\"id\" = ?".into(), params: vec![json!(-1)] });
+  config.where_ = Some(Sql { sql: "\"posts\".\"id\" = ?".into(), params: vec![JsVal::Num(-1.0)] });
   let built = build_relational_query(&schema, "posts", &config, Mode::First).expect("build");
   assert!(execute_js(&exec, &built, Mode::First, &NoCalls).expect("first").is_undefined());
 
-  config.where_ = Some(Sql { sql: "\"posts\".\"id\" = ?".into(), params: vec![json!(1)] });
+  config.where_ = Some(Sql { sql: "\"posts\".\"id\" = ?".into(), params: vec![JsVal::Num(1.0)] });
   let built = build_relational_query(&schema, "posts", &config, Mode::First).expect("build");
   assert!(built.sql.sql.starts_with("select \"id\", \"when_sec\", cast(\"big\" as text) from "));
   let row = execute_js(&exec, &built, Mode::First, &NoCalls).expect("first");
@@ -184,7 +184,7 @@ fn string_to_bigint_follows_ecmascript() {
 fn driver_errors_are_drizzle_query_errors() {
   let conn = memory_conn();
   let exec = LibsqlConn { conn: &conn, in_transaction: false, int_mode: IntMode::Number };
-  let sql = Sql { sql: "select * from missing where a = ? and b = ?".into(), params: vec![json!(1), json!(null), json!("x")] };
+  let sql = Sql { sql: "select * from missing where a = ? and b = ?".into(), params: vec![JsVal::Num(1.0), JsVal::Null, JsVal::str("x")] };
   let err = query_cells(&exec, &sql).expect_err("missing table");
   assert_eq!(err.name, "DrizzleQueryError");
   assert_eq!(err.message, "Failed query: select * from missing where a = ? and b = ?\nparams: 1,,x");
@@ -204,7 +204,7 @@ fn driver_errors_are_drizzle_query_errors() {
     Some(json!({ "kind": "RangeError", "message": "Received integer which cannot be safely represented as a JavaScript number" }))
   );
 
-  let object_param = Sql { sql: "select ?".into(), params: vec![json!({ "a": 1 })] };
+  let object_param = Sql { sql: "select ?".into(), params: vec![JsVal::from_json(&json!({ "a": 1 }))] };
   let err = query_cells(&exec, &object_param).expect_err("object param");
   assert_eq!(err.message, "Failed query: select ?\nparams: [object Object]");
   assert_eq!(

@@ -2,7 +2,16 @@
  * Scenarios run identically against `@libsql/client` and the Rust runtime.
  * Each step records the described outcome (value or thrown error).
  */
+import v8 from 'node:v8'
+import vm from 'node:vm'
+
 import { describeValue } from './describe.js'
+
+/** A full garbage collection (`--expose-gc` turned on at run time). */
+const collectGarbage = (): void => {
+  v8.setFlagsFromString('--expose-gc')
+  ;(vm.runInNewContext('gc') as () => void)()
+}
 
 export type AnyClient = any
 export type CreateClient = (config: any) => AnyClient
@@ -436,6 +445,31 @@ export const scenarios: Scenario[] = [
     },
   },
   {
+    // The binding finalizes a statement when its JS `Statement` is garbage collected; one whose
+    // step failed with SQLITE_BUSY stays active until then, so the connection keeps its locks:
+    // after a failed `BEGIN IMMEDIATE` on the client, a client read keeps a shared lock and the
+    // open transaction cannot commit. After a full GC it can.
+    name: 'busy statements stay active until garbage collected',
+    run: async ({ createClient, step, url }) => {
+      const c = createClient({ url })
+      await c.execute(T)
+      const a = await c.transaction('write')
+      await step('begin while another transaction writes', () => c.transaction('write'))
+      await step('client read', () => c.execute('select count(*) from t'))
+      await step('insert', () => a.execute(`insert into t (a) values ('busy')`))
+      await step('commit while the failed begin is active', () => a.commit())
+      await step('collect', async () => {
+        for (let i = 0; i < 3; i++) {
+          collectGarbage()
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        }
+      })
+      await step('commit after collection', () => a.commit())
+      await step('committed', () => c.execute(`select count(*) c from t where a = 'busy'`))
+      c.close()
+    },
+  },
+  {
     name: 'client lifecycle',
     run: async ({ createClient, step, url }) => {
       const c = createClient({ url })
@@ -529,15 +563,65 @@ export const mathScenario: Scenario = {
   name: 'math functions',
   run: async ({ createClient, step, url }) => {
     const c = createClient({ url })
-    const inputs = ['2', '2.5', '-2.5', '0', '-1', 'null', `'abc'`, `'4'`, '9007199254740993', `x'01'`, '1e400', '-0.0', '0.5']
-    for (const f of ['ceil', 'ceiling', 'floor', 'trunc', 'ln', 'log', 'log10', 'log2', 'exp', 'acos', 'asin', 'atan', 'cos', 'sin', 'tan', 'cosh', 'sinh', 'tanh', 'acosh', 'asinh', 'atanh', 'sqrt', 'radians', 'degrees', 'cot', 'coth', 'square', 'sign', 'abs']) {
+    const inputs = [
+      '2',
+      '2.5',
+      '-2.5',
+      '0',
+      '-1',
+      'null',
+      `'abc'`,
+      `'4'`,
+      '9007199254740993',
+      `x'01'`,
+      '1e400',
+      '-0.0',
+      '0.5',
+    ]
+    for (const f of [
+      'ceil',
+      'ceiling',
+      'floor',
+      'trunc',
+      'ln',
+      'log',
+      'log10',
+      'log2',
+      'exp',
+      'acos',
+      'asin',
+      'atan',
+      'cos',
+      'sin',
+      'tan',
+      'cosh',
+      'sinh',
+      'tanh',
+      'acosh',
+      'asinh',
+      'atanh',
+      'sqrt',
+      'radians',
+      'degrees',
+      'cot',
+      'coth',
+      'square',
+      'sign',
+      'abs',
+    ]) {
       await step(f, () => c.execute(`select ${inputs.map((i) => `${f}(${i})`).join(', ')}`))
     }
     for (const f of ['pow', 'power', 'mod', 'atan2', 'atn2', 'log']) {
-      await step(f + '2', () => c.execute(`select ${f}(2, 3), ${f}(2.5, -1), ${f}(0, 0), ${f}(null, 1), ${f}(1, 'x'), ${f}('x', 2), ${f}(-8, 1.0/3)`))
+      await step(f + '2', () =>
+        c.execute(
+          `select ${f}(2, 3), ${f}(2.5, -1), ${f}(0, 0), ${f}(null, 1), ${f}(1, 'x'), ${f}('x', 2), ${f}(-8, 1.0/3)`,
+        ),
+      )
     }
     await step('pi', () => c.execute('select pi(), sign(-2), sign(3.5), sign(0), sign(null)'))
-    await step('index on math', () => c.execute('create table mi (a real); create index mi_a on mi(floor(a))'))
+    await step('index on math', () =>
+      c.execute('create table mi (a real); create index mi_a on mi(floor(a))'),
+    )
     c.close()
   },
 }

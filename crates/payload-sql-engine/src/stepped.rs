@@ -21,9 +21,10 @@
 //! calls of the method meanwhile. A yield follows every statement (also a failed one: its
 //! promise rejects), so every `await` of a statement in the TS method is a step boundary.
 //!
-//! Method threads are pooled (an idle thread is reused by the next call). If no thread can be
-//! started, the call runs on the driver's thread on its first resume without yielding, as does a
-//! call started with [`SteppedCall::start_atomic`].
+//! Method threads are pooled (an idle thread is reused by the next call) and have a large stack.
+//! A call started with [`SteppedCall::start_atomic`] runs on such a thread too, but without
+//! yielding. Only if no thread can be started does a call run on the driver's thread (on its first
+//! resume, without yielding).
 
 use std::cell::{Cell as StdCell, RefCell};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -93,22 +94,12 @@ impl SteppedCall {
     context_json: Option<String>,
     conn_id: ConnId,
   ) -> Self {
-    let request = Arc::new(Mutex::new(Some(Request { engine, method, args_json, context_json, conn_id })));
-    let (to_op, op_inbox) = mpsc::channel::<ToOp>();
-    let (op_outbox, from_op) = mpsc::channel::<FromOp>();
-    let task_request = Arc::clone(&request);
-    let task = Box::new(move || {
-      let Some(request) = lock(&task_request).take() else { return };
-      drop(task_request);
-      run_threaded(request, op_inbox, op_outbox);
-    });
-    if pool::run(task).is_ok() {
-      return Self { state: State::Threaded { to_op, from_op, done: StdCell::new(false) } };
-    }
-    Self { state: State::Inline(RefCell::new(lock(&request).take())) }
+    Self::spawn(Request { engine, method, args_json, context_json, conn_id }, false)
   }
 
-  /// A call that runs as a whole on the driver's thread on its first resume (no yields).
+  /// A call that runs as a whole on its first resume (no yields), on a method thread (host
+  /// functions are served by the driver meanwhile), or on the driver's thread when no thread can
+  /// be started.
   pub fn start_atomic(
     engine: Arc<SqliteEngine>,
     method: String,
@@ -116,8 +107,23 @@ impl SteppedCall {
     context_json: Option<String>,
     conn_id: ConnId,
   ) -> Self {
-    let request = Request { engine, method, args_json, context_json, conn_id };
-    Self { state: State::Inline(RefCell::new(Some(request))) }
+    Self::spawn(Request { engine, method, args_json, context_json, conn_id }, true)
+  }
+
+  fn spawn(request: Request, atomic: bool) -> Self {
+    let request = Arc::new(Mutex::new(Some(request)));
+    let (to_op, op_inbox) = mpsc::channel::<ToOp>();
+    let (op_outbox, from_op) = mpsc::channel::<FromOp>();
+    let task_request = Arc::clone(&request);
+    let task = Box::new(move || {
+      let Some(request) = lock(&task_request).take() else { return };
+      drop(task_request);
+      run_threaded(request, op_inbox, op_outbox, atomic);
+    });
+    if pool::run(task).is_ok() {
+      return Self { state: State::Threaded { to_op, from_op, done: StdCell::new(false) } };
+    }
+    Self { state: State::Inline(RefCell::new(lock(&request).take())) }
   }
 
   /// Runs the method until its next yield point or until it finishes, blocking the caller.
@@ -198,6 +204,8 @@ struct ThreadDriver {
   outbox: Sender<FromOp>,
   inbox: Receiver<ToOp>,
   abort: RefCell<Option<EngineError>>,
+  /// Runs without yielding ([`SteppedCall::start_atomic`]).
+  atomic: bool,
 }
 
 impl ThreadDriver {
@@ -209,6 +217,9 @@ impl ThreadDriver {
 
 impl Driver for ThreadDriver {
   fn end_step(&self) {
+    if self.atomic {
+      return;
+    }
     let resumed = self.outbox.send(FromOp::Yielded).is_ok() && matches!(self.inbox.recv(), Ok(ToOp::Resume));
     if !resumed {
       self.fail(EngineError::internal("engine call driver went away"));
@@ -237,12 +248,12 @@ impl Host for ThreadDriver {
   }
 }
 
-fn run_threaded(request: Request, inbox: Receiver<ToOp>, outbox: Sender<FromOp>) {
+fn run_threaded(request: Request, inbox: Receiver<ToOp>, outbox: Sender<FromOp>, atomic: bool) {
   // parked until the driver resumes the call the first time
   if !matches!(inbox.recv(), Ok(ToOp::Resume)) {
     return;
   }
-  let driver = ThreadDriver { outbox: outbox.clone(), inbox, abort: RefCell::new(None) };
+  let driver = ThreadDriver { outbox: outbox.clone(), inbox, abort: RefCell::new(None), atomic };
   let result = run_method(request, &driver);
   let _ = outbox.send(FromOp::Done(result));
 }
@@ -302,22 +313,28 @@ impl Statements for QueuedWrite<'_> {
 }
 
 /// A write-path statement on the connection `session` addresses (`tx.execute` first checks that
-/// the transaction is still open).
+/// the transaction is still open). A statement that ends the transaction (SQLite rolls it back on
+/// some errors) retires its handle, like the find path's statements do.
 pub(crate) fn run_write_statement(session: &mut Session<'_>, q: &SqlFragment) -> ExecResult<RawRows> {
   let in_transaction = session.is_transaction();
-  let conn = session.conn().map_err(|e| ExecError::Engine(statement_client_error(q, &e)))?;
+  let result = (|| {
+    let conn = session.conn().map_err(|e| ExecError::Engine(statement_client_error(q, &e)))?;
+    if in_transaction {
+      payload_sqlite::client::check_transaction_open(conn).map_err(|e| ExecError::Engine(statement_client_error(q, &e)))?;
+    }
+    let raw = conn.connection().map_err(|e| ExecError::Engine(statement_client_error(q, &e)))?;
+    payload_sql_upsert::sql::run_statement(raw, q)
+  })();
   if in_transaction {
-    payload_sqlite::client::check_transaction_open(conn).map_err(|e| ExecError::Engine(statement_client_error(q, &e)))?;
+    session.retire_finished_transaction();
   }
-  let raw = conn.connection().map_err(|e| ExecError::Engine(statement_client_error(q, &e)))?;
-  payload_sql_upsert::sql::run_statement(raw, q)
+  result
 }
 
 /// A client error of a write-path statement (closed connection or transaction): drizzle wraps it
 /// in a `DrizzleQueryError` like any other driver error.
 fn statement_client_error(q: &SqlFragment, error: &ClientError) -> EngineError {
-  let params = q.params.iter().map(payload_engine::js::encode_value).collect::<Vec<_>>();
-  payload_sql_find::exec::drizzle_query_error(&Sql { sql: q.sql.clone(), params }, error)
+  payload_sql_find::exec::drizzle_query_error(&Sql { sql: q.sql.clone(), params: q.params.clone() }, error)
 }
 
 /// Reusable method threads.
@@ -329,7 +346,8 @@ mod pool {
 
   pub(super) type Task = Box<dyn FnOnce() + Send>;
 
-  /// Deep `where` trees and documents recurse deeply.
+  /// Deep `where` trees and documents recurse deeply. Stacks are reserved address space, committed
+  /// as they are used.
   const STACK_SIZE: usize = 16 * 1024 * 1024;
   /// How long an idle thread waits for the next call.
   const IDLE_TIMEOUT: Duration = Duration::from_secs(30);

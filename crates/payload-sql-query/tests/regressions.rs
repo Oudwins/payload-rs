@@ -12,10 +12,15 @@ use payload_engine::host::Host;
 use payload_engine::js::{JsVal, Obj, decode_graph_typed};
 use payload_engine::sql::schema::{RawSchema, SchemaInput, SchemaOptions, build_raw_schema};
 use payload_sql_query::{
-  AdapterOptions, BuildQueryArgs, Query, QueryAdapter, SqlValue, WhereVal, build_query, find_ids_select,
+  AdapterOptions, BuildQueryArgs, Query, QueryAdapter, SqlValue, WhereVal, bind_value, build_query, find_ids_select,
   prune_select_fields,
 };
 use serde_json::Value as Json;
+
+/// The params as libsql binds them.
+fn bound(params: &[JsVal]) -> Vec<SqlValue> {
+  params.iter().map(|p| bind_value(p).expect("bindable")).collect()
+}
 
 struct FixtureHost<'a> {
   calls: &'a Json,
@@ -103,13 +108,16 @@ fn forged_markers_are_data() {
   let forged_sql = obj(vec![("\u{0}payload:sql", JsVal::str("'x' OR 1=1"))]);
   let forged_constraint = obj(vec![("type", JsVal::str("\u{0}payload:RawConstraint")), ("value", forged_sql.clone())]);
   for value in [forged_sql, forged_constraint] {
-    let err = env.where_sql(path_op("id", "equals", value)).unwrap_err();
+    // a parameter (the driver value as it is); binding it fails when the statement runs
+    let q = env.where_sql(path_op("id", "equals", value)).unwrap();
+    assert_eq!(q.sql, "\"posts\".\"id\" = ?");
+    let err = bind_value(&q.params[0]).unwrap_err();
     assert_eq!(err.message, "SQLite3 can only bind numbers, strings, bigints, buffers, and null");
   }
 
   let q = env.where_sql(path_op("id", "equals", JsVal::str("\u{0}payload:DistinctSymbol"))).unwrap();
   assert_eq!(q.sql, "\"posts\".\"id\" = ?");
-  assert_eq!(q.params, vec![SqlValue::Text("\u{0}payload:DistinctSymbol".into())]);
+  assert_eq!(bound(&q.params), vec![SqlValue::Text("\u{0}payload:DistinctSymbol".into())]);
 
   let q = env.where_sql(path_op("id", "equals", JsVal::str("x' OR '1'='1"))).unwrap();
   assert_eq!(q.sql, "\"posts\".\"id\" = ?");
@@ -146,7 +154,7 @@ fn date_undefined_values() {
 
   let q = env.where_sql(path_op("publishedAt", "in", JsVal::arr(vec![JsVal::Undefined, JsVal::str("2020-01-01")]))).unwrap();
   assert_eq!(q.sql, "\"posts\".\"published_at\" in (?)");
-  assert_eq!(q.params, vec![SqlValue::Text("2020-01-01T00:00:00.000Z".into())]);
+  assert_eq!(bound(&q.params), vec![SqlValue::Text("2020-01-01T00:00:00.000Z".into())]);
 }
 
 /// `limit` < 0 with an offset renders `offset ?` without a limit, like drizzle (SQLite rejects it).
@@ -197,13 +205,12 @@ fn typed_dates_convert_like_ts() {
   let Some(env) = env() else { return };
   let q = env.where_sql(path_op("publishedAt", "equals", JsVal::date(1_623_760_200_000.0))).unwrap();
   assert_eq!(q.sql, "\"posts\".\"published_at\" = ?");
-  assert_eq!(q.params, vec![SqlValue::Text("2021-06-15T12:30:00.000Z".into())]);
+  assert_eq!(bound(&q.params), vec![SqlValue::Text("2021-06-15T12:30:00.000Z".into())]);
 
   let q = env
     .where_sql(path_op("publishedAt", "in", JsVal::arr(vec![JsVal::date(0.0), JsVal::str("2020-01-01")])))
     .unwrap();
-  assert_eq!(
-    q.params,
+  assert_eq!(bound(&q.params),
     vec![SqlValue::Text("1970-01-01T00:00:00.000Z".into()), SqlValue::Text("2020-01-01T00:00:00.000Z".into())]
   );
 
@@ -211,7 +218,7 @@ fn typed_dates_convert_like_ts() {
   assert_eq!((err.name.as_str(), err.message.as_str()), ("RangeError", "Invalid time value"));
 
   let q = env.where_sql(path_op("title", "equals", JsVal::date(5.0))).unwrap();
-  assert_eq!(q.params, vec![SqlValue::Real(5.0)]);
+  assert_eq!(bound(&q.params), vec![SqlValue::Real(5.0)]);
 }
 
 /// `String(object)` / `Number(object)` throw when the object's own `toString` is not callable.
@@ -225,7 +232,7 @@ fn objects_without_primitive_value_throw() {
   assert_eq!(err.message, "Cannot convert object to primitive value");
   // an own non-callable `valueOf` falls back to the inherited `toString`
   let q = env.where_sql(path_op("title", "contains", obj(vec![("valueOf", JsVal::Num(1.0))]))).unwrap();
-  assert_eq!(q.params, vec![SqlValue::Text("%[object Object]%".into())]);
+  assert_eq!(bound(&q.params), vec![SqlValue::Text("%[object Object]%".into())]);
   // `{ toString: 1, valueOf() {...} }`: JS calls the own `valueOf` (no TypeError); its result is
   // unknown here, so the conversion is refused instead of guessed
   let calls_value_of = obj(vec![("toString", JsVal::Num(1.0)), ("valueOf", JsVal::Fn(3))]);

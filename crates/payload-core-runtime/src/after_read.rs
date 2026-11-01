@@ -378,8 +378,9 @@ mod leaf_run_bits {
 /// such a field and pushes the same kind of promise (fulfilled, or rejected with what a read
 /// threw) onto `fieldPromises`. No plain leaf awaits, so `promise()` would also complete
 /// synchronously, and the promise count and states, hence the microtask schedule, are unchanged.
-/// A hooked leaf in the run (`hooked`) is a call of the host's `hookedLeaf`, a JS `async`
-/// function with the body `promise()` has for such a field, whose promise is pushed in place.
+/// A hooked leaf in the run (`hooked`) is a call of upstream's own `promise()`
+/// (`afterRead/promise.ts`, with the args literal `traverseFields` builds), whose promise is
+/// pushed in place.
 fn leaf_run(ctx: &Rc<Ctx>, t: &Rc<Trav>, start: u32, end: u32, hooked: bool) -> JsResult<()> {
   let h = host()?;
   let table = t.fields.leaf_table()?;
@@ -387,7 +388,7 @@ fn leaf_run(ctx: &Rc<Ctx>, t: &Rc<Trav>, start: u32, end: u32, hooked: bool) -> 
   let select = t.select.get();
   let mut from = start;
   while from < end {
-    let mut args = [js::undefined(); 14];
+    let mut args = [js::undefined(); 17];
     args[..8].copy_from_slice(&[
       t.sibling_doc.get(),
       table.keys.get(),
@@ -406,8 +407,11 @@ fn leaf_run(ctx: &Rc<Ctx>, t: &Rc<Trav>, start: u32, end: u32, hooked: bool) -> 
         js::string(&t.parent_index_path),
         js::string(&t.parent_path),
         js::string(&t.parent_schema_path),
+        js::number(t.field_depth),
+        t.parent_is_localized.get(),
+        t.select_mode.get(),
       ]);
-      14
+      17
     } else {
       8
     };
@@ -927,15 +931,25 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
         let rows = Val::from_local(rows)?;
         let mut start_row = js::number(0.0);
         let mut len = js::number(-1.0);
-        // Rows with hooked leaves also need what `hookedLeaf` reads: the `afterReadArgs` array,
-        // `blockData`, `field.fields` and the paths rows are traversed with.
+        // Rows with hooked leaves also need what upstream's `promise()` of those leaves takes: the
+        // `afterReadArgs` array, `blockData`, `field.fields`, the paths rows are traversed with,
+        // and the rows' `fieldDepth`, `parentIsLocalized` and `selectMode`.
         let hooked_args = if hooked {
-          Some([ctx.arr.get(), row_trav.block_data.get(), children.node.get(), js::string(path), js::string(schema_path)])
+          Some([
+            ctx.arr.get(),
+            row_trav.block_data.get(),
+            children.node.get(),
+            js::string(path),
+            js::string(schema_path),
+            js::number(row_trav.field_depth),
+            children_localized.get(),
+            row_trav.select_mode.get(),
+          ])
         } else {
           None
         };
         loop {
-          let mut args = [js::undefined(); 14];
+          let mut args = [js::undefined(); 17];
           args[..9].copy_from_slice(&[
             rows.get(),
             start_row,
@@ -950,7 +964,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
           let argc = match &hooked_args {
             Some(extra) => {
               args[9..].copy_from_slice(extra);
-              14
+              17
             }
             None => 9,
           };

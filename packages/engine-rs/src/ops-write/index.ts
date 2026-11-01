@@ -3,7 +3,7 @@
  * main addon as `coreOpsWriteBinding()`), as drop-ins with the upstream signatures of
  * `packages/payload/src/collections/operations/{create,update,updateByID,delete,deleteByID,
  * duplicate,restoreVersion,validate}.ts`. payload's operation modules forward to these when
- * `PAYLOAD_ENGINE=rs` (overridable with `PAYLOAD_CORE_OPS_ENGINE=rs|ts`).
+ * `PAYLOAD_ENGINE=rs` (overridable with `PAYLOAD_CORE_ENGINE=rs|ts`).
  *
  * The exports are plain functions returning the engine task's promise (not `async` wrappers), so
  * a caller awaiting them takes the same microtask ticks as awaiting the TS `async` function.
@@ -33,6 +33,8 @@ import { createOpsWriteHost } from './host.js'
 type Any = any
 
 export type CoreOpsWriteBinding = {
+  /** Host-helper contract version (crates/payload-core-ops-write/src/binding.rs `API_VERSION`). */
+  apiVersion?: number
   create: (args: unknown) => Promise<unknown>
   delete: (args: unknown) => Promise<unknown>
   deleteByID: (args: unknown) => Promise<unknown>
@@ -48,6 +50,9 @@ export type CoreOpsWriteBinding = {
 }
 
 let binding: CoreOpsWriteBinding | undefined
+
+/** The binding contract this host implements (crates/payload-core-ops-write/src/binding.rs). */
+const CORE_OPS_WRITE_API_VERSION = 1
 
 export const getCoreOpsWrite = (): CoreOpsWriteBinding => {
   if (binding) {
@@ -69,6 +74,11 @@ export const getCoreOpsWrite = (): CoreOpsWriteBinding => {
     throw new Error(`The engine addon at ${addonPath} has no coreOpsWriteBinding export`)
   }
   const created = addon.coreOpsWriteBinding()
+  if (created.apiVersion !== CORE_OPS_WRITE_API_VERSION) {
+    throw new Error(
+      `The engine addon at ${addonPath} has core write ops API version ${created.apiVersion}, expected ${CORE_OPS_WRITE_API_VERSION}; rebuild it`,
+    )
+  }
   created.init(
     createOpsWriteHost(
       process.env.PAYLOAD_OPS_WRITE_TRAVERSALS === 'ts'
@@ -108,7 +118,7 @@ const recordStats = () => {
 }
 
 const op =
-  (name: Exclude<keyof CoreOpsWriteBinding, 'init' | 'stats'>) =>
+  (name: Exclude<keyof CoreOpsWriteBinding, 'apiVersion' | 'init' | 'stats'>) =>
   (args: Any): Promise<Any> => {
     let promise: Promise<Any>
     try {

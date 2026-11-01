@@ -5,7 +5,9 @@
 //! build, and [`Sql::render`] turns them into SQLite text with `?` placeholders and bound
 //! parameters exactly like `SQLiteDialect.sqlToQuery`, including drizzle's quirks:
 //! `undefined` chunks render as an empty string, raw JS arrays render as `(?, ?)` lists,
-//! column-bound params go through the column's `mapToDriverValue`.
+//! column-bound params go through the column's `mapToDriverValue`. The params are the driver
+//! values drizzle hands to libsql; [`bind_value`] is libsql's conversion of one of them, which
+//! runs when the statement is executed (its errors are the statement's).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -99,8 +101,10 @@ impl Column {
         };
         JsVal::Num(if self.decoder == Decoder::Timestamp { (unix / 1e3).floor() } else { unix })
       }
+      // `SQLiteBlobBuffer` has no `mapToDriverValue`: the value is passed on unchanged
+      Decoder::BlobBuffer => v.clone(),
       // `Buffer.from(...)`: no `Buffer` value exists on this side
-      Decoder::BlobBuffer | Decoder::BlobJson | Decoder::BlobBigInt => {
+      Decoder::BlobJson | Decoder::BlobBigInt => {
         return Err(EngineError::internal(format!(
           "payload-sql-query: binding a value to the blob column \"{}\" is not supported",
           self.name
@@ -137,11 +141,21 @@ pub fn with_driver_host<R>(host: &dyn Host, f: impl FnOnce() -> R) -> R {
 }
 
 fn call_driver_host(id: u32, v: &JsVal) -> Result<JsVal> {
-  let host = DRIVER_HOST.with(StdCell::get).ok_or_else(|| {
-    EngineError::internal("payload-sql-query: a custom column's toDriver needs a host (with_driver_host)")
-  })?;
-  // SAFETY: see `with_driver_host`.
-  unsafe { (*host).call(id, &payload_engine::js::encode_value(v)) }
+  DriverHost.call(id, &payload_engine::js::encode_value(v))
+}
+
+/// The host installed on this thread with [`with_driver_host`] (custom columns' `mapTo` /
+/// `mapFrom`, `$defaultFn` / `$onUpdate` functions of the live schema).
+pub struct DriverHost;
+
+impl Host for DriverHost {
+  fn call(&self, id: u32, arg: &serde_json::Value) -> Result<JsVal> {
+    let host = DRIVER_HOST.with(StdCell::get).ok_or_else(|| {
+      EngineError::internal(format!("payload-sql-query: JS function {id} of the live schema needs a host (with_driver_host)"))
+    })?;
+    // SAFETY: see `with_driver_host`.
+    unsafe { (*host).call(id, arg) }
+  }
 }
 
 /// A selectable / comparable expression: a column or a raw SQL expression.
@@ -234,19 +248,21 @@ impl SqlValue {
   }
 }
 
-/// Rendered SQL text and its parameters.
+/// Rendered SQL text and its parameters: the driver values (after `mapToDriverValue`, before
+/// libsql's [`bind_value`]), as drizzle passes them to `client.execute({ sql, args })`.
 #[derive(Clone, Debug, Default)]
 pub struct Query {
   pub sql: String,
-  pub params: Vec<SqlValue>,
+  pub params: Vec<JsVal>,
 }
 
 pub fn quote(name: &str) -> String {
   format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-/// `@libsql/client` `valueToSql` + libsql binding rules.
-fn bind_value(v: &JsVal) -> Result<SqlValue> {
+/// `@libsql/client` `valueToSql` + libsql binding rules for one driver value: the `RangeError` /
+/// `TypeError`s of `valueToSql`, and the binding's `Error` for values it cannot bind.
+pub fn bind_value(v: &JsVal) -> Result<SqlValue> {
   // `value.valueOf()`; an invalid date binds `NaN`, which SQLite stores as NULL
   if let Some(ms) = v.as_date() {
     return Ok(SqlValue::Real(ms));
@@ -316,7 +332,7 @@ fn render_value(v: &JsVal, q: &mut Query) -> Result<()> {
     }
     other => {
       q.sql.push('?');
-      q.params.push(bind_value(other)?);
+      q.params.push(other.clone());
     }
   }
   Ok(())
@@ -329,7 +345,7 @@ fn render_chunk(chunk: &Chunk, q: &mut Query) -> Result<()> {
     Chunk::Param(v, col) => {
       let mapped = if v.is_null() { JsVal::Null } else { col.map_to_driver_value(v)? };
       q.sql.push('?');
-      q.params.push(bind_value(&mapped)?);
+      q.params.push(mapped);
     }
     Chunk::Value(v) => render_value(v, q)?,
     Chunk::Sql(s) => s.render_into(q)?,

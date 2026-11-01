@@ -85,7 +85,7 @@ export const beforeDuplicate: typeof upstreamBeforeDuplicate = isRustCoreEngine
             })
       } catch (error) {
         // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- rejects with the thrown value as is
-      return Promise.reject(error)
+        return Promise.reject(error)
       }
     }
   : upstreamBeforeDuplicate

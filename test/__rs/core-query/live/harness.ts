@@ -39,6 +39,7 @@ import {
   appendVersionToQueryKey,
 } from '../../../../packages/payload/src/versions/drafts/appendVersionToQueryKey.js'
 import { test } from '../../../__helpers/int/vitest.js'
+import { trackDatabaseIO } from '../../dispatch/settle.js'
 import * as rust from '../glue.js'
 import {
   activeRun,
@@ -162,6 +163,9 @@ export const instrumentConfig = (payload: Payload) => {
 
 // ---------------------------------------------------------------------------------------------
 // running
+
+/** Extra TS/Rust batch pairs taken when a batch differs (see `Stats.unstable`). */
+const UNSTABLE_RERUNS = Number(process.env.RS_CORE_QUERY_RERUNS ?? 4)
 
 const settleTurns = async () => {
   for (let i = 0; i < 3; i++) {
@@ -319,6 +323,12 @@ export type Stats = {
   batches: number
   cases: number
   diffs: string[]
+  /**
+   * Batches whose first TS/Rust pair differed but where a re-run Rust batch equals a re-run (or
+   * the first) TS batch: TS is not deterministic there (on MongoDB, access functions doing
+   * database I/O settle in network order). Listed, not counted as diffs.
+   */
+  unstable?: string[]
   errorsCompared: number
   events: number
   hostCalls: number
@@ -345,6 +355,9 @@ export const runDifferential = async (
   cases: Case[],
   { batchSize = 6 }: { batchSize?: number } = {},
 ): Promise<Stats> => {
+  // counts in-flight database calls (access functions query the database); with RS_ORDERED_IO=true
+  // their results are delivered in call order (test/__rs/dispatch/settle.ts)
+  trackDatabaseIO(payload)
   instrumentConfig(payload)
   const stats: Stats = {
     batches: 0,
@@ -394,12 +407,28 @@ export const runDifferential = async (
     stats.unhandled += ts.unhandled.length
     stats.errorsCompared += ts.outcomes.filter((o: any) => o.error).length
     const label = `${group.map((c) => c.name).join(' | ')}${traced ? ' [traced]' : ''}`
-    const d =
-      firstDiff(ts.outcomes, rs.outcomes, '$outcomes') ??
-      firstDiff(ts.events, rs.events, '$events') ??
-      firstDiff(ts.unhandled, rs.unhandled, '$unhandled')
+    const diffOf = (a: typeof ts, b: typeof rs) =>
+      firstDiff(a.outcomes, b.outcomes, '$outcomes') ??
+      firstDiff(a.events, b.events, '$events') ??
+      firstDiff(a.unhandled, b.unhandled, '$unhandled')
+    const d = diffOf(ts, rs)
     if (d) {
-      stats.diffs.push(`${label}: ${d}`)
+      const tsRuns = [ts]
+      const rsRuns = [rs]
+      let isUnstable = false
+      for (let i = 0; i < UNSTABLE_RERUNS && !isUnstable; i++) {
+        tsRuns.push(await runBatch({ payload }, 'ts', group, traced))
+        rsRuns.push(await runBatch({ payload }, 'rs', group, traced))
+        isUnstable = rsRuns.some((r) => tsRuns.some((t) => !diffOf(t, r)))
+      }
+      if (isUnstable) {
+        const isTsSelfDiffering = tsRuns.some((t) => diffOf(tsRuns[0]!, t))
+        ;(stats.unstable ??= []).push(
+          `${label}: ${d}${isTsSelfDiffering ? ' (TS differs from itself)' : ''}`,
+        )
+      } else {
+        stats.diffs.push(`${label}: ${d}`)
+      }
     }
   }
   return stats
@@ -921,7 +950,7 @@ export const registerLiveDifferential = ({
     const variants = await reqVariants(payload)
     const cases = [...generateCorpus(payload, variants), ...(extraCases?.(payload, variants) ?? [])]
     const stats = await runDifferential(payload, cases)
-    const summary = { ...stats, diffs: stats.diffs.length }
+    const summary = { ...stats, diffs: stats.diffs.length, unstable: stats.unstable?.length ?? 0 }
     console.log(`[core-query live] ${name}: ${JSON.stringify(summary)}`)
     if (stats.diffs.length) {
       console.log(stats.diffs.slice(0, 15).join('\n\n'))

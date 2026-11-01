@@ -10,6 +10,7 @@
 
 use indexmap::IndexMap;
 use payload_engine::error::{EngineError, Result};
+use payload_engine::js::{JsVal, decode_graph_typed, encode_value};
 use serde_json::Value as Json;
 
 /// `column.mapFromDriverValue` of the drizzle `sqlite-core` column classes
@@ -95,6 +96,77 @@ pub struct Column {
   pub primary: bool,
   /// Function id of a `SQLiteCustomColumn`'s `mapTo` (`toDriver`), when it is a function.
   pub to_driver: Option<u32>,
+  /// What `insert` / `update` use for the column when no value is given (`column.default`,
+  /// `$defaultFn`, `$onUpdate`). `None` when the description does not say (a schema built from
+  /// the raw tables, or a describer without `hasDefault`): the raw column's defaults apply.
+  pub defaults: Option<ColumnDefaults>,
+  /// `column.shouldDisableInsert()` (generated columns are not listed in `insert`).
+  pub insert_disabled: bool,
+}
+
+/// The defaults of a drizzle column (`buildInsertQuery` / `buildUpdateSet`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ColumnDefaults {
+  /// `column.default` when it is neither `null` nor `undefined`.
+  pub default: Option<ColumnDefault>,
+  /// Function id of a host function calling `column.defaultFn()` (`$defaultFn`).
+  pub default_fn: Option<u32>,
+  /// Function id of a host function calling `column.onUpdateFn()` (`$onUpdate`).
+  pub on_update_fn: Option<u32>,
+}
+
+/// A default value: drizzle `SQL` (rendered by `dialect.sqlToQuery`) or a value bound through the
+/// column's `mapToDriverValue` (`sql.param(value, column)`).
+#[derive(Clone, Debug)]
+pub enum ColumnDefault {
+  Sql { sql: String, params: Vec<JsVal> },
+  Value(JsVal),
+}
+
+impl PartialEq for ColumnDefault {
+  fn eq(&self, other: &Self) -> bool {
+    let encode = |params: &[JsVal]| params.iter().map(encode_value).collect::<Vec<_>>();
+    match (self, other) {
+      (ColumnDefault::Sql { sql: a, params: pa }, ColumnDefault::Sql { sql: b, params: pb }) => a == b && encode(pa) == encode(pb),
+      (ColumnDefault::Value(a), ColumnDefault::Value(b)) => encode_value(a) == encode_value(b),
+      _ => false,
+    }
+  }
+}
+
+impl ColumnDefault {
+  /// The described form: `{ sql: { sql, params: tree[] } }` or `{ value: tree }` (trees in the
+  /// `serializeForEngine` tree encoding). Also the result of a `defaultFn` / `onUpdateFn` host
+  /// function. `None` for anything else.
+  pub fn from_json(json: &Json) -> Result<Option<Self>> {
+    if let Some(sql) = json.get("sql") {
+      let text = sql.get("sql").and_then(Json::as_str).ok_or_else(|| EngineError::internal("column default SQL without `sql`"))?;
+      let params = sql.get("params").and_then(Json::as_array).into_iter().flatten().map(decode_tree).collect::<Result<_>>()?;
+      return Ok(Some(ColumnDefault::Sql { sql: text.to_string(), params }));
+    }
+    match json.get("value") {
+      Some(tree) => Ok(Some(ColumnDefault::Value(decode_tree(tree)?))),
+      None => Ok(None),
+    }
+  }
+
+  /// The decoded result of a `defaultFn` / `onUpdateFn` host function (`{ sql: { sql, params } }`
+  /// or `{ value }`, see [`ColumnDefault::from_json`]).
+  pub fn from_js(value: &JsVal) -> Result<Self> {
+    let sql = value.get("sql");
+    if let Some(text) = sql.get("sql").as_str() {
+      return Ok(ColumnDefault::Sql { sql: text.to_string(), params: sql.get("params").items().cloned().collect() });
+    }
+    if value.has("value") {
+      return Ok(ColumnDefault::Value(value.get("value").clone()));
+    }
+    Err(EngineError::internal("a column default function returned neither `sql` nor `value`"))
+  }
+}
+
+/// A value in the `serializeForEngine` tree encoding, typed (`Date`s, `bigint`s).
+fn decode_tree(tree: &Json) -> Result<JsVal> {
+  decode_graph_typed(&serde_json::json!({ "objects": [], "root": tree }))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -245,7 +317,15 @@ impl DrizzleSchema {
             _ => "text",
           };
           let primary = col.get("primaryKey").and_then(Json::as_bool) == Some(true);
-          let column = Column { name, decoder: Decoder::from_raw_type(raw_type), sql_type: sql_type.into(), primary, to_driver: None };
+          let column = Column {
+            name,
+            decoder: Decoder::from_raw_type(raw_type),
+            sql_type: sql_type.into(),
+            primary,
+            to_driver: None,
+            defaults: None,
+            insert_disabled: false,
+          };
           (col_key.clone(), column)
         })
         .collect();
@@ -319,6 +399,11 @@ impl DrizzleSchema {
   /// - `mode`: `column.config.mode` (decides `SQLiteTimestamp` seconds vs ms)
   /// - `fromDriver` / `toDriver`: function ids of a `SQLiteCustomColumn`'s `mapFrom` / `mapTo`
   ///   (absent / `null` when it is not a function)
+  /// - `hasDefault` (`column.hasDefault`): when present, the column's defaults are described by
+  ///   `default` (`{ sql: { sql, params } }` / `{ value }`, absent when `column.default` is
+  ///   nullish), `defaultFn` / `onUpdateFn` (host function ids, see [`ColumnDefault::from_js`]);
+  ///   when absent, the raw column's defaults apply
+  /// - `generated` (`column.shouldDisableInsert()`)
   /// - relation `type`: `one` (with `fields` / `references`), `one-no-config` or `many`
   pub fn from_json(json: &Json) -> Result<Self> {
     let mut tables = IndexMap::new();
@@ -334,7 +419,18 @@ impl DrizzleSchema {
         .into_iter()
         .flatten()
         .map(|(k, c)| {
-          (
+          let defaults = match c.get("hasDefault") {
+            None => None,
+            Some(_) => Some(ColumnDefaults {
+              default: match c.get("default") {
+                Some(d) => ColumnDefault::from_json(d)?,
+                None => None,
+              },
+              default_fn: function_id(c, "defaultFn"),
+              on_update_fn: function_id(c, "onUpdateFn"),
+            }),
+          };
+          Ok((
             k.clone(),
             Column {
               name: str_of(c, "name"),
@@ -346,10 +442,12 @@ impl DrizzleSchema {
               sql_type: str_of(c, "sqlType"),
               primary: c.get("primary").and_then(Json::as_bool) == Some(true),
               to_driver: function_id(c, "toDriver"),
+              defaults,
+              insert_disabled: c.get("generated").and_then(Json::as_bool) == Some(true),
             },
-          )
+          ))
         })
-        .collect();
+        .collect::<Result<_>>()?;
       let relations = t
         .get("relations")
         .and_then(|c| c.as_object())

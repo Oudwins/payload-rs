@@ -4,7 +4,7 @@
 
 use payload_engine::error::{EngineError, Result};
 use payload_engine::fields::has_drafts_enabled;
-use payload_engine::js::{JsVal, Obj, num_to_json};
+use payload_engine::js::{JsVal, Obj};
 use payload_engine::strings::to_snake_case;
 
 use crate::args::Extra;
@@ -73,7 +73,7 @@ pub(crate) fn render_joins(joins: &[QueryJoin]) -> Sql {
 }
 
 fn num_param(n: f64) -> Sql {
-  Sql::param(num_to_json(n))
+  Sql::param(JsVal::Num(n))
 }
 
 /// Returns the extras to assign, in TS assignment order.

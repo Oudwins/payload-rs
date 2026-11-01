@@ -58,6 +58,12 @@ const newHandle = (id: number): Handle => {
 /** Handle of every client / transaction, for `getSqliteConnId`. */
 const handles = new WeakMap<object, Handle>()
 
+/**
+ * `outcome.retained` holds the statements a failed step left active: `executeStmt` prepares a
+ * `Statement` per call and drops it, and the binding finalizes it when V8 collects that object,
+ * so the connection keeps their locks until then. They are dropped here the same way (native
+ * objects whose finalizer finalizes the statement).
+ */
 const unwrap = <T>(outcome: NativeOutcome<T>): T => {
   if (outcome.error) {
     throw toJsError(outcome.error)

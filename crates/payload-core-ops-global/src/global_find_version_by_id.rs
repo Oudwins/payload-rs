@@ -117,7 +117,7 @@ async fn run(args: Val) -> JsResult<Val> {
 
   // beforeRead - Collection
   if has_hooks(global_config.get(), "beforeRead")? {
-    let mut hooks = hooks_of(global_config.get(), "beforeRead")?;
+    let mut hooks = hooks_of(global_config.get(), "beforeRead", "globalConfig")?;
     while let Some(hook) = hooks.next()? {
       let hook = val(hook)?;
       let body = async {
@@ -159,7 +159,7 @@ async fn run(args: Val) -> JsResult<Val> {
 
   // afterRead - Global
   if has_hooks(global_config.get(), "afterRead")? {
-    let mut hooks = hooks_of(global_config.get(), "afterRead")?;
+    let mut hooks = hooks_of(global_config.get(), "afterRead", "globalConfig")?;
     while let Some(hook) = hooks.next()? {
       let hook = val(hook)?;
       let body = async {

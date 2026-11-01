@@ -102,6 +102,8 @@ const makeConfig = (db: ReturnType<typeof sqliteAdapter> | SanitizedConfig['db']
       { slug: 'hooked', access, fields: [{ name: 'name', type: 'text' }] },
     ],
     db: db as SanitizedConfig['db'],
+    // `payload-jobs` (updateJobs' markWrite cases)
+    jobs: { tasks: [{ slug: 'noop', handler: () => ({ output: {} }) }] },
     globals: [
       {
         slug: 'settings',
@@ -225,36 +227,78 @@ const expectSame = async (operation: (payload: Payload) => Promise<unknown>) => 
   return reference as { error?: unknown; ok?: unknown }
 }
 
+type Statement = [sql: string, boundParameterCount: number]
+
+const describeStatement = (stmt: { args?: unknown[]; sql: string } | string): Statement =>
+  typeof stmt === 'string' ? [stmt, 0] : [stmt.sql, stmt.args?.length ?? 0]
+
+/** Transaction control, which the reference's libsql client runs without `execute`. */
+const transactionControl = /^\s*(?:begin|commit|rollback)\b/i
+
 /**
- * `both`, plus the `[sql, bound parameter count]` of every statement each side ran: the
- * reference's through its client's `execute`, the candidate's from the SQLite statement trace of
- * its connections (the engine does not go through `execute`). Fails when nothing ran.
+ * Runs `operation` and appends the `[sql, bound parameter count]` of every statement it ran to
+ * `statements` (also when it throws): the reference's through its client's `execute` and its
+ * transactions' `execute`, the candidate's from the SQLite statement trace of its connections (the
+ * engine does not go through `execute`; it also records the transaction control statements libsql
+ * runs internally, see `withoutTransactionControl`).
  */
-const expectSameStatements = async (operation: (payload: Payload) => Promise<unknown>) => {
-  const statements = {} as Record<Side, [string, number][]>
-  const out = await both(async (payload) => {
-    if (payload === instances.candidate) {
-      getNativeSqlite().sqliteStartStatementTrace()
-      try {
-        return await operation(payload)
-      } finally {
-        statements.candidate = getNativeSqlite().sqliteTakeStatementTrace()
-      }
-    }
-    const client = (payload.db as unknown as { drizzle: { $client: Record<string, any> } }).drizzle
-      .$client
-    const execute = client.execute
-    statements.reference = []
-    client.execute = function (this: unknown, ...args: [{ args?: unknown[]; sql: string }]) {
-      statements.reference.push([args[0].sql, args[0].args?.length ?? 0])
-      return execute.apply(this, args)
-    }
+const captureStatements = async <T>(
+  payload: Payload,
+  operation: (payload: Payload) => Promise<T>,
+  statements: Statement[],
+): Promise<T> => {
+  if (payload === instances.candidate) {
+    getNativeSqlite().sqliteStartStatementTrace()
     try {
       return await operation(payload)
     } finally {
-      delete client.execute
+      statements.push(...getNativeSqlite().sqliteTakeStatementTrace())
     }
-  })
+  }
+  const client = (payload.db as unknown as { drizzle: { $client: Record<string, any> } }).drizzle
+    .$client
+  const { execute, transaction } = client
+  client.execute = function (this: unknown, ...args: [any]) {
+    statements.push(describeStatement(args[0]))
+    return execute.apply(this, args)
+  }
+  client.transaction = async function (this: unknown, ...args: unknown[]) {
+    const tx = await transaction.apply(this, args)
+    const txExecute = tx.execute
+    tx.execute = function (this: unknown, ...txArgs: [any]) {
+      statements.push(describeStatement(txArgs[0]))
+      return txExecute.apply(this, txArgs)
+    }
+    return tx
+  }
+  try {
+    return await operation(payload)
+  } finally {
+    delete client.execute
+    delete client.transaction
+  }
+}
+
+const withoutTransactionControl = (statements: Statement[]) =>
+  statements.filter(([sql]) => !transactionControl.test(sql))
+
+/**
+ * `both`, plus the statements each side ran (`captureStatements`), which must be identical. Fails
+ * when nothing ran.
+ */
+const expectSameStatements = async (operation: (payload: Payload) => Promise<unknown>) => {
+  const recorded = { candidate: [], reference: [] } as Record<Side, Statement[]>
+  const out = await both((payload) =>
+    captureStatements(
+      payload,
+      operation,
+      recorded[payload === instances.candidate ? 'candidate' : 'reference'],
+    ),
+  )
+  const statements = {
+    candidate: withoutTransactionControl(recorded.candidate),
+    reference: withoutTransactionControl(recorded.reference),
+  }
   expect(statements.reference.length).toBeGreaterThan(0)
   expect({ ...out.candidate!, statements: statements.candidate }).toEqual({
     ...out.reference!,
@@ -659,7 +703,58 @@ test.suite('withRustEngine', {}, () => {
         } as never),
       uniqueViolation: (payload) =>
         payload.db.create({ collection: 'posts', data: { title: 'unique' } } as never),
+      // a trigger makes every update of payload_jobs fail (`updateJobsFailing`)
+      ...updateJobsFailing({
+        // `{}` after `delete data.log`: not an initial claim upstream, the per-job `upsertRow`
+        // path marks before its failing update
+        emptyAfterLog: { log: [] },
+        // non-string token / until: not an initial claim either
+        nonStringToken: { processingToken: 5, processingUntil: '2026-01-02T03:04:05.678Z' },
+        // the initial claim: marks only after its update succeeded
+        initialClaim: {
+          processingToken: 'token',
+          processingUntil: '2026-01-02T03:04:05.678Z',
+        },
+      }),
     }
+    for (const side of ['reference', 'candidate'] as const) {
+      const db = instances[side].db as unknown as { drizzle: any }
+      await instances[side].db.create({
+        collection: 'payload-jobs',
+        data: { input: {}, taskSlug: 'noop' },
+      } as never)
+      await db.drizzle.run(
+        sql`create trigger fail_job_updates before update on payload_jobs begin select raise(abort, 'job updates fail'); end`,
+      )
+    }
+    try {
+      await expectMarkWrites(operations)
+    } finally {
+      for (const side of ['reference', 'candidate'] as const) {
+        await (instances[side].db as unknown as { drizzle: any }).drizzle.run(
+          sql`drop trigger fail_job_updates`,
+        )
+      }
+    }
+  })
+
+  const updateJobsFailing = (cases: Record<string, Record<string, unknown>>) =>
+    Object.fromEntries(
+      Object.entries(cases).map(([name, data]) => [
+        `updateJobs ${name}`,
+        (payload: Payload) =>
+          payload.db.updateJobs({
+            data: { ...data },
+            limit: 1,
+            where: { taskSlug: { equals: 'noop' } },
+          } as never),
+      ]),
+    )
+
+  /** Every operation's outcome and `lastWriteTimestamp` must match upstream's. */
+  const expectMarkWrites = async (
+    operations: Record<string, (payload: Payload) => Promise<unknown>>,
+  ) => {
     for (const [name, operation] of Object.entries(operations)) {
       const { candidate, reference } = await both(async (payload) => {
         const db = payload.db as unknown as { lastWriteTimestamp?: number }
@@ -674,7 +769,7 @@ test.suite('withRustEngine', {}, () => {
       })
       expect({ name, ...(candidate as object) }).toEqual({ name, ...(reference as object) })
     }
-  })
+  }
 
   test('should run engine calls on the transaction connection', async () => {
     const rolledBack = await expectSame(async (payload) => {
@@ -756,6 +851,25 @@ test.suite('withRustEngine', {}, () => {
       } as never),
     )
     expect(nullSelect.error).toMatchObject({ $error: 'TypeError' })
+    // unknown slugs: upstream's TypeError, thrown before `getTransaction`
+    const unknownCollection = await expectSame((payload) =>
+      payload.db.createVersion({
+        autosave: false,
+        collectionSlug: 'nope',
+        parent: 1,
+        versionData: {},
+      } as never),
+    )
+    expect(unknownCollection.error).toMatchObject({ $error: 'TypeError' })
+    const unknownGlobal = await expectSame(async (payload) => {
+      const data: Record<string, unknown> = {}
+      try {
+        return await payload.db.createGlobal({ slug: 'nope', data } as never)
+      } catch (error) {
+        return { data, error: describe(error) }
+      }
+    })
+    expect(unknownGlobal.ok).toMatchObject({ data: {}, error: { $error: 'TypeError' } })
   })
 
   test('should run limitedBoundParameters statements like upstream', async () => {
@@ -813,18 +927,20 @@ test.suite('withRustEngine', {}, () => {
   })
 
   test('should run on the live schema of the schema hooks', async () => {
-    const traced = (payload: Payload) => {
-      getNativeSqlite().sqliteStartStatementTrace()
-      return payload.db.create({ collection: 'hooked', data: { name: 'one' } } as never)
-    }
-    await expectSame(async (payload) => {
-      const doc = await traced(payload)
-      const statements = getNativeSqlite().sqliteTakeStatementTrace()
+    const written = await expectSame(async (payload) => {
+      const statements: Statement[] = []
+      const doc = await captureStatements(
+        payload,
+        () => payload.db.create({ collection: 'hooked', data: { name: 'one' } } as never),
+        statements,
+      )
       // `beforeSchemaInit`'s raw column (with its default) is written by both
-      return payload === instances.candidate
-        ? { doc, hasRawExtra: statements.some(([text]) => text.includes('"raw_extra", ')) }
-        : { doc, hasRawExtra: true }
+      return {
+        doc,
+        hasRawExtra: statements.some(([text]) => /^insert into "hooked" .*"raw_extra"/.test(text)),
+      }
     })
+    expect(written.ok).toMatchObject({ hasRawExtra: true })
     await expectSameStatements(async (payload) => {
       const raw = await (payload.db as unknown as { drizzle: any }).drizzle.all(
         sql`select raw_extra, custom from hooked`,
@@ -854,17 +970,14 @@ test.suite('withRustEngine', {}, () => {
     )
   })
 
-  // Engine gap (ENGINE_CONTRACT.md "Columns added to drizzle tables only"): the write path builds
-  // `insert` / `update` from raw tables, so `afterSchemaInit`'s drizzle-only column is not listed.
-  // Flips to failing once fixed. (The loopback runs upstream's write path.)
-  ;(isLoopback ? test : test.fails)(
-    'should write the drizzle-only columns of afterSchemaInit like upstream',
-    async () => {
-      await expectSameStatements((payload) =>
-        payload.db.create({ collection: 'hooked', data: { name: 'two' } } as never),
-      )
-    },
-  )
+  // ENGINE_CONTRACT.md "Columns added to drizzle tables only": upstream drizzle builds the insert
+  // from the drizzle table, so `afterSchemaInit`'s drizzle-only column is returned (and inserted
+  // only when it has a value). Strict: every statement must equal upstream's.
+  test('should write the drizzle-only columns of afterSchemaInit like upstream', async () => {
+    await expectSameStatements((payload) =>
+      payload.db.create({ collection: 'hooked', data: { name: 'two' } } as never),
+    )
+  })
 
   test.skipIf(isLoopback)('should reject connections of another database', async () => {
     const registry = createFunctionRegistry()
@@ -915,5 +1028,61 @@ test.suite('withRustEngine', {}, () => {
     }
     expect(pick(instances.candidate)).toEqual(pick(instances.reference))
     await expectSame((payload) => payload.find({ collection: 'posts', depth: 0, sort: 'id' }))
+  })
+
+  // packages/payload/src/index.ts hot reload: `db.init()`, then `db.connect({ hotReload: true })`,
+  // which builds a new drizzle instance while requests may still be running. No call may fail.
+  test('should keep serving calls across a hot reload like upstream', async () => {
+    const upstreamCalls = () =>
+      Object.values(getRustEngineStats().upstream).reduce((a, b) => a + b, 0)
+    const reasonsBefore = { ...getRustEngineStats().upstreamReasons }
+    const reloaded = await expectSame(async (payload) => {
+      const db = payload.db as unknown as Record<string, any>
+      await db.init()
+      // between init and connect: the previous drizzle instance
+      const beforeConnect = await payload.find({ collection: 'posts', depth: 0, sort: 'id' })
+      // a call still running when connect replaces the drizzle instance, and one started right then
+      const callsBefore = engineCalls()
+      // `limit: 1` with more documents: a select and a count statement, so the engine still runs it
+      const running = payload.db.find({ collection: 'posts', limit: 1, sort: 'id' } as never)
+      let isRunningSettled = false
+      void running.then(
+        () => (isRunningSettled = true),
+        () => (isRunningSettled = true),
+      )
+      // until the candidate's call is inside the engine (its first statement ran)
+      for (
+        let i = 0;
+        i < 3 || (payload === instances.candidate && engineCalls() === callsBefore && i < 100);
+        i++
+      ) {
+        await Promise.resolve()
+      }
+      const connecting = db.connect({ hotReload: true })
+      const startedDuringConnect = payload.db.find({ collection: 'posts', sort: 'id' } as never)
+      const wasRunning = !isRunningSettled
+      const [runningResult, duringResult] = await Promise.all([
+        running,
+        startedDuringConnect,
+        connecting,
+      ])
+      const afterConnect = await payload.find({ collection: 'posts', depth: 0, sort: 'id' })
+      return { afterConnect, beforeConnect, duringResult, runningResult, wasRunning }
+    })
+    expect(reloaded.ok).toMatchObject({ wasRunning: true })
+    // the call after the reload runs on the engine, on the new live schema
+    const before = { calls: engineCalls(), upstream: upstreamCalls() }
+    await expectSame((payload) => payload.db.find({ collection: 'hooked', sort: 'id' } as never))
+    expect({ calls: engineCalls(), upstream: upstreamCalls() }).toEqual({
+      calls: before.calls + 1,
+      upstream: before.upstream,
+    })
+    // only the engine's need for exclusive access to swap the live schema may send a call upstream
+    const reasons = getRustEngineStats().upstreamReasons
+    for (const reason of Object.keys(reasons)) {
+      if (reasons[reason] !== reasonsBefore[reason]) {
+        expect(reason).toBe('live schema: engine calls in progress')
+      }
+    }
   })
 })

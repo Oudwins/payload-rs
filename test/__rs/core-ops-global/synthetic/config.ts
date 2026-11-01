@@ -5,7 +5,8 @@
  * (sync and async, custom error class); access returning `true`, `false`, a where, a promise or
  * throwing; a versioned, localized global with drafts; auth collections with login attempts,
  * sessions, email verification, username login and custom forgot-password emails.
- * Behaviour is steered per request through `req.context` and logged there.
+ * Behaviour is steered per request through `req.context` and logged there
+ * (`beforeReadWrapsVersion`: beforeRead hooks return `{ version: doc }`, see `hook`).
  */
 import type { Access, CollectionConfig, GlobalConfig } from 'payload'
 
@@ -55,6 +56,12 @@ const hook =
     log(c, `${kind}${n}`)
     if (c.throwIn === `${kind}${n}`) {
       throw new GlobalHookError(`${kind}${n} threw`)
+    }
+    if (kind === 'beforeRead' && c.beforeReadWrapsVersion) {
+      // findGlobalVersionByID assigns a beforeRead hook's result to `result` itself (upstream
+      // quirk) and then reads `result.version`: returning `{ version: doc }` lets the lookup reach
+      // its afterRead traversal and hook loop.
+      return { version: args.doc }
     }
     const value = pick(args)
     const replace = c.replace === `${kind}${n}`

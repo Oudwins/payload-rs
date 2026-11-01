@@ -447,6 +447,7 @@ export const registerAfterHooksSuite = ({
                 ...set.concurrency.map((concurrent) => ({ concurrent, traverse: undefined })),
                 { concurrent: false, traverse: 'fields' as const },
                 { concurrent: true, traverse: 'siblingFields' as const },
+                { concurrent: false, traverse: 'nested' as const },
               ]
               for (const { concurrent, traverse } of modes) {
                 await compare(

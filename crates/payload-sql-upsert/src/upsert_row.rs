@@ -9,7 +9,7 @@
 use indexmap::{IndexMap, IndexSet};
 use payload_engine::error::{EngineError, Result};
 use payload_engine::js::{JsVal, Obj};
-use payload_engine::sql::schema::RawSchema;
+use crate::sql::Schema;
 use payload_sql_write::js::{OBJECT_PROTOTYPE_KEYS, js_insert, to_js_string};
 use payload_sql_write::{NestedRowToInsert, Row, RowToInsert, RowValue, TransformForWriteArgs, WriteAdapter, transform_for_write};
 
@@ -282,7 +282,7 @@ fn row_id(row: &Obj) -> JsVal {
 /// mutation `transformForWrite` makes).
 pub fn upsert_row(
   exec: &mut Executor<'_>,
-  schema: &RawSchema,
+  schema: Schema<'_>,
   opts: &AdapterOptions,
   ctx: &WriteContext<'_>,
   host: &mut dyn UpsertHost,
@@ -297,7 +297,7 @@ pub fn upsert_row(
 
 fn upsert_row_inner(
   exec: &mut Executor<'_>,
-  schema: &RawSchema,
+  schema: Schema<'_>,
   opts: &AdapterOptions,
   ctx: &WriteContext<'_>,
   host: &mut dyn UpsertHost,
@@ -346,7 +346,7 @@ fn upsert_row_inner(
 /// The `id && shouldUseOptimizedUpsertRow(...)` branch: a plain `UPDATE ... SET`.
 fn optimized_update(
   exec: &mut Executor<'_>,
-  schema: &RawSchema,
+  schema: Schema<'_>,
   opts: &AdapterOptions,
   ctx: &WriteContext<'_>,
   host: &mut dyn UpsertHost,
@@ -403,11 +403,7 @@ fn optimized_update(
         }
         _ => Returning::All,
       };
-      let keys: Vec<String> = match &returning {
-        Returning::Columns(c) => c.clone(),
-        _ => t.columns().map(|(k, _)| k.clone()).collect(),
-      };
-      let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+      let key_refs = returning.keys(t);
       let q = build_update(t, &row, Some(&update_where), &returning)?;
       let docs = exec.query_columns(t, &key_refs, &q)?;
       match docs.into_iter().next() {
@@ -428,7 +424,7 @@ fn optimized_update(
 }
 
 /// `adapter.tables[name][key]` where a missing table throws like V8.
-fn table_reading<'a>(schema: &'a RawSchema, name: &str, reading: &str) -> Result<Table<'a>> {
+fn table_reading<'a>(schema: Schema<'a>, name: &str, reading: &str) -> Result<Table<'a>> {
   table(schema, name)
     .ok_or_else(|| EngineError::new("TypeError", format!("Cannot read properties of undefined (reading '{reading}')")))
 }
@@ -448,7 +444,7 @@ fn prop<'a>(obj: &'a Obj, key: &str) -> &'a JsVal {
 /// conditional upsert did not touch a row.
 fn write_rows(
   exec: &mut Executor<'_>,
-  schema: &RawSchema,
+  schema: Schema<'_>,
   opts: &AdapterOptions,
   args: &UpsertRowArgs,
   data: &JsVal,
@@ -613,7 +609,7 @@ fn write_rows(
       }
 
       let mut existing: Vec<Obj> = vec![];
-      let keys: Vec<&str> = rt.columns().map(|(k, _)| k.as_str()).collect();
+      let keys = Returning::All.keys(rt);
       if !conditions.is_empty() {
         let mut q = select_all(rt)?;
         if let Some(w) = or(conditions) {
@@ -632,7 +628,7 @@ fn write_rows(
           rt.col_ref("parent")?,
           rt.col_ref("order")?
         ),
-        vec![crate::value::map_to_driver(rt.column_type("parent"), &parent_id)?, JsVal::Num(1.0)],
+        vec![rt.encode("parent", &parent_id)?, JsVal::Num(1.0)],
       );
       let max_rows = exec.query_columns(rt, &["order"], &max_q)?;
       let mut max_order = JsVal::Num(0.0);
@@ -838,7 +834,8 @@ fn write_rows(
 }
 
 fn select_all(t: Table<'_>) -> Result<SqlFragment> {
-  let cols = t.columns().map(|(k, _)| t.column_name(k).map(ident)).collect::<Result<Vec<_>>>()?;
+  // `db.select().from(table)`: every column, single-table selection
+  let cols = t.columns().iter().map(|c| c.selection()).collect::<Vec<_>>();
   Ok(SqlFragment::raw(format!("select {} from {}", cols.join(", "), ident(t.name()))))
 }
 
@@ -853,7 +850,7 @@ fn record_uuid(uuid_map: &mut IndexMap<String, JsVal>, row: &Obj) {
 }
 
 /// `deleteExistingArrayRows` (packages/drizzle/src/upsertRow/deleteExistingArrayRows.ts).
-pub fn delete_existing_array_rows(exec: &mut Executor<'_>, schema: &RawSchema, table_name: &str, parent_id: &JsVal) -> ExecResult<()> {
+pub fn delete_existing_array_rows(exec: &mut Executor<'_>, schema: Schema<'_>, table_name: &str, parent_id: &JsVal) -> ExecResult<()> {
   let t = table_reading(schema, table_name, "_parentID")?;
   let w = and(vec![eq(t, "_parentID", parent_id)?]);
   exec.delete_where(t, w.as_ref())
@@ -863,7 +860,7 @@ pub fn delete_existing_array_rows(exec: &mut Executor<'_>, schema: &RawSchema, t
 #[allow(clippy::too_many_arguments)]
 pub fn delete_existing_rows_by_path(
   exec: &mut Executor<'_>,
-  schema: &RawSchema,
+  schema: Schema<'_>,
   table_name: &str,
   parent_id: &JsVal,
   rows: &[&Obj],
@@ -907,7 +904,7 @@ struct TableRows {
 /// `insertArrays` (packages/drizzle/src/upsertRow/insertArrays.ts).
 pub fn insert_arrays(
   exec: &mut Executor<'_>,
-  schema: &RawSchema,
+  schema: Schema<'_>,
   opts: &AdapterOptions,
   arrays: Vec<IndexMap<String, Vec<NestedRowToInsert>>>,
   parent_rows: &[Obj],

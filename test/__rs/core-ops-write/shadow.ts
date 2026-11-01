@@ -24,9 +24,19 @@
  *   branch by first appearance (24+ hex ids, tokens, salts, hashes, UUIDs) or as `recent`
  *   (ISO timestamps and Dates within a day of now).
  *   Nested operations inside a branch run the branch's implementation (AsyncLocalStorage).
- *   A diff is re-checked by a second TS branch: if TS differs from itself the case is counted as
- *   `unstable` instead of a diff. A Rust branch that ran no Rust operation, or a TS branch that
- *   ran one, is a failure (`sameEngine`).
+ *   A diff is re-checked against further TS branches (up to `RS_OPS_TS_RERUNS`, default 3): the
+ *   case is counted as `unstable` instead of a diff only when the Rust log equals one of those TS
+ *   logs (TS differs from itself and Rust behaves like one of its runs); otherwise it is a diff.
+ *   A Rust branch that ran no Rust operation, or a TS branch that ran one, is a failure
+ *   (`sameEngine`).
+ * - `trace-ts` / `trace-rs`: for adapters whose writes cannot be rolled back with a savepoint
+ *   (`transactionOptions: {}`, PAYLOAD_RS_SQLITE_TRANSACTIONS=true; optionally
+ *   RS_OPS_WRITE_SINGLE_TX=true to also set `bulkOperationsSingleTransaction`, so bulk update and
+ *   delete take their per-document transaction paths). Every top-level write call (serialized
+ *   through one queue) runs once, for real, on the caller's args with the selected implementation,
+ *   logging the same events as a shadow branch; the logs are written next to the report as
+ *   `<report>.traces.jsonl` and compared across processes (a TS run, a second TS run, a Rust
+ *   run) by trace-compare.mjs.
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
@@ -39,6 +49,8 @@ type Fn = (...args: Any[]) => Any
 
 type Branch = {
   args: Any
+  /** Set once the branch has settled (see `settleBranch`): later events are not logged. */
+  frozen?: boolean
   ids: Map<object, number>
   kind: 'real' | 'rs' | 'ts'
   log: string[]
@@ -69,6 +81,8 @@ type DiffRecord = {
   test?: string
   ts: string[]
   ts2?: string[]
+  /** The Rust log equals a TS rerun (counted as unstable, not as a diff). */
+  unstable?: boolean
 }
 
 const mode = process.env.PAYLOAD_OPS ?? 'ts'
@@ -77,6 +91,11 @@ const realSetTimeout = globalThis.setTimeout
 const realClearTimeout = globalThis.clearTimeout
 const realDateNow = Date.now
 const BRANCH_TIMEOUT_MS = Number(process.env.RS_OPS_BRANCH_TIMEOUT_MS ?? 30000)
+const TS_RERUNS = Number(process.env.RS_OPS_TS_RERUNS ?? 3)
+const isTraceMode = mode === 'trace-ts' || mode === 'trace-rs'
+const SINGLE_TRANSACTION = process.env.RS_OPS_WRITE_SINGLE_TX === 'true'
+const ORDERED_IO = process.env.RS_OPS_ORDERED_IO === 'true'
+const realSetImmediate = globalThis.setImmediate
 const MAX_DIFFS_RECORDED = 40
 const SAVEPOINT = 'rs_ops_write_shadow'
 const FILE_BACKUP_DIR = process.env.RS_OPS_WRITE_FILES ?? `/tmp/rs-ops-write-files-${process.pid}`
@@ -101,6 +120,8 @@ export const loadRustCalls = async (): Promise<void> => {
 
 const stats: Record<string, OpStats> = {}
 const diffs: DiffRecord[] = []
+/** Trace modes: one entry per top-level write call, in call order. */
+const traces: { log: string[]; op: string; test?: string }[] = []
 let currentTest: string | undefined
 let queue: Promise<unknown> = Promise.resolve()
 
@@ -141,6 +162,12 @@ export const flushReport = (testFile: string): void => {
   }
   fs.mkdirSync(out, { recursive: true })
   const name = `${path.basename(path.dirname(testFile))}-${path.basename(testFile)}.${process.pid}.${realDateNow()}.json`
+  if (isTraceMode) {
+    fs.writeFileSync(
+      path.join(out, `${name}.traces.jsonl`),
+      traces.map((t) => JSON.stringify(t)).join('\n'),
+    )
+  }
   fs.writeFileSync(
     path.join(out, name),
     JSON.stringify(
@@ -160,6 +187,20 @@ export const dispatch = (name: string, getTs: () => Fn, getRs: () => Fn): Fn => 
     return (args: Any) => {
       statsFor(name).calls++
       return getRs()(args)
+    }
+  }
+  if (isTraceMode) {
+    const kind = mode === 'trace-rs' ? 'rs' : 'ts'
+    return (args: Any) => {
+      const branch = als.getStore()
+      if (branch) {
+        return recordCall(branch, `op:${name}`, undefined, [args], (...a) =>
+          (branch.kind === 'ts' ? getTs() : getRs())(...a),
+        )
+      }
+      const run = queue.then(() => traceTop(name, kind, kind === 'ts' ? getTs() : getRs(), args))
+      queue = run.catch(() => undefined)
+      return run
     }
   }
   if (mode !== 'shadow') {
@@ -216,21 +257,32 @@ const shadowTop = async (name: string, ts: Fn, rs: Fn, args: Any): Promise<Any> 
       if (at === -1) {
         s.equal++
       } else {
-        const ts2Log = await runIsolated(payload, 'ts', ts, cloneArgs(pristine), s)
-        const tsUnstable = firstDiff(tsLog, ts2Log) !== -1
-        if (tsUnstable) {
+        // Nondeterminism is only accepted when the Rust log equals another TS run of the case.
+        let matched: string[] | undefined
+        let lastRerun: string[] = tsLog
+        for (let i = 0; i < TS_RERUNS && !matched; i++) {
+          lastRerun = await runIsolated(payload, 'ts', ts, cloneArgs(pristine), s)
+          if (firstDiff(lastRerun, rsLog) === -1) {
+            matched = lastRerun
+          }
+        }
+        if (matched) {
           s.unstable++
         } else {
           s.diffs++
         }
         if (diffs.length < MAX_DIFFS_RECORDED) {
+          const rerunAt = firstDiff(lastRerun, rsLog)
           diffs.push({
             at,
             op: name,
             rs: rsLog.slice(Math.max(0, at - 2), at + 3).map(clip),
             test: currentTest,
             ts: tsLog.slice(Math.max(0, at - 2), at + 3).map(clip),
-            ...(tsUnstable ? { ts2: ts2Log.slice(at, at + 2).map(clip) } : {}),
+            ts2: matched
+              ? ['(the Rust log equals this TS rerun)']
+              : lastRerun.slice(Math.max(0, rerunAt - 2), rerunAt + 3).map(clip),
+            ...(matched ? { unstable: true } : {}),
           })
         }
       }
@@ -426,6 +478,88 @@ const runIsolated = async (
   }
 }
 
+/**
+ * Trace modes: runs one top-level write call for real with the selected implementation, logging
+ * it like a shadow branch, and settles with the operation's own outcome.
+ */
+const traceTop = async (name: string, kind: 'rs' | 'ts', impl: Fn, args: Any): Promise<Any> => {
+  const s = statsFor(name)
+  s.calls++
+  await loadRustCalls()
+  const payload = args?.req?.payload
+  if (payload) {
+    instrument(payload)
+  }
+  const before = getCoreOpsWriteCalls()
+  const branch = newBranch(kind, args)
+  const outcome: Any = await als.run(branch, () => {
+    try {
+      return Promise.resolve(impl(args)).then(
+        (value) => ({ ok: true, value }),
+        (error) => ({ error, ok: false }),
+      )
+    } catch (error) {
+      return Promise.resolve({ error, ok: false, sync: true })
+    }
+  })
+  finishBranch(branch, outcome, args)
+  await settleBranch(branch)
+  const ran = getCoreOpsWriteCalls() - before
+  if (kind === 'rs') {
+    s.rsCalls += ran
+    if (ran === 0) {
+      s.sameEngine++
+    }
+  } else if (ran !== 0) {
+    s.sameEngine++
+  }
+  s.compared++
+  s.events += branch.log.length
+  if (!outcome.ok) {
+    s.rejections++
+  }
+  traces.push({ log: branch.log, op: name, test: currentTest })
+  if (outcome.ok) {
+    return outcome.value
+  }
+  throw outcome.error
+}
+
+/**
+ * Work an operation leaves running after it settled (e.g. a `Promise.all` sibling still querying
+ * the database after another one rejected) keeps logging into the branch. Before the log is
+ * compared (or the next call starts) the branch waits until no event arrived for a few
+ * macrotask turns (at most `SETTLE_TURNS`), then stops logging, so how far that tail got is not
+ * a matter of timing.
+ */
+const SETTLE_TURNS = 200
+const settleBranch = async (branch: Branch): Promise<void> => {
+  let quiet = 0
+  for (let turn = 0; turn < SETTLE_TURNS && quiet < 3; turn++) {
+    const before = branch.log.length
+    await new Promise((resolve) => realSetTimeout(resolve, 0))
+    quiet = branch.log.length === before ? quiet + 1 : 0
+  }
+  branch.frozen = true
+}
+
+/** The events after an operation settled: outcome, `req.context`, request state, args. */
+const finishBranch = (branch: Branch, outcome: Any, args: Any): void => {
+  if (outcome.ok) {
+    push(branch, { ev: 'outcome', ok: true, value: snap(branch, outcome.value) })
+  } else {
+    push(branch, {
+      error: snapError(branch, outcome.error),
+      ev: 'outcome',
+      ok: false,
+      sync: !!outcome.sync,
+    })
+  }
+  push(branch, { ev: 'context', value: snap(branch, branch.req?.context) })
+  push(branch, { ev: 'req', value: snapReqState(branch, branch.req) })
+  push(branch, { ev: 'args', value: snapShallowArgs(branch, args) })
+}
+
 const runBranch = async (kind: 'rs' | 'ts', impl: Fn, args: Any): Promise<string[]> => {
   const branch = newBranch(kind, args)
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -448,19 +582,8 @@ const runBranch = async (kind: 'rs' | 'ts', impl: Fn, args: Any): Promise<string
     push(branch, { ev: 'outcome', timeout: true })
     return branch.log
   }
-  if (outcome.ok) {
-    push(branch, { ev: 'outcome', ok: true, value: snap(branch, outcome.value) })
-  } else {
-    push(branch, {
-      error: snapError(branch, outcome.error),
-      ev: 'outcome',
-      ok: false,
-      sync: !!outcome.sync,
-    })
-  }
-  push(branch, { ev: 'context', value: snap(branch, branch.req?.context) })
-  push(branch, { ev: 'req', value: snapReqState(branch, branch.req) })
-  push(branch, { ev: 'args', value: snapShallowArgs(branch, args) })
+  finishBranch(branch, outcome, args)
+  await settleBranch(branch)
   return branch.log
 }
 
@@ -500,6 +623,9 @@ const TICKER_BUDGET = 1024
 
 /** Logs `event` with `gap`: microtasks run since the previous event of the branch. */
 const push = (branch: Branch, event: Record<string, unknown>): void => {
+  if (branch.frozen) {
+    return
+  }
   const ticker = branch.ticker
   event.gap = !ticker ? 'start' : ticker.count < TICKER_BUDGET ? ticker.count : 'far'
   branch.log.push(JSON.stringify(event))
@@ -676,6 +802,9 @@ const cloneArgs = (args: Any): Any => {
     const v = args[key]
     if (key === 'collection') {
       out[key] = v
+    } else if (typeof v === 'function') {
+      // Callbacks of the caller (e.g. validate's `onValidationData`): logged like hooks.
+      out[key] = wrap(`args.${key}`, v)
     } else if (key === 'req') {
       out[key] = cloneReq(v)
     } else {
@@ -694,8 +823,9 @@ const HEX_TOKEN = /^[0-9a-f]{24,}$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/
 
+// (multipart boundaries are random per request: `----formdata-undici-<digits>`)
 const EMBEDDED_TOKEN =
-  /[0-9a-f]{24,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+  /[0-9a-f]{24,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|formdata-undici-\d{6,}/gi
 
 const tokenOf = (branch: Branch, v: string): number => {
   let n = branch.tokens.get(v)
@@ -711,8 +841,9 @@ const tokenOf = (branch: Branch, v: string): number => {
  * inside strings such as `pbkdf2-sha256-v1:<hex>`) and UUIDs become per-branch tokens numbered by
  * first appearance; ISO timestamps within a day of now become `recent`.
  */
+const JWT = /^eyJ[\w-]*\.[\w-]*\.[\w-]*$/
 const canonicalString = (branch: Branch, v: string): unknown => {
-  if (HEX_TOKEN.test(v) || UUID.test(v)) {
+  if (HEX_TOKEN.test(v) || UUID.test(v) || JWT.test(v)) {
     return { $token: tokenOf(branch, v) }
   }
   if (ISO_DATE.test(v)) {
@@ -761,6 +892,18 @@ const snapShallowArgs = (branch: Branch, args: Any): unknown => {
   return out
 }
 
+/** bson / bson-objectid ObjectId instances: compared by class and hex value (their own keys are
+ * buffers or bson 7's `i0..i3` numbers, which differ between processes for generated ids). */
+const isObjectID = (v: Any): boolean => {
+  const proto = Object.getPrototypeOf(v)
+  return (
+    proto !== Object.prototype &&
+    proto !== null &&
+    (proto?.constructor?.name === 'ObjectId' || proto?.constructor?.name === 'ObjectID') &&
+    typeof v.toHexString === 'function'
+  )
+}
+
 const snap = (
   branch: Branch,
   v: Any,
@@ -778,6 +921,10 @@ const snap = (
     return canonicalString(branch, v)
   }
   if (typeof v === 'number') {
+    // JWT `iat` / `exp` and other epoch-second stamps near now differ between processes
+    if (Number.isInteger(v) && v > 1e9 && Math.abs(v * 1000 - realDateNow()) < 2 * 864e5) {
+      return { $epochSeconds: 'recent' }
+    }
     return Number.isFinite(v) && !Object.is(v, -0)
       ? v
       : { $num: Object.is(v, -0) ? '-0' : String(v) }
@@ -807,6 +954,12 @@ const snap = (
   }
   if (ArrayBuffer.isView(v)) {
     return { $bytes: (v as ArrayBufferView).byteLength }
+  }
+  if (isObjectID(v)) {
+    return {
+      $class: Object.getPrototypeOf(v).constructor.name,
+      $oid: canonicalString(branch, v.toHexString()),
+    }
   }
   let id = branch.ids.get(v)
   if (id === undefined) {
@@ -994,11 +1147,51 @@ const DB_METHODS = [
   'rollbackTransaction',
 ]
 
+/**
+ * `RS_OPS_ORDERED_IO=true` (trace modes on a network database such as MongoDB): the settlement of
+ * every top-level `payload.db.*` call is delivered in call order, each one macrotask turn after the
+ * previous delivery and after its own I/O settled, with the adapter's own value or error. Upstream
+ * runs per-document work concurrently (`Promise.all` in bulk update / delete when
+ * `bulkOperationsSingleTransaction` is false, mongodb's default), so with real network I/O the
+ * interleaving of the documents' hooks depends on which response arrives first and the TS
+ * reference differs from itself. Both engines run on the same wrapper, which only delays
+ * deliveries, so the interleaving becomes a function of the call order. Calls made while another
+ * call runs (`this.updateOne` inside `upsert`, ...) are not delayed.
+ */
+const ioScope = new AsyncLocalStorage<true>()
+let ioDeliveryTail: Promise<unknown> = Promise.resolve()
+const orderedIO = (fn: Fn): Fn =>
+  function (this: Any, ...args: Any[]) {
+    if (ioScope.getStore()) {
+      return fn.apply(this, args)
+    }
+    const raw = ioScope.run(true, () => fn.apply(this, args))
+    if (!raw || typeof raw.then !== 'function') {
+      return raw
+    }
+    const settled = Promise.resolve(raw).then(
+      (value: unknown) => ({ ok: true as const, value }),
+      (error: unknown) => ({ error, ok: false as const }),
+    )
+    const delivered = ioDeliveryTail.then(async () => {
+      const outcome = await settled
+      await new Promise((resolve) => realSetImmediate(resolve))
+      return outcome
+    })
+    ioDeliveryTail = delivered
+    return delivered.then((outcome) => (outcome.ok ? outcome.value : Promise.reject(outcome.error)))
+  }
+
 const instrument = (payload: Any): void => {
   if (instrumented.has(payload)) {
     return
   }
   instrumented.add(payload)
+  if (SINGLE_TRANSACTION) {
+    // The per-document transaction paths of bulk update/delete (mongodb's mode), on sqlite with
+    // `transactionOptions: {}`.
+    payload.db.bulkOperationsSingleTransaction = true
+  }
   staticRoles.set(payload, '$payload')
   staticRoles.set(payload.config, '$config')
   staticRoles.set(payload.db, '$db')
@@ -1036,7 +1229,10 @@ const instrument = (payload: Any): void => {
   }
   for (const method of DB_METHODS) {
     if (typeof payload.db[method] === 'function') {
-      payload.db[method] = wrap(`db.${method}`, payload.db[method])
+      payload.db[method] = wrap(
+        `db.${method}`,
+        ORDERED_IO ? orderedIO(payload.db[method]) : payload.db[method],
+      )
     }
   }
 }

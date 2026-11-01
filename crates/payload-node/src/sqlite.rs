@@ -267,12 +267,23 @@ enum Value {
 }
 
 /// `{ ok: value }` or `{ error: { kind, message, code?, rawCode? } }`.
-pub struct Outcome(std::result::Result<Value, ClientError>);
+/// A client call's result, plus the statements its failed steps left active (see
+/// `payload_sqlite::conn::with_statement_retention`). Each is handed to JS as `retained[i]`, a
+/// napi external whose native finalizer finalizes the statement: the same kind of object as the
+/// binding's `Statement`, which `executeStmt` drops at once and V8 collects in its own time.
+pub struct Outcome(std::result::Result<Value, ClientError>, Vec<u64>);
 
 impl<T: Into<Value>> From<payload_sqlite::Result<T>> for Outcome {
   fn from(r: payload_sqlite::Result<T>) -> Self {
-    Outcome(r.map(Into::into))
+    Outcome(r.map(Into::into), Vec::new())
   }
+}
+
+/// Runs a client call's statements with the binding's statement lifetime.
+fn retaining(f: impl FnOnce() -> Outcome) -> Outcome {
+  let (mut outcome, retained) = payload_sqlite::conn::with_statement_retention(f);
+  outcome.1.extend(retained);
+  outcome
 }
 
 impl From<()> for Value {
@@ -404,9 +415,36 @@ impl ToNapiValue for Outcome {
         }
         Err(err) => set(env, obj, "error", error_to_js(env, err)?)?,
       }
+      if !val.1.is_empty() {
+        let arr = js_array(env, val.1.len())?;
+        for (i, id) in val.1.iter().enumerate() {
+          set_index(env, arr, i, retained_statement_external(env, *id)?)?;
+        }
+        set(env, obj, "retained", arr)?;
+      }
       Ok(obj)
     }
   }
+}
+
+/// A napi external owning kept statement `id`; its finalizer queues the statement's finalization.
+unsafe fn retained_statement_external(env: sys::napi_env, id: u64) -> Result<sys::napi_value> {
+  unsafe extern "C" fn finalize(_env: sys::napi_env, data: *mut std::ffi::c_void, _hint: *mut std::ffi::c_void) {
+    // SAFETY: `data` is the `Box<u64>` leaked below, finalized once.
+    let id = unsafe { Box::from_raw(data.cast::<u64>()) };
+    worker::release_statement(*id);
+  }
+  let data = Box::into_raw(Box::new(id));
+  let mut value = std::ptr::null_mut();
+  // SAFETY: live env; on failure the box is reclaimed and the statement released at once.
+  let status = unsafe { sys::napi_create_external(env, data.cast(), Some(finalize), std::ptr::null_mut(), &mut value) };
+  if status != sys::Status::napi_ok {
+    // SAFETY: not handed to napi.
+    drop(unsafe { Box::from_raw(data) });
+    worker::release_statement(id);
+    return Err(Error::new(Status::GenericFailure, "could not create a statement handle"));
+  }
+  Ok(value)
 }
 
 fn int_mode(mode: &str) -> IntMode {
@@ -456,7 +494,7 @@ fn spawn<'env>(
   let pending = std::sync::Arc::new(std::sync::Mutex::new(Some(deferred)));
   let pending_job = pending.clone();
   let submitted = worker::submit(id, move |session| {
-    let outcome = job(session);
+    let outcome = retaining(|| job(session));
     if retire {
       session.retire_finished_transaction();
     }
@@ -466,7 +504,7 @@ fn spawn<'env>(
   });
   if let Err(err) = submitted {
     if let Some(d) = pending.lock().ok().and_then(|mut g| g.take()) {
-      d.resolve(Box::new(move |_| Ok(Outcome(Err(err)))));
+      d.resolve(Box::new(move |_| Ok(Outcome(Err(err), Vec::new()))));
     }
   }
   Ok(promise)
@@ -628,13 +666,13 @@ where
   T: Send + 'static,
 {
   let result = worker::call(id, move |session| {
-    let r = f(session);
+    let outcome = retaining(|| f(session).into());
     session.retire_finished_transaction();
-    r
+    outcome
   });
   match result {
-    Ok(r) => r.into(),
-    Err(e) => Outcome(Err(e)),
+    Ok(outcome) => outcome,
+    Err(e) => Outcome(Err(e), Vec::new()),
   }
 }
 
@@ -666,7 +704,7 @@ pub fn sqlite_get_db_sync(id: u32) -> Outcome {
 pub fn sqlite_in_transaction(id: u32) -> Outcome {
   match worker::call(id, |session| session.conn().map(|conn| conn.in_transaction())) {
     Ok(r) => r.into(),
-    Err(e) => Outcome(Err(e)),
+    Err(e) => Outcome(Err(e), Vec::new()),
   }
 }
 

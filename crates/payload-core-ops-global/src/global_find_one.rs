@@ -35,7 +35,7 @@ async fn run(args: Val) -> JsResult<Val> {
   let include_lock_status = call_val("includeLockStatus", &[include_lock_status_from_args.get(), req.get()])?;
 
   // beforeOperation - Global
-  args = config_hooks(&global_config, "beforeOperation", args, |args| {
+  args = config_hooks(&global_config, "beforeOperation", "globalConfig", args, |args| {
     call("globalBeforeOperationArgs", &[args, global_config.get(), js::string("read"), override_access.get()])
   })
   .await?;
@@ -120,7 +120,7 @@ async fn run(args: Val) -> JsResult<Val> {
   }
 
   // Execute before global hook
-  doc = config_hooks(&global_config, "beforeRead", doc, |doc| {
+  doc = config_hooks(&global_config, "beforeRead", "globalConfig", doc, |doc| {
     call("globalReadHookArgs", &[req.get(), doc, global_config.get(), override_access.get()])
   })
   .await?;
@@ -149,7 +149,7 @@ async fn run(args: Val) -> JsResult<Val> {
   doc = await_js(p).await?;
 
   // Execute after global hook
-  doc = config_hooks(&global_config, "afterRead", doc, |doc| {
+  doc = config_hooks(&global_config, "afterRead", "globalConfig", doc, |doc| {
     call("globalReadHookArgs", &[req.get(), doc, global_config.get(), override_access.get()])
   })
   .await?;

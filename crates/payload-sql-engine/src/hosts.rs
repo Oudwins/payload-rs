@@ -325,7 +325,7 @@ impl OpsHost for Ops<'_> {
     let config = match distinct_id {
       // `findFirst({ where: eq(this.tables[tableName].id, selectDistinctResult[0].id) })`
       Some(id) => {
-        let t = require_table(&self.call.engine.schema, &self.table_name)?;
+        let t = require_table(self.call.engine.write_schema(), &self.table_name)?;
         QueryConfig { where_: Some(fragment_to_find_sql(&eq(t, "id", id)?)?), ..QueryConfig::default() }
       }
       // `buildFindManyArgs(...)` with `findManyArgs.where = where` (drizzle maps its columns to

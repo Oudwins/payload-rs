@@ -798,3 +798,53 @@ fn upsert_row_statements_interleave_with_concurrent_calls() {
   let (method, args) = update(3);
   assert_eq!(db.ok(method, args)["log"].as_array().map(Vec::len), Some(1));
 }
+
+/// A json column holding JSON nested 100k levels deep (V8's `JSON.parse` accepts any depth, so TS
+/// returns it) is read, transformed and encoded without recursion: on the payload-sqlite worker
+/// (4 MB stack, `call_json`), on a call thread (`SteppedCall`, 16 MB) and atomically. The result is
+/// the stored value itself.
+#[test]
+fn deep_json_values_are_read_without_recursion() {
+  use payload_sql_engine::stepped::{Step, SteppedCall};
+  let Some(fixture) = fixture("fields") else { return };
+  let db = open("fields-deep-json", &fixture, "number");
+  let depth = 100_000;
+  let deep = format!("{}{}{}", "[{\"a\":".repeat(depth), "1", "}]".repeat(depth));
+  let id = db.id;
+  let stored = deep.clone();
+  worker::call(id, move |session| {
+    let conn = session.conn().expect("conn").connection().expect("connection");
+    conn
+      .execute(
+        "insert into json_fields (id, json, updated_at, created_at) values (1, ?, '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')",
+        [stored],
+      )
+      .expect("insert");
+  })
+  .expect("insert job");
+  let args = json!({ "objects": [], "root": { "collection": "json-fields", "where": { "id": { "equals": 1 } } } }).to_string();
+  let check = |text: &str| {
+    assert!(text.contains(&format!("\"json\":{deep}")), "the deep value comes back as stored");
+  };
+
+  // statement by statement on a call thread, and atomically on a call thread
+  for atomic in [false, true] {
+    let start = if atomic { SteppedCall::start_atomic } else { SteppedCall::start };
+    let op = start(Arc::clone(&db.engine), "find".into(), args.clone(), None, id);
+    let text = loop {
+      match op.resume(&NoHost) {
+        Step::Yielded => continue,
+        Step::Done(result) => break result.unwrap_or_else(|e| panic!("find failed: {}", e.to_json())),
+      }
+    };
+    check(&text);
+  }
+
+  // atomically on the worker (4 MB stack)
+  let engine = Arc::clone(&db.engine);
+  let worker_args = args.clone();
+  let text = worker::call(id, move |session| engine.call_json(&NoHost, "find", &worker_args, None, session))
+    .expect("job")
+    .unwrap_or_else(|e| panic!("find failed: {}", e.to_json()));
+  check(&text);
+}

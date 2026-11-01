@@ -9,24 +9,33 @@
 // other read, call and decision of the TS body. `await` stays here, at the upstream position, so
 // async validators are real async functions with upstream's microtask ticks. A native returns
 // `NEXT` where the TS body continues past an await or a call this shell makes.
+//
+// A native call is `nX(tags <marker>, ...bindings)`: the tag word describes the first 7 bindings
+// (`pk`; the bindings after those are passed untagged), and lib.rs replaces each marker (a `K:x` comment) with the strings native `x` uses
+// (keys.rs), so the engine creates no property key per call.
 ;(function payloadValidateShell(bootstrap, deps) {
   const { ObjectId, validateJSONSchema } = deps
 
   const NEXT = {}
-  const SPECIES = {}
-  const species = { C: undefined }
+  // Slow-path results of the method / iteration helpers, read by the engine right after the
+  // helper returns (no user code runs in between).
+  const box = { a: undefined, m: undefined, n: undefined, r: undefined }
+  const isArray = Array.isArray
   const symbolIterator = Symbol.iterator
-  const symbolSpecies = Symbol.species
   const ArrayPrototype = Array.prototype
   const arrayValues = ArrayPrototype[symbolIterator]
   const ArrayIteratorPrototype = Object.getPrototypeOf([][symbolIterator]())
   const arrayIteratorNext = ArrayIteratorPrototype.next
+  const isProxy =
+    globalThis.process?.getBuiltinModule?.('node:util')?.types?.isProxy ?? (() => true)
+  // `f.call(thisArg, ...args)` without looking `call` up.
+  const callFunction = Function.prototype.call.bind(Function.prototype.call)
   const emailRegex =
     /^(?!.*\.\.)[\w!#$%&'*+/=?^`{|}~-](?:[\w!#$%&'*+/=?^`{|}~.-]*[\w!#$%&'*+/=?^`{|}~-])?@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$/i
 
   const N = bootstrap({
     NEXT,
-    symbols: [symbolIterator],
+    box,
     arrayIteratorPrototype: ArrayIteratorPrototype,
     arrayValues,
     some: ArrayPrototype.some,
@@ -36,45 +45,112 @@
     find: ArrayPrototype.find,
     includes: ArrayPrototype.includes,
     indexOf: ArrayPrototype.indexOf,
-    push: ArrayPrototype.push,
-    // `GetIterator(items)` of a `for...of`: reads `items[Symbol.iterator]` (as the TS does) and
-    // returns `NEXT` when it and `%ArrayIteratorPrototype%.next` are the defaults (the engine then
-    // walks the array by index with a live length), else the method for the full protocol.
-    arrayIterator: (items) => {
-      const method = items[symbolIterator]
-      return method === arrayValues && ArrayIteratorPrototype.next === arrayIteratorNext
-        ? NEXT
-        : method
-    },
-    // The same for an engine-created array literal (no own `Symbol.iterator`).
-    literalIterator: () => {
-      const method = ArrayPrototype[symbolIterator]
-      return method === arrayValues && ArrayIteratorPrototype.next === arrayIteratorNext
-        ? NEXT
-        : method
-    },
-    // The method lookup of a `.filter` / `.map` call; for the builtin on a real array also the
-    // `constructor` / `@@species` reads of its `ArraySpeciesCreate`: `NEXT` when they give
-    // `%Array%` (or undefined), `SPECIES` with the constructor in `species.C`, else the method.
-    SPECIES,
-    species,
-    speciesMethod: (receiver, name, builtin, isRealArray) => {
+    // `receiver[name](element)` when the method found (as the TS looks it up) is the builtin
+    // `builtin`: the builtin calls `element`, which runs the engine's closure. Else `NEXT` with
+    // the method in `box.m` (the engine calls it with a fresh function).
+    callArray: (receiver, name, builtin) => {
       const method = receiver[name]
-      if (method !== builtin || !isRealArray) {
-        return method
-      }
-      let C = receiver.constructor
-      if ((typeof C === 'object' && C !== null) || typeof C === 'function') {
-        C = C[symbolSpecies]
-        if (C === null) {
-          C = undefined
-        }
-      }
-      if (C === undefined || C === Array) {
+      if (method !== builtin) {
+        box.m = method
         return NEXT
       }
-      species.C = C
-      return SPECIES
+      return callFunction(method, receiver, element)
+    },
+    // The same with a value argument (`includes` / `indexOf`).
+    callArrayWith: (receiver, name, builtin, value) => {
+      const method = receiver[name]
+      if (method !== builtin) {
+        box.m = method
+        return NEXT
+      }
+      return callFunction(method, receiver, value)
+    },
+    // `[item][name](element)` (the literal also in `box.a` when the method is not the builtin).
+    callLiteral: (item, name, builtin) => {
+      const items = [item]
+      const method = items[name]
+      if (method !== builtin) {
+        box.a = items
+        box.m = method
+        return NEXT
+      }
+      return callFunction(method, items, element)
+    },
+    // The `for...of` loops of the TS over arrays, one per loop so V8 names the TS expression in
+    // its errors. The body is the engine's `callback`; `NEXT` is "no return out of the loop".
+    forOfStringsToValidate: (stringsToValidate) => {
+      for (const stringValue of stringsToValidate) {
+        const result = callback(stringValue)
+        if (result !== NEXT) {
+          return result
+        }
+      }
+      return NEXT
+    },
+    forOfNumbersToValidate: (numbersToValidate) => {
+      for (const number of numbersToValidate) {
+        const result = callback(number)
+        if (result !== NEXT) {
+          return result
+        }
+      }
+      return NEXT
+    },
+    forOfAllBlockSlugs: (allBlockSlugs) => {
+      for (const blockSlug of allBlockSlugs) {
+        const result = callback(blockSlug)
+        if (result !== NEXT) {
+          return result
+        }
+      }
+      return NEXT
+    },
+    forOfValue: (value) => {
+      for (const item of value) {
+        const result = callback(item)
+        if (result !== NEXT) {
+          return result
+        }
+      }
+      return NEXT
+    },
+    // The same for an engine-created array literal (no own `Symbol.iterator`).
+    literalIter: () => {
+      const method = ArrayPrototype[symbolIterator]
+      if (method !== arrayValues) {
+        box.m = method
+        return 1
+      }
+      const next = ArrayIteratorPrototype.next
+      if (next !== arrayIteratorNext) {
+        box.n = next
+        return 2
+      }
+      return 0
+    },
+    // `const [a, b] = entry` for `count` consecutive engine-created entries: the `GetIterator`
+    // reads and, after the two default steps, `IteratorClose`'s `return` read, entry by entry.
+    // Returns `4 * done + code`: `done` entries had only defaults, entry `done` (when < count)
+    // stopped with code 1 (method in `box.m`), 2 (`next` in `box.n`) or 3 (`return` in `box.r`).
+    literalPairs: (count) => {
+      for (let i = 0; i < count; i++) {
+        const method = ArrayPrototype[symbolIterator]
+        if (method !== arrayValues) {
+          box.m = method
+          return i * 4 + 1
+        }
+        const next = ArrayIteratorPrototype.next
+        if (next !== arrayIteratorNext) {
+          box.n = next
+          return i * 4 + 2
+        }
+        const ret = ArrayIteratorPrototype.return
+        if (ret !== undefined && ret !== null) {
+          box.r = ret
+          return i * 4 + 3
+        }
+      }
+      return count * 4
     },
     get: (o, key) => o[key],
     isArray: (value) => Array.isArray(value),
@@ -109,6 +185,11 @@
       }, t('validation:invalidSelections')),
   })
 
+  // Runs the closure the engine set around the helper call that reaches it.
+  const { callback } = N
+  // What builtin array methods get: a builtin calls a native function through V8's slow API path,
+  // an optimized JS function calls it directly.
+  const element = (value) => callback(value)
   const {
     allBlockSlugs: nAllBlockSlugs,
     array: nArray,
@@ -136,9 +217,8 @@
     username: nUsername,
   } = N
 
-  // `typeof` and truthiness of a native's argument, 4 bits each (lib.rs `run`, ops.rs `V`):
-  // pure facts about values the shell already holds, so the natives need no Node-API call to
-  // classify their arguments.
+  // `typeof` and truthiness of a binding, 4 bits (ops.rs `V`): pure facts about values the shell
+  // already holds, so the natives need no Node-API call to classify them.
   const tag = (v) =>
     typeof v === 'string'
       ? v === ''
@@ -165,22 +245,31 @@
                       : v
                         ? 11
                         : 12
-  const run = (native, a, b, c, d, e, f, g, h, i) =>
-    native(
-      tag(a) +
-        16 *
-          (tag(b) +
-            16 * (tag(c) + 16 * (tag(d) + 16 * (tag(e) + 16 * (tag(f) + 16 * (tag(g) + 16 * (tag(h) + 16 * tag(i)))))))),
-      a,
-      b,
-      c,
-      d,
-      e,
-      f,
-      g,
-      h,
-      i,
-    )
+  // `tag` plus `Array.isArray` for an object: 13 when it is true, 14 for an object that is not a
+  // proxy (never an array), 15 for a proxy (its `Array.isArray` is asked where the TS asks it).
+  // The intrinsic `Array.isArray` reads nothing and throws only for a revoked proxy.
+  const atag = (v) => {
+    if (typeof v !== 'object' || v === null) {
+      return tag(v)
+    }
+    try {
+      if (isArray(v)) {
+        return 13
+      }
+    } catch {
+      return 15
+    }
+    return isProxy(v) ? 15 : 14
+  }
+  // Tags of up to 7 bindings in one small integer (a Smi).
+  const pk = (a, b, c, d, e, f, g) =>
+    tag(a) |
+    (tag(b) << 4) |
+    (tag(c) << 8) |
+    (tag(d) << 12) |
+    (tag(e) << 16) |
+    (tag(f) << 20) |
+    (tag(g) << 24)
 
   const text = (
     value,
@@ -196,7 +285,19 @@
       },
       required,
     },
-  ) => run(nText, value, hasMany, fieldMaxLength, maxRows, minLength, minRows, config, t, required)
+  ) =>
+    nText(
+      pk(value, hasMany, fieldMaxLength, minLength, required, config, t) /*K:text*/,
+      value,
+      hasMany,
+      fieldMaxLength,
+      minLength,
+      required,
+      config,
+      t,
+      maxRows,
+      minRows,
+    )
 
   const slug = () => true
 
@@ -211,10 +312,25 @@
       },
       required,
     },
-  ) => run(nPassword, value, fieldMaxLength, minLength, config, t, required)
+  ) =>
+    nPassword(
+      pk(value, fieldMaxLength, minLength, config, t, required) /*K:password*/,
+      value,
+      fieldMaxLength,
+      minLength,
+      config,
+      t,
+      required,
+    )
 
   const confirmPassword = (value, { req: { t }, required, siblingData }) =>
-    run(nConfirmPassword, value, t, required, siblingData)
+    nConfirmPassword(
+      pk(value, t, required, siblingData) /*K:confirmPassword*/,
+      value,
+      t,
+      required,
+      siblingData,
+    )
 
   const email = (
     value,
@@ -227,7 +343,17 @@
       required,
       siblingData,
     },
-  ) => run(nEmail, value, collectionSlug, collections, config, t, required, siblingData)
+  ) =>
+    nEmail(
+      pk(value, collectionSlug, collections, config, t, required, siblingData) /*K:email*/,
+      value,
+      collectionSlug,
+      collections,
+      config,
+      t,
+      required,
+      siblingData,
+    )
 
   const username = (
     value,
@@ -240,7 +366,17 @@
       required,
       siblingData,
     },
-  ) => run(nUsername, value, collectionSlug, collections, config, t, required, siblingData)
+  ) =>
+    nUsername(
+      pk(value, collectionSlug, collections, config, t, required, siblingData) /*K:username*/,
+      value,
+      collectionSlug,
+      collections,
+      config,
+      t,
+      required,
+      siblingData,
+    )
 
   const textarea = (
     value,
@@ -253,27 +389,71 @@
       },
       required,
     },
-  ) => run(nTextarea, value, fieldMaxLength, minLength, config, t, required)
+  ) =>
+    nTextarea(
+      pk(value, fieldMaxLength, minLength, config, t, required) /*K:textarea*/,
+      value,
+      fieldMaxLength,
+      minLength,
+      config,
+      t,
+      required,
+    )
 
-  const code = (value, { req: { t }, required }) => run(nCode, value, t, required)
+  const code = (value, { req: { t }, required }) =>
+    nCode(pk(value, t, required) /*K:code*/, value, t, required)
 
   const json = async (value, { jsonError, jsonSchema, req: { t }, required }) => {
-    const result = run(nJson, value, jsonError, jsonSchema, t, required)
+    const result = nJson(
+      pk(value, jsonError, jsonSchema, t, required) /*K:json*/,
+      value,
+      jsonError,
+      jsonSchema,
+      t,
+      required,
+    )
     return result === NEXT ? validateJSONSchema({ jsonSchema, value }) : result
   }
 
-  const checkbox = (value, { req: { t }, required }) => run(nCheckbox, value, t, required)
+  const checkbox = (value, { req: { t }, required }) =>
+    nCheckbox(pk(value, t, required) /*K:checkbox*/, value, t, required)
 
   const date = (value, { name, req: { t }, required, siblingData, timezone }) =>
-    run(nDate, value, name, t, required, siblingData, timezone)
+    nDate(
+      pk(value, name, t, required, siblingData, timezone) /*K:date*/,
+      value,
+      name,
+      t,
+      required,
+      siblingData,
+      timezone,
+    )
 
-  const richText = async (value, options) => run(nRichText, value, options)
+  const richText = async (value, options) =>
+    nRichText(pk(value, options) /*K:richText*/, value, options)
 
   const number = (value, { hasMany, max, maxRows, min, minRows, req: { t }, required }) =>
-    run(nNumber, value, hasMany, max, maxRows, min, minRows, t, required)
+    nNumber(
+      pk(value, hasMany, max, min, required, t, maxRows) /*K:number*/,
+      value,
+      hasMany,
+      max,
+      min,
+      required,
+      t,
+      maxRows,
+      minRows,
+    )
 
   const array = (value, { maxRows, minRows, req: { t }, required }) =>
-    run(nArray, value, maxRows, minRows, t, required)
+    nArray(
+      pk(value, maxRows, minRows, t, required) /*K:array*/,
+      value,
+      maxRows,
+      minRows,
+      t,
+      required,
+    )
 
   const validateBlocksFilterOptions = async function validateBlocksFilterOptions({
     id,
@@ -283,7 +463,7 @@
     siblingData,
     value,
   }) {
-    const allBlockSlugs = run(nAllBlockSlugs, value)
+    const allBlockSlugs = nAllBlockSlugs(pk(value) /*K:allBlockSlugs*/, value)
 
     let allowedBlockSlugs = undefined
 
@@ -302,14 +482,26 @@
       allowedBlockSlugs = filterOptions
     }
 
-    return run(nBlocksFilterResult, allBlockSlugs, allowedBlockSlugs)
+    return nBlocksFilterResult(
+      pk(allBlockSlugs, allowedBlockSlugs) /*K:blocksFilterResult*/,
+      allBlockSlugs,
+      allowedBlockSlugs,
+    )
   }
 
   const blocks = async (
     value,
     { id, data, filterOptions, maxRows, minRows, req: { t }, req, required, siblingData },
   ) => {
-    const result = run(nBlocks, value, filterOptions, maxRows, minRows, required, t)
+    const result = nBlocks(
+      pk(value, filterOptions, maxRows, minRows, required, t) /*K:blocks*/,
+      value,
+      filterOptions,
+      maxRows,
+      minRows,
+      required,
+      t,
+    )
     if (result !== NEXT) {
       return result
     }
@@ -321,7 +513,7 @@
       siblingData,
       value,
     })
-    return run(nBlocksInvalid, invalidBlockSlugs, t)
+    return nBlocksInvalid(pk(invalidBlockSlugs, t) /*K:blocksInvalid*/, invalidBlockSlugs, t)
   }
 
   const validateFilterOptions = async (
@@ -364,7 +556,8 @@
             optionFilter = null
           }
 
-          const findArgs = run(nFilterOptionsFind, 
+          const findArgs = nFilterOptionsFind(
+            pk(values, optionFilter, collection, falseCollections, overrideAccess, req) /*K:filterOptionsFind*/,
             values,
             optionFilter,
             collection,
@@ -376,7 +569,7 @@
           if (findArgs !== NEXT) {
             const result = await req.payloadDataLoader.find(findArgs)
 
-            options[collection] = run(nDocIDs, result)
+            options[collection] = nDocIDs(pk(result) /*K:docIDs*/, result)
           } else {
             options[collection] = []
           }
@@ -389,7 +582,14 @@
         }
       }
 
-      return run(nFilterOptionsResult, values, relationTo, falseCollections, options, t)
+      return nFilterOptionsResult(
+        pk(values, relationTo, falseCollections, options, t) /*K:filterOptionsResult*/,
+        values,
+        relationTo,
+        falseCollections,
+        options,
+        t,
+      )
     }
 
     return true
@@ -405,7 +605,17 @@
       required,
     } = options
 
-    const result = run(nRelationship, value, event, maxRows, minRows, relationTo, payload, t, required)
+    const result = nRelationship(
+      atag(value) | (pk(event, relationTo, required, t, payload, maxRows) << 4) /*K:relationship*/,
+      value,
+      event,
+      relationTo,
+      required,
+      t,
+      payload,
+      maxRows,
+      minRows,
+    )
     return result !== NEXT ? result : validateFilterOptions(value, options)
   }
 
@@ -419,7 +629,17 @@
       required,
     } = options
 
-    const result = run(nRelationship, value, event, maxRows, minRows, relationTo, payload, t, required)
+    const result = nRelationship(
+      atag(value) | (pk(event, relationTo, required, t, payload, maxRows) << 4) /*K:relationship*/,
+      value,
+      event,
+      relationTo,
+      required,
+      t,
+      payload,
+      maxRows,
+      minRows,
+    )
     return result !== NEXT ? result : validateFilterOptions(value, options)
   }
 
@@ -437,12 +657,21 @@
           })
         : options
 
-    return run(nSelect, value, filteredOptions, hasMany, t, required)
+    return nSelect(
+      pk(value, filteredOptions, hasMany, t, required) /*K:select*/,
+      value,
+      filteredOptions,
+      hasMany,
+      t,
+      required,
+    )
   }
 
-  const radio = (value, { options, req: { t }, required }) => run(nRadio, value, options, t, required)
+  const radio = (value, { options, req: { t }, required }) =>
+    nRadio(pk(value, options, t, required) /*K:radio*/, value, options, t, required)
 
-  const point = (value = ['', ''], { req: { t }, required }) => run(nPoint, value, t, required)
+  const point = (value = ['', ''], { req: { t }, required }) =>
+    nPoint(pk(value, t, required) /*K:point*/, value, t, required)
 
   return {
     array,

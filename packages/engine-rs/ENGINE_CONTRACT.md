@@ -40,7 +40,7 @@ class SqliteEngine {
   ): SqliteEngine
   /** Same JSON as `buildRawSchema` today (rawTables, rawRelations, tableNameMap, ...). */
   rawSchema(): string
-  /** The live schema after `beforeSchemaInit` / `afterSchemaInit` (call during init, before any `call`). */
+  /** The live schema after `beforeSchemaInit` / `afterSchemaInit` (calls in progress keep theirs). */
   setLiveSchema(descriptionJson: string): void
   /** Tells the engine which payload-sqlite client/connection ids belong to this adapter. */
   attachClient(clientId: number): void
@@ -63,6 +63,10 @@ class SqliteEngine {
   `DrizzleQueryError`-shaped errors, `TypeError`, ...) with identical properties.
 - JS callbacks the drizzle code makes (`dbName`/`enumName` functions, `payload.db.*` hooks,
   `beforeSchemaInit`/`afterSchemaInit`) go through `callFunction` (sync) or are kept in TS.
+- `callFunction` returns `serializeForEngine(result)`; the engine decodes it typed, so a `Date` or
+  `bigint` a JS function returns (a custom column's `fromDriver` / `toDriver`, a `$defaultFn`)
+  stays one: decoded columns hold it like drizzle returns it, bound values bind it like libsql's
+  `valueToSql` (`date.valueOf()` as a double, a `bigint` as a 64-bit integer).
 
 ## Rust side (`crates/payload-sql-engine`, implemented)
 
@@ -108,9 +112,9 @@ interleave statement by statement in microtask order. `call` reproduces this
   method (drizzle awaits each one, no `Promise.all`) is a step boundary, including the statements
   of one `upsertRow`.
 - `PAYLOAD_RS_ENGINE_ATOMIC=true` (read once by the addon) runs every call as a whole inside
-  `call`, on the JS thread, without steps (no interleaving; diagnostics and timing comparisons
-  only). JS functions work as in stepped calls. If no thread can be started for a call, it runs
-  like that too.
+  `call`, on a call thread (same stack as stepped calls) without steps (no interleaving;
+  diagnostics and timing comparisons only). JS functions work as in stepped calls. If no thread
+  can be started for a call, it runs as a whole on the JS thread.
 - JS functions the method calls (custom column `fromDriver` / `toDriver`, see `setLiveSchema`) run
   on the JS thread through `callFunction` while the step waits. They may use the clients
   synchronously and may start other engine calls (no statement holds the queue meanwhile).
@@ -135,7 +139,12 @@ interleave statement by statement in microtask order. `call` reproduces this
   `deleteMany`).
 - Results are the tree encoding of the return value: own `undefined` keys are kept
   (`{ $undefined: true }`, e.g. `limit` of `find` without a limit, `deleteMany`'s `undefined`),
-  user objects whose only key is reserved are `$obj`-escaped.
+  user objects whose only key is reserved are `$obj`-escaped, `-0` is written as `-0`.
+- Depth: values read from the database (json columns, which V8's `JSON.parse` reads at any
+  depth) are parsed, transformed, encoded and freed without recursion, and
+  `deserializeFromEngine` decodes iteratively, so a 100k-level json value comes back like TS
+  returns it (test/__rs/find/engine/engineCalls.int.spec.ts, crates/payload-sql-read/tests/
+  deep_json.rs, `deep_json_values_are_read_without_recursion` in payload-sql-engine).
 
 ### `setLiveSchema(descriptionJson)`
 
@@ -155,34 +164,60 @@ engine.setLiveSchema(
 ```
 
 - `drizzle` (`DrizzleSchema::from_json`, payload-sql-query `drizzle`): `{ [tsName]: { dbName,
-  columns: { [key]: { name, columnType, sqlType, primary, mode?, fromDriver?, toDriver? } },
-  relations: { [key]: { type: 'one' | 'many' | 'one-no-config', fields?, references?,
-  referencedTable, relationName, sourceTable } } } }`. `fromDriver` / `toDriver` are the
-  `callFunction` registry ids of a custom column's `mapFrom` / `mapTo`
-  (`describeDrizzleSchema(schema, tableNamesMap, register)` with the registry's `register`); they
-  are called with the value as a `serializeForEngine` tree, so `callFunction` decodes its argument
-  with `deserializeFromEngine`. This is `adapter.tables` for everything drizzle resolves at call
-  time: every relational query, every `where` / `sort` column (`getTableColumnFromPath`,
-  `buildOrderBy`; values bound through the column's `mapToDriverValue`, custom `toDriver`
-  included), every selection (`SQLiteNumericBigInt` → `cast(... as text)`, also in
-  `selectDistinct` / `findDistinct`) and every decoded column (`mapResultRow` decodes all selected
-  columns in order).
-- `rawTables`: replaces the raw tables the write path builds `insert` / `update` / `delete`
-  statements and returned columns from (keys and `null` placeholders kept).
-- Verified end to end through napi against the TS adapter (schema hooks renaming a raw column and
-  replacing drizzle columns with a custom type and a bigint numeric):
-  test/__rs/find/engine/engineCalls.int.spec.ts.
+  columns: { [key]: { name, columnType, sqlType, primary, mode?, fromDriver?, toDriver?,
+  hasDefault?, default?, defaultFn?, onUpdateFn?, generated? } }, relations: { [key]: { type:
+  'one' | 'many' | 'one-no-config', fields?, references?, referencedTable, relationName,
+  sourceTable } } } }`. `fromDriver` / `toDriver` are the `callFunction` registry ids of a custom
+  column's `mapFrom` / `mapTo` (`describeDrizzleSchema(schema, tableNamesMap, register)` with the
+  registry's `register`); they are called with the value as a `serializeForEngine` tree, so
+  `callFunction` decodes its argument with `deserializeFromEngine`. This is `adapter.tables` for
+  everything drizzle resolves at call time: every relational query, every `where` / `sort` column
+  (`getTableColumnFromPath`, `buildOrderBy`; values bound through the column's
+  `mapToDriverValue`, custom `toDriver` included), every selection (`SQLiteNumericBigInt` →
+  `cast(... as text)`, also in `selectDistinct` / `findDistinct` and `returning`), every decoded
+  column (`mapResultRow` decodes all selected columns in order), and every write: `insert` lists
+  the table's columns in drizzle order (`generated: true` ones, `column.shouldDisableInsert()`,
+  left out), `update ... set` lists the set columns and those with `onUpdateFn` in drizzle order,
+  values go through the column's `mapToDriverValue` (custom `toDriver` included), `returning`
+  decodes like `mapResultRow`.
+- Column defaults (what `buildInsertQuery` / `buildUpdateSet` use for a column without a value),
+  described when `hasDefault` (`column.hasDefault`) is present:
+  - `default`: `column.default` when not nullish, `{ sql: { sql, params } }` for drizzle `SQL`
+    (`dialect.sqlToQuery`, params as trees) or `{ value: <tree> }` (bound through the column);
+  - `defaultFn` / `onUpdateFn`: `callFunction` ids of functions returning, for `column.defaultFn()`
+    / `column.onUpdateFn()`, `{ sql: dialect.sqlToQuery(result) }` when the result is `SQL`, else
+    `{ value: result }`. Called with `null`, once per row and column, in statement order
+    (`onUpdateFn` for every listed column of an `update`, also when `set` has a value, like
+    drizzle).
+  - Without `hasDefault` the raw column's defaults are used (`default`, `defaultNow`,
+    `defaultRandom` / `defaultV7`), `null` for a column without a raw column.
+  The harness's `describeDrizzleSchema` (test/__rs/find/harness.ts) produces all of them; the
+  glue's `describeLiveSchema` (packages/engine-rs/src/adapter/schema.ts) must add `hasDefault`,
+  `default`, `defaultFn`, `onUpdateFn` and `generated` for columns added or replaced by
+  `afterSchemaInit` to be inserted with their defaults.
+- `rawTables`: replaces the raw tables the write path takes table names, `delete` statements and
+  the raw columns' defaults from (keys and `null` placeholders kept).
+- `setLiveSchema` can be called at any time: calls in progress finish on the schema they started
+  with (like TS calls that captured the previous drizzle instance), later calls use the new one.
+- Verified end to end through napi against the TS adapter (schema hooks renaming a raw column,
+  replacing drizzle columns with custom types returning `Date`s / `bigint`s and a bigint numeric,
+  and adding drizzle-only columns with `default`, `$defaultFn`, `$onUpdate` and SQL defaults; the
+  rows left by the writes are compared column by column): test/__rs/find/engine/engineCalls.int.spec.ts.
 - Without `setLiveSchema` the engine uses the schema it derived from its own raw schema (identical
   to the live one when no hook changes it).
 
 ### Errors (`payload_sql_engine::error_json`)
 
 - `{ name: 'DrizzleQueryError', message, query, params, cause }` for every failed statement
-  (find or write path): `params` tree-encoded, `cause` a `NativeError`
-  (`{ code, kind, message, rawCode }`, message without the `CODE: ` prefix) with libsql's kind:
-  statements that return rows (`select`, `... returning`) run with `stmt.all()` in libsql, whose
-  bind / step errors escape as the raw native error (`kind: 'native'`); prepare errors and errors
-  of statements without rows (`stmt.run()`) are `SqliteError`s (`kind: 'sqlite'`).
+  (find or write path): `params` are the driver values drizzle passed to the client (after
+  `mapToDriverValue`: `Date`s, `bigint`s, booleans as they are), tree-encoded; `cause` a
+  `NativeError` (`{ code, kind, message, rawCode }`, message without the `CODE: ` prefix) with
+  libsql's kind: statements that return rows (`select`, `... returning`) run with `stmt.all()` in
+  libsql, whose bind / step errors escape as the raw native error (`kind: 'native'`); prepare
+  errors and errors of statements without rows (`stmt.run()`) are `SqliteError`s
+  (`kind: 'sqlite'`). The client's `valueToSql` errors (non-finite numbers, `bigint`s beyond 64
+  bits: `kind: 'RangeError'`; `undefined`: `kind: 'TypeError'`) and the binding's error for other
+  objects (`kind: 'Error'`, after `prepare`) are causes too, raised when the statement is executed.
 - `{ name: 'ValidationError', message, data: { id, collection?, errors: [{ path, tableName }], global? } }`
   for unique violations; `errors[].message` is left out so TS fills `req.t('error:valueMustBeUnique')`.
 - `{ name: 'APIError', message, data, status? }` (`status` only when drizzle passes one, e.g. 400).
@@ -197,16 +232,18 @@ engine.setLiveSchema(
   microtasks between two statements of one method. Concurrent calls of the same method (or of
   methods with the same statement sequence) interleave exactly like TS; a call racing TS code with
   a different number of awaits can be ordered differently.
-- **Columns added to drizzle tables only (`afterSchemaInit` `extendTable`) are read, not
-  written.** Relational queries, `where` / `sort` columns, selections and decoding use the live
-  drizzle schema, but the write path builds `insert` / `update` statements from raw tables
-  (`setLiveSchema`'s `rawTables`, i.e. `beforeSchemaInit` changes) and encodes values with the raw
-  column types: drizzle would also list the extra columns there and encode values with the drizzle
-  column (custom `toDriver`).
-- **Blob columns and `bigint` where values on the find path.** Binding a value to a drizzle blob
-  column (`Buffer.from(...)`) is an internal error (no `Buffer` value on this side). A `bigint`
-  where value of a find statement is bound as a double (exact on the write path's selects, which
-  bind it as a 64-bit integer).
+- **Defaults of drizzle-only columns need the glue's description.** Without `hasDefault` in the
+  description (the glue's `describeLiveSchema` does not send it yet), a column added by
+  `afterSchemaInit` is inserted as `null` instead of its `default` / `$defaultFn` value.
+- **Blob encoders.** Binding a value to a `blob({ mode: 'json' | 'bigint' })` column
+  (`Buffer.from(...)`) is an internal error (no `Buffer` value on this side); `blob()` /
+  `blob({ mode: 'buffer' })` columns have no encoder and bind the value as it is, like drizzle.
+- **Deep arguments.** `argsJson` and host function results are parsed with a nesting limit of
+  128 (serde_json): data nested deeper (e.g. a json field written with more than ~125 levels)
+  fails with an internal error where TS writes it (until V8's own stack limit in
+  `JSON.stringify`). Values read from the database have no depth limit (see "Depth").
+- **Lone surrogates.** Strings are UTF-8 on this side: a lone UTF-16 surrogate in a parsed json
+  value (`"\ud800"`) becomes U+FFFD.
 - **JS functions as conversion methods.** `Number(x)` / `String(x)` of a where value whose own
   `valueOf` / `toString` is a JS function (JS would call it) is an internal error.
 - **JS-level interception of the client is bypassed.** Engine statements do not go through

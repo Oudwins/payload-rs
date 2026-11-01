@@ -142,7 +142,7 @@ pub fn get_mut<'a>(v: &'a mut JsVal, key: &str) -> Option<&'a mut JsVal> {
 pub fn set(v: &mut JsVal, key: &str, value: JsVal) -> Result<()> {
   match v {
     JsVal::Obj(o) => {
-      js_insert(Arc::make_mut(o), key, value);
+      js_insert(&mut **Arc::make_mut(o), key, value);
       Ok(())
     }
     JsVal::Arr(a) => {
@@ -198,7 +198,7 @@ pub fn with_wrapped<R>(value: &mut JsVal, f: impl FnOnce(&mut JsVal) -> R) -> R 
   let mut wrapped = JsVal::arr(vec![std::mem::take(value)]);
   let result = f(&mut wrapped);
   if let JsVal::Arr(a) = wrapped {
-    *value = Arc::try_unwrap(a).map(|v| v.into_iter().next().unwrap_or_default()).unwrap_or_else(|a| a[0].clone());
+    *value = Arc::try_unwrap(a).map(|v| v.into_vec().into_iter().next().unwrap_or_default()).unwrap_or_else(|a| a[0].clone());
   }
   result
 }

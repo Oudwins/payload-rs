@@ -25,6 +25,7 @@ import { upstreamBeforeValidate as beforeValidateTS } from '../../../packages/pa
 import { traverseFields as traverseFieldsTS } from '../../../packages/payload/src/fields/hooks/beforeValidate/traverseFields.js'
 import { createPayloadRequest } from '../../../packages/payload/src/utilities/createPayloadRequest.js'
 import { assertDistinctEngines, startEngineRun } from '../dispatch/engineGuard.js'
+import { settleRun, trackDatabaseIO } from '../dispatch/settle.js'
 
 assertDistinctEngines('beforeValidate', beforeValidateTS, beforeValidateRS)
 assertDistinctEngines('beforeValidate traverseFields', traverseFieldsTS, traverseFieldsRS)
@@ -319,7 +320,8 @@ export type Variant = {
   operation: 'create' | 'update' | 'validate'
   overrideAccess: boolean
   /** Call the exported `traverseFields` (as lexical does) instead of `beforeValidate`. */
-  viaTraverseFields?: boolean
+  /** `'nested'`: with a nested call's arguments (parent paths, `blockData`, `parentIsLocalized`). */
+  viaTraverseFields?: 'nested' | boolean
   /** Pass `id` (the doc id). */
   withID?: boolean
 }
@@ -364,6 +366,7 @@ export const runBeforeValidate = async ({
 }): Promise<RunOutcome> => {
   const beforeValidate = engine === 'ts' ? beforeValidateTS : beforeValidateRS
   const engineRun = startEngineRun(engine, 'beforeValidate')
+  trackDatabaseIO(payload)
   const req = await createPayloadRequest({
     context: { rsDifferential: true, ...variant.context },
     locale: variant.locale,
@@ -395,7 +398,10 @@ export const runBeforeValidate = async ({
     variant.viaTraverseFields
       ? (traverseFields as (args: Record<string, unknown>) => Promise<unknown>)({
           id: variant.withID ? input.doc.id : undefined,
-          blockData: undefined,
+          blockData:
+            variant.viaTraverseFields === 'nested'
+              ? { id: 'block-data', blockType: 'nestedBlock' }
+              : undefined,
           collection: collection ?? null,
           context: req.context,
           data: input.data,
@@ -406,10 +412,10 @@ export const runBeforeValidate = async ({
           onFieldAccess,
           operation: variant.operation,
           overrideAccess: variant.overrideAccess,
-          parentIndexPath: '',
-          parentIsLocalized: false,
-          parentPath: '',
-          parentSchemaPath: '',
+          parentIndexPath: variant.viaTraverseFields === 'nested' ? '1-2' : '',
+          parentIsLocalized: variant.viaTraverseFields === 'nested',
+          parentPath: variant.viaTraverseFields === 'nested' ? 'outer.0' : '',
+          parentSchemaPath: variant.viaTraverseFields === 'nested' ? 'outer' : '',
           req,
           siblingData: input.data,
           siblingDoc: docs[i],
@@ -452,6 +458,7 @@ export const runBeforeValidate = async ({
   }
   // let stray settle events land before snapshotting
   await new Promise((resolve) => setTimeout(resolve, 0))
+  await settleRun({ activity: () => recorder.current?.events.length ?? 0, payload })
   Math.random = originalRandom
   // one snapshot pass so sharing between data, doc and docForHooks shows up as `$ref`
   const all = snap({

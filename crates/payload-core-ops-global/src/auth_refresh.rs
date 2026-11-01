@@ -75,7 +75,7 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
     let mut result = Val::Undefined;
 
     // refresh hook - Collection
-    let mut hooks = ForOf::new(path(&args, &["collection", "config", "hooks", "refresh"])?.get())?;
+    let mut hooks = ForOf::of(path(&args, &["collection", "config", "hooks", "refresh"])?.get(), "args.collection.config.hooks.refresh")?;
     while let Some(refresh_hook) = hooks.next()? {
       let refresh_hook = val(refresh_hook)?;
       let mut done = false;
@@ -121,7 +121,7 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
     set(target.get(), "user", user_with_read_access.get())?;
 
     // After Refresh - Collection
-    result = config_hooks(&collection_config, "afterRefresh", result, |result| {
+    result = config_hooks(&collection_config, "afterRefresh", "collectionConfig", result, |result| {
       call("afterRefreshHookArgs", &[args.get(), result])
     })
     .await?;

@@ -517,6 +517,7 @@ version = "0.1.0"
 dependencies = [
  "napi",
  "payload-core-ops",
+ "payload-core-ops-write",
  "payload-core-runtime",
 ]
 
@@ -585,6 +586,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "payload-mongo-engine"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "payload-engine",
+ "payload-mongo-joins",
+ "payload-mongo-query",
+ "payload-mongo-schema",
+ "payload-mongo-transform",
+ "serde_json",
+]
+
+[[package]]
+name = "payload-mongo-joins"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "payload-engine",
+ "payload-sql-read",
+ "serde_json",
+]
+
+[[package]]
+name = "payload-mongo-query"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "payload-engine",
+ "payload-sql-query",
+ "payload-sql-read",
+ "serde_json",
+]
+
+[[package]]
+name = "payload-mongo-schema"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "payload-engine",
+ "serde_json",
+]
+
+[[package]]
+name = "payload-mongo-transform"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "payload-engine",
+ "serde_json",
+]
+
+[[package]]
 name = "payload-node"
 version = "0.1.0"
 dependencies = [
@@ -602,6 +655,8 @@ dependencies = [
  "payload-core-validate",
  "payload-core-validate-live",
  "payload-engine",
+ "payload-mongo-engine",
+ "payload-mongo-schema",
  "payload-sql-engine",
  "payload-sqlite",
  "serde_json",
@@ -643,6 +698,7 @@ dependencies = [
  "indexmap",
  "libc",
  "payload-engine",
+ "payload-sql-find",
  "rusqlite",
  "serde",
  "serde_json",
@@ -665,6 +721,8 @@ version = "0.1.0"
 dependencies = [
  "indexmap",
  "payload-engine",
+ "payload-sql-find",
+ "payload-sql-query",
  "payload-sql-read",
  "payload-sql-write",
  "rusqlite",

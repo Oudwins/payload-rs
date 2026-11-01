@@ -558,7 +558,7 @@ fn cache_get(key: Local) -> JsResult<Option<Cached>> {
 }
 
 unsafe extern "C" fn finalize_cached(env: sys::napi_env, data: *mut c_void, _hint: *mut c_void) {
-  js::set_env(env);
+  js::set_env_uncounted(env);
   drop(unsafe { Box::from_raw(data as *mut Cached) });
 }
 

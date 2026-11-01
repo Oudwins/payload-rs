@@ -131,7 +131,7 @@ fn run(where_: Json, sort: Option<&str>) -> Result<(Vec<Json>, String, Vec<Json>
   )
   .map_err(|e| format!("{}: {}", e.name, e.message))?;
   let rel = trace.relational.expect("relational");
-  Ok((result.docs.iter().map(|d| d["id"].clone()).collect(), rel.sql, rel.params))
+  Ok((result.docs.iter().map(|d| d["id"].clone()).collect(), rel.sql, rel.params.iter().map(payload_engine::js::JsVal::to_json).collect()))
 }
 
 #[test]

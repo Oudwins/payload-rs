@@ -21,7 +21,9 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, expect } from 'vitest'
 
 import * as drizzle from '../../../packages/drizzle/node_modules/drizzle-orm/index.js'
+import { SQLiteSyncDialect } from '../../../packages/drizzle/node_modules/drizzle-orm/sqlite-core/dialect.js'
 import { SQLiteRelationalQuery } from '../../../packages/drizzle/node_modules/drizzle-orm/sqlite-core/query-builders/query.js'
+import { serializeForEngine } from '../../../packages/engine-rs/src/serialize.js'
 import { getSqliteConnId } from '../../../packages/engine-rs/src/sqlite/client.js'
 import { toJsError } from '../../../packages/engine-rs/src/sqlite/errors.js'
 import { getNativeSqlite } from '../../../packages/engine-rs/src/sqlite/native.js'
@@ -197,10 +199,30 @@ export const callHostFunction: CallFunction = (json) => {
   }
 }
 
+const defaultsDialect = new SQLiteSyncDialect()
+
+/**
+ * A column default as `DrizzleSchema::from_json` reads it: drizzle `SQL` rendered by
+ * `dialect.sqlToQuery` (`{ sql: { sql, params } }`), any other value bound through the column
+ * (`{ value }`, in the `serializeForEngine` tree encoding).
+ */
+const describeDefault = (value: unknown, encode: (v: unknown) => unknown) => {
+  if (!is(value, SQL)) {
+    return { value: encode(value) }
+  }
+  const query = defaultsDialect.sqlToQuery(value as any)
+  return { sql: { params: (query.params as unknown[]).map(encode), sql: query.sql } }
+}
+
+const encodeTree = (value: unknown) =>
+  (JSON.parse(serializeForEngine(value, { functions: [] })) as { root: unknown }).root
+
 /**
  * Describes the live drizzle relational schema (`db._.schema`) for `DrizzleSchema::from_json`.
- * `register` assigns the `callFunction` ids of custom columns' `mapFrom` / `mapTo` (default: this
- * harness's host function registry).
+ * `register` assigns the `callFunction` ids of custom columns' `mapFrom` / `mapTo` and of the
+ * functions computing `$defaultFn` / `$onUpdate` defaults (default: this harness's host function
+ * registry). A default function's host function returns `{ sql: { sql, params } }` or `{ value }`
+ * (`ColumnDefault::from_js`).
  */
 export const describeDrizzleSchema = (
   tablesConfig: any,
@@ -223,6 +245,32 @@ export const describeDrizzleSchema = (
               toDriver: register(column.mapTo),
             }
           : {}),
+        // `buildInsertQuery` / `buildUpdateSet`: `column.default`, `defaultFn`, `onUpdateFn`
+        hasDefault: column.hasDefault,
+        ...(column.default !== null && column.default !== undefined
+          ? { default: describeDefault(column.default, encodeTree) }
+          : {}),
+        ...(typeof column.defaultFn === 'function'
+          ? {
+              defaultFn: register(() => {
+                const result = column.defaultFn()
+                return is(result, SQL)
+                  ? { sql: defaultsDialect.sqlToQuery(result) }
+                  : { value: result }
+              }),
+            }
+          : {}),
+        ...(typeof column.onUpdateFn === 'function'
+          ? {
+              onUpdateFn: register(() => {
+                const result = column.onUpdateFn()
+                return is(result, SQL)
+                  ? { sql: defaultsDialect.sqlToQuery(result) }
+                  : { value: result }
+              }),
+            }
+          : {}),
+        ...(column.shouldDisableInsert() ? { generated: true } : {}),
       }
     }
     const relations: Record<string, unknown> = {}

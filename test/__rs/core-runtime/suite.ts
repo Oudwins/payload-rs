@@ -24,7 +24,16 @@ export type DiffStats = {
   runs: number
   tracedRuns?: number
   traceEventsCompared?: number
+  /**
+   * Cases whose first TS/Rust pair differed but where a re-run Rust outcome equals a re-run (or
+   * the first) TS outcome: the TS reference itself is not deterministic there (on MongoDB a hook
+   * awaiting `setImmediate` races the network I/O of population). Listed, not counted as diffs.
+   */
+  unstable?: string[]
 }
+
+/** Extra TS/Rust run pairs taken when a case differs (see `DiffStats.unstable`). */
+const UNSTABLE_RERUNS = Number(process.env.RS_CORE_RUNTIME_RERUNS ?? 4)
 
 /** A run that never settles is reported as an outcome instead of stalling the suite. */
 const withTimeout = (promise: Promise<RunOutcome>, ms = 10_000): Promise<RunOutcome> =>
@@ -241,14 +250,22 @@ export const registerDifferentialSuite = ({
               ]
             for (const docSet of docSets) {
               // afterRead (sequential/concurrent, plain/traced), then the exported traverseFields
-              // (sequential plain, concurrent traced)
-              const modes = [
-                ...(target.collection ? [false, true] : [false]).flatMap((c) => [
-                  [c, false, false],
-                  [c, true, false],
-                ]),
+              // (sequential plain, concurrent traced) with root and with nested-call arguments
+              const modes: [boolean, boolean, 'nested' | boolean][] = [
+                ...(target.collection ? [false, true] : [false]).flatMap(
+                  (c): [boolean, boolean, boolean][] => [
+                    [c, false, false],
+                    [c, true, false],
+                  ],
+                ),
                 [false, false, true],
-                ...(target.collection ? [[true, true, true]] : []),
+                [false, false, 'nested'],
+                ...(target.collection
+                  ? ([
+                      [true, true, true],
+                      [true, true, 'nested'],
+                    ] as [boolean, boolean, 'nested' | boolean][])
+                  : []),
               ]
               for (const [concurrent, trace, traverse] of modes) {
                 const run = (engine: 'rs' | 'ts'): Promise<RunOutcome> =>
@@ -286,9 +303,23 @@ export const registerDifferentialSuite = ({
                   canonicalizeGeneratedIDs(rs, inputJSON),
                 )
                 if (diff) {
-                  stats.diffs.push(
-                    `${config.slug} [${variant.name}, ${docSet.label}${concurrent ? ', concurrent' : ''}${trace ? ', traced' : ''}${traverse ? ', traverseFields' : ''}] ${diff}`,
-                  )
+                  const label = `${config.slug} [${variant.name}, ${docSet.label}${concurrent ? ', concurrent' : ''}${trace ? ', traced' : ''}${traverse ? `, traverseFields${traverse === 'nested' ? ' nested' : ''}` : ''}]`
+                  const tsOutcomes = [canonicalizeGeneratedIDs(ts, inputJSON)]
+                  const rsOutcomes = [canonicalizeGeneratedIDs(rs, inputJSON)]
+                  let isUnstable = false
+                  for (let i = 0; i < UNSTABLE_RERUNS && !isUnstable; i++) {
+                    tsOutcomes.push(canonicalizeGeneratedIDs(await withTimeout(run('ts')), inputJSON))
+                    rsOutcomes.push(canonicalizeGeneratedIDs(await withTimeout(run('rs')), inputJSON))
+                    isUnstable = rsOutcomes.some((r) => tsOutcomes.some((t) => !firstDiff(t, r)))
+                  }
+                  if (isUnstable) {
+                    const isTsSelfDiffering = tsOutcomes.some((t) => firstDiff(tsOutcomes[0], t))
+                    ;(stats.unstable ??= []).push(
+                      `${label} ${diff}${isTsSelfDiffering ? ' (TS differs from itself)' : ''}`,
+                    )
+                  } else {
+                    stats.diffs.push(`${label} ${diff}`)
+                  }
                 }
               }
             }
@@ -302,7 +333,7 @@ export const registerDifferentialSuite = ({
           JSON.stringify(stats, null, 2),
         )
         console.log(
-          `[core-runtime] ${name}: runs=${stats.runs} (traced=${stats.tracedRuns ?? 0}) docs=${stats.docsCompared} callbackEvents=${stats.callbacksCompared} docTraceEvents=${stats.traceEventsCompared ?? 0} rejections=${stats.rejectionsCompared ?? 0} diffs=${stats.diffs.length}`,
+          `[core-runtime] ${name}: runs=${stats.runs} (traced=${stats.tracedRuns ?? 0}) docs=${stats.docsCompared} callbackEvents=${stats.callbacksCompared} docTraceEvents=${stats.traceEventsCompared ?? 0} rejections=${stats.rejectionsCompared ?? 0} diffs=${stats.diffs.length} unstable=${stats.unstable?.length ?? 0}`,
         )
         // a run that compared nothing must not pass
         expect(stats.runs).toBeGreaterThan(0)

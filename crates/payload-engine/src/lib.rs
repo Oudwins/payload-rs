@@ -1,3 +1,4 @@
+pub mod bson;
 pub mod error;
 pub mod fields;
 pub mod host;

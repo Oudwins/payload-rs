@@ -22,8 +22,8 @@ import path from 'node:path'
 
 import type { Access, AccessResult } from '../../../payload/src/config/types.js'
 
-import { getCoreQueryBinding } from '../../../../test/__rs/core-query/glue.js'
 import { afterRead as tsAfterRead } from '../../../payload/src/fields/hooks/afterRead/index.js'
+import { getCoreQueryBinding } from '../query/index.js'
 import { getCoreRuntime } from '../runtime/index.js'
 import { createOpsHost } from './host.js'
 
@@ -31,8 +31,8 @@ import { createOpsHost } from './host.js'
 type Any = any
 
 export type CoreOpsBinding = {
-  /** Host-helper contract version (crates/payload-core-ops/src/binding.rs `API_VERSION`); an
-   * older addon fails loudly on the first missing helper (`core ops host helper ... is missing`). */
+  /** Host-helper contract version (crates/payload-core-ops/src/binding.rs `API_VERSION`), checked
+   * at load against `CORE_OPS_API_VERSION`. */
   apiVersion?: number
   count: (args: unknown) => Promise<unknown>
   countVersions: (args: unknown) => Promise<unknown>
@@ -50,6 +50,9 @@ export type CoreOpsBinding = {
 type OperationName = Exclude<keyof CoreOpsBinding, 'apiVersion' | 'init' | 'sanitizeSortQuery'>
 
 let binding: CoreOpsBinding | undefined
+
+/** The binding contract this host implements (crates/payload-core-ops/src/binding.rs `API_VERSION`). */
+const CORE_OPS_API_VERSION = 2
 
 export const getCoreOps = (): CoreOpsBinding => {
   if (binding) {
@@ -70,6 +73,11 @@ export const getCoreOps = (): CoreOpsBinding => {
     throw new Error(`The engine addon at ${addonPath} has no coreOpsBinding export`)
   }
   const created = addon.coreOpsBinding()
+  if (created.apiVersion !== CORE_OPS_API_VERSION) {
+    throw new Error(
+      `The engine addon at ${addonPath} has core ops API version ${created.apiVersion}, expected ${CORE_OPS_API_VERSION}; rebuild it`,
+    )
+  }
   created.init({
     ...createOpsHost(
       process.env.PAYLOAD_OPS_AFTER_READ === 'ts' ? (tsAfterRead as Any) : undefined,

@@ -22,7 +22,6 @@ type Body<const N: usize> = fn([Local; N]) -> JsResult<Local>;
 
 fn run<const N: usize>(env: sys::napi_env, info: sys::napi_callback_info, body: Body<N>) -> sys::napi_value {
   js::set_env(env);
-  payload_core_runtime::executor::count_entry();
   let (args, _) = js::callback_args::<N>(env, info);
   match catch_unwind(AssertUnwindSafe(|| body(args))) {
     Ok(Ok(v)) => v.0,

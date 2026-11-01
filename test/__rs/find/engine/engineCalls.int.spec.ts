@@ -3,14 +3,18 @@
  * per-call harnesses cannot see:
  *
  * - `setLiveSchema` end to end through napi: schema hooks rename a raw column
- *   (`beforeSchemaInit`, through `adapter.rawTables`) and replace drizzle columns with a custom
- *   type and a bigint numeric (`afterSchemaInit` `extendTable`). An engine created on the
+ *   (`beforeSchemaInit`, through `adapter.rawTables`), replace drizzle columns with custom types
+ *   and a bigint numeric, and add drizzle-only columns with `default` / `$defaultFn` /
+ *   `$onUpdate` / SQL defaults (`afterSchemaInit` `extendTable`). An engine created on the
  *   candidate's client gets `{ drizzle: describeDrizzleSchema(...), rawTables: adapter.rawTables }`
- *   and must answer like the TS adapter (where / sort columns, custom `toDriver` / `fromDriver`,
- *   `cast(... as text)` selections, writes through the renamed column).
+ *   and must answer like the TS adapter (where / sort columns, custom `toDriver` / `fromDriver`
+ *   returning `Date`s and `bigint`s, `cast(... as text)` selections, writes through the renamed
+ *   column, inserts / updates of the drizzle-only columns), with identical rows afterwards.
  * - concurrent calls (`Promise.all`), which interleave statement by statement in TS, including a
  *   call whose client connection is taken by a transaction begun between its statements;
- * - typed arguments (`Date`, `bigint`) of the data methods.
+ * - typed arguments (`Date`, `bigint`) of the data methods, `bigint` where values of every column
+ *   kind, and libsql's `valueToSql` errors (wrapped in `DrizzleQueryError`s);
+ * - json values nested 100k levels deep (V8's `JSON.parse` has no depth limit).
  *
  * Reference: `sqliteAdapter(args)`; candidate: `withRustEngine(sqliteAdapter(args))`, each with its
  * own database file and the same faked clock. Fails when nothing was compared, or when the
@@ -24,7 +28,8 @@ import type { Payload, SanitizedConfig } from 'payload'
 
 import { sqliteAdapter } from '@payloadcms/db-sqlite'
 import { DrizzleQueryError } from '@payloadcms/db-sqlite/drizzle'
-import { customType, numeric } from '@payloadcms/db-sqlite/drizzle/sqlite-core'
+import { sql } from '@payloadcms/db-sqlite/drizzle'
+import { customType, numeric, text } from '@payloadcms/db-sqlite/drizzle/sqlite-core'
 import { rmSync } from 'node:fs'
 import { buildConfig, getPayload } from 'payload'
 import { afterAll, beforeAll, expect, vi } from 'vitest'
@@ -73,6 +78,30 @@ const encodedText = customType<{ data: string; driverData: string }>({
   toDriver: (value) => `enc:${value}`,
 })
 
+/** A text field whose drizzle column decodes to a `Date` (typed host results). */
+const dateText = customType<{ data: Date; driverData: string }>({
+  dataType: () => 'text',
+  fromDriver: (value) => new Date(value),
+  toDriver: (value) => (value instanceof Date ? value.toISOString() : String(value)),
+})
+
+/**
+ * A number field stored through a `bigint` (`toDriver`): libsql binds it as a 64-bit integer, which
+ * the text column stores as `'3'` (a double would be `'3.0'`).
+ */
+const bigintText = customType<{ data: number; driverData: bigint }>({
+  dataType: () => 'text',
+  fromDriver: (value) => Number(value),
+  toDriver: (value) => BigInt(value),
+})
+
+/** A drizzle-only column whose `toDriver` returns the `Date` itself (bound as `date.valueOf()`). */
+const dateValue = customType<{ data: Date; driverData: Date }>({
+  dataType: () => 'text',
+  fromDriver: (value) => new Date(Number(value)),
+  toDriver: (value) => value,
+})
+
 const makeConfig = (db: unknown) =>
   buildConfig({
     collections: [
@@ -84,6 +113,8 @@ const makeConfig = (db: unknown) =>
           { name: 'title', type: 'text' },
           { name: 'code', type: 'text' },
           { name: 'views', type: 'number' },
+          { name: 'published', type: 'text' },
+          { name: 'rank', type: 'number' },
           { name: 'tags', type: 'array', fields: [{ name: 'tag', type: 'text' }] },
         ],
       },
@@ -95,6 +126,8 @@ const makeConfig = (db: unknown) =>
           { name: 'name', type: 'text' },
           { name: 'n', type: 'number' },
           { name: 'when', type: 'date' },
+          { name: 'meta', type: 'json' },
+          { name: 'parent', type: 'relationship', relationTo: 'items' },
           { name: 'tags', type: 'array', fields: [{ name: 'tag', type: 'text' }] },
         ],
       },
@@ -103,25 +136,40 @@ const makeConfig = (db: unknown) =>
     secret: 'rs-engine-calls',
   })
 
-const adapterArgs = (file: string) => ({
-  afterSchemaInit: [
-    ({ extendTable, schema }: AnyObject) => {
-      extendTable({
-        columns: { code: encodedText('code'), views: numeric('views', { mode: 'bigint' }) },
-        table: schema.tables.posts,
-      })
-      return schema
-    },
-  ],
-  beforeSchemaInit: [
-    ({ adapter, schema }: AnyObject) => {
-      adapter.rawTables.posts.columns.title.name = 'headline'
-      return schema
-    },
-  ],
-  client: { url: `file:${file}` },
-  transactionOptions: {},
-})
+const adapterArgs = (file: string) => {
+  // per adapter, so both sides start from the same sequence
+  let tokens = 0
+  return {
+    afterSchemaInit: [
+      ({ extendTable, schema }: AnyObject) => {
+        extendTable({
+          columns: {
+            code: encodedText('code'),
+            published: dateText('published'),
+            rank: bigintText('rank'),
+            views: numeric('views', { mode: 'bigint' }),
+            // drizzle-only columns: written with their defaults, like drizzle's `insert` / `update`
+            edited: text('edited').$onUpdate(() => 'edited'),
+            note: text('note').default('n/a'),
+            seen: dateValue('seen').$defaultFn(() => new Date(1700000000000)),
+            sqlDefault: text('sql_default').default(sql`('x' || 'y')`),
+            token: text('token').$defaultFn(() => `tok-${++tokens}`),
+          },
+          table: schema.tables.posts,
+        })
+        return schema
+      },
+    ],
+    beforeSchemaInit: [
+      ({ adapter, schema }: AnyObject) => {
+        adapter.rawTables.posts.columns.title.name = 'headline'
+        return schema
+      },
+    ],
+    client: { url: `file:${file}` },
+    transactionOptions: {},
+  }
+}
 
 const instances = {} as Record<Side, Payload>
 
@@ -155,6 +203,47 @@ const describeValue = (value: unknown, seen = new Set<unknown>()): unknown => {
   return out
 }
 
+/** `describeValue` without recursion (for values deeper than the JS stack), as one string. */
+const describeIteratively = (value: unknown): string => {
+  const out: string[] = []
+  const work: unknown[] = [value]
+  const close = Symbol('close')
+  while (work.length > 0) {
+    const item = work.pop()
+    if (item === close) {
+      out.push(')')
+      continue
+    }
+    if (typeof item === 'string' && item.startsWith('\u0000key:')) {
+      out.push(item)
+      continue
+    }
+    if (item instanceof Date) {
+      out.push(`date:${Number.isNaN(item.getTime()) ? 'invalid' : item.toISOString()}`)
+    } else if (typeof item === 'bigint') {
+      out.push(`bigint:${item}`)
+    } else if (item === undefined) {
+      out.push('undefined')
+    } else if (typeof item !== 'object' || item === null) {
+      out.push(JSON.stringify(item))
+    } else if (Array.isArray(item)) {
+      out.push('array(')
+      work.push(close)
+      for (let i = item.length - 1; i >= 0; i--) {
+        work.push(item[i])
+      }
+    } else {
+      out.push('object(')
+      work.push(close)
+      const entries = Object.entries(item)
+      for (let i = entries.length - 1; i >= 0; i--) {
+        work.push(entries[i]![1], `\u0000key:${entries[i]![0]}`)
+      }
+    }
+  }
+  return out.join(' ')
+}
+
 const settle = async (run: () => Promise<unknown>) => {
   try {
     return { ok: describeValue(await run()) }
@@ -163,7 +252,7 @@ const settle = async (run: () => Promise<unknown>) => {
   }
 }
 
-const report = { concurrent: 0, live: 0, typed: 0 }
+const report = { concurrent: 0, deep: 0, live: 0, typed: 0 }
 
 /** An array row id (the data methods take rows with ids; the Local API generates them). */
 const rowId = (n: number) => n.toString(16).padStart(24, '0')
@@ -228,6 +317,7 @@ test.suite('SqliteEngine.call', {}, () => {
     expect(report.live).toBeGreaterThan(0)
     expect(report.concurrent).toBeGreaterThan(0)
     expect(report.typed).toBeGreaterThan(0)
+    expect(report.deep).toBeGreaterThan(0)
   })
 
   test('should run the candidate on the Rust engine', () => {
@@ -274,9 +364,9 @@ test.suite('SqliteEngine.call', {}, () => {
     engine.attachClient(clientId)
 
     await seed([
-      `insert into posts (id, headline, code, views, updated_at, created_at) values (1, 'first', 'enc:a', 10, '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')`,
-      `insert into posts (id, headline, code, views, updated_at, created_at) values (2, 'second', 'enc:b', 9007199254740993, '2025-01-02T00:00:00.000Z', '2025-01-02T00:00:00.000Z')`,
-      `insert into posts (id, headline, code, views, updated_at, created_at) values (3, 'third', 'enc:a', 10, '2025-01-03T00:00:00.000Z', '2025-01-03T00:00:00.000Z')`,
+      `insert into posts (id, headline, code, views, published, rank, updated_at, created_at) values (1, 'first', 'enc:a', 10, '2020-01-01T00:00:00.000Z', '3', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')`,
+      `insert into posts (id, headline, code, views, published, rank, updated_at, created_at) values (2, 'second', 'enc:b', 9007199254740993, '2021-01-01T00:00:00.000Z', '4', '2025-01-02T00:00:00.000Z', '2025-01-02T00:00:00.000Z')`,
+      `insert into posts (id, headline, code, views, published, rank, updated_at, created_at) values (3, 'third', 'enc:a', 10, '2020-01-01T00:00:00.000Z', '3.0', '2025-01-03T00:00:00.000Z', '2025-01-03T00:00:00.000Z')`,
       `insert into posts_tags (_order, _parent_id, id, tag) values (1, 1, '000000000000000000000001', 'x')`,
       `insert into posts_tags (_order, _parent_id, id, tag) values (1, 2, '000000000000000000000002', 'y')`,
     ])
@@ -331,6 +421,44 @@ test.suite('SqliteEngine.call', {}, () => {
     await callBoth('create', { collection, data: { tags: [{ tag: 'w' }], title: 'fifth' } })
     await callBoth('deleteOne', { collection, where: { 'tags.tag': { equals: 'z' } } })
     await callBoth('find', { collection, sort: 'id' })
+
+    // custom columns whose `fromDriver` returns a `Date` and whose `toDriver` returns a `bigint`
+    await callBoth('find', {
+      collection,
+      sort: 'id',
+      where: { published: { equals: '2020-01-01T00:00:00.000Z' } },
+    })
+    await callBoth('findDistinct', { collection, field: 'published', sort: 'published' })
+    await callBoth('find', { collection, sort: 'id', where: { rank: { equals: 3 } } })
+    await callBoth('count', { collection, where: { rank: { in: [3, 4] } } })
+    // inserts / updates list every drizzle column: custom `toDriver`s, `default`, `$defaultFn`
+    // (also returning a `Date`), `$onUpdate` and SQL defaults of the drizzle-only columns
+    await callBoth('create', {
+      collection,
+      data: { published: '2022-02-02T00:00:00.000Z', rank: 7, title: 'sixth' },
+    })
+    await callBoth('create', { collection, data: { title: 'seventh' } })
+    await callBoth('updateOne', {
+      collection,
+      data: { rank: 8 },
+      where: { title: { equals: 'sixth' } },
+    })
+    await callBoth('updateMany', {
+      collection,
+      data: { code: 'c' },
+      where: { rank: { exists: true } },
+    })
+    await callBoth('find', { collection, sort: 'id' })
+    // the rows the writes left, column by column (`views` holds an integer beyond 2^53, which
+    // libsql cannot read as a number)
+    const rows = await expectSame('live', (payload) =>
+      (payload.db as AnyObject).drizzle.all(
+        sql.raw(
+          `select id, headline, code, cast(views as text) as views, published, rank, edited, note, seen, sql_default, token, updated_at, created_at from posts order by id`,
+        ),
+      ),
+    )
+    expect(rows.ok).toHaveLength(6)
   })
 
   test('should interleave concurrent calls like TS', async () => {
@@ -421,6 +549,58 @@ test.suite('SqliteEngine.call', {}, () => {
     await expectSame('typed', (payload) =>
       payload.db.find({ collection: 'items', sort: 'id', where: {} }),
     )
+    // `bigint` where values bind as 64-bit integers on every column kind (find, count and the
+    // write path's selects); too large ones are libsql's `RangeError` in a `DrizzleQueryError`.
+    // A text column compares an integer `7` with '7', a double with '7.0'.
+    await expectSame('typed', (payload) =>
+      payload.db.create({ collection: 'items', data: { name: '7' } }),
+    )
+    for (const where of [
+      { id: { equals: 1n } },
+      { id: { in: [1n, 2n] } },
+      { name: { equals: 7n } },
+      { parent: { equals: 1n } },
+      { id: { equals: 2n ** 70n } },
+      { parent: { not_equals: -(2n ** 64n) } },
+    ]) {
+      await expectSame('typed', (payload) => payload.db.find({ collection: 'items', where }))
+      await expectSame('typed', (payload) => payload.db.count({ collection: 'items', where }))
+      await expectSame('typed', (payload) =>
+        payload.db.updateMany({ collection: 'items', data: { n: 3 }, where }),
+      )
+    }
+    // write-path binding: a bigint relationship id, and `valueToSql`'s `RangeError`s
+    for (const parent of [1n, 2n ** 70n, Number.POSITIVE_INFINITY, Number.NaN]) {
+      await expectSame('typed', (payload) =>
+        payload.db.create({ collection: 'items', data: { name: 'child', parent } }),
+      )
+    }
+    await expectSame('typed', (payload) =>
+      payload.db.find({ collection: 'items', sort: 'id', where: {} }),
+    )
+  })
+
+  test('should read json nested 100k levels deep like TS', async () => {
+    const depth = 100_000
+    const deep = `${'[{"a":'.repeat(depth)}1${'}]'.repeat(depth)}`
+    for (const side of ['reference', 'candidate'] as const) {
+      const db = instances[side].db as AnyObject
+      await db.drizzle.run(
+        sql`insert into items (name, meta, updated_at, created_at) values ('deep', ${deep}, '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z')`,
+      )
+    }
+    const out = {} as Record<Side, string>
+    for (const side of ['reference', 'candidate'] as const) {
+      const result = await instances[side].db.find({
+        collection: 'items',
+        where: { name: { equals: 'deep' } },
+      })
+      out[side] = describeIteratively(result)
+    }
+    // a doc whose `meta` is the stored value, `depth` arrays deep
+    expect(out.reference.length).toBeGreaterThan(depth * 4)
+    expect(out.candidate === out.reference).toBe(true)
+    report.deep++
   })
 
   test('should have run the candidate calls on the engine', () => {

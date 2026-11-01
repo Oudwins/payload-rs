@@ -597,7 +597,7 @@ fn run_op(conn: &Connection, schema: &Schema, op: &Json, fields: &HashMap<i64, J
   let mut data = args.get("data").clone();
   let mut host = Host { st };
   let mut ops_host = Ops { st };
-  let sch = &schema.raw;
+  let sch: payload_sql_upsert::sql::Schema<'_> = (&schema.raw).into();
   let ctx = WriteContext { adapter: &adapter, fields: &op_fields };
   let res = {
     let mut env = Env { exec: &mut exec, schema: sch, opts: &opts, ctx, host: &mut host };

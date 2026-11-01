@@ -29,7 +29,7 @@ async fn run(args: Val) -> JsResult<Val> {
       if truthy(&gv(&args, "disableTransaction")?) { false } else { truthy(&init_transaction(&req).await?) };
 
     // beforeOperation - Global
-    args = config_hooks(&initial_global_config, "beforeOperation", args.clone(), |args| {
+    args = config_hooks(&initial_global_config, "beforeOperation", "initialGlobalConfig", args.clone(), |args| {
       call("globalBeforeOperationArgsUpdate", &[args, initial_global_config.get(), js::string("update")])
     })
     .await?;
@@ -141,7 +141,7 @@ async fn run(args: Val) -> JsResult<Val> {
     )?;
 
     // beforeValidate - Global
-    data = config_hooks(&global_config, "beforeValidate", data, |data| {
+    data = config_hooks(&global_config, "beforeValidate", "globalConfig", data, |data| {
       call(
         "globalChangeHookArgs",
         &[req.get(), data, global_config.get(), publication_hook_doc.get(), override_access.get()],
@@ -150,7 +150,7 @@ async fn run(args: Val) -> JsResult<Val> {
     .await?;
 
     // beforeChange - Global
-    data = config_hooks(&global_config, "beforeChange", data, |data| {
+    data = config_hooks(&global_config, "beforeChange", "globalConfig", data, |data| {
       call(
         "globalChangeHookArgs",
         &[req.get(), data, global_config.get(), publication_hook_doc.get(), override_access.get()],
@@ -314,7 +314,7 @@ async fn run(args: Val) -> JsResult<Val> {
     .await?;
 
     // afterRead - Global
-    result = config_hooks(&global_config, "afterRead", result, |doc| {
+    result = config_hooks(&global_config, "afterRead", "globalConfig", result, |doc| {
       call("globalReadHookArgs", &[req.get(), doc, global_config.get(), override_access.get()])
     })
     .await?;
@@ -327,7 +327,7 @@ async fn run(args: Val) -> JsResult<Val> {
     .await?;
 
     // afterChange - Global
-    result = config_hooks(&global_config, "afterChange", result, |doc| {
+    result = config_hooks(&global_config, "afterChange", "globalConfig", result, |doc| {
       call(
         "globalAfterChangeHookArgs",
         &[req.get(), data.get(), doc, global_config.get(), override_access.get(), original_doc.get()],

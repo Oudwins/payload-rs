@@ -56,36 +56,54 @@ pub fn map_to_driver(column_type: &str, value: &JsVal) -> Result<JsVal> {
   })
 }
 
-/// A bound SQLite value: `@libsql/client` `valueToSql` followed by libsql's
-/// native binding (every JS number is bound as a double, booleans become numbers).
-pub fn bind_value(value: &JsVal) -> Result<Value> {
+/// An error of `valueToSql` (`RangeError` / `TypeError`) or of the binding (`Error`).
+#[derive(Clone, Debug)]
+pub struct BindError {
+  /// The JS class: `RangeError`, `TypeError` or `Error`.
+  pub kind: &'static str,
+  pub message: String,
+}
+
+impl BindError {
+  /// The binding's error for objects (raised once the statement is prepared).
+  pub fn unbindable() -> Self {
+    BindError { kind: "Error", message: "SQLite3 can only bind numbers, strings, bigints, buffers, and null".into() }
+  }
+}
+
+/// `@libsql/client` `valueToSql` (intMode `number`) followed by libsql's native binding rules:
+/// every JS number is bound as a double, booleans become numbers, a `bigint` a 64-bit integer, a
+/// `Date` its time value. `Ok(None)` is a value the binding rejects (any other object).
+pub fn value_to_sql(value: &JsVal) -> std::result::Result<Option<Value>, BindError> {
   match value.typed() {
     // `value.valueOf()`; an invalid date binds `NaN`, which SQLite stores as NULL
-    Some(TypedValue::Date(ms)) => return Ok(Value::Real(ms)),
+    Some(TypedValue::Date(ms)) => return Ok(Some(Value::Real(ms))),
     Some(TypedValue::BigInt(decimal)) => {
-      return decimal.parse::<i64>().map(Value::Integer).map_err(|_| {
-        EngineError::new("RangeError", "bigint is too large to be represented as a 64-bit integer and passed as argument")
+      return decimal.parse::<i64>().map(|n| Some(Value::Integer(n))).map_err(|_| BindError {
+        kind: "RangeError",
+        message: "bigint is too large to be represented as a 64-bit integer and passed as argument".into(),
       });
     }
     None => {}
   }
-  Ok(match value {
+  Ok(Some(match value {
     JsVal::Null => Value::Null,
     JsVal::Bool(b) => Value::Real(if *b { 1.0 } else { 0.0 }),
     JsVal::Num(n) => {
       if !n.is_finite() {
-        return Err(EngineError::new("RangeError", "Only finite numbers (not Infinity or NaN) can be passed as arguments"));
+        return Err(BindError {
+          kind: "RangeError",
+          message: "Only finite numbers (not Infinity or NaN) can be passed as arguments".into(),
+        });
       }
       Value::Real(*n)
     }
     JsVal::Str(s) => Value::Text(s.to_string()),
     JsVal::Undefined => {
-      return Err(EngineError::new("TypeError", "undefined cannot be passed as argument to the database"));
+      return Err(BindError { kind: "TypeError", message: "undefined cannot be passed as argument to the database".into() });
     }
-    JsVal::Arr(_) | JsVal::Obj(_) | JsVal::Fn(_) => {
-      return Err(EngineError::new("Error", "SQLite3 can only bind numbers, strings, bigints, buffers, and null"));
-    }
-  })
+    JsVal::Arr(_) | JsVal::Obj(_) | JsVal::Fn(_) => return Ok(None),
+  }))
 }
 
 /// `@libsql/client` `valueFromSql` (intMode `number`).

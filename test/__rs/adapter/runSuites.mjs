@@ -10,6 +10,19 @@
  * --addon      PAYLOAD_ENGINE_ADDON (default: the shared packages/engine-rs/payload-engine.node)
  * --core ts    PAYLOAD_CORE_ENGINE=ts: field hooks / validators stay TS (SQL engine parity only);
  *              default: PAYLOAD_ENGINE=rs alone, i.e. the Rust core runtime too
+ * --engine ts  the reference side: PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE unset (upstream TS); the
+ *              engine-call checks below do not apply. Default `rs`.
+ * --variant v  the adapter matrix (test/__rs/harness/databaseAdapter.ts):
+ *              `default`      PAYLOAD_DATABASE=sqlite (test/dbAdapters.ts `sqlite`)
+ *              `transactions` the same plus `transactionOptions: {}` (PAYLOAD_RS_SQLITE_TRANSACTIONS)
+ *              `uuid`         PAYLOAD_DATABASE=sqlite-uuid (test/dbAdapters.ts `sqlite-uuid`)
+ *              `uuidv7`       PAYLOAD_DATABASE=sqlite-uuidv7
+ * --baseline f vitest JSON result(s) to compare with (repeatable; default
+ *              .rs-baseline/sqlite-all.json). With several reference runs a test's status must
+ *              equal its status in at least one of them; tests whose reference runs disagree are
+ *              listed as `reference flaky`.
+ * --write-baseline f  merges this run's per-file results into one vitest JSON (a baseline for
+ *              --baseline, e.g. a variant's TS run)
  *
  * Files of one test/<suite> directory never run concurrently. Every file gets its own SQLite file under /tmp (deleted afterwards) and an engine stats file, so
  * the summary shows that the engine served the data methods (and how many calls ran the upstream
@@ -30,11 +43,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const argv = process.argv.slice(2)
 const options = {
   addon: undefined,
+  baselines: [],
   core: undefined,
+  engine: 'rs',
   jobs: 1,
   loopback: false,
   out: '/tmp/rs-adapter-runs',
   timeout: 1_200_000,
+  variant: 'default',
+  writeBaseline: undefined,
 }
 const files = []
 for (let i = 0; i < argv.length; i++) {
@@ -51,19 +68,66 @@ for (let i = 0; i < argv.length; i++) {
     options.jobs = Number(argv[++i])
   } else if (arg === '--timeout') {
     options.timeout = Number(argv[++i])
+  } else if (arg === '--engine') {
+    options.engine = argv[++i]
+  } else if (arg === '--variant') {
+    options.variant = argv[++i]
+  } else if (arg === '--baseline') {
+    options.baselines.push(path.resolve(argv[++i]))
+  } else if (arg === '--write-baseline') {
+    options.writeBaseline = path.resolve(argv[++i])
   } else {
     files.push(path.relative(root, path.resolve(root, arg)))
   }
 }
 
+const variants = {
+  default: { PAYLOAD_DATABASE: 'sqlite' },
+  transactions: { PAYLOAD_DATABASE: 'sqlite', PAYLOAD_RS_SQLITE_TRANSACTIONS: 'true' },
+  uuid: { PAYLOAD_DATABASE: 'sqlite-uuid' },
+  uuidv7: { PAYLOAD_DATABASE: 'sqlite-uuidv7' },
+}
+if (!variants[options.variant]) {
+  throw new Error(`--variant must be one of ${Object.keys(variants).join(', ')}`)
+}
+if (options.engine !== 'rs' && options.engine !== 'ts') {
+  throw new Error('--engine must be rs or ts')
+}
+const isRs = options.engine === 'rs'
+
 mkdirSync(options.out, { recursive: true })
 
-const baseline = JSON.parse(readFileSync(path.join(root, '.rs-baseline/sqlite-all.json'), 'utf8'))
-const baselineByFile = new Map(
-  baseline.testResults.map((file) => [path.relative(root, file.name), file]),
+if (options.baselines.length === 0) {
+  options.baselines.push(path.join(root, '.rs-baseline/sqlite-all.json'))
+}
+/** One Map(file -> vitest file result) per reference run. */
+const baselineRuns = options.baselines.map(
+  (file) =>
+    new Map(
+      JSON.parse(readFileSync(file, 'utf8')).testResults.map((result) => [
+        path.relative(root, result.name),
+        result,
+      ]),
+    ),
 )
+const baselineByFile = baselineRuns[0]
 
-const slugOf = (file) => file.replace(/[^a-zA-Z0-9]+/g, '_')
+/** Output file stem (injective): `/` → `__`, `_` → `_u`, other non-alphanumerics → `_x` + 6 hex digits. */
+const slugOf = (file) =>
+  file
+    .replace(/_/g, '_u')
+    .replace(/\//g, '__')
+    .replace(/[^a-zA-Z0-9_]/g, (char) => `_x${char.codePointAt(0).toString(16).padStart(6, '0')}`)
+{
+  const seen = new Map()
+  for (const file of files) {
+    const slug = slugOf(file)
+    if (seen.has(slug) && seen.get(slug) !== file) {
+      throw new Error(`output name collision: ${seen.get(slug)} and ${file}`)
+    }
+    seen.set(slug, file)
+  }
+}
 
 const runFile = (file, index) =>
   new Promise((resolve) => {
@@ -80,6 +144,10 @@ const runFile = (file, index) =>
       PAYLOAD_RS_ENGINE_STATS_FILE: statsFile,
       SQLITE_URL: `file:${dbFile}`,
       TZ: 'UTC',
+      ...variants[options.variant],
+    }
+    if (!variants[options.variant].PAYLOAD_RS_SQLITE_TRANSACTIONS) {
+      delete env.PAYLOAD_RS_SQLITE_TRANSACTIONS
     }
     if (options.loopback) {
       env.PAYLOAD_RS_ENGINE_LOOPBACK = 'true'
@@ -92,11 +160,17 @@ const runFile = (file, index) =>
     } else {
       delete env.PAYLOAD_CORE_ENGINE
     }
+    if (!isRs) {
+      delete env.PAYLOAD_ENGINE
+      delete env.PAYLOAD_CORE_ENGINE
+      delete env.PAYLOAD_ENGINE_ADDON
+      delete env.PAYLOAD_RS_ENGINE_LOOPBACK
+    }
     const started = Date.now()
     const child = spawn(
       'pnpm',
       [
-        'test:int:sqlite',
+        'test:int',
         '--config',
         'test/__rs/harness/vitest.config.ts',
         '--reporter=json',
@@ -121,6 +195,15 @@ const runFile = (file, index) =>
     })
   })
 
+const normalizeStatus = (status) =>
+  status === undefined
+    ? 'missing'
+    : status === 'passed'
+      ? 'passed'
+      : status === 'failed'
+        ? 'failed'
+        : 'skipped'
+
 const testsOf = (fileResult) =>
   new Map((fileResult?.assertionResults ?? []).map((test) => [test.fullName, test]))
 
@@ -137,23 +220,21 @@ const compare = ({ code, durationMs, file, jsonFile, statsFile }) => {
   const fileResult = result?.testResults?.[0]
   const stats = readJSON(statsFile)
   const baseTests = testsOf(baselineByFile.get(file))
+  const baseRunsTests = baselineRuns.map((run) => testsOf(run.get(file)))
   const tests = testsOf(fileResult)
+  const referenceFlaky = []
   const counts = { failed: 0, passed: 0, skipped: 0 }
   const differences = []
   for (const [name, test] of tests) {
     const status =
       test.status === 'passed' ? 'passed' : test.status === 'failed' ? 'failed' : 'skipped'
     counts[status]++
-    const baseStatus = baseTests.get(name)?.status
-    const normalizedBase =
-      baseStatus === undefined
-        ? 'missing'
-        : baseStatus === 'passed'
-          ? 'passed'
-          : baseStatus === 'failed'
-            ? 'failed'
-            : 'skipped'
-    if (normalizedBase !== status) {
+    const baseStatuses = baseRunsTests.map((run) => normalizeStatus(run.get(name)?.status))
+    const normalizedBase = baseStatuses[0]
+    if (new Set(baseStatuses).size > 1) {
+      referenceFlaky.push({ name, reference: baseStatuses, status })
+    }
+    if (!baseStatuses.includes(status)) {
       differences.push({
         baseline: normalizedBase,
         failure: (test.failureMessages ?? []).join('\n').split('\n').slice(0, 6).join('\n'),
@@ -163,7 +244,7 @@ const compare = ({ code, durationMs, file, jsonFile, statsFile }) => {
     }
   }
   for (const [name, test] of baseTests) {
-    if (!tests.has(name)) {
+    if (!tests.has(name) && !baseRunsTests.some((run) => !run.has(name))) {
       differences.push({ baseline: test.status, name, status: 'missing' })
     }
   }
@@ -180,7 +261,8 @@ const compare = ({ code, durationMs, file, jsonFile, statsFile }) => {
   return {
     baseline: baseCounts,
     calls,
-    isEngineBypassed: calls === 0 && upstreamCalls > 0,
+    isEngineBypassed: isRs && calls === 0 && upstreamCalls > 0,
+    referenceFlaky,
     hasBaseline: baselineByFile.has(file),
     upstreamCalls,
     upstreamReasons: stats?.upstreamReasons,
@@ -227,8 +309,20 @@ const worker = async () => {
 await Promise.all(Array.from({ length: Math.max(1, options.jobs) }, worker))
 
 results.sort((a, b) => a.file.localeCompare(b.file))
-let md =
-  '| suite | baseline pass/fail/skip | rs pass/fail/skip | diffs | engine calls | upstream calls |\n|---|---|---|---|---|---|\n'
+if (options.writeBaseline) {
+  const testResults = []
+  for (const r of results) {
+    const fileResult = readJSON(path.join(options.out, `${slugOf(r.file)}.json`))?.testResults?.[0]
+    if (fileResult) {
+      testResults.push(fileResult)
+    }
+  }
+  writeFileSync(
+    options.writeBaseline,
+    JSON.stringify({ engine: options.engine, testResults, variant: options.variant }),
+  )
+}
+let md = `engine ${options.engine}, variant ${options.variant}, baselines ${options.baselines.map((file) => path.relative(root, file)).join(', ')}\n\n| suite | baseline pass/fail/skip | ${options.engine} pass/fail/skip | diffs | engine calls | upstream calls |\n|---|---|---|---|---|---|\n`
 for (const r of results) {
   md += `| ${r.file} | ${r.baseline.passed}/${r.baseline.failed}/${r.baseline.skipped} | ${r.counts.passed}/${r.counts.failed}/${r.counts.skipped} | ${r.differences.length}${r.loadError ? ' (load error)' : ''}${r.hasBaseline ? '' : ' (no baseline)'} | ${r.calls}${r.isEngineBypassed ? ' (engine bypassed)' : r.upstreamCalls > r.calls ? ' (mostly upstream)' : ''} | ${r.upstreamCalls}${r.upstreamCalls ? ` (${Object.keys(r.upstreamReasons ?? {}).join(', ')})` : ''} |\n`
 }
@@ -245,6 +339,12 @@ const totals = results.reduce(
 )
 md += `\n**${results.length - totals.differing}/${results.length} files identical to the baseline**, ${totals.tests} tests, ${totals.calls} engine calls, ${totals.upstream} upstream calls\n`
 for (const r of results) {
+  if (r.referenceFlaky.length) {
+    md += `\n### ${r.file}: reference flaky\n`
+    for (const f of r.referenceFlaky) {
+      md += `- ${f.name}: reference ${f.reference.join(' / ')}, this run ${f.status}\n`
+    }
+  }
   if (r.differences.length || r.loadError) {
     md += `\n### ${r.file}\n`
     if (r.loadError) {
@@ -257,6 +357,6 @@ for (const r of results) {
 }
 writeFileSync(path.join(options.out, 'summary.md'), md)
 process.stdout.write(`\n${md}`)
-if (totals.differing > 0 || totals.tests === 0 || totals.calls === 0) {
+if (totals.differing > 0 || totals.tests === 0 || (isRs && totals.calls === 0)) {
   process.exitCode = 1
 }

@@ -12,14 +12,14 @@ use payload_sql_query::build_query::{BuildQueryArgs as QBuildQueryArgs, BuildQue
 use payload_sql_query::json_query::{CreateJsonQueryArgs, JsonColumn, create_json_query};
 use payload_sql_query::operators::{OperatorConstraintArgs as QOperatorConstraintArgs, apply_operator, build_operator_constraint};
 use payload_sql_query::sanitize::{SanitizeArgs as QSanitizeArgs, sanitize_query_value};
-use payload_sql_query::sql::{Chunk, Column, Expr, Operand, Sql as QSql, SqlValue, TableRef};
+use payload_sql_query::sql::{Chunk, Column, Expr, Operand, Sql as QSql, TableRef};
 use payload_sql_query::{QueryAdapter, WhereVal, build_query};
 
 use crate::context::{
   BuildQueryArgs, BuiltQuery, ColumnRef, JsonQueryArgs, OperatorConstraintArgs, QueryBuilder, QueryJoin,
   QueryOrderBy, SanitizeArgs, SanitizedQueryValue, SelectField, WhereColumn,
 };
-use crate::sql::{Param, Sql};
+use crate::sql::Sql;
 
 /// Keys of the SQLite `adapter.operators` object (`operatorMap` with the
 /// `@payloadcms/db-sqlite` overrides).
@@ -275,11 +275,7 @@ fn column_ref(column: &Column) -> ColumnRef {
 /// parameters as the libsql client binds them.
 pub fn render(sql: &QSql) -> Result<Sql> {
   let query = sql.render()?;
-  Ok(Sql { sql: query.sql, params: query.params.iter().map(param).collect() })
-}
-
-fn param(value: &SqlValue) -> Param {
-  value.to_json()
+  Ok(Sql { sql: query.sql, params: query.params })
 }
 
 /// drizzle `mapColumnsInSQLToAlias(query, alias)`: every column chunk (also in

@@ -377,69 +377,165 @@ impl Val {
   /// functions `undefined` (what `serializeForEngine` would send for them), `Object.prototype` an
   /// empty object, and a reference back to an ancestor (only possible through mutation)
   /// `undefined`. Lone surrogates in strings become U+FFFD.
+  ///
+  /// Iterative: values of any depth convert without growing the stack.
   pub fn to_js(&self) -> JsVal {
-    fn convert(value: &Val, ancestors: &mut Vec<usize>) -> JsVal {
-      match value {
-        Val::Undefined | Val::Builtin(Builtin::Function(_)) => JsVal::Undefined,
-        Val::Builtin(Builtin::ObjectPrototype) => JsVal::obj(payload_engine::js::Obj::new()),
-        Val::Null => JsVal::Null,
-        Val::Bool(b) => JsVal::Bool(*b),
-        Val::Num(n) => JsVal::Num(*n),
-        Val::Str(s) => JsVal::str(s.to_lossy().as_ref()),
-        Val::Date(ms) => JsVal::date(*ms),
-        Val::BigInt(d) => JsVal::bigint(d.clone()),
+    enum Children {
+      Arr(Vec<Val>, Vec<JsVal>),
+      Obj(Vec<(JsStr, Val)>, payload_engine::js::Obj),
+    }
+    struct Frame {
+      id: usize,
+      next: usize,
+      children: Children,
+    }
+    let mut ancestors = std::collections::HashSet::new();
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut current = self.clone();
+    loop {
+      let mut finished = match &current {
+        Val::Undefined | Val::Builtin(Builtin::Function(_)) => Some(JsVal::Undefined),
+        Val::Builtin(Builtin::ObjectPrototype) => Some(JsVal::obj(payload_engine::js::Obj::new())),
+        Val::Null => Some(JsVal::Null),
+        Val::Bool(b) => Some(JsVal::Bool(*b)),
+        Val::Num(n) => Some(JsVal::Num(*n)),
+        Val::Str(s) => Some(JsVal::str(s.to_lossy().as_ref())),
+        Val::Date(ms) => Some(JsVal::date(*ms)),
+        Val::BigInt(d) => Some(JsVal::bigint(d.clone())),
         Val::Arr(a) => {
           let id = Rc::as_ptr(a) as usize;
-          if ancestors.contains(&id) {
-            return JsVal::Undefined;
+          if ancestors.insert(id) {
+            let items = a.borrow().to_vec();
+            let out = Vec::with_capacity(items.len());
+            stack.push(Frame { id, next: 0, children: Children::Arr(items, out) });
+            None
+          } else {
+            Some(JsVal::Undefined)
           }
-          ancestors.push(id);
-          let items = a.borrow().iter().map(|v| convert(v, ancestors)).collect();
-          ancestors.pop();
-          JsVal::arr(items)
         }
         Val::Obj(o) => {
           let id = Rc::as_ptr(o) as usize;
-          if ancestors.contains(&id) {
-            return JsVal::Undefined;
+          if ancestors.insert(id) {
+            let entries = o.borrow().entries();
+            let out = payload_engine::js::Obj::with_capacity(entries.len());
+            stack.push(Frame { id, next: 0, children: Children::Obj(entries, out) });
+            None
+          } else {
+            Some(JsVal::Undefined)
           }
-          ancestors.push(id);
-          let entries = o.borrow().entries();
-          let mut out = payload_engine::js::Obj::with_capacity(entries.len());
-          for (k, v) in entries {
-            out.insert(k.to_lossy().into_owned(), convert(&v, ancestors));
-          }
-          ancestors.pop();
-          JsVal::obj(out)
         }
+      };
+      loop {
+        if let Some(value) = finished.take() {
+          let Some(frame) = stack.last_mut() else { return value };
+          match &mut frame.children {
+            Children::Arr(_, out) => out.push(value),
+            Children::Obj(entries, out) => {
+              out.insert(entries[frame.next].0.to_lossy().into_owned(), value);
+            }
+          }
+          frame.next += 1;
+        }
+        let Some(frame) = stack.last_mut() else { unreachable!("a finished root returns above") };
+        let child = match &frame.children {
+          Children::Arr(items, _) => items.get(frame.next).cloned(),
+          Children::Obj(entries, _) => entries.get(frame.next).map(|(_, v)| v.clone()),
+        };
+        if let Some(child) = child {
+          current = child;
+          break;
+        }
+        let Some(frame) = stack.pop() else { unreachable!() };
+        ancestors.remove(&frame.id);
+        finished = Some(match frame.children {
+          Children::Arr(_, out) => JsVal::arr(out),
+          Children::Obj(_, out) => JsVal::obj(out),
+        });
       }
     }
-    convert(self, &mut Vec::new())
   }
 
-  /// Copies an immutable config value into a fresh mutable value.
+  /// Copies an immutable config value into a fresh mutable value (iterative: any depth). An
+  /// object reached again from inside itself (a cycle) is the copy being built.
   pub fn from_js(value: &JsVal) -> Val {
-    if let Some(t) = value.as_date() {
-      return Val::Date(t);
+    fn leaf(value: &JsVal) -> Option<Val> {
+      if let Some(t) = value.as_date() {
+        return Some(Val::Date(t));
+      }
+      if let Some(d) = value.as_bigint() {
+        return Some(Val::BigInt(d));
+      }
+      Some(match value {
+        JsVal::Undefined | JsVal::Fn(_) => Val::Undefined,
+        JsVal::Null => Val::Null,
+        JsVal::Bool(b) => Val::Bool(*b),
+        JsVal::Num(n) => Val::Num(*n),
+        JsVal::Str(s) => Val::str(s),
+        JsVal::Arr(_) | JsVal::Obj(_) => return None,
+      })
     }
-    if let Some(d) = value.as_bigint() {
-      return Val::BigInt(d);
-    }
-    match value {
-      JsVal::Undefined | JsVal::Fn(_) => Val::Undefined,
-      JsVal::Null => Val::Null,
-      JsVal::Bool(b) => Val::Bool(*b),
-      JsVal::Num(n) => Val::Num(*n),
-      JsVal::Str(s) => Val::str(s),
-      JsVal::Arr(a) => Val::new_arr(a.iter().map(Val::from_js).collect()),
-      JsVal::Obj(o) => {
-        let mut obj = JsObject::new();
-        for (k, v) in o.iter() {
-          obj.define(k, Val::from_js(v));
-        }
-        Val::from_obj(obj)
+    fn open(source: &JsVal) -> Val {
+      match source {
+        JsVal::Arr(a) => Val::new_arr(Vec::with_capacity(a.len())),
+        _ => Val::new_obj(),
       }
     }
+    /// A container being copied: its source, the copy, and how many children are copied.
+    struct Frame<'a> {
+      source: &'a JsVal,
+      copy: Val,
+      next: usize,
+    }
+    if let Some(v) = leaf(value) {
+      return v;
+    }
+    let root = open(value);
+    let mut ancestors: std::collections::HashMap<usize, Val> = std::collections::HashMap::new();
+    ancestors.extend(value.identity().map(|id| (id, root.clone())));
+    let mut stack = vec![Frame { source: value, copy: root.clone(), next: 0 }];
+    while let Some(frame) = stack.last_mut() {
+      let index = frame.next;
+      let (key, item) = match frame.source {
+        JsVal::Arr(a) => match a.get(index) {
+          Some(v) => ("", v),
+          None => {
+            ancestors.remove(&frame.source.identity().unwrap_or(0));
+            stack.pop();
+            continue;
+          }
+        },
+        JsVal::Obj(o) => match o.get_index(index) {
+          Some((k, v)) => (k.as_str(), v),
+          None => {
+            ancestors.remove(&frame.source.identity().unwrap_or(0));
+            stack.pop();
+            continue;
+          }
+        },
+        _ => {
+          stack.pop();
+          continue;
+        }
+      };
+      frame.next += 1;
+      let (value, opened) = match leaf(item) {
+        Some(v) => (v, false),
+        None => match item.identity().and_then(|id| ancestors.get(&id)) {
+          Some(cycle) => (cycle.clone(), false),
+          None => (open(item), true),
+        },
+      };
+      match &frame.copy {
+        Val::Arr(a) => a.borrow_mut().push(value.clone()),
+        Val::Obj(o) => o.borrow_mut().define(key, value.clone()),
+        _ => {}
+      }
+      if opened {
+        ancestors.extend(item.identity().map(|id| (id, value.clone())));
+        stack.push(Frame { source: item, copy: value, next: 0 });
+      }
+    }
+    root
   }
 }
 

@@ -21,8 +21,8 @@ use crate::host;
 
 /// The destructured `beforeDuplicate` args, constant for the whole traversal.
 struct Ctx {
-  /// `[collection, context, doc, req]` for the host's `beforeDuplicateLeaves` (indices `BD_*` in
-  /// packages/engine-rs/src/runtime/afterChange/binding.ts).
+  /// `[collection, context, doc, req, id, overrideAccess]` for the host's `beforeDuplicateLeaves`
+  /// (indices `BD_*` in packages/engine-rs/src/runtime/afterChange/binding.ts).
   arr: Val,
   collection: Val,
   context: Val,
@@ -63,14 +63,14 @@ async fn run(args: Val) -> JsResult<Tail> {
   let a = args.get();
   let g = |name: &str| -> JsResult<Val> { Val::from_local(rt::get_named(a, name)?) };
   // destructuring order: id, collection, context, doc, overrideAccess, req
-  let _id = g("id")?;
+  let id = g("id")?;
   let collection = g("collection")?;
   let context = g("context")?;
   let doc = g("doc")?;
-  let _override_access = g("overrideAccess")?;
+  let override_access = g("overrideAccess")?;
   let req = g("req")?;
   let arr = js::array();
-  for (i, v) in [&collection, &context, &doc, &req].into_iter().enumerate() {
+  for (i, v) in [&collection, &context, &doc, &req, &id, &override_access].into_iter().enumerate() {
     js::set_element(arr, i as u32, v.get())?;
   }
   let ctx = Rc::new(Ctx { arr: Val::from_local(arr)?, collection, context, doc, req });

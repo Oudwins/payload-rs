@@ -25,6 +25,7 @@ import { upstreamBeforeChange as beforeChangeTS } from '../../../packages/payloa
 import { traverseFields as beforeChangeTraverseFieldsTS } from '../../../packages/payload/src/fields/hooks/beforeChange/traverseFields.js'
 import { createPayloadRequest } from '../../../packages/payload/src/utilities/createPayloadRequest.js'
 import { assertDistinctEngines, startEngineRun } from '../dispatch/engineGuard.js'
+import { settleRun, trackDatabaseIO } from '../dispatch/settle.js'
 
 assertDistinctEngines('beforeChange', beforeChangeTS, beforeChangeRS)
 assertDistinctEngines(
@@ -382,15 +383,18 @@ export const runBeforeChange = async ({
   /**
    * Call the exported `traverseFields` (what rich text editor hooks call) with the arguments
    * `beforeChange` passes it (on `data` itself, fresh `errors`/`mergeLocaleActions` arrays kept on
-   * the input so they are compared), instead of `beforeChange`.
+   * the input so they are compared), instead of `beforeChange`. `'nested'`: with the arguments of
+   * a nested call (lexical's sub-field traversals): parent paths, `blockData`, a field label path,
+   * `parentIsLocalized: true`.
    */
-  traverse?: boolean
+  traverse?: 'nested' | boolean
   variant: Variant
 }): Promise<RunOutcome> => {
   const beforeChange = engine === 'ts' ? beforeChangeTS : beforeChangeRS
   const traverseFields =
     engine === 'ts' ? beforeChangeTraverseFieldsTS : beforeChangeTraverseFieldsRS
   const engineRun = startEngineRun(engine, 'beforeChange')
+  trackDatabaseIO(payload)
   const req = await createPayloadRequest({
     context: { rsDifferential: true },
     locale: variant.locale,
@@ -408,25 +412,27 @@ export const runBeforeChange = async ({
     const mergeLocaleActions: unknown[] = []
     input.traverseErrors = errors
     input.traverseMergeLocaleActions = mergeLocaleActions
+    const nested = traverse === 'nested'
     return traverseFields({
       id: input.id,
+      blockData: nested ? { id: 'block-data', blockType: 'nestedBlock' } : undefined,
       collection: collection ?? null,
       context: req.context,
       data: input.data,
       doc: input.doc,
       docWithLocales: input.docWithLocales,
       errors,
-      fieldLabelPath: '',
+      fieldLabelPath: nested ? 'Outer 1' : '',
       fields: (collection ?? global)!.fields,
       global: global ?? null,
       isValidationOperation: variant.isValidationOperation,
       mergeLocaleActions,
       operation: variant.operation,
       overrideAccess: variant.overrideAccess,
-      parentIndexPath: '',
-      parentIsLocalized: false,
-      parentPath: '',
-      parentSchemaPath: '',
+      parentIndexPath: nested ? '1-2' : '',
+      parentIsLocalized: nested,
+      parentPath: nested ? 'outer.0' : '',
+      parentSchemaPath: nested ? 'outer' : '',
       req,
       siblingData: input.data,
       siblingDoc: input.doc,
@@ -497,6 +503,7 @@ export const runBeforeChange = async ({
   // let stray settle events and unhandled rejections land before snapshotting
   await new Promise((resolve) => setTimeout(resolve, 0))
   await new Promise((resolve) => setImmediate(resolve))
+  await settleRun({ activity: () => recorder.current?.events.length ?? 0, payload })
   process.off('unhandledRejection', onUnhandled)
   for (const listener of previousListeners) {
     process.on('unhandledRejection', listener)

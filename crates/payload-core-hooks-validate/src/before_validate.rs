@@ -230,7 +230,9 @@ pub fn traverse_fields_entry(args: Local) -> JsResult<Local> {
   })
 }
 
-/// `String(v)` for the string path arguments of the `traverseFields` entry.
+/// The string path arguments of the `traverseFields` entry. The TS drop-in destructures with
+/// upstream's pattern and runs upstream's function for non-string paths, so only strings arrive;
+/// other values are converted like `String(v)` as a fallback.
 fn js_string_arg(v: Local) -> String {
   match js::type_of(v) {
     Type::String => js::get_string(v).unwrap_or_default(),
@@ -270,6 +272,7 @@ fn traverse(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Local> {
         js::string(&t.parent_schema_path),
         t.sibling_data.get(),
         t.sibling_doc.get(),
+        t.parent_is_localized.get(),
       ],
     )?;
     return call_host(&host()?.promise_all, &[promises]);
@@ -287,6 +290,7 @@ fn traverse(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Local> {
         js::string(&t.parent_schema_path),
         t.sibling_data.get(),
         t.sibling_doc.get(),
+        t.parent_is_localized.get(),
       ],
     );
   }
@@ -338,6 +342,7 @@ async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Tail> {
           js::string(&t.parent_schema_path),
           t.sibling_data.get(),
           t.sibling_doc.get(),
+          t.parent_is_localized.get(),
         ],
       )?;
     }

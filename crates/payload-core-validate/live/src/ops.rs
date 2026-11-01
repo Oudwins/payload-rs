@@ -1,15 +1,26 @@
 //! JS operations on live values with V8's semantics, over raw Node-API.
 //!
+//! Every Node-API call goes through the binding's own `env` ([`Cx`]), so the hot paths make no
+//! thread-local lookups. Property keys come from the running call's frame (keys.rs) when the
+//! shell passed them, else they are created on use.
+//!
 //! Property reads use `napi_get_property` ([[Get]]: getters, proxies, prototype chain,
 //! `ToPropertyKey` of computed keys); reads on primitives and nullish receivers go through the
 //! shell's `get` helper so V8 boxes / throws its own `TypeError`. Object and array literals are
-//! built with `napi_define_properties` (CreateDataProperty, never a setter). Array methods the TS
-//! calls on JS arrays (`.some`, `.filter`, ...) are looked up like the TS does; when the result is
-//! the realm's builtin and the receiver a real array, the builtin's spec steps run here with
-//! Node-API element operations (`HasProperty` / `Get` / live `length`, `ArraySpeciesCreate`),
-//! otherwise the real method is called with a Rust callback. `for...of` does the same with the
-//! shell's `arrayIterator` check (default iterator: index walk; otherwise the full iterator
-//! protocol, including `IteratorClose`).
+//! built with `napi_define_properties` (CreateDataProperty, never a setter).
+//!
+//! Array methods the TS calls (`.some`, `.filter`, `.includes`, ...): the shell looks the method
+//! up like the TS does and, when it is the realm's builtin, calls the builtin itself with
+//! `element`, a JS arrow that runs the engine closure set around that call
+//! ([`Cx::with_engine_callback`]): the builtin's own steps, no emulation. Anything else is called
+//! from here with a fresh function. `.push` always calls the method found. `for...of` over a JS
+//! array is a JS loop of the shell (one per TS loop, so V8 names the TS expression in its
+//! errors) whose body is the engine closure; over an engine-created `[value]` literal the
+//! shell's `literalIter` checks the default iterator (reads on `Array.prototype` /
+//! `%ArrayIteratorPrototype%`) and the literal is only built for a replaced one.
+//!
+//! Values handed to an engine closure live in that callback's handle scope: anything kept after
+//! it returns is a [`Held`] (the `Map` keys of `select`).
 
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -17,61 +28,99 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
 use napi::sys;
-use payload_core_runtime::js::{self, JsResult, Local, Persist, Thrown, Type, Val, check};
+use payload_core_runtime::js::{self, JsResult, Local, Thrown, Type, Val, check};
 
-/// The constructor `ArraySpeciesCreate` uses: `%Array%`, or the one `@@species` gave.
-#[derive(Clone, Copy)]
-enum Species {
-  Array,
-  Constructor(Local),
+use crate::keys::{K, KEY_COUNT, NAMES};
+
+/// A strong reference to an object, function or symbol of the binding. Never deleted: the
+/// binding lives as long as the module that created it.
+pub struct Ref(sys::napi_ref);
+
+/// The strings the shell passed to the running native (keys.rs).
+pub struct Frame {
+  pub keys: *const sys::napi_value,
+  pub count: usize,
+  pub map: &'static [u8; KEY_COUNT],
 }
 
 /// Intrinsics and helpers of one binding (shell.js `bootstrap({...})`).
 pub struct Cx {
-  pub next: Persist,
-  symbols: Persist,
-  array_iterator_prototype: Persist,
-  array_values: Persist,
-  some: Persist,
-  for_each: Persist,
-  filter: Persist,
-  map: Persist,
-  find: Persist,
-  includes: Persist,
-  index_of: Persist,
-  push: Persist,
-  array_iterator: Persist,
-  literal_iterator: Persist,
-  species_method: Persist,
-  species_marker: Persist,
-  species_box: Persist,
-  h_get: Persist,
-  h_is_array: Persist,
-  h_lt: Persist,
-  h_gt: Persist,
-  h_string: Persist,
-  h_number: Persist,
-  pub h_date_parse: Persist,
-  pub h_email_test: Persist,
-  pub h_object_id_is_valid: Persist,
-  pub h_object_id_hex: Persist,
-  pub h_find_collection: Persist,
-  pub h_object_keys_length: Persist,
-  h_error: Persist,
-  h_type_error: Persist,
-  pub h_duplicates_message: Persist,
-  pub h_invalid_relationships_message: Persist,
-  pub h_invalid_selections_message: Persist,
+  env: sys::napi_env,
+  frame: Cell<*const Frame>,
+  next: Ref,
+  shell_box: Ref,
+  array_iterator_prototype: Ref,
+  array_values: Ref,
+  /// The Rust closure the shell's `callback` runs (set around the helper calls that pass it to
+  /// a builtin).
+  closure: Cell<Option<*const EngineCallback>>,
+  some: Ref,
+  for_each: Ref,
+  filter: Ref,
+  map: Ref,
+  find: Ref,
+  includes: Ref,
+  index_of: Ref,
+  h_call_array: Ref,
+  h_call_array_with: Ref,
+  h_call_literal: Ref,
+  h_for_of_strings: Ref,
+  h_for_of_numbers: Ref,
+  h_for_of_block_slugs: Ref,
+  h_for_of_value: Ref,
+  h_literal_iter: Ref,
+  h_literal_pairs: Ref,
+  h_get: Ref,
+  h_is_array: Ref,
+  h_lt: Ref,
+  h_gt: Ref,
+  h_string: Ref,
+  h_number: Ref,
+  pub h_date_parse: Ref,
+  pub h_email_test: Ref,
+  pub h_object_id_is_valid: Ref,
+  pub h_object_id_hex: Ref,
+  pub h_find_collection: Ref,
+  pub h_object_keys_length: Ref,
+  h_error: Ref,
+  h_type_error: Ref,
+  pub h_duplicates_message: Ref,
+  pub h_invalid_relationships_message: Ref,
+  pub h_invalid_selections_message: Ref,
 }
 
+/// A Rust closure called by the shell's `callback` with the first argument (the element a
+/// builtin array method passes).
+type EngineCallback = dyn Fn(Local) -> JsResult<Local>;
+
+/// The `for...of` loops of the TS over arrays (shell `forOf*`, one per loop so V8's
+/// `<expr> is not iterable` names the TS expression).
+#[derive(Clone, Copy)]
+pub enum Loop {
+  StringsToValidate,
+  NumbersToValidate,
+  AllBlockSlugs,
+  Value,
+}
+
+const INDEX_KEYS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
 impl Cx {
-  pub fn new(host: Local) -> JsResult<Cx> {
-    let f = |name: &str| -> JsResult<Persist> { Persist::new(js::get_named(host, name)?) };
+  pub fn new(env: sys::napi_env, host: Local) -> JsResult<Cx> {
+    let f = |name: &str| -> JsResult<Ref> {
+      let value = js::get_named(host, name)?;
+      let mut r = ptr::null_mut();
+      check(unsafe { sys::napi_create_reference(env, value.0, 1, &mut r) })?;
+      Ok(Ref(r))
+    };
     Ok(Cx {
+      env,
+      frame: Cell::new(ptr::null()),
       next: f("NEXT")?,
-      symbols: f("symbols")?,
+      shell_box: f("box")?,
       array_iterator_prototype: f("arrayIteratorPrototype")?,
       array_values: f("arrayValues")?,
+      closure: Cell::new(None),
       some: f("some")?,
       for_each: f("forEach")?,
       filter: f("filter")?,
@@ -79,12 +128,15 @@ impl Cx {
       find: f("find")?,
       includes: f("includes")?,
       index_of: f("indexOf")?,
-      push: f("push")?,
-      array_iterator: f("arrayIterator")?,
-      literal_iterator: f("literalIterator")?,
-      species_method: f("speciesMethod")?,
-      species_marker: f("SPECIES")?,
-      species_box: f("species")?,
+      h_call_array: f("callArray")?,
+      h_call_array_with: f("callArrayWith")?,
+      h_call_literal: f("callLiteral")?,
+      h_for_of_strings: f("forOfStringsToValidate")?,
+      h_for_of_numbers: f("forOfNumbersToValidate")?,
+      h_for_of_block_slugs: f("forOfAllBlockSlugs")?,
+      h_for_of_value: f("forOfValue")?,
+      h_literal_iter: f("literalIter")?,
+      h_literal_pairs: f("literalPairs")?,
       h_get: f("get")?,
       h_is_array: f("isArray")?,
       h_lt: f("lt")?,
@@ -105,129 +157,429 @@ impl Cx {
     })
   }
 
-  /// Calls a shell helper as a plain function.
-  pub fn helper(&self, helper: &Persist, args: &[Local]) -> JsResult<Local> {
-    js::call(helper.get(), js::undefined(), args)
+  #[inline]
+  fn r(&self, r: &Ref) -> Local {
+    let mut v = ptr::null_mut();
+    unsafe { sys::napi_get_reference_value(self.env, r.0, &mut v) };
+    Local(v)
+  }
+
+  /// Makes `frame` the running call's strings; returns the previous one for [`Cx::leave`]
+  /// (natives re-enter through user code).
+  pub fn enter(&self, frame: *const Frame) -> *const Frame {
+    self.frame.replace(frame)
+  }
+
+  pub fn leave(&self, previous: *const Frame) {
+    self.frame.set(previous);
+  }
+
+  /// The string `k` (a property key or a literal value).
+  #[inline]
+  pub fn k(&self, k: K) -> Local {
+    let frame = self.frame.get();
+    if !frame.is_null() {
+      // SAFETY: the frame lives on the stack of the running native, which restores the previous
+      // frame before it returns.
+      let frame = unsafe { &*frame };
+      let i = usize::from(frame.map[k as usize]);
+      if i < frame.count {
+        return Local(unsafe { *frame.keys.add(i) });
+      }
+    }
+    self.create_key(NAMES[k as usize])
+  }
+
+  fn create_key(&self, name: &str) -> Local {
+    let mut v = ptr::null_mut();
+    unsafe { sys::node_api_create_property_key_latin1(self.env, name.as_ptr().cast(), name.len() as isize, &mut v) };
+    Local(v)
+  }
+
+  /// The `NEXT` marker: the shell continues the TS body.
+  pub fn next(&self) -> Local {
+    self.r(&self.next)
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Primitives and classification
+
+  pub fn undefined(&self) -> Local {
+    let mut v = ptr::null_mut();
+    unsafe { sys::napi_get_undefined(self.env, &mut v) };
+    Local(v)
+  }
+
+  pub fn undefined_v(&self) -> V {
+    V { v: self.undefined(), tag: UNDEFINED }
+  }
+
+  pub fn boolean(&self, b: bool) -> Local {
+    let mut v = ptr::null_mut();
+    unsafe { sys::napi_get_boolean(self.env, b, &mut v) };
+    Local(v)
+  }
+
+  pub fn yes(&self) -> Local {
+    self.boolean(true)
+  }
+
+  pub fn number(&self, n: f64) -> Local {
+    let mut v = ptr::null_mut();
+    unsafe { sys::napi_create_double(self.env, n, &mut v) };
+    Local(v)
+  }
+
+  pub fn number_v(&self, n: f64) -> V {
+    V { v: self.number(n), tag: if n == 0.0 || n.is_nan() { FALSY_NUMBER } else { NUMBER } }
+  }
+
+  /// A string made at run time (not one of keys.rs).
+  pub fn string_utf16(&self, units: &[u16]) -> JsResult<Local> {
+    let mut v = ptr::null_mut();
+    check(unsafe { sys::napi_create_string_utf16(self.env, units.as_ptr(), units.len() as isize, &mut v) })?;
+    Ok(Local(v))
+  }
+
+  /// A binding the shell did not tag, classified ([`V::unclassified`]).
+  pub fn classify(&self, v: V) -> V {
+    if v.tag == UNCLASSIFIED { self.of(v.v) } else { v }
+  }
+
+  /// `typeof` and truthiness of a value the engine got from JS.
+  pub fn of(&self, v: Local) -> V {
+    let mut t = 0;
+    unsafe { sys::napi_typeof(self.env, v.0, &mut t) };
+    let tag = match t {
+      sys::ValueType::napi_undefined => UNDEFINED,
+      sys::ValueType::napi_null => NULL,
+      sys::ValueType::napi_boolean => {
+        let mut b = false;
+        unsafe { sys::napi_get_value_bool(self.env, v.0, &mut b) };
+        if b { TRUE } else { FALSE }
+      }
+      sys::ValueType::napi_number => {
+        let n = self.f64_value(v);
+        if n == 0.0 || n.is_nan() { FALSY_NUMBER } else { NUMBER }
+      }
+      sys::ValueType::napi_string => {
+        if self.utf16_len(v) == 0 {
+          EMPTY_STRING
+        } else {
+          STRING
+        }
+      }
+      sys::ValueType::napi_symbol => SYMBOL,
+      sys::ValueType::napi_function => FUNCTION,
+      9 => {
+        let mut out = ptr::null_mut();
+        let mut b = false;
+        unsafe {
+          sys::napi_coerce_to_bool(self.env, v.0, &mut out);
+          sys::napi_get_value_bool(self.env, out, &mut b);
+        }
+        if b { BIGINT } else { FALSY_BIGINT }
+      }
+      _ => OBJECT,
+    };
+    V { v, tag }
+  }
+
+  fn f64_value(&self, v: Local) -> f64 {
+    let mut n = 0.0;
+    unsafe { sys::napi_get_value_double(self.env, v.0, &mut n) };
+    n
+  }
+
+  /// A number result of a shell helper (`None` for anything else).
+  fn number_result(&self, v: Local) -> Option<f64> {
+    let mut n = 0.0;
+    ((unsafe { sys::napi_get_value_double(self.env, v.0, &mut n) }) == sys::Status::napi_ok).then_some(n)
+  }
+
+  pub fn u32_value(&self, v: Local) -> u32 {
+    let mut n = 0;
+    unsafe { sys::napi_get_value_uint32(self.env, v.0, &mut n) };
+    n
+  }
+
+  fn utf16_len(&self, v: Local) -> usize {
+    let mut len = 0usize;
+    unsafe { sys::napi_get_value_string_utf16(self.env, v.0, ptr::null_mut(), 0, &mut len) };
+    len
+  }
+
+  /// Exact UTF-16 copy of a string value.
+  pub fn utf16(&self, v: V) -> Vec<u16> {
+    if !v.is_string() {
+      return Vec::new();
+    }
+    let len = self.utf16_len(v.v);
+    let mut buf = vec![0u16; len + 1];
+    let mut out = 0usize;
+    unsafe { sys::napi_get_value_string_utf16(self.env, v.v.0, buf.as_mut_ptr(), len + 1, &mut out) };
+    buf.truncate(out);
+    buf
+  }
+
+  /// The value of a number.
+  pub fn num(&self, v: V) -> Option<f64> {
+    v.is_number().then(|| self.f64_value(v.v))
+  }
+
+  /// UTF-16 length of a string.
+  pub fn str_len(&self, v: V) -> Option<usize> {
+    v.is_string().then(|| self.utf16_len(v.v))
+  }
+
+  pub fn strict_eq(&self, a: Local, b: Local) -> bool {
+    let mut r = false;
+    unsafe { sys::napi_strict_equals(self.env, a.0, b.0, &mut r) };
+    r
+  }
+
+  /// `v === n`
+  pub fn eq_num(&self, v: V, n: f64) -> bool {
+    self.num(v) == Some(n)
+  }
+
+  /// `v === 'literal'`: the UTF-16 code units of `v` against those of `s`.
+  pub fn eq_str(&self, v: V, s: &str) -> bool {
+    if !v.is_string() {
+      return false;
+    }
+    let expected = s.encode_utf16();
+    let len = self.utf16_len(v.v);
+    if len != expected.clone().count() {
+      return false;
+    }
+    let mut stack = [0u16; 32];
+    let mut heap = Vec::new();
+    let buf: &mut [u16] = if len < stack.len() {
+      &mut stack[..len + 1]
+    } else {
+      heap.resize(len + 1, 0);
+      &mut heap
+    };
+    let mut out = 0usize;
+    let status = unsafe { sys::napi_get_value_string_utf16(self.env, v.v.0, buf.as_mut_ptr(), len + 1, &mut out) };
+    status == sys::Status::napi_ok && out == len && buf[..len].iter().copied().eq(expected)
+  }
+
+  fn raw_is_array(&self, v: Local) -> bool {
+    let mut r = false;
+    unsafe { sys::napi_is_array(self.env, v.0, &mut r) };
+    r
+  }
+
+  /// A real array (`napi_is_array` is false for proxies).
+  pub fn is_real_array(&self, v: V) -> bool {
+    v.is_object_like() && self.raw_is_array(v.v)
+  }
+
+  /// `Array.isArray(v)`. A real array always is one and a non-proxy object never becomes one
+  /// (the shell's `atag` tells those apart); anything else asks the realm, where the TS asks
+  /// (a revoked proxy throws there).
+  pub fn is_array(&self, v: V) -> JsResult<bool> {
+    match v.tag {
+      PLAIN_OBJECT => Ok(false),
+      OBJECT | ARRAY_HINT | UNKNOWN_OBJECT | FUNCTION => {
+        if self.raw_is_array(v.v) {
+          return Ok(true);
+        }
+        Ok(self.of(self.helper(&self.h_is_array, &[v.v])?).truthy())
+      }
+      _ => Ok(false),
+    }
+  }
+
+  pub fn array_length(&self, a: Local) -> u32 {
+    let mut n = 0;
+    unsafe { sys::napi_get_array_length(self.env, a.0, &mut n) };
+    n
+  }
+
+  fn get_element(&self, o: Local, index: u32) -> JsResult<Local> {
+    let mut v = ptr::null_mut();
+    check(unsafe { sys::napi_get_element(self.env, o.0, index, &mut v) })?;
+    Ok(Local(v))
   }
 
   // -------------------------------------------------------------------------------------------
   // Property access
 
-  /// `o.name`
-  pub fn get(&self, o: impl Js, name: &str) -> JsResult<Local> {
-    self.get_key(o, js::key(name))
+  fn raw_get(&self, o: Local, key: Local) -> JsResult<Local> {
+    let mut v = ptr::null_mut();
+    check(unsafe { sys::napi_get_property(self.env, o.0, key.0, &mut v) })?;
+    Ok(Local(v))
+  }
+
+  /// `o.k`
+  pub fn get(&self, o: V, k: K) -> JsResult<Local> {
+    self.get_key(o, self.k(k))
+  }
+
+  /// `o.k`, classified.
+  pub fn get_v(&self, o: V, k: K) -> JsResult<V> {
+    Ok(self.of(self.get(o, k)?))
   }
 
   /// `o[key]` (`ToPropertyKey(key)` by V8).
-  pub fn get_key(&self, o: impl Js, key: Local) -> JsResult<Local> {
-    if o.kind().is_object_like() {
-      js::get_property(o.local(), key)
-    } else {
-      self.helper(&self.h_get, &[o.local(), key])
-    }
+  pub fn get_key(&self, o: V, key: Local) -> JsResult<Local> {
+    if o.is_object_like() { self.raw_get(o.v, key) } else { self.helper(&self.h_get, &[o.v, key]) }
   }
 
-  /// `o?.name`
-  pub fn get_opt(&self, o: impl Js, name: &str) -> JsResult<Local> {
-    if is_nullish(o) { Ok(js::undefined()) } else { self.get(o, name) }
+  /// `o?.k`
+  pub fn get_opt(&self, o: V, k: K) -> JsResult<V> {
+    if o.is_nullish() { Ok(self.undefined_v()) } else { self.get_v(o, k) }
   }
 
   /// `o?.[key]`
-  pub fn get_opt_key(&self, o: impl Js, key: Local) -> JsResult<Local> {
-    if is_nullish(o) { Ok(js::undefined()) } else { self.get_key(o, key) }
+  pub fn get_opt_key(&self, o: V, key: Local) -> JsResult<V> {
+    if o.is_nullish() { Ok(self.undefined_v()) } else { Ok(self.of(self.get_key(o, key)?)) }
   }
 
   /// `o[index]`
-  pub fn get_index(&self, o: impl Js, index: u32) -> JsResult<Local> {
-    if o.kind().is_object_like() {
-      js::get_element(o.local(), index)
+  pub fn get_index(&self, o: V, index: u32) -> JsResult<V> {
+    let v = if o.is_object_like() {
+      self.get_element(o.v, index)?
     } else {
-      self.helper(&self.h_get, &[o.local(), js::number(f64::from(index))])
-    }
+      self.helper(&self.h_get, &[o.v, self.number(f64::from(index))])?
+    };
+    Ok(self.of(v))
   }
 
-  /// `o.length` (a primitive string's own `length` is read without a call).
-  pub fn length(&self, o: impl Js) -> JsResult<Local> {
-    match if o.tag().is_none() || is_string(o) { string_length(o.local()) } else { None } {
-      Some(n) => Ok(js::number(n as f64)),
-      None => self.get(o, "length"),
+  /// `o.length` (a primitive string's and a real array's own `length` are read without a call).
+  pub fn length(&self, o: V) -> JsResult<V> {
+    if let Some(n) = self.str_len(o) {
+      return Ok(self.number_v(n as f64));
+    }
+    if self.is_real_array(o) {
+      return Ok(self.number_v(f64::from(self.array_length(o.v))));
+    }
+    self.get_v(o, K::Length)
+  }
+
+  /// `o.length === 0` (a string's emptiness is in its tag).
+  pub fn length_is_zero(&self, o: V) -> JsResult<bool> {
+    match o.tag {
+      EMPTY_STRING => Ok(true),
+      STRING => Ok(false),
+      _ if self.is_real_array(o) => Ok(self.array_length(o.v) == 0),
+      _ => Ok(self.eq_num(self.get_v(o, K::Length)?, 0.0)),
     }
   }
 
   /// `o?.length`
-  pub fn length_opt(&self, o: impl Js) -> JsResult<Local> {
-    if is_nullish(o) { Ok(js::undefined()) } else { self.length(o) }
+  pub fn length_opt(&self, o: V) -> JsResult<V> {
+    if o.is_nullish() { Ok(self.undefined_v()) } else { self.length(o) }
   }
 
-  fn symbol(&self, index: u32) -> JsResult<Local> {
-    js::get_element(self.symbols.get(), index)
+  fn box_get(&self, k: K) -> JsResult<Local> {
+    self.raw_get(self.r(&self.shell_box), self.k(k))
   }
 
   // -------------------------------------------------------------------------------------------
   // Operators and builtins
 
-  /// `Array.isArray(v)` (`napi_is_array` is false for proxies of arrays: those ask the realm).
-  pub fn is_array(&self, v: impl Js) -> JsResult<bool> {
-    if v.kind() != Type::Object {
-      return Ok(false);
-    }
-    if js::is_array(v.local()) {
-      return Ok(true);
-    }
-    Ok(js::truthy(self.helper(&self.h_is_array, &[v.local()])?))
-  }
-
   /// `a < b`
-  pub fn lt(&self, a: impl Js, b: impl Js) -> JsResult<bool> {
-    if let (Some(a), Some(b)) = (number_value(a), number_value(b)) {
-      return Ok(a < b);
+  pub fn lt(&self, a: V, b: V) -> JsResult<bool> {
+    match self.primitive_less(a, b) {
+      Some(r) => Ok(r),
+      None => Ok(self.of(self.helper(&self.h_lt, &[a.v, b.v])?).truthy()),
     }
-    Ok(js::truthy(self.helper(&self.h_lt, &[a.local(), b.local()])?))
   }
 
   /// `a > b`
-  pub fn gt(&self, a: impl Js, b: impl Js) -> JsResult<bool> {
-    if let (Some(a), Some(b)) = (number_value(a), number_value(b)) {
-      return Ok(a > b);
+  pub fn gt(&self, a: V, b: V) -> JsResult<bool> {
+    match self.primitive_less(b, a) {
+      Some(r) => Ok(r),
+      None => Ok(self.of(self.helper(&self.h_gt, &[a.v, b.v])?).truthy()),
     }
-    Ok(js::truthy(self.helper(&self.h_gt, &[a.local(), b.local()])?))
+  }
+
+  /// `IsLessThan(x, y)` for primitives other than symbols and bigints (`None`: the operator
+  /// needs `ToPrimitive` / BigInt semantics, done by the shell).
+  fn primitive_less(&self, x: V, y: V) -> Option<bool> {
+    if let (Some(a), Some(b)) = (self.num(x), self.num(y)) {
+      return Some(a < b);
+    }
+    if x.is_string() && y.is_string() {
+      return Some(self.utf16(x) < self.utf16(y));
+    }
+    Some(self.primitive_to_number(x)? < self.primitive_to_number(y)?)
+  }
+
+  /// `ToNumber` of a primitive that is not a symbol or bigint (no user code can run).
+  fn primitive_to_number(&self, v: V) -> Option<f64> {
+    match v.tag {
+      UNDEFINED => Some(f64::NAN),
+      NULL | FALSE => Some(0.0),
+      TRUE => Some(1.0),
+      FALSY_NUMBER | NUMBER => Some(self.f64_value(v.v)),
+      EMPTY_STRING | STRING => {
+        let mut out = ptr::null_mut();
+        let status = unsafe { sys::napi_coerce_to_number(self.env, v.v.0, &mut out) };
+        (status == sys::Status::napi_ok).then(|| self.f64_value(Local(out)))
+      }
+      _ => None,
+    }
   }
 
   /// `String(v)` (symbols allowed).
-  pub fn string(&self, v: impl Js) -> JsResult<Local> {
-    match ty(v) {
-      Type::String => Ok(v.local()),
-      Type::Symbol => self.helper(&self.h_string, &[v.local()]),
-      _ => to_string(v.local()),
+  pub fn string(&self, v: V) -> JsResult<V> {
+    match v.ty() {
+      Type::String => Ok(v),
+      Type::Symbol => Ok(self.of(self.helper(&self.h_string, &[v.v])?)),
+      _ => self.to_string(v),
     }
   }
 
+  /// `ToString(v)` (template literal / string concatenation; throws for symbols).
+  pub fn to_string(&self, v: V) -> JsResult<V> {
+    if v.is_string() {
+      return Ok(v);
+    }
+    let mut out = ptr::null_mut();
+    check(unsafe { sys::napi_coerce_to_string(self.env, v.v.0, &mut out) })?;
+    Ok(self.of(Local(out)))
+  }
+
+  /// `` `${a}${b}` `` for an engine string `b`.
+  pub fn concat(&self, a: V, b: &str) -> JsResult<Local> {
+    let mut units = self.utf16(self.to_string(a)?);
+    units.extend(b.encode_utf16());
+    self.string_utf16(&units)
+  }
+
   /// `Number(v)`
-  pub fn number(&self, v: impl Js) -> JsResult<f64> {
-    match ty(v) {
-      Type::Number => Ok(js::get_f64(v.local())),
+  pub fn to_number(&self, v: V) -> JsResult<f64> {
+    if let Some(n) = self.num(v) {
+      return Ok(n);
+    }
+    match v.ty() {
       Type::String | Type::Boolean | Type::Undefined | Type::Null | Type::Symbol => {
         let mut out = ptr::null_mut();
-        check(unsafe { sys::napi_coerce_to_number(js::env(), v.local().0, &mut out) })?;
-        Ok(js::get_f64(Local(out)))
+        check(unsafe { sys::napi_coerce_to_number(self.env, v.v.0, &mut out) })?;
+        Ok(self.f64_value(Local(out)))
       }
-      _ => Ok(js::get_f64(self.helper(&self.h_number, &[v.local()])?)),
+      _ => Ok(self.f64_value(self.helper(&self.h_number, &[v.v])?)),
     }
   }
 
   /// `parseFloat(v)`
-  pub fn parse_float(&self, v: impl Js) -> JsResult<f64> {
-    if let Some(n) = number_value(v) {
+  pub fn parse_float(&self, v: V) -> JsResult<f64> {
+    if let Some(n) = self.num(v) {
       // `ToString` of a number parses back to the same number, except `-0` ("0").
       return Ok(if n == 0.0 { 0.0 } else { n });
     }
-    let s = to_string(v.local())?;
-    Ok(parse_float_utf16(&js::get_string_utf16(s).unwrap_or_default()))
+    let s = self.to_string(v)?;
+    Ok(parse_float_utf16(&self.utf16(s)))
   }
 
   /// `parseFloat(String(v))`
-  pub fn parse_float_of_string(&self, v: impl Js) -> JsResult<f64> {
-    match ty(v) {
+  pub fn parse_float_of_string(&self, v: V) -> JsResult<f64> {
+    match v.ty() {
       Type::Number => self.parse_float(v),
       Type::Symbol => Ok(f64::NAN),
       _ => self.parse_float(self.string(v)?),
@@ -235,61 +587,96 @@ impl Cx {
   }
 
   /// `isNumber(value)` (`payload/src/utilities/isNumber.ts`)
-  pub fn is_number(&self, value: impl Js) -> JsResult<bool> {
-    match ty(value) {
+  pub fn is_number(&self, value: V) -> JsResult<bool> {
+    match value.ty() {
       Type::Undefined | Type::Null => return Ok(false),
-      Type::Number => return Ok(!js::get_f64(value.local()).is_nan()),
+      Type::Number => return Ok(!self.f64_value(value.v).is_nan()),
       Type::String => {
-        if js::get_string_utf16(value.local()).is_some_and(|units| units.iter().all(|u| is_js_whitespace(*u))) {
+        if self.utf16(value).iter().all(|u| is_js_whitespace(*u)) {
           return Ok(false);
         }
       }
       _ => {}
     }
-    Ok(!self.number(value)?.is_nan())
+    Ok(!self.to_number(value)?.is_nan())
   }
 
   // -------------------------------------------------------------------------------------------
   // Calls, literals, errors
 
-  /// Calls `func` (the callee `expr`) with `this`; V8's `TypeError` when it is not callable.
-  pub fn call(&self, func: impl Js, this: Local, args: &[Local], expr: &str) -> JsResult<Local> {
-    if ty(func) != Type::Function {
-      return Err(self.type_error(&format!("{expr} is not a function")));
+  /// Calls a shell helper (an arrow function: `this` is not used).
+  pub fn helper(&self, helper: &Ref, args: &[Local]) -> JsResult<Local> {
+    let func = self.r(helper);
+    self.raw_call(func, func, args)
+  }
+
+  fn raw_call(&self, func: Local, this: Local, args: &[Local]) -> JsResult<Local> {
+    let mut out = ptr::null_mut();
+    let raw = args.as_ptr().cast::<sys::napi_value>();
+    check(unsafe { sys::napi_call_function(self.env, this.0, func.0, args.len(), raw, &mut out) })?;
+    Ok(Local(out))
+  }
+
+  /// Calls `func` with `this`; V8's `TypeError` (`<expr> is not a function`, `expr` being the
+  /// concatenated source text of the callee) when it is not callable.
+  pub fn call(&self, func: V, this: Local, args: &[Local], expr: &[&str]) -> JsResult<Local> {
+    if !func.is_function() {
+      return Err(self.type_error(&format!("{} is not a function", expr.concat())));
     }
-    js::call(func.local(), this, args)
+    self.raw_call(func.v, this, args)
   }
 
   /// `receiver.method(...args)`: `expr` is the receiver's source text.
-  pub fn call_method(&self, receiver: impl Js, method: &str, args: &[Local], expr: &str) -> JsResult<Local> {
-    let func = self.get(receiver, method)?;
-    self.call(func, receiver.local(), args, &format!("{expr}.{method}"))
+  pub fn call_method(&self, receiver: V, method: K, args: &[Local], expr: &str) -> JsResult<Local> {
+    let func = self.get_v(receiver, method)?;
+    self.call(func, receiver.v, args, &[expr, ".", NAMES[method as usize]])
   }
 
   /// `t(key)` / `t(key, vars)` with the destructured `t`.
-  pub fn t(&self, t: impl Js, key: &str, vars: Option<Local>) -> JsResult<Local> {
+  pub fn t(&self, t: V, key: K, vars: Option<Local>) -> JsResult<Local> {
     match vars {
-      Some(vars) => self.call(t, js::undefined(), &[js::string(key), vars], "t"),
-      None => self.call(t, js::undefined(), &[js::string(key)], "t"),
+      Some(vars) => self.call(t, self.undefined(), &[self.k(key), vars], &["t"]),
+      None => self.call(t, self.undefined(), &[self.k(key)], &["t"]),
     }
   }
 
   /// An object literal (own data properties in source order).
-  pub fn object(&self, entries: &[(&str, Local)]) -> JsResult<Local> {
-    let o = js::object();
-    let descs: Vec<sys::napi_property_descriptor> =
-      entries.iter().map(|(name, value)| data_property(js::key(name), *value)).collect();
-    check(unsafe { sys::napi_define_properties(js::env(), o.0, descs.len(), descs.as_ptr()) })?;
-    Ok(o)
+  pub fn object(&self, entries: &[(K, Local)]) -> JsResult<Local> {
+    let mut o = ptr::null_mut();
+    unsafe { sys::napi_create_object(self.env, &mut o) };
+    let mut descs = [data_property(ptr::null_mut(), ptr::null_mut()); 8];
+    let mut heap = Vec::new();
+    let descs: &mut [sys::napi_property_descriptor] = if entries.len() <= descs.len() {
+      &mut descs[..entries.len()]
+    } else {
+      heap.resize(entries.len(), data_property(ptr::null_mut(), ptr::null_mut()));
+      &mut heap
+    };
+    for (desc, (name, value)) in descs.iter_mut().zip(entries) {
+      *desc = data_property(self.k(*name).0, value.0);
+    }
+    check(unsafe { sys::napi_define_properties(self.env, o, descs.len(), descs.as_ptr()) })?;
+    Ok(Local(o))
   }
 
   /// An array literal.
   pub fn array_of(&self, items: &[Local]) -> JsResult<Local> {
-    let a = js::array();
+    let mut a = ptr::null_mut();
+    check(unsafe { sys::napi_create_array(self.env, &mut a) })?;
     for (i, item) in items.iter().enumerate() {
-      define_index(a, i as u32, *item)?;
+      self.define_index(Local(a), i as u32, *item)?;
     }
-    Ok(a)
+    Ok(Local(a))
+  }
+
+  /// `CreateDataPropertyOrThrow(o, ToString(index), value)`
+  fn define_index(&self, o: Local, index: u32, value: Local) -> JsResult<()> {
+    let name = match INDEX_KEYS.get(index as usize) {
+      Some(name) => self.create_key(name),
+      None => self.create_key(&index.to_string()),
+    };
+    let desc = data_property(name.0, value.0);
+    check(unsafe { sys::napi_define_properties(self.env, o.0, 1, &desc) })
   }
 
   pub fn type_error(&self, message: &str) -> Thrown {
@@ -301,8 +688,9 @@ impl Cx {
     self.error_with(&self.h_error, message)
   }
 
-  fn error_with(&self, ctor: &Persist, message: &str) -> Thrown {
-    match self.helper(ctor, &[js::string(message)]).and_then(Val::from_local) {
+  fn error_with(&self, ctor: &Ref, message: &str) -> Thrown {
+    let units: Vec<u16> = message.encode_utf16().collect();
+    match self.string_utf16(&units).and_then(|m| self.helper(ctor, &[m])).and_then(Val::from_local) {
       Ok(v) => Thrown(v),
       Err(e) => e,
     }
@@ -311,305 +699,340 @@ impl Cx {
   // -------------------------------------------------------------------------------------------
   // Array methods
 
-  /// Looks up `receiver[name]` (as the TS does); `Some(func)` when the builtin's steps run here.
-  fn builtin(&self, receiver: Local, name: &str, intrinsic: &Persist) -> JsResult<(Local, bool)> {
-    let func = self.get(receiver, name)?;
-    Ok((func, js::is_array(receiver) && js::strict_equals(func, intrinsic.get())))
+  /// Runs `body` while the shell's `callback` calls `f` (re-entrant: the previous closure is
+  /// restored, also on unwind).
+  pub fn with_engine_callback<'f, R>(
+    &self,
+    f: &'f (dyn Fn(Local) -> JsResult<Local> + 'f),
+    body: impl FnOnce() -> JsResult<R>,
+  ) -> JsResult<R> {
+    struct Restore<'a>(&'a Cell<Option<*const EngineCallback>>, Option<*const EngineCallback>);
+    impl Drop for Restore<'_> {
+      fn drop(&mut self) {
+        self.0.set(self.1);
+      }
+    }
+    // SAFETY: lifetime erasure; the pointer is only called through `closure`, which `Restore`
+    // resets before `f` goes out of scope.
+    let f: *const EngineCallback =
+      unsafe { std::mem::transmute::<&'f (dyn Fn(Local) -> JsResult<Local> + 'f), &'static EngineCallback>(f) };
+    let _restore = Restore(&self.closure, self.closure.replace(Some(f)));
+    body()
+  }
+
+  /// The closure the shell's `callback` runs now.
+  pub fn engine_closure(&self) -> Option<*const EngineCallback> {
+    self.closure.get()
+  }
+
+  /// `receiver.name(f)`: shell `callArray` looks the method up (as the TS does) and calls it
+  /// when it is the builtin, with the shell's `callback`; anything else is called here with a
+  /// fresh function (V8's `<expr>.<name> is not a function` when it is not callable).
+  fn call_array(
+    &self,
+    receiver: V,
+    name: K,
+    builtin: &Ref,
+    expr: &str,
+    f: &dyn Fn(Local) -> JsResult<Local>,
+  ) -> JsResult<Local> {
+    let next = self.next();
+    let args = [receiver.v, self.k(name), self.r(builtin)];
+    let result = self.with_engine_callback(f, || self.helper(&self.h_call_array, &args))?;
+    if !self.strict_eq(result, next) {
+      return Ok(result);
+    }
+    let func = self.of(self.box_get(K::BoxM)?);
+    let callback = |args: &[Local]| f(args[0]);
+    with_callback(&callback, |cb| self.call(func, receiver.v, &[cb], &[expr, ".", NAMES[name as usize]]))
+  }
+
+  /// `receiver.name(value)` for `includes` / `indexOf` (shell `callArrayWith`).
+  fn call_array_with(&self, receiver: V, name: K, builtin: &Ref, value: V, expr: &str) -> JsResult<V> {
+    let next = self.next();
+    let result = self.helper(&self.h_call_array_with, &[receiver.v, self.k(name), self.r(builtin), value.v])?;
+    if !self.strict_eq(result, next) {
+      return Ok(self.of(result));
+    }
+    let func = self.of(self.box_get(K::BoxM)?);
+    Ok(self.of(self.call(func, receiver.v, &[value.v], &[expr, ".", NAMES[name as usize]])?))
   }
 
   /// `receiver.some(f)`
-  pub fn some(&self, receiver: impl Js, expr: &str, f: &dyn Fn(Local) -> JsResult<bool>) -> JsResult<Local> {
-    let receiver = receiver.local();
-    let (func, is_builtin) = self.builtin(receiver, "some", &self.some)?;
-    if is_builtin {
-      let len = js::array_length(receiver);
-      for k in 0..len {
-        if has_element(receiver, k)? && f(js::get_element(receiver, k)?)? {
-          return Ok(js::boolean(true));
-        }
-      }
-      return Ok(js::boolean(false));
-    }
-    let callback = |args: &[Local]| Ok(js::boolean(f(args[0])?));
-    with_callback(&callback, |cb| self.call(func, receiver, &[cb], &format!("{expr}.some")))
+  pub fn some(&self, receiver: V, expr: &str, f: &dyn Fn(V) -> JsResult<bool>) -> JsResult<V> {
+    let callback = |item: Local| Ok(self.boolean(f(self.of(item))?));
+    Ok(self.of(self.call_array(receiver, K::SomeKey, &self.some, expr, &callback)?))
   }
 
   /// `receiver.forEach(f)`
-  pub fn for_each(&self, receiver: impl Js, expr: &str, f: &dyn Fn(Local) -> JsResult<()>) -> JsResult<()> {
-    let receiver = receiver.local();
-    let (func, is_builtin) = self.builtin(receiver, "forEach", &self.for_each)?;
-    if is_builtin {
-      let len = js::array_length(receiver);
-      for k in 0..len {
-        if has_element(receiver, k)? {
-          f(js::get_element(receiver, k)?)?;
-        }
-      }
-      return Ok(());
-    }
-    let callback = |args: &[Local]| {
-      f(args[0])?;
-      Ok(js::undefined())
+  pub fn for_each(&self, receiver: V, expr: &str, f: &dyn Fn(V) -> JsResult<()>) -> JsResult<()> {
+    let callback = |item: Local| {
+      f(self.of(item))?;
+      Ok(self.undefined())
     };
-    with_callback(&callback, |cb| self.call(func, receiver, &[cb], &format!("{expr}.forEach"))).map(|_| ())
+    self.call_array(receiver, K::ForEach, &self.for_each, expr, &callback).map(|_| ())
   }
 
   /// `receiver.filter(f)`
-  pub fn filter(&self, receiver: impl Js, expr: &str, f: &dyn Fn(Local) -> JsResult<bool>) -> JsResult<Local> {
-    let receiver = receiver.local();
-    let (func, species) = self.species_method(receiver, "filter", &self.filter)?;
-    if let Some(species) = species {
-      let len = js::array_length(receiver);
-      let out = self.array_species_create(species, 0)?;
-      let mut to = 0;
-      for k in 0..len {
-        if has_element(receiver, k)? {
-          let value = js::get_element(receiver, k)?;
-          if f(value)? {
-            define_index(out, to, value)?;
-            to += 1;
-          }
-        }
-      }
-      return Ok(out);
+  pub fn filter(&self, receiver: V, expr: &str, f: &dyn Fn(V) -> JsResult<bool>) -> JsResult<V> {
+    let callback = |item: Local| Ok(self.boolean(f(self.of(item))?));
+    Ok(self.of(self.call_array(receiver, K::Filter, &self.filter, expr, &callback)?))
+  }
+
+  /// `[item].filter(f)` over an engine literal: shell `callLiteral` makes the literal and looks
+  /// the method up on it; anything but the builtin is called here with a fresh function.
+  pub fn filter_literal(&self, item: V, expr: &str, f: &dyn Fn(V) -> JsResult<bool>) -> JsResult<V> {
+    let next = self.next();
+    let callback = |item: Local| Ok(self.boolean(f(self.of(item))?));
+    let args = [item.v, self.k(K::Filter), self.r(&self.filter)];
+    let result = self.with_engine_callback(&callback, || self.helper(&self.h_call_literal, &args))?;
+    if !self.strict_eq(result, next) {
+      return Ok(self.of(result));
     }
-    let callback = |args: &[Local]| Ok(js::boolean(f(args[0])?));
-    with_callback(&callback, |cb| self.call(func, receiver, &[cb], &format!("{expr}.filter")))
+    let literal = self.box_get(K::BoxA)?;
+    let func = self.of(self.box_get(K::BoxM)?);
+    let callback = |args: &[Local]| callback(args[0]);
+    Ok(self.of(with_callback(&callback, |cb| self.call(func, literal, &[cb], &[expr, ".filter"]))?))
   }
 
   /// `receiver.map(f)`
-  pub fn map(&self, receiver: impl Js, expr: &str, f: &dyn Fn(Local) -> JsResult<Local>) -> JsResult<Local> {
-    let receiver = receiver.local();
-    let (func, species) = self.species_method(receiver, "map", &self.map)?;
-    if let Some(species) = species {
-      let len = js::array_length(receiver);
-      let out = self.array_species_create(species, len)?;
-      for k in 0..len {
-        if has_element(receiver, k)? {
-          let mapped = f(js::get_element(receiver, k)?)?;
-          define_index(out, k, mapped)?;
-        }
-      }
-      return Ok(out);
-    }
-    let callback = |args: &[Local]| f(args[0]);
-    with_callback(&callback, |cb| self.call(func, receiver, &[cb], &format!("{expr}.map")))
+  pub fn map(&self, receiver: V, expr: &str, f: &dyn Fn(V) -> JsResult<Local>) -> JsResult<V> {
+    let callback = |item: Local| f(self.of(item));
+    Ok(self.of(self.call_array(receiver, K::Map, &self.map, expr, &callback)?))
   }
 
   /// `receiver.find(f)`
-  pub fn find(&self, receiver: impl Js, expr: &str, f: &dyn Fn(Local) -> JsResult<bool>) -> JsResult<Local> {
-    let receiver = receiver.local();
-    let (func, is_builtin) = self.builtin(receiver, "find", &self.find)?;
-    if is_builtin {
-      let len = js::array_length(receiver);
-      for k in 0..len {
-        let value = js::get_element(receiver, k)?;
-        if f(value)? {
-          return Ok(value);
-        }
-      }
-      return Ok(js::undefined());
-    }
-    let callback = |args: &[Local]| Ok(js::boolean(f(args[0])?));
-    with_callback(&callback, |cb| self.call(func, receiver, &[cb], &format!("{expr}.find")))
+  pub fn find(&self, receiver: V, expr: &str, f: &dyn Fn(V) -> JsResult<bool>) -> JsResult<V> {
+    let callback = |item: Local| Ok(self.boolean(f(self.of(item))?));
+    Ok(self.of(self.call_array(receiver, K::Find, &self.find, expr, &callback)?))
   }
 
   /// `receiver.includes(value)`
-  pub fn includes(&self, receiver: impl Js, value: impl Js, expr: &str) -> JsResult<Local> {
-    let (receiver, value) = (receiver.local(), value.local());
-    let (func, is_builtin) = self.builtin(receiver, "includes", &self.includes)?;
-    if is_builtin {
-      let len = js::array_length(receiver);
-      for k in 0..len {
-        if same_value_zero(js::get_element(receiver, k)?, value) {
-          return Ok(js::boolean(true));
-        }
-      }
-      return Ok(js::boolean(false));
-    }
-    self.call(func, receiver, &[value], &format!("{expr}.includes"))
+  pub fn includes(&self, receiver: V, value: V, expr: &str) -> JsResult<V> {
+    self.call_array_with(receiver, K::Includes, &self.includes, value, expr)
   }
 
   /// `receiver.indexOf(value)`
-  pub fn index_of(&self, receiver: impl Js, value: impl Js, expr: &str) -> JsResult<Local> {
-    let (receiver, value) = (receiver.local(), value.local());
-    let (func, is_builtin) = self.builtin(receiver, "indexOf", &self.index_of)?;
-    if is_builtin {
-      let len = js::array_length(receiver);
-      for k in 0..len {
-        if has_element(receiver, k)? && js::strict_equals(js::get_element(receiver, k)?, value) {
-          return Ok(js::number(f64::from(k)));
-        }
+  pub fn index_of(&self, receiver: V, value: V, expr: &str) -> JsResult<V> {
+    self.call_array_with(receiver, K::IndexOf, &self.index_of, value, expr)
+  }
+
+  /// `receiver.push(value)`: the method found is always called (the builtin's `Set`s of the
+  /// element and of `length` throw on failure, which Node-API's `[[Set]]` does not report).
+  pub fn push(&self, receiver: V, value: Local, expr: &str) -> JsResult<()> {
+    let func = self.get_v(receiver, K::Push)?;
+    self.call(func, receiver.v, &[value], &[expr, ".push"]).map(|_| ())
+  }
+
+  /// SameValueZero
+  pub fn same_value_zero(&self, a: V, b: V) -> bool {
+    if self.strict_eq(a.v, b.v) {
+      return true;
+    }
+    matches!((self.num(a), self.num(b)), (Some(x), Some(y)) if x.is_nan() && y.is_nan())
+  }
+
+  /// Keeps `v` beyond the running callback's handle scope (a `Map` key of the TS).
+  pub fn hold(&self, v: V) -> JsResult<Held> {
+    Ok(match v.tag {
+      UNDEFINED => Held::Undefined,
+      NULL => Held::Null,
+      TRUE => Held::Bool(true),
+      FALSE => Held::Bool(false),
+      FALSY_NUMBER | NUMBER => Held::Num(self.f64_value(v.v)),
+      EMPTY_STRING | STRING => Held::Str(self.utf16(v)),
+      BIGINT | FALSY_BIGINT => {
+        let (mut sign, mut count) = (0, 0usize);
+        check(unsafe { sys::napi_get_value_bigint_words(self.env, v.v.0, &mut sign, &mut count, ptr::null_mut()) })?;
+        let mut words = vec![0u64; count];
+        check(unsafe { sys::napi_get_value_bigint_words(self.env, v.v.0, &mut sign, &mut count, words.as_mut_ptr()) })?;
+        words.truncate(count);
+        Held::BigInt(sign, words)
       }
-      return Ok(js::number(-1.0));
-    }
-    self.call(func, receiver, &[value], &format!("{expr}.indexOf"))
-  }
-
-  /// `receiver.push(value)`
-  pub fn push(&self, receiver: impl Js, value: impl Js, expr: &str) -> JsResult<()> {
-    let (receiver, value) = (receiver.local(), value.local());
-    let (func, is_builtin) = self.builtin(receiver, "push", &self.push)?;
-    if is_builtin {
-      // `Set(O, len, value, true)` (the new length follows from the element write).
-      return js::set_element(receiver, js::array_length(receiver), value);
-    }
-    self.call(func, receiver, &[value], &format!("{expr}.push")).map(|_| ())
-  }
-
-  /// The method lookup of a `.filter` / `.map` call and, when it is the builtin on a real array,
-  /// the `constructor` / `@@species` reads of its `ArraySpeciesCreate` (shell `speciesMethod`):
-  /// `(method, None)` to call the method, `(_, Some(species))` to run the builtin's steps.
-  fn species_method(&self, receiver: Local, name: &str, intrinsic: &Persist) -> JsResult<(Local, Option<Species>)> {
-    let args = [receiver, js::key(name), intrinsic.get(), js::boolean(js::is_array(receiver))];
-    let found = self.helper(&self.species_method, &args)?;
-    if js::strict_equals(found, self.next.get()) {
-      return Ok((found, Some(Species::Array)));
-    }
-    if js::strict_equals(found, self.species_marker.get()) {
-      return Ok((found, Some(Species::Constructor(js::get_named(self.species_box.get(), "C")?))));
-    }
-    Ok((found, None))
-  }
-
-  /// The rest of `ArraySpeciesCreate(original, length)`.
-  fn array_species_create(&self, species: Species, length: u32) -> JsResult<Local> {
-    let c = match species {
-      Species::Array => {
-        let mut out = ptr::null_mut();
-        check(unsafe { sys::napi_create_array_with_length(js::env(), length as usize, &mut out) })?;
-        return Ok(Local(out));
+      _ => {
+        let mut r = ptr::null_mut();
+        check(unsafe { sys::napi_create_reference(self.env, v.v.0, 1, &mut r) })?;
+        Held::Ref(self.env, r)
       }
-      Species::Constructor(c) => c,
-    };
-    if ty(c) != Type::Function {
-      return Err(self.type_error("object.constructor[Symbol.species] is not a constructor"));
+    })
+  }
+
+  /// SameValueZero(held, v)
+  pub fn held_equals(&self, held: &Held, v: V) -> bool {
+    match held {
+      Held::Undefined => v.tag == UNDEFINED,
+      Held::Null => v.tag == NULL,
+      Held::Bool(b) => v.tag == if *b { TRUE } else { FALSE },
+      Held::Num(x) => self.num(v).is_some_and(|y| *x == y || (x.is_nan() && y.is_nan())),
+      Held::Str(units) => v.is_string() && self.utf16(v) == *units,
+      Held::BigInt(..) => matches!(v.tag, BIGINT | FALSY_BIGINT) && self.hold(v).is_ok_and(|other| other == *held),
+      Held::Ref(_, r) => (v.is_object_like() || v.tag == SYMBOL) && self.strict_eq(self.r(&Ref(*r)), v.v),
     }
-    let mut out = ptr::null_mut();
-    let arg = js::number(f64::from(length));
-    check(unsafe { sys::napi_new_instance(js::env(), c.0, 1, &arg.0, &mut out) })?;
-    Ok(Local(out))
+  }
+
+  /// The JS value of `held` (an equal primitive, or the same object).
+  pub fn held_value(&self, held: &Held) -> JsResult<Local> {
+    Ok(match held {
+      Held::Undefined => self.undefined(),
+      Held::Null => {
+        let mut v = ptr::null_mut();
+        unsafe { sys::napi_get_null(self.env, &mut v) };
+        Local(v)
+      }
+      Held::Bool(b) => self.boolean(*b),
+      Held::Num(n) => self.number(*n),
+      Held::Str(units) => self.string_utf16(units)?,
+      Held::BigInt(sign, words) => {
+        let mut v = ptr::null_mut();
+        check(unsafe { sys::napi_create_bigint_words(self.env, *sign, words.len(), words.as_ptr(), &mut v) })?;
+        Local(v)
+      }
+      Held::Ref(_, r) => self.r(&Ref(*r)),
+    })
   }
 
   // -------------------------------------------------------------------------------------------
   // for...of
 
-  /// `for (const item of items) { body }` (no awaits in the body). `body` returns `Some(v)` for a
-  /// `return v` out of the loop. `expr` is the source text of `items` (V8's "is not iterable").
-  pub fn for_of(&self, items: impl Js, expr: &str, body: &dyn Fn(Local) -> JsResult<Option<Local>>) -> JsResult<Option<Local>> {
-    if is_nullish(items) {
-      return Err(self.type_error(&format!("{expr} is not iterable")));
-    }
-    let items = items.local();
-    let method = if js::is_array(items) {
-      let method = self.helper(&self.array_iterator, &[items])?;
-      if js::strict_equals(method, self.next.get()) {
-        return self.for_of_default(items, body);
-      }
-      method
-    } else {
-      self.get_key(items, self.symbol(0)?)?
+  /// `for (const item of items) { body }` (no awaits in the body), as a JS loop of the shell
+  /// whose body calls `body`. `body` returns `Some(v)` for a `return v` out of the loop.
+  pub fn for_of(&self, items: V, site: Loop, body: &dyn Fn(V) -> JsResult<Option<Local>>) -> JsResult<Option<Local>> {
+    let next = self.next();
+    let callback = |item: Local| Ok(body(self.of(item))?.unwrap_or(next));
+    let helper = match site {
+      Loop::StringsToValidate => &self.h_for_of_strings,
+      Loop::NumbersToValidate => &self.h_for_of_numbers,
+      Loop::AllBlockSlugs => &self.h_for_of_block_slugs,
+      Loop::Value => &self.h_for_of_value,
     };
-    self.for_of_protocol(items, method, expr, body)
+    let result = self.with_engine_callback(&callback, || self.helper(helper, &[items.v]))?;
+    Ok((!self.strict_eq(result, next)).then_some(result))
   }
 
   /// `for (const item of [value]) { body }` over an engine-created literal (only built when the
   /// iteration needs the object).
-  pub fn for_of_literal(&self, value: impl Js, expr: &str, body: &dyn Fn(Local) -> JsResult<Option<Local>>) -> JsResult<Option<Local>> {
-    let value = value.local();
-    let method = self.helper(&self.literal_iterator, &[])?;
-    if !js::strict_equals(method, self.next.get()) {
-      let items = self.array_of(&[value])?;
-      return self.for_of_protocol(items, method, expr, body);
-    }
-    match body(value) {
-      Ok(None) => Ok(None),
-      Ok(Some(v)) => {
-        self.close_literal_iterator(value, false)?;
-        Ok(Some(v))
+  pub fn for_of_literal(&self, value: V, expr: &str, body: &dyn Fn(V) -> JsResult<Option<Local>>) -> JsResult<Option<Local>> {
+    let result = self.helper(&self.h_literal_iter, &[])?;
+    match self.number_result(result) {
+      Some(0.0) => match body(value) {
+        Ok(None) => Ok(None),
+        Ok(Some(v)) => {
+          self.close_default_iterator(self.array_of(&[value.v])?, false)?;
+          Ok(Some(v))
+        }
+        Err(e) => {
+          let _ = self.array_of(&[value.v]).and_then(|items| self.close_default_iterator(items, true));
+          Err(e)
+        }
+      },
+      Some(1.0) => {
+        let method = self.of(self.box_get(K::BoxM)?);
+        self.for_of_protocol(self.array_of(&[value.v])?, method, expr, body)
       }
-      Err(e) => {
-        let _ = self.close_literal_iterator(value, true);
-        Err(e)
+      _ => {
+        let next = self.of(self.box_get(K::BoxN)?);
+        let iterator = self.raw_call(self.r(&self.array_values), self.array_of(&[value.v])?, &[])?;
+        self.iterate(iterator, next, body)
       }
     }
   }
 
-  fn close_literal_iterator(&self, value: Local, is_throw: bool) -> JsResult<()> {
-    let ret = js::get_named(self.array_iterator_prototype.get(), "return")?;
-    if is_nullish(ret) {
-      return Ok(());
+  /// `for (const [a, b] of map.entries()) { body(a, b) }` over the engine's `Map` entries (`new
+  /// Map()` is emulated): the array-destructuring steps of each entry. `is_quiet(i)` is true
+  /// when entry `i`'s body makes no observable operation, so the destructuring reads of the
+  /// following entries are made by one shell call (shell `literalPairs`).
+  pub fn for_of_pairs(
+    &self,
+    entries: &[(Local, Local)],
+    is_quiet: &dyn Fn(usize) -> bool,
+    body: &dyn Fn(V, V) -> JsResult<()>,
+  ) -> JsResult<()> {
+    let mut i = 0;
+    while i < entries.len() {
+      let mut last = i;
+      while last + 1 < entries.len() && is_quiet(last) {
+        last += 1;
+      }
+      let count = last - i + 1;
+      let result = self.helper(&self.h_literal_pairs, &[self.number(count as f64)])?;
+      let result = self.number_result(result).unwrap_or(0.0) as usize;
+      let (done, code) = (result / 4, result % 4);
+      for (a, b) in &entries[i..i + done.min(count)] {
+        body(self.of(*a), self.of(*b))?;
+      }
+      if done >= count {
+        i = last + 1;
+        continue;
+      }
+      let (a, b) = entries[i + done];
+      let (a, b) = match code {
+        1 => {
+          let method = self.of(self.box_get(K::BoxM)?);
+          self.destructure_pair(self.array_of(&[a, b])?, method)?
+        }
+        2 => {
+          let next = self.of(self.box_get(K::BoxN)?);
+          let iterator = self.raw_call(self.r(&self.array_values), self.array_of(&[a, b])?, &[])?;
+          self.destructure_steps(iterator, next)?
+        }
+        _ => {
+          let ret = self.of(self.box_get(K::BoxR)?);
+          let iterator = self.raw_call(self.r(&self.array_values), self.array_of(&[a, b])?, &[])?;
+          self.call_return(iterator, ret, false)?;
+          (self.of(a), self.of(b))
+        }
+      };
+      body(a, b)?;
+      i += done + 1;
     }
-    let iterator = js::call(self.array_values.get(), self.array_of(&[value])?, &[])?;
-    self.call_return(iterator, ret, is_throw)
+    Ok(())
   }
 
-  /// `const [a, b] = entry` for an engine-created two-element `entry` (a `Map` entry): GetIterator,
-  /// two IteratorStepValues and IteratorClose (two targets never exhaust the iterator). Returns
-  /// the bound values, which only differ from `(a, b)` under a replaced array iterator.
-  pub fn destructure_pair(&self, a: Local, b: Local) -> JsResult<(Local, Local)> {
-    let method = self.helper(&self.literal_iterator, &[])?;
-    if js::strict_equals(method, self.next.get()) {
-      let ret = js::get_named(self.array_iterator_prototype.get(), "return")?;
-      if !is_nullish(ret) {
-        let iterator = js::call(self.array_values.get(), self.array_of(&[a, b])?, &[])?;
-        self.call_return(iterator, ret, false)?;
-      }
-      return Ok((a, b));
-    }
-    if ty(method) != Type::Function {
+  /// `const [a, b] = items` with a replaced `@@iterator` method.
+  fn destructure_pair(&self, items: Local, method: V) -> JsResult<(V, V)> {
+    if !method.is_function() {
       return Err(self.type_error("object is not iterable"));
     }
-    let iterator = js::call(method, self.array_of(&[a, b])?, &[])?;
-    if !ty(iterator).is_object_like() {
-      return Err(self.type_error("Result of the Symbol.iterator method is not an object"));
-    }
-    let next = js::get_named(iterator, "next")?;
-    let mut values = [js::undefined(); 2];
+    let iterator = self.raw_call(method.v, items, &[])?;
+    let next = self.iterator_next(iterator)?;
+    self.destructure_steps(iterator, next)
+  }
+
+  /// Two `IteratorStepValue`s and `IteratorClose` (two targets never exhaust the iterator).
+  fn destructure_steps(&self, iterator: Local, next: V) -> JsResult<(V, V)> {
+    let mut values = [self.undefined_v(); 2];
     for slot in &mut values {
-      let result = self.call(next, iterator, &[], "iterator.next")?;
-      if !ty(result).is_object_like() {
+      let result = self.of(self.call_value(next, iterator)?);
+      if !result.is_object_like() {
         return Err(self.iterator_result_error(result));
       }
-      if js::truthy(js::get_named(result, "done")?) {
+      if self.get_v(result, K::Done)?.truthy() {
         return Ok((values[0], values[1]));
       }
-      *slot = js::get_named(result, "value")?;
+      *slot = self.get_v(result, K::Value)?;
     }
     self.iterator_close(iterator, false)?;
     Ok((values[0], values[1]))
   }
 
-  /// The default array iterator: one element per step, `length` read live.
-  fn for_of_default(&self, items: Local, body: &dyn Fn(Local) -> JsResult<Option<Local>>) -> JsResult<Option<Local>> {
-    let mut index = 0;
-    while index < js::array_length(items) {
-      let item = js::get_element(items, index)?;
-      index += 1;
-      match body(item) {
-        Ok(None) => {}
-        Ok(Some(v)) => {
-          self.close_default_iterator(items, false)?;
-          return Ok(Some(v));
-        }
-        Err(e) => {
-          let _ = self.close_default_iterator(items, true);
-          return Err(e);
-        }
-      }
+  /// `GetIterator`'s `Result of the Symbol.iterator method` check and the `next` read.
+  fn iterator_next(&self, iterator: Local) -> JsResult<V> {
+    let iterator = self.of(iterator);
+    if !iterator.is_object_like() {
+      return Err(self.type_error("Result of the Symbol.iterator method is not an object"));
     }
-    Ok(None)
+    self.get_v(iterator, K::Next)
   }
 
   /// `IteratorClose` of an array iterator: `return` is looked up on `%ArrayIteratorPrototype%`
   /// (where an array iterator finds it); when one is installed it is called with a fresh
   /// iterator of `items`.
   fn close_default_iterator(&self, items: Local, is_throw: bool) -> JsResult<()> {
-    let ret = js::get_named(self.array_iterator_prototype.get(), "return")?;
-    if is_nullish(ret) {
+    let ret = self.of(self.raw_get(self.r(&self.array_iterator_prototype), self.k(K::Return))?);
+    if ret.is_nullish() {
       return Ok(());
     }
-    let iterator = js::call(self.array_values.get(), items, &[])?;
+    let iterator = self.raw_call(self.r(&self.array_values), items, &[])?;
     self.call_return(iterator, ret, is_throw)
   }
 
@@ -617,27 +1040,29 @@ impl Cx {
   fn for_of_protocol(
     &self,
     items: Local,
-    method: Local,
+    method: V,
     expr: &str,
-    body: &dyn Fn(Local) -> JsResult<Option<Local>>,
+    body: &dyn Fn(V) -> JsResult<Option<Local>>,
   ) -> JsResult<Option<Local>> {
-    if ty(method) != Type::Function {
+    if !method.is_function() {
       return Err(self.type_error(&format!("{expr} is not iterable")));
     }
-    let iterator = js::call(method, items, &[])?;
-    if !ty(iterator).is_object_like() {
-      return Err(self.type_error("Result of the Symbol.iterator method is not an object"));
-    }
-    let next = js::get_named(iterator, "next")?;
+    let iterator = self.raw_call(method.v, items, &[])?;
+    let next = self.iterator_next(iterator)?;
+    self.iterate(iterator, next, body)
+  }
+
+  /// The iterator protocol after `GetIterator`.
+  fn iterate(&self, iterator: Local, next: V, body: &dyn Fn(V) -> JsResult<Option<Local>>) -> JsResult<Option<Local>> {
     loop {
-      let result = self.call(next, iterator, &[], "iterator.next")?;
-      if !ty(result).is_object_like() {
+      let result = self.of(self.call_value(next, iterator)?);
+      if !result.is_object_like() {
         return Err(self.iterator_result_error(result));
       }
-      if js::truthy(js::get_named(result, "done")?) {
+      if self.get_v(result, K::Done)?.truthy() {
         return Ok(None);
       }
-      let item = js::get_named(result, "value")?;
+      let item = self.get_v(result, K::Value)?;
       match body(item) {
         Ok(None) => {}
         Ok(Some(v)) => {
@@ -655,39 +1080,77 @@ impl Cx {
   /// `IteratorClose(iterator, completion)`; for a throw completion its own errors are dropped
   /// (the caller rethrows the original).
   fn iterator_close(&self, iterator: Local, is_throw: bool) -> JsResult<()> {
-    let ret = js::get_named(iterator, "return")?;
-    if is_nullish(ret) {
+    let ret = self.of(self.raw_get(iterator, self.k(K::Return))?);
+    if ret.is_nullish() {
       return Ok(());
     }
     self.call_return(iterator, ret, is_throw)
   }
 
-  fn call_return(&self, iterator: Local, ret: Local, is_throw: bool) -> JsResult<()> {
-    if ty(ret) != Type::Function {
-      return Err(self.type_error(&format!("{} is not a function", self.describe(ret))));
+  /// Calls an iterator method the TS reaches without a callee expression (`next` / `return`):
+  /// V8 names the value by its type when it is not callable (`number 5 is not a function`).
+  fn call_value(&self, func: V, this: Local) -> JsResult<Local> {
+    if !func.is_function() {
+      let text = |v: V| self.string(v).map(|s| String::from_utf16_lossy(&self.utf16(s))).unwrap_or_default();
+      let callee = match func.ty() {
+        Type::Undefined => "undefined".to_string(),
+        Type::Null => "object null".to_string(),
+        Type::Boolean => format!("boolean {}", text(func)),
+        Type::Number => format!("number {}", text(func)),
+        Type::String => format!("string \"{}\"", text(func)),
+        Type::Symbol => "symbol".to_string(),
+        Type::BigInt => "bigint".to_string(),
+        _ => "object".to_string(),
+      };
+      return Err(self.type_error(&format!("{callee} is not a function")));
     }
-    let result = js::call(ret, iterator, &[])?;
-    if !is_throw && !ty(result).is_object_like() {
+    self.raw_call(func.v, this, &[])
+  }
+
+  fn call_return(&self, iterator: Local, ret: V, is_throw: bool) -> JsResult<()> {
+    let result = self.of(self.call_value(ret, iterator)?);
+    if !is_throw && !result.is_object_like() {
       return Err(self.iterator_result_error(result));
     }
     Ok(())
   }
 
-  fn iterator_result_error(&self, result: Local) -> Thrown {
+  fn iterator_result_error(&self, result: V) -> Thrown {
     let text = self.describe(result);
     self.type_error(&format!("Iterator result {text} is not an object"))
   }
 
-  fn describe(&self, v: Local) -> String {
-    self.string(v).ok().and_then(js::get_string).unwrap_or_default()
+  fn describe(&self, v: V) -> String {
+    self.string(v).map(|s| String::from_utf16_lossy(&self.utf16(s))).unwrap_or_default()
   }
 }
 
 // ---------------------------------------------------------------------------------------------
-// Value helpers
+// Values
+
+/// A value kept across handle scopes: primitives copied (identity of primitives is not
+/// observable), objects, functions and symbols referenced.
+#[derive(PartialEq)]
+pub enum Held {
+  Undefined,
+  Null,
+  Bool(bool),
+  Num(f64),
+  Str(Vec<u16>),
+  BigInt(i32, Vec<u64>),
+  Ref(sys::napi_env, sys::napi_ref),
+}
+
+impl Drop for Held {
+  fn drop(&mut self) {
+    if let Held::Ref(env, r) = self {
+      unsafe { sys::napi_delete_reference(*env, *r) };
+    }
+  }
+}
 
 /// A handle the engine knows the `typeof` / truthiness of: a validator argument with the tag the
-/// shell computed (shell.js `tag`), or any value classified by [`V::of`].
+/// shell computed (shell.js `tag` / `atag`), or a value classified by [`Cx::of`].
 #[derive(Clone, Copy)]
 pub struct V {
   pub v: Local,
@@ -702,11 +1165,20 @@ const FALSY_NUMBER: u8 = 4;
 const NUMBER: u8 = 5;
 const EMPTY_STRING: u8 = 6;
 const STRING: u8 = 7;
+/// An object, `Array.isArray` not known.
 const OBJECT: u8 = 8;
 const FUNCTION: u8 = 9;
 const SYMBOL: u8 = 10;
 const BIGINT: u8 = 11;
 const FALSY_BIGINT: u8 = 12;
+/// `atag`: an object `Array.isArray` was true for (a real array or a proxy of one).
+const ARRAY_HINT: u8 = 13;
+/// `atag`: an object that is neither an array nor a proxy, so never an array.
+const PLAIN_OBJECT: u8 = 14;
+/// `atag`: a proxy (its `Array.isArray` may throw once revoked).
+const UNKNOWN_OBJECT: u8 = 15;
+/// A binding the shell did not tag (see [`Cx::classify`]); no predicate may be asked of it.
+const UNCLASSIFIED: u8 = 16;
 
 impl V {
   /// An argument with its shell tag.
@@ -714,77 +1186,13 @@ impl V {
     V { v, tag }
   }
 
-  pub fn of(v: Local) -> V {
-    let tag = match js::type_of(v) {
-      Type::Undefined => UNDEFINED,
-      Type::Null => NULL,
-      Type::Boolean => {
-        if js::get_bool(v) {
-          TRUE
-        } else {
-          FALSE
-        }
-      }
-      Type::Number => {
-        let n = js::get_f64(v);
-        if n == 0.0 || n.is_nan() { FALSY_NUMBER } else { NUMBER }
-      }
-      Type::String => {
-        if string_length(v) == Some(0) {
-          EMPTY_STRING
-        } else {
-          STRING
-        }
-      }
-      Type::Object | Type::External => OBJECT,
-      Type::Function => FUNCTION,
-      Type::Symbol => SYMBOL,
-      Type::BigInt => {
-        if js::truthy(v) {
-          BIGINT
-        } else {
-          FALSY_BIGINT
-        }
-      }
-    };
-    V { v, tag }
-  }
-}
-
-/// Values the predicates below work on: raw handles (classified with Node-API on each use) and
-/// tagged [`V`]s (classified once).
-pub trait Js: Copy {
-  fn local(self) -> Local;
-  fn kind(self) -> Type;
-  fn is_truthy(self) -> bool;
-  /// `Some(tag)` when known without a Node-API call.
-  fn tag(self) -> Option<u8>;
-}
-
-impl Js for Local {
-  fn local(self) -> Local {
-    self
+  /// A binding the shell passes without a tag: [`Cx::classify`] it before use.
+  pub fn unclassified(v: Local) -> V {
+    V { v, tag: UNCLASSIFIED }
   }
 
-  fn kind(self) -> Type {
-    js::type_of(self)
-  }
-
-  fn is_truthy(self) -> bool {
-    js::truthy(self)
-  }
-
-  fn tag(self) -> Option<u8> {
-    None
-  }
-}
-
-impl Js for V {
-  fn local(self) -> Local {
-    self.v
-  }
-
-  fn kind(self) -> Type {
+  pub fn ty(self) -> Type {
+    debug_assert!(self.tag != UNCLASSIFIED, "unclassified binding");
     match self.tag {
       UNDEFINED => Type::Undefined,
       NULL => Type::Null,
@@ -798,165 +1206,72 @@ impl Js for V {
     }
   }
 
-  fn is_truthy(self) -> bool {
-    matches!(self.tag, TRUE | NUMBER | STRING | OBJECT | FUNCTION | SYMBOL | BIGINT)
+  pub fn truthy(self) -> bool {
+    debug_assert!(self.tag != UNCLASSIFIED, "unclassified binding");
+    !matches!(self.tag, UNDEFINED | NULL | FALSE | FALSY_NUMBER | EMPTY_STRING | FALSY_BIGINT)
   }
 
-  fn tag(self) -> Option<u8> {
-    Some(self.tag)
+  pub fn is_nullish(self) -> bool {
+    debug_assert!(self.tag != UNCLASSIFIED, "unclassified binding");
+    matches!(self.tag, UNDEFINED | NULL)
   }
-}
 
-pub fn ty(v: impl Js) -> Type {
-  v.kind()
-}
-
-pub fn is_nullish(v: impl Js) -> bool {
-  matches!(v.kind(), Type::Undefined | Type::Null)
-}
-
-pub fn is_string(v: impl Js) -> bool {
-  match v.tag() {
-    Some(tag) => matches!(tag, EMPTY_STRING | STRING),
-    None => string_length(v.local()).is_some(),
+  pub fn is_undefined(self) -> bool {
+    self.tag == UNDEFINED
   }
-}
 
-/// `typeof v === 'number'`
-pub fn is_number_type(v: impl Js) -> bool {
-  number_value(v).is_some()
-}
-
-/// `typeof v === 'object'` (true for `null`).
-pub fn is_typeof_object(v: impl Js) -> bool {
-  v.kind().is_typeof_object()
-}
-
-pub fn truthy(v: impl Js) -> bool {
-  v.is_truthy()
-}
-
-/// `v === true`
-pub fn is_true(v: impl Js) -> bool {
-  match v.tag() {
-    Some(tag) => tag == TRUE,
-    None => {
-      let mut b = false;
-      (unsafe { sys::napi_get_value_bool(js::env(), v.local().0, &mut b) }) == sys::Status::napi_ok && b
-    }
+  pub fn is_null(self) -> bool {
+    self.tag == NULL
   }
-}
 
-/// `v === false`
-pub fn is_false(v: impl Js) -> bool {
-  match v.tag() {
-    Some(tag) => tag == FALSE,
-    None => {
-      let mut b = true;
-      (unsafe { sys::napi_get_value_bool(js::env(), v.local().0, &mut b) }) == sys::Status::napi_ok && !b
-    }
+  pub fn is_true(self) -> bool {
+    self.tag == TRUE
+  }
+
+  pub fn is_false(self) -> bool {
+    self.tag == FALSE
+  }
+
+  pub fn is_boolean(self) -> bool {
+    matches!(self.tag, TRUE | FALSE)
+  }
+
+  pub fn is_number(self) -> bool {
+    matches!(self.tag, FALSY_NUMBER | NUMBER)
+  }
+
+  pub fn is_string(self) -> bool {
+    matches!(self.tag, EMPTY_STRING | STRING)
+  }
+
+  pub fn is_function(self) -> bool {
+    self.tag == FUNCTION
+  }
+
+  /// Objects and functions (Node-API can do property operations on them directly).
+  pub fn is_object_like(self) -> bool {
+    matches!(self.tag, OBJECT | FUNCTION | ARRAY_HINT | PLAIN_OBJECT | UNKNOWN_OBJECT)
+  }
+
+  /// `typeof v === 'object'` (true for `null`).
+  pub fn is_typeof_object(self) -> bool {
+    matches!(self.tag, NULL | OBJECT | ARRAY_HINT | PLAIN_OBJECT | UNKNOWN_OBJECT)
   }
 }
 
-pub fn strict_eq(a: impl Js, b: impl Js) -> bool {
-  js::strict_equals(a.local(), b.local())
-}
-
-/// `v === n`
-pub fn eq_num(v: impl Js, n: f64) -> bool {
-  number_value(v) == Some(n)
-}
-
-/// `v === 'literal'`
-pub fn eq_str(v: impl Js, s: &str) -> bool {
-  if v.tag().is_some_and(|tag| !matches!(tag, EMPTY_STRING | STRING)) {
-    return false;
-  }
-  // `s` is an ASCII literal: equal strings have the same length in UTF-16 and Latin-1.
-  let mut buf = [0u8; 32];
-  let mut len = 0usize;
-  if s.len() >= buf.len() || string_length(v.local()) != Some(s.len()) {
-    return s.len() >= buf.len() && js::str_equals(v.local(), s);
-  }
-  let status = unsafe {
-    sys::napi_get_value_string_latin1(js::env(), v.local().0, buf.as_mut_ptr().cast(), buf.len(), &mut len)
-  };
-  status == sys::Status::napi_ok && &buf[..len] == s.as_bytes()
-}
-
-/// The value of a number, `None` for anything else.
-pub fn number_value(v: impl Js) -> Option<f64> {
-  if v.tag().is_some_and(|tag| !matches!(tag, FALSY_NUMBER | NUMBER)) {
-    return None;
-  }
-  let mut n = 0.0;
-  ((unsafe { sys::napi_get_value_double(js::env(), v.local().0, &mut n) }) == sys::Status::napi_ok).then_some(n)
-}
-
-/// UTF-16 length of a string, `None` for anything else.
-pub fn string_length(v: Local) -> Option<usize> {
-  let mut len = 0usize;
-  ((unsafe { sys::napi_get_value_string_utf16(js::env(), v.0, ptr::null_mut(), 0, &mut len) }) == sys::Status::napi_ok)
-    .then_some(len)
-}
-
-/// SameValueZero
-pub fn same_value_zero(a: Local, b: Local) -> bool {
-  if js::strict_equals(a, b) {
-    return true;
-  }
-  matches!((number_value(a), number_value(b)), (Some(x), Some(y)) if x.is_nan() && y.is_nan())
-}
-
-pub fn yes() -> Local {
-  js::boolean(true)
-}
-
-/// `ToString(v)` (template literal / string concatenation; throws for symbols).
-pub fn to_string(v: Local) -> JsResult<Local> {
-  if is_string(v) {
-    return Ok(v);
-  }
-  let mut out = ptr::null_mut();
-  check(unsafe { sys::napi_coerce_to_string(js::env(), v.0, &mut out) })?;
-  Ok(Local(out))
-}
-
-/// `` `${a}${b}` `` for an engine string `b`.
-pub fn concat(a: Local, b: &str) -> JsResult<Local> {
-  let mut units = js::get_string_utf16(to_string(a)?).unwrap_or_default();
-  units.extend(b.encode_utf16());
-  let mut v = ptr::null_mut();
-  check(unsafe { sys::napi_create_string_utf16(js::env(), units.as_ptr(), units.len() as isize, &mut v) })?;
-  Ok(Local(v))
-}
-
-fn has_element(o: Local, index: u32) -> JsResult<bool> {
-  let mut r = false;
-  check(unsafe { sys::napi_has_element(js::env(), o.0, index, &mut r) })?;
-  Ok(r)
-}
-
-fn data_property(name: Local, value: Local) -> sys::napi_property_descriptor {
+fn data_property(name: sys::napi_value, value: sys::napi_value) -> sys::napi_property_descriptor {
   sys::napi_property_descriptor {
     utf8name: ptr::null(),
-    name: name.0,
+    name,
     method: None,
     getter: None,
     setter: None,
-    value: value.0,
+    value,
     attributes: sys::PropertyAttributes::writable
       | sys::PropertyAttributes::enumerable
       | sys::PropertyAttributes::configurable,
     data: ptr::null_mut(),
   }
-}
-
-/// `CreateDataPropertyOrThrow(o, ToString(index), value)`
-fn define_index(o: Local, index: u32, value: Local) -> JsResult<()> {
-  let name = index.to_string();
-  let desc = data_property(js::key(&name), value);
-  check(unsafe { sys::napi_define_properties(js::env(), o.0, 1, &desc) })
 }
 
 /// JS `WhiteSpace` and `LineTerminator` code units (`String.prototype.trim`, `StrWhiteSpaceChar`).

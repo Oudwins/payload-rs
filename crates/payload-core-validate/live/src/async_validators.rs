@@ -6,41 +6,39 @@
 
 use std::cell::RefCell;
 
-use payload_core_runtime::js::{self, JsResult, Local};
+use payload_core_runtime::js::{JsResult, Local, Type};
 
-use crate::ops::{
-  Cx, V, eq_num, eq_str, is_false, is_nullish, is_string, is_true, is_typeof_object, number_value, same_value_zero,
-  strict_eq, truthy, ty, yes,
-};
+use crate::keys::K;
+use crate::ops::{Cx, Held, Loop, V};
 use crate::validators::{option_matches, validate_array_length};
 
 /// `json` up to `return validateJSONSchema({ jsonSchema, value })` (`NEXT`, made by the shell).
 pub fn json(cx: &Cx, args: [V; 5]) -> JsResult<Local> {
   let [value, json_error, json_schema, t, required] = args;
 
-  if truthy(required) && !truthy(value) {
-    return cx.t(t, "validation:required", None);
+  if required.truthy() && !value.truthy() {
+    return cx.t(t, K::Required, None);
   }
 
-  if ty(json_error) != js::Type::Undefined {
-    return cx.t(t, "validation:invalidInput", None);
+  if !json_error.is_undefined() {
+    return cx.t(t, K::InvalidInput, None);
   }
 
-  if truthy(json_schema) && is_not_empty(cx, value)? {
-    return Ok(cx.next.get());
+  if json_schema.truthy() && is_not_empty(cx, value)? {
+    return Ok(cx.next());
   }
-  Ok(yes())
+  Ok(cx.yes())
 }
 
 /// `isNotEmpty(value)` of `json`.
 fn is_not_empty(cx: &Cx, value: V) -> JsResult<bool> {
-  if is_nullish(value) {
+  if value.is_nullish() {
     return Ok(false);
   }
-  if cx.is_array(value)? && eq_num(cx.length(value)?, 0.0) {
+  if cx.is_array(value)? && cx.length_is_zero(value)? {
     return Ok(false);
   }
-  if is_typeof_object(value) && eq_num(cx.helper(&cx.h_object_keys_length, &[value.v])?, 0.0) {
+  if value.is_typeof_object() && cx.eq_num(cx.of(cx.helper(&cx.h_object_keys_length, &[value.v])?), 0.0) {
     return Ok(false);
   }
   Ok(true)
@@ -49,24 +47,24 @@ fn is_not_empty(cx: &Cx, value: V) -> JsResult<bool> {
 /// The whole `richText` body (it has no await of its own).
 pub fn rich_text(cx: &Cx, args: [V; 2]) -> JsResult<Local> {
   let [value, options] = args;
-  if !truthy(cx.get_opt(options, "editor")?) {
+  if !cx.get_opt(options, K::Editor)?.truthy() {
     return Err(cx.error("richText field has no editor property."));
   }
-  if ty(cx.get_opt(options, "editor")?) == js::Type::Function {
+  if cx.get_opt(options, K::Editor)?.ty() == Type::Function {
     return Err(cx.error("Attempted to access unsanitized rich text editor."));
   }
 
-  let editor = cx.get_opt(options, "editor")?;
+  let editor = cx.get_opt(options, K::Editor)?;
 
-  cx.call_method(editor, "validate", &[value.v, options.v], "editor")
+  cx.call_method(editor, K::Validate, &[value.v, options.v], "editor")
 }
 
 /// `validateBlocksFilterOptions`: `allBlockSlugs`.
 pub fn all_block_slugs(cx: &Cx, args: [V; 1]) -> JsResult<Local> {
   let [value] = args;
   if cx.is_array(value)? {
-    let mapped = cx.map(value, "value", &|b| cx.get(b, "blockType"))?;
-    return cx.filter(mapped, "value.map(...)", &|s| Ok(truthy(s)));
+    let mapped = cx.map(value, "value", &|b| cx.get(b, K::BlockType))?;
+    return Ok(cx.filter(mapped, "value.map(...)", &|s| Ok(s.truthy()))?.v);
   }
   cx.array_of(&[])
 }
@@ -74,20 +72,20 @@ pub fn all_block_slugs(cx: &Cx, args: [V; 1]) -> JsResult<Local> {
 /// `validateBlocksFilterOptions` after the `filterOptions` await: the result object.
 pub fn blocks_filter_result(cx: &Cx, args: [V; 2]) -> JsResult<Local> {
   let [all_block_slugs, allowed_block_slugs] = args;
-  let invalid_block_slugs = cx.array_of(&[])?;
-  if truthy(allowed_block_slugs) {
-    cx.for_of(all_block_slugs, "allBlockSlugs", &|block_slug| {
-      if !truthy(cx.includes(allowed_block_slugs, block_slug, "allowedBlockSlugs")?) {
-        cx.push(invalid_block_slugs, block_slug, "invalidBlockSlugs")?;
+  let invalid_block_slugs = cx.of(cx.array_of(&[])?);
+  if allowed_block_slugs.truthy() {
+    cx.for_of(all_block_slugs, Loop::AllBlockSlugs, &|block_slug| {
+      if !cx.includes(allowed_block_slugs, block_slug, "allowedBlockSlugs")?.truthy() {
+        cx.push(invalid_block_slugs, block_slug.v, "invalidBlockSlugs")?;
       }
       Ok(None)
     })?;
   }
 
   cx.object(&[
-    ("allBlockSlugs", all_block_slugs.v),
-    ("allowedBlockSlugs", allowed_block_slugs.v),
-    ("invalidBlockSlugs", invalid_block_slugs),
+    (K::AllBlockSlugs, all_block_slugs.v),
+    (K::AllowedBlockSlugs, allowed_block_slugs.v),
+    (K::InvalidBlockSlugs, invalid_block_slugs.v),
   ])
 }
 
@@ -95,44 +93,49 @@ pub fn blocks_filter_result(cx: &Cx, args: [V; 2]) -> JsResult<Local> {
 pub fn blocks(cx: &Cx, args: [V; 6]) -> JsResult<Local> {
   let [value, filter_options, max_rows, min_rows, required, t] = args;
   let length_validation_result = validate_array_length(cx, value, max_rows, min_rows, required, t)?;
-  if is_string(length_validation_result) {
-    return Ok(length_validation_result);
+  if length_validation_result.is_string() {
+    return Ok(length_validation_result.v);
   }
 
-  if truthy(filter_options) {
-    return Ok(cx.next.get());
+  if filter_options.truthy() {
+    return Ok(cx.next());
   }
 
-  Ok(yes())
+  Ok(cx.yes())
 }
 
 /// `blocks` after the await, with the destructured `invalidBlockSlugs`.
 pub fn blocks_invalid(cx: &Cx, args: [V; 2]) -> JsResult<Local> {
   let [invalid_block_slugs, t] = args;
-  if truthy(cx.length_opt(invalid_block_slugs)?) {
-    let blocks = cx.call_method(invalid_block_slugs, "join", &[js::string(", ")], "invalidBlockSlugs")?;
-    return cx.t(t, "validation:invalidBlocks", Some(cx.object(&[("blocks", blocks)])?));
+  if cx.length_opt(invalid_block_slugs)?.truthy() {
+    let blocks = cx.call_method(invalid_block_slugs, K::Join, &[cx.k(K::CommaSpace)], "invalidBlockSlugs")?;
+    return cx.t(t, K::InvalidBlocks, Some(cx.object(&[(K::Blocks, blocks)])?));
   }
 
-  Ok(yes())
+  Ok(cx.yes())
 }
 
-/// `isValidID(value, type)` (`payload/src/utilities/isValidID.ts`)
-fn is_valid_id(cx: &Cx, value: Local, id_type: Local) -> JsResult<bool> {
-  if eq_str(id_type, "text") && truthy(value) {
-    if is_typeof_object(value) || is_string(value) {
-      let is_object_id = truthy(cx.helper(&cx.h_object_id_is_valid, &[value])?);
-      return Ok(is_string(value) || is_object_id);
+/// `isValidID(value, type)` (`payload/src/utilities/isValidID.ts`); `id_type` `None` is the
+/// literal `'text'`.
+fn is_valid_id(cx: &Cx, value: V, id_type: Option<V>) -> JsResult<bool> {
+  let is = |literal: &str| match id_type {
+    None => literal == "text",
+    Some(id_type) => cx.eq_str(id_type, literal),
+  };
+  if is("text") && value.truthy() {
+    if value.is_typeof_object() || value.is_string() {
+      let is_object_id = cx.of(cx.helper(&cx.h_object_id_is_valid, &[value.v])?).truthy();
+      return Ok(value.is_string() || is_object_id);
     }
     return Ok(false);
   }
 
-  if eq_str(id_type, "number") && number_value(value).is_some_and(|n| !n.is_nan()) {
+  if is("number") && cx.num(value).is_some_and(|n| !n.is_nan()) {
     return Ok(true);
   }
 
-  if eq_str(id_type, "ObjectID") {
-    return Ok(truthy(cx.helper(&cx.h_object_id_is_valid, &[cx.string(value)?])?));
+  if is("ObjectID") {
+    return Ok(cx.of(cx.helper(&cx.h_object_id_is_valid, &[cx.string(value)?.v])?).truthy());
   }
 
   Ok(false)
@@ -141,75 +144,79 @@ fn is_valid_id(cx: &Cx, value: Local, id_type: Local) -> JsResult<bool> {
 /// `upload` / `relationship` (identical bodies) up to `return validateFilterOptions(value,
 /// options)` (`NEXT`).
 pub fn relationship(cx: &Cx, args: [V; 8]) -> JsResult<Local> {
-  let [value, event, max_rows, min_rows, relation_to, payload, t, required] = args;
+  let [value, event, relation_to, required, t, payload, max_rows, min_rows] = args;
+  let zero = cx.number_v(0.0);
 
-  if ((!truthy(value) && ty(value) != js::Type::Number) || (cx.is_array(value)? && eq_num(cx.length(value)?, 0.0)))
-    && truthy(required)
+  if ((!value.truthy() && !value.is_number()) || (cx.is_array(value)? && cx.length_is_zero(value)?))
+    && required.truthy()
   {
-    return cx.t(t, "validation:required", None);
+    return cx.t(t, K::Required, None);
   }
 
-  if cx.is_array(value)? && cx.gt(cx.length(value)?, js::number(0.0))? {
-    if truthy(min_rows) && cx.lt(cx.length(value)?, min_rows)? {
-      let label = cx.t(t, "general:rows", None)?;
-      let vars = cx.object(&[("label", label), ("min", min_rows.v), ("value", cx.length(value)?)])?;
-      return cx.t(t, "validation:lessThanMin", Some(vars));
+  if cx.is_array(value)? && cx.gt(cx.length(value)?, zero)? {
+    let (max_rows, min_rows) = (cx.classify(max_rows), cx.classify(min_rows));
+    if min_rows.truthy() && cx.lt(cx.length(value)?, min_rows)? {
+      let label = cx.t(t, K::GeneralRows, None)?;
+      let vars = cx.object(&[(K::Label, label), (K::Min, min_rows.v), (K::Value, cx.length(value)?.v)])?;
+      return cx.t(t, K::LessThanMin, Some(vars));
     }
 
-    if truthy(max_rows) && cx.gt(cx.length(value)?, max_rows)? {
-      let label = cx.t(t, "general:rows", None)?;
-      let vars = cx.object(&[("label", label), ("max", max_rows.v), ("value", cx.length(value)?)])?;
-      return cx.t(t, "validation:greaterThanMax", Some(vars));
+    if max_rows.truthy() && cx.gt(cx.length(value)?, max_rows)? {
+      let label = cx.t(t, K::GeneralRows, None)?;
+      let vars = cx.object(&[(K::Label, label), (K::Max, max_rows.v), (K::Value, cx.length(value)?.v)])?;
+      return cx.t(t, K::GreaterThanMax, Some(vars));
     }
   }
 
-  if !is_nullish(value) {
-    let values = if cx.is_array(value)? { value.v } else { cx.array_of(&[value.v])? };
+  if !value.is_nullish() {
+    let is_invalid = |val: V| -> JsResult<bool> {
+      let mut collection_slug = cx.undefined_v();
+      let mut requested_id = cx.undefined_v();
 
-    let is_invalid = |val: Local| -> JsResult<bool> {
-      let mut collection_slug = js::undefined();
-      let mut requested_id = js::undefined();
-
-      if is_string(relation_to) {
-        collection_slug = relation_to.v;
+      if relation_to.is_string() {
+        collection_slug = relation_to;
 
         // custom id
-        if truthy(val) || ty(val) == js::Type::Number {
+        if val.truthy() || val.is_number() {
           requested_id = val;
         }
       }
 
-      if cx.is_array(relation_to)? && is_typeof_object(val) && truthy(cx.get_opt(val, "relationTo")?) {
-        collection_slug = cx.get(val, "relationTo")?;
-        requested_id = cx.get(val, "value")?;
+      if cx.is_array(relation_to)? && val.is_typeof_object() && cx.get_opt(val, K::RelationTo)?.truthy() {
+        collection_slug = cx.get_v(val, K::RelationTo)?;
+        requested_id = cx.get_v(val, K::Value)?;
       }
 
-      if ty(requested_id) == js::Type::Null {
+      if requested_id.is_null() {
         return Ok(false);
       }
 
-      let mut id_type = cx.get_opt(cx.get_key(cx.get(payload, "collections")?, collection_slug)?, "customIDType")?;
-      if !truthy(id_type) {
-        id_type = cx.get_opt(cx.get_opt(payload, "db")?, "defaultIDType")?;
-      }
-      if !truthy(id_type) {
-        id_type = js::string("text");
+      // payload.collections[collectionSlug]?.customIDType || payload?.db?.defaultIDType || 'text'
+      let collections = cx.get_v(payload, K::Collections)?;
+      let mut id_type = cx.get_opt(cx.of(cx.get_key(collections, collection_slug.v)?), K::CustomIDType)?;
+      if !id_type.truthy() {
+        id_type = cx.get_opt(cx.get_opt(payload, K::Db)?, K::DefaultIDType)?;
       }
 
-      Ok(!is_valid_id(cx, requested_id, id_type)?)
+      Ok(!is_valid_id(cx, requested_id, id_type.truthy().then_some(id_type))?)
     };
-    let invalid_relationships = cx.filter(values, "values", &is_invalid)?;
+    // `Array.isArray(value) ? value : [value]`
+    let invalid_relationships = if cx.is_array(value)? {
+      cx.filter(value, "values", &is_invalid)?
+    } else {
+      cx.filter_literal(value, "values", &is_invalid)?
+    };
 
-    if cx.gt(cx.length(invalid_relationships)?, js::number(0.0))? {
-      return cx.helper(&cx.h_invalid_relationships_message, &[invalid_relationships]);
+    if cx.gt(cx.length(invalid_relationships)?, zero)? {
+      return cx.helper(&cx.h_invalid_relationships_message, &[invalid_relationships.v]);
     }
   }
 
-  if eq_str(event, "onChange") {
-    return Ok(yes());
+  if cx.eq_str(event, "onChange") {
+    return Ok(cx.yes());
   }
 
-  Ok(cx.next.get())
+  Ok(cx.next())
 }
 
 /// `validateFilterOptions`, one collection after the `filterOptions` await (`optionFilter`
@@ -217,100 +224,100 @@ pub fn relationship(cx: &Cx, args: [V; 8]) -> JsResult<Local> {
 /// `req.payloadDataLoader.find` arguments, or `NEXT` when there are none.
 pub fn filter_options_find(cx: &Cx, args: [V; 6]) -> JsResult<Local> {
   let [values, option_filter, collection, false_collections, override_access, req] = args;
-  let value_ids = cx.array_of(&[])?;
+  let value_ids = cx.of(cx.array_of(&[])?);
 
   cx.for_each(values, "values", &|val| {
-    if is_typeof_object(val) {
-      if truthy(cx.get_opt(val, "value")?) {
-        cx.push(value_ids, cx.get(val, "value")?, "valueIDs")?;
-      } else if truthy(cx.helper(&cx.h_object_id_is_valid, &[val])?) {
-        cx.push(value_ids, cx.helper(&cx.h_object_id_hex, &[val])?, "valueIDs")?;
+    if val.is_typeof_object() {
+      if cx.get_opt(val, K::Value)?.truthy() {
+        cx.push(value_ids, cx.get(val, K::Value)?, "valueIDs")?;
+      } else if cx.of(cx.helper(&cx.h_object_id_is_valid, &[val.v])?).truthy() {
+        cx.push(value_ids, cx.helper(&cx.h_object_id_hex, &[val.v])?, "valueIDs")?;
       }
     }
 
-    if is_string(val) || ty(val) == js::Type::Number {
-      cx.push(value_ids, val, "valueIDs")?;
+    if val.is_string() || val.is_number() {
+      cx.push(value_ids, val.v, "valueIDs")?;
     }
     Ok(())
   })?;
 
-  if js::array_length(value_ids) == 0 {
-    return Ok(cx.next.get());
+  if cx.array_length(value_ids.v) == 0 {
+    return Ok(cx.next());
   }
 
-  let and = cx.array_of(&[cx.object(&[("id", cx.object(&[("in", value_ids)])?)])?])?;
-  let find_where = cx.object(&[("and", and)])?;
+  let and = cx.of(cx.array_of(&[cx.object(&[(K::Id, cx.object(&[(K::In, value_ids.v)])?)])?])?);
+  let find_where = cx.object(&[(K::And, and.v)])?;
 
-  if truthy(option_filter) && !is_true(option_filter) {
-    cx.push(and, option_filter, "findWhere.and")?;
+  if option_filter.truthy() && !option_filter.is_true() {
+    cx.push(and, option_filter.v, "findWhere.and?")?;
   }
 
-  if is_false(option_filter) {
-    cx.push(false_collections, collection, "falseCollections")?;
+  if option_filter.is_false() {
+    cx.push(false_collections, collection.v, "falseCollections")?;
   }
 
   cx.object(&[
-    ("collection", collection.v),
-    ("depth", js::number(0.0)),
-    ("disableErrors", js::boolean(true)),
-    ("limit", js::number(0.0)),
-    ("overrideAccess", if is_nullish(override_access) { js::boolean(false) } else { override_access.v }),
-    ("pagination", js::boolean(false)),
-    ("req", req.v),
-    ("where", find_where),
+    (K::Collection, collection.v),
+    (K::Depth, cx.number(0.0)),
+    (K::DisableErrors, cx.boolean(true)),
+    (K::Limit, cx.number(0.0)),
+    (K::OverrideAccess, if override_access.is_nullish() { cx.boolean(false) } else { override_access.v }),
+    (K::Pagination, cx.boolean(false)),
+    (K::Req, req.v),
+    (K::Where, find_where),
   ])
 }
 
 /// `result.docs.map((doc) => doc.id)`
 pub fn doc_ids(cx: &Cx, args: [V; 1]) -> JsResult<Local> {
   let [result] = args;
-  let docs = cx.get(result, "docs")?;
-  cx.map(docs, "result.docs", &|doc| cx.get(doc, "id"))
+  let docs = cx.get_v(result, K::Docs)?;
+  Ok(cx.map(docs, "result.docs", &|doc| cx.get(doc, K::Id))?.v)
 }
 
 /// `validateFilterOptions` after the collection loop.
 pub fn filter_options_result(cx: &Cx, args: [V; 5]) -> JsResult<Local> {
   let [values, relation_to, false_collections, options, t] = args;
 
-  let is_invalid = |val: Local| -> JsResult<bool> {
-    let mut collection = js::undefined();
-    let mut requested_id = js::undefined();
+  let is_invalid = |val: V| -> JsResult<bool> {
+    let mut collection = cx.undefined_v();
+    let mut requested_id = cx.undefined_v();
 
-    if is_string(relation_to) {
-      collection = relation_to.v;
+    if relation_to.is_string() {
+      collection = relation_to;
 
-      if is_string(val) || ty(val) == js::Type::Number {
+      if val.is_string() || val.is_number() {
         requested_id = val;
       }
 
-      if is_typeof_object(val) && truthy(cx.helper(&cx.h_object_id_is_valid, &[val])?) {
-        requested_id = cx.helper(&cx.h_object_id_hex, &[val])?;
+      if val.is_typeof_object() && cx.of(cx.helper(&cx.h_object_id_is_valid, &[val.v])?).truthy() {
+        requested_id = cx.of(cx.helper(&cx.h_object_id_hex, &[val.v])?);
       }
     }
 
-    if cx.is_array(relation_to)? && is_typeof_object(val) && truthy(cx.get_opt(val, "relationTo")?) {
-      collection = cx.get(val, "relationTo")?;
-      requested_id = cx.get(val, "value")?;
+    if cx.is_array(relation_to)? && val.is_typeof_object() && cx.get_opt(val, K::RelationTo)?.truthy() {
+      collection = cx.get_v(val, K::RelationTo)?;
+      requested_id = cx.get_v(val, K::Value)?;
     }
 
-    if truthy(cx.find(false_collections, "falseCollections", &|slug| Ok(strict_eq(relation_to, slug)))?) {
+    if cx.find(false_collections, "falseCollections", &|slug| Ok(cx.strict_eq(relation_to.v, slug.v)))?.truthy() {
       return Ok(true);
     }
 
-    if !truthy(cx.get_key(options, collection)?) {
+    if !cx.of(cx.get_key(options, collection.v)?).truthy() {
       return Ok(true);
     }
 
-    let index = cx.index_of(cx.get_key(options, collection)?, requested_id, "options[collection]")?;
-    Ok(eq_num(index, -1.0))
+    let index = cx.index_of(cx.of(cx.get_key(options, collection.v)?), requested_id, "options[collection]")?;
+    Ok(cx.eq_num(index, -1.0))
   };
   let invalid_relationships = cx.filter(values, "values", &is_invalid)?;
 
-  if cx.gt(cx.length(invalid_relationships)?, js::number(0.0))? {
-    return cx.helper(&cx.h_invalid_selections_message, &[invalid_relationships, t.v]);
+  if cx.gt(cx.length(invalid_relationships)?, cx.number_v(0.0))? {
+    return cx.helper(&cx.h_invalid_selections_message, &[invalid_relationships.v, t.v]);
   }
 
-  Ok(yes())
+  Ok(cx.yes())
 }
 
 /// `select` after the `filterOptions` await.
@@ -318,61 +325,72 @@ pub fn select(cx: &Cx, args: [V; 5]) -> JsResult<Local> {
   let [value, filtered_options, has_many, t, required] = args;
 
   if cx.is_array(value)? {
-    let input_is_invalid = |input: Local| -> JsResult<bool> {
-      let matches = |option: Local| -> JsResult<bool> {
-        Ok(strict_eq(option, input) || (!is_string(option) && strict_eq(cx.get_opt(option, "value")?, input)))
+    let input_is_invalid = |input: V| -> JsResult<bool> {
+      let matches = |option: V| -> JsResult<bool> {
+        Ok(cx.strict_eq(option.v, input.v) || (!option.is_string() && cx.strict_eq(cx.get_opt(option, K::Value)?.v, input.v)))
       };
-      Ok(!truthy(cx.some(filtered_options, "filteredOptions", &matches)?))
+      Ok(!cx.some(filtered_options, "filteredOptions", &matches)?.truthy())
     };
-    if truthy(cx.some(value, "value", &input_is_invalid)?) {
-      return cx.t(t, "validation:invalidSelection", None);
+    if cx.some(value, "value", &input_is_invalid)?.truthy() {
+      return cx.t(t, K::InvalidSelection, None);
     }
   }
 
   // Check for duplicate values when hasMany is true
-  if truthy(has_many) && cx.is_array(value)? && cx.gt(cx.length(value)?, js::number(1.0))? {
-    // `new Map()` keyed by SameValueZero, insertion ordered (`-0` is stored as `+0`).
-    let counts: RefCell<Vec<(Local, f64)>> = RefCell::new(Vec::new());
+  if has_many.truthy() && cx.is_array(value)? && cx.gt(cx.length(value)?, cx.number_v(1.0))? {
+    // `new Map()` keyed by SameValueZero, insertion ordered (`-0` is stored as `+0`). The loop
+    // body runs in a callback, so the keys are held beyond its handle scope.
+    let counts: RefCell<Vec<(Held, f64)>> = RefCell::new(Vec::new());
 
-    cx.for_of(value, "value", &|item| {
+    cx.for_of(value, Loop::Value, &|item| {
       let mut counts = counts.borrow_mut();
-      match counts.iter_mut().find(|(key, _)| same_value_zero(*key, item)) {
+      match counts.iter_mut().find(|(key, _)| cx.held_equals(key, item)) {
         Some((_, count)) => *count += 1.0,
-        None => counts.push((if eq_num(item, 0.0) { js::number(0.0) } else { item }, 1.0)),
+        None => counts.push((cx.hold(item)?, 1.0)),
       }
       Ok(None)
     })?;
 
-    let duplicates = cx.array_of(&[])?;
+    let counts = counts.into_inner();
+    let duplicates = cx.of(cx.array_of(&[])?);
+    let mut entries = Vec::with_capacity(counts.len());
+    for (key, count) in &counts {
+      let key = match key {
+        Held::Num(n) if *n == 0.0 => cx.number(0.0),
+        key => cx.held_value(key)?,
+      };
+      entries.push((key, cx.number(*count)));
+    }
+    let one = cx.number_v(1.0);
     // for (const [item, count] of counts.entries())
-    for (key, count) in counts.into_inner() {
-      let (item, count) = cx.destructure_pair(key, js::number(count))?;
-      if cx.gt(count, js::number(1.0))? {
+    cx.for_of_pairs(&entries, &|i| counts[i].1 <= 1.0, &|item, count| {
+      if cx.gt(count, one)? {
         // Add the item 'count' times to show all occurrences
         let mut i = 0.0;
-        while cx.lt(js::number(i), count)? {
-          cx.push(duplicates, item, "duplicates")?;
+        while cx.lt(cx.number_v(i), count)? {
+          cx.push(duplicates, item.v, "duplicates")?;
           i += 1.0;
         }
       }
-    }
+      Ok(())
+    })?;
 
-    if js::array_length(duplicates) > 0 {
-      return cx.helper(&cx.h_duplicates_message, &[duplicates, t.v]);
-    }
-  }
-
-  if is_string(value) {
-    if !truthy(cx.some(filtered_options, "filteredOptions", &|option| option_matches(cx, option, value))?) {
-      return cx.t(t, "validation:invalidSelection", None);
+    if cx.array_length(duplicates.v) > 0 {
+      return cx.helper(&cx.h_duplicates_message, &[duplicates.v, t.v]);
     }
   }
 
-  if truthy(required)
-    && (is_nullish(value) || (truthy(has_many) && cx.is_array(value)? && eq_num(cx.length_opt(value)?, 0.0)))
+  if value.is_string()
+    && !cx.some(filtered_options, "filteredOptions", &|option| option_matches(cx, option, value))?.truthy()
   {
-    return cx.t(t, "validation:required", None);
+    return cx.t(t, K::InvalidSelection, None);
   }
 
-  Ok(yes())
+  if required.truthy()
+    && (value.is_nullish() || (has_many.truthy() && cx.is_array(value)? && cx.length_is_zero(value)?))
+  {
+    return cx.t(t, K::Required, None);
+  }
+
+  Ok(cx.yes())
 }

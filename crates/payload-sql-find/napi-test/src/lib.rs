@@ -142,7 +142,7 @@ pub fn relational_query(
   let out = match build_relational_query(&schema, &table, &config, mode) {
     Err(e) => json!({ "error": e.to_json() }),
     Ok(built) => {
-      let mut out = json!({ "sql": built.sql.sql, "params": built.sql.params });
+      let mut out = json!({ "sql": built.sql.sql, "params": built.sql.to_json()["params"] });
       if !target_json.is_empty() {
         let conn = executor(&parse(&target_json)?)?;
         match exec::execute_js(&conn, &built, mode, &host) {
@@ -436,10 +436,21 @@ pub fn find_many_rs(
 pub fn diff_schemas(a: u32, b: u32) -> napi::Result<String> {
   let (a, b) = (schema(a)?, schema(b)?);
   let mut out = Vec::new();
+  // what the raw schema cannot know: the described defaults (the write path takes the raw
+  // columns' defaults when a description has none)
+  let without_defaults = |table: &payload_sql_query::drizzle::Table| {
+    let mut table = table.clone();
+    for column in table.columns.values_mut() {
+      column.defaults = None;
+    }
+    table
+  };
   for (name, table) in &a.tables {
     match b.tables.get(name) {
       None => out.push(format!("missing table {name}")),
-      Some(other) if other != table => out.push(format!("table {name}: {table:?} != {other:?}")),
+      Some(other) if without_defaults(other) != without_defaults(table) => {
+        out.push(format!("table {name}: {table:?} != {other:?}"))
+      }
       _ => {}
     }
   }

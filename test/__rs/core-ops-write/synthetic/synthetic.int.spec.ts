@@ -10,10 +10,13 @@
  */
 import type { Payload } from 'payload'
 
+import { createPayloadRequest } from 'payload'
+
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { validateOperation } from '../../../../packages/payload/src/collections/operations/validate.js'
 import { test } from '../../../__helpers/int/vitest.js'
 import { getStats } from '../shadow.js'
 
@@ -106,6 +109,14 @@ const seed = async (payload: Payload, collection: string, extra: Record<string, 
 }
 
 const hookedLike = ['hooked', 'trashable', 'restricted']
+
+const seedUsername = (payload: Payload) =>
+  payload.create({
+    collection: 'usernames' as Any,
+    context: { seeding: true },
+    data: { password: 'correct-horse-battery', username: 'existing-user' } as Any,
+    overrideAccess: true,
+  })
 
 test.suite('Rust write operations synthetic', { config: './config.ts' }, () => {
   test('should create under every context', async ({ payload }) => {
@@ -462,6 +473,88 @@ test.suite('Rust write operations synthetic', { config: './config.ts' }, () => {
         payload.validate({ collection: 'hooked' as Any, context: { ...(context ?? {}) }, ...rest }),
       )
     }
+    // runValidationLifecycle's hook loops, traversals and callbacks under every context, for a
+    // new document and an existing one; the operation itself (not the Local API) for the
+    // `onValidationData` / `skipMutationHooks` / `validationOperation` arguments.
+    for (const [i, context] of contexts.entries()) {
+      for (const id of [undefined, docs[1].id]) {
+        await rec(`validate hooked context ${i} ${id === undefined ? 'new' : 'existing'}`, () =>
+          payload.validate({
+            id,
+            collection: 'hooked' as Any,
+            context: { ...context },
+            data: { title: `v${i}` },
+            overrideAccess: false,
+          } as Any),
+        )
+      }
+      for (const variant of [
+        { skipMutationHooks: true },
+        { validationOperation: 'create' },
+        { id: docs[1].id, validationOperation: 'update' },
+        // a field beforeChange hook changing the value: `processedData` (onDataProcessed) differs
+        // from the data the lifecycle passed in
+        { fieldReplace: true, id: docs[1].id, validationOperation: 'update' },
+      ]) {
+        const { fieldReplace, ...operationArgs } = variant as Any
+        const req = await createPayloadRequest({
+          context: { ...context, ...(fieldReplace ? { fieldReplace: 'title.beforeChange' } : {}) },
+          payload,
+        })
+        await rec(`validateOperation hooked context ${i} ${JSON.stringify(variant)}`, () =>
+          validateOperation({
+            collection: payload.collections['hooked' as Any],
+            data: { title: `o${i}` },
+            onValidationData: (data: Any) => {
+              outcomes.push(`onValidationData ${i} ${normalize(data)}`)
+            },
+            req,
+            ...operationArgs,
+          } as Any),
+        )
+      }
+    }
+    // the auth `beforeValidation` (ensureUsernameOrEmail) and unique-constraint `validateData`
+    for (const id of [undefined, (await seedUsername(payload)).id]) {
+      await rec(
+        `validate usernames without username ${id === undefined ? 'new' : 'existing'}`,
+        () =>
+          payload.validate({
+            id,
+            collection: 'usernames' as Any,
+            data: { name: 'n', username: '' } as Any,
+          } as Any),
+      )
+    }
+    await rec('validate accounts new without email', () =>
+      payload.validate({
+        collection: 'accounts' as Any,
+        data: { password: 'correct-horse-battery' } as Any,
+      }),
+    )
+    await rec('validate accounts new', () =>
+      payload.validate({
+        collection: 'accounts' as Any,
+        data: { email: 'v@example.com', password: 'correct-horse-battery' } as Any,
+      }),
+    )
+    const account = await payload.create({
+      collection: 'accounts' as Any,
+      data: { email: 'taken@example.com', password: 'correct-horse-battery' } as Any,
+    })
+    await rec('validate accounts duplicate email', () =>
+      payload.validate({
+        collection: 'accounts' as Any,
+        data: { email: 'taken@example.com', password: 'correct-horse-battery' } as Any,
+      }),
+    )
+    await rec('validate accounts existing', () =>
+      payload.validate({
+        id: account.id,
+        collection: 'accounts' as Any,
+        data: { email: '' } as Any,
+      }),
+    )
     const draft = await payload.create({
       collection: 'drafts' as Any,
       data: { title: 'vd' } as Any,

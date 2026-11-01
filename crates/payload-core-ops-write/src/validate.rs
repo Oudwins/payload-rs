@@ -7,6 +7,7 @@ use payload_core_runtime::js::{self, JsResult, Local, Val};
 
 use crate::common::traverse;
 use crate::host::{self, at, call, call_fn, call_val, get, get_val, val};
+use crate::validation_lifecycle::{LifecycleArgs, run_validation_lifecycle};
 
 /// `validateOperation(args)`: returns its promise.
 pub fn validate(args: Local) -> JsResult<Local> {
@@ -128,20 +129,25 @@ async fn scoped(args: Val) -> JsResult<Val> {
     call_val("validateOriginalFromSource", &[req.get(), source_data.get(), doc_with_locales.get(), cc.get()])?
   };
 
-  // return runValidationLifecycle({ ... }) (the promise, not awaited)
-  call_val(
-    "runValidationLifecycle",
-    &[
-      id.get(),
-      cc.get(),
-      doc_with_locales.get(),
-      incoming_data.get(),
-      on_validation_data.get(),
-      original_doc.get(),
-      override_access.get(),
-      req.get(),
-      skip_mutation_hooks.get(),
-      validation_operation.get(),
-    ],
-  )
+  // return runValidationLifecycle({ id, beforeValidation, collection, ... }) (the promise, not
+  // awaited: the async function adopts it)
+  let callbacks = call("validateLifecycleCallbacks", &[cc.get(), id.get(), original_doc.get(), req.get()])?;
+  let before_validation = get_val(callbacks, "beforeValidation")?;
+  let validate_data = get_val(callbacks, "validateData")?;
+  val(run_validation_lifecycle(LifecycleArgs {
+    traverse: host::traversal,
+    id,
+    before_validation,
+    collection: cc,
+    doc_with_locales,
+    global: Val::Null,
+    incoming_data,
+    on_validation_data,
+    original_doc,
+    override_access,
+    req,
+    skip_mutation_hooks,
+    validate_data,
+    validation_operation,
+  })?)
 }

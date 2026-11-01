@@ -321,6 +321,15 @@ const variantsFor = (payload: Payload): Variant[] => {
       withID: true,
     },
     {
+      name: 'traverse-fields-entry-nested',
+      docMode: 'doc',
+      onFieldAccess: true,
+      operation: 'update',
+      overrideAccess: false,
+      viaTraverseFields: 'nested',
+      withID: true,
+    },
+    {
       name: 'restoring',
       context: { isRestoringVersion: true },
       docMode: 'doc',

@@ -3,6 +3,7 @@
 //! the TS `async` functions).
 
 use payload_core_ops::common::AccessArgs;
+use payload_core_ops_write::validation_lifecycle::{LifecycleArgs, run_validation_lifecycle};
 use payload_core_runtime::executor::{await_js, spawn};
 use payload_core_runtime::js::{self, JsResult, Local, Val};
 
@@ -88,20 +89,25 @@ async fn scoped(args: Val) -> JsResult<Val> {
     await_js(p).await?
   };
 
-  call_val(
-    "globalRunValidationLifecycle",
-    &[
-      doc_with_locales.get(),
-      global_config.get(),
-      incoming_data.get(),
-      on_validation_data.get(),
-      original_doc.get(),
-      override_access.get(),
-      req.get(),
-      skip_mutation_hooks.get(),
-      validation_operation.get(),
-    ],
-  )
+  // return runValidationLifecycle({ collection: null, docWithLocales, global: globalConfig, ... })
+  // (the promise, not awaited: the async function adopts it). The lifecycle is the write
+  // operations crate's port (its host helpers: `getOpsGlobal()` initializes that binding first).
+  val(run_validation_lifecycle(LifecycleArgs {
+    traverse: |name, args| call("fieldTraversal", &[js::string(name), args]),
+    id: Val::Undefined,
+    before_validation: Val::Undefined,
+    collection: Val::Null,
+    doc_with_locales,
+    global: global_config,
+    incoming_data,
+    on_validation_data,
+    original_doc,
+    override_access,
+    req,
+    skip_mutation_hooks,
+    validate_data: Val::Undefined,
+    validation_operation,
+  })?)
 }
 
 /// `resolveValidationGlobalSource({ slug, accessResult, draft, globalConfig, overrideAccess, req })`

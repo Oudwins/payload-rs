@@ -2,7 +2,7 @@
 
 use payload_engine::error::EngineError;
 use payload_engine::js::JsVal;
-use payload_engine::sql::schema::RawSchema;
+use crate::sql::Schema;
 use payload_sql_write::encode_value;
 use serde_json::{Value as Json, json};
 
@@ -44,7 +44,7 @@ fn match_unique_message(message: &str) -> Option<(String, String)> {
 
 /// `handleUpsertError`: unique constraint violations become a
 /// `ValidationError`, everything else is re-thrown unchanged.
-pub fn handle_upsert_error(schema: &RawSchema, table_name: &str, ctx: &ErrorContext, error: ExecError) -> EngineError {
+pub fn handle_upsert_error(schema: Schema<'_>, table_name: &str, ctx: &ErrorContext, error: ExecError) -> EngineError {
   let db = match error {
     ExecError::Db(db) => db,
     ExecError::Engine(e) => return e,
@@ -125,13 +125,13 @@ mod db_tests {
       Some(RawTable { name: "posts".into(), columns, foreign_keys: Map::new(), indexes: Map::new() }),
     );
     schema.field_constraints.insert("posts".into(), IndexMap::from([("slug_idx".to_string(), "slug".to_string())]));
-    let t = require_table(&schema, "posts").unwrap();
+    let t = require_table((&schema).into(), "posts").unwrap();
     let mut exec = Executor::new(&conn);
     let row: payload_sql_write::Row = [("slug".to_string(), RowValue::Value(JsVal::str("a")))].into_iter().collect();
     exec.insert(t, std::slice::from_ref(&row), None).unwrap();
     let err = exec.insert(t, std::slice::from_ref(&row), None).unwrap_err();
     let ctx = ErrorContext { id: JsVal::Undefined, collection_slug: Some("posts".into()), ..Default::default() };
-    let e = handle_upsert_error(&schema, "posts", &ctx, err);
+    let e = handle_upsert_error((&schema).into(), "posts", &ctx, err);
     assert_eq!(e.name, "ValidationError");
     assert_eq!(
       e.data.unwrap(),

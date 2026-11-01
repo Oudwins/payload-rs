@@ -4,7 +4,7 @@
 
 use indexmap::{IndexMap, IndexSet};
 use payload_engine::error::{EngineError, Result};
-use payload_engine::js::{JsVal, Obj, num_to_json};
+use payload_engine::js::{JsVal, Obj};
 use payload_engine::strings::to_snake_case;
 use serde_json::json;
 
@@ -644,10 +644,10 @@ pub(crate) fn build_polymorphic_join_query(
     let mut select = Sql::raw(if should_deduplicate { "select distinct " } else { "select " });
     select.push(&col("id")).push_str(", ");
     select.push(&col(&on_path)).push_str(" as ").push(&Sql::ident(&on_path)).push_str(", ");
-    select.push_param(serde_json::Value::String(collection.clone())).push_str(" as \"relationTo\", ");
+    select.push_param(JsVal::str(collection.as_str())).push_str(" as \"relationTo\", ");
     match table.columns.get(&sort_path) {
       Some(_) => select.push(&col(&sort_path)),
-      None => select.push_param(serde_json::Value::Null),
+      None => select.push_param(JsVal::Null),
     };
     select.push_str(" as \"sortPath\" from ").push(&Sql::ident(&table.db_name));
 
@@ -668,7 +668,7 @@ pub(crate) fn build_polymorphic_join_query(
         Some(sql::eq(&Sql::column(&table.db_name, &table.columns["id"].name), &locale_col("_parentID")?)),
         match a.locale {
           Some(l) if l != "all" => {
-            Some(sql::eq(&locale_col("_locale")?, &Sql::param(serde_json::Value::String(l.to_string()))))
+            Some(sql::eq(&locale_col("_locale")?, &Sql::param(JsVal::str(l))))
           }
           _ => None,
         },
@@ -698,13 +698,13 @@ pub(crate) fn build_polymorphic_join_query(
   documents.push_str(") ").push_str(&escape_name(&sorted_alias));
   documents.push_str(&format!("\n      WHERE \"{sorted_alias}\".\"{on_path}\" = \"{}\".\"id\"", a.current_table_name));
   if a.limit != 0.0 && !a.limit.is_nan() {
-    documents.push_str(" LIMIT ").push_param(num_to_json(a.limit));
+    documents.push_str(" LIMIT ").push_param(JsVal::Num(a.limit));
   }
   if a.page.truthy() && a.limit != 0.0 {
     let page = a.page.as_num().unwrap_or(f64::NAN);
     let offset = (page - 1.0) * a.page_size.unwrap_or(a.limit);
     if offset > 0.0 {
-      documents.push_str(" OFFSET ").push_param(num_to_json(offset));
+      documents.push_str(" OFFSET ").push_param(JsVal::Num(offset));
     }
   }
   documents.push_str(&format!("\n    ) AS \"{sub_query_alias}\"\n  )"));

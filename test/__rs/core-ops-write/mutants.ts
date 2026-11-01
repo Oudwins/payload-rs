@@ -10,6 +10,11 @@
  * 5. updateDocument does not stamp `updatedAt` before `db.updateOne` (NOT detectable: the key
  *    already exists from the field hook and near-now timestamps are canonicalized as `recent`).
  * 6. auth collections: results do not get the `collection` property.
+ * 7. runValidationLifecycle: collection hook args without `originalDoc`.
+ * 8. runValidationLifecycle: `onDataProcessed` does not update `processedData` (validation data
+ *    from the pre-beforeChange data).
+ * 9. runValidationLifecycle: `beforeValidation` (the auth `ensureUsernameOrEmail` callback) is
+ *    not passed.
  */
 import { initTransaction } from '../../../packages/payload/src/utilities/initTransaction.js'
 
@@ -54,6 +59,39 @@ export const mutantHost = (n: number, host: Record<string, Any>): Record<string,
       return { ...host, setUpdatedAtNow: () => {} }
     case 6:
       return { ...host, withCollection: (doc: Any) => doc }
+    case 7:
+      return {
+        ...host,
+        lifecycleCollectionHookArgs: (
+          collection: Any,
+          req: Any,
+          data: Any,
+          validationOperation: Any,
+        ) => ({
+          collection,
+          context: req.context,
+          data,
+          operation: validationOperation,
+          req,
+        }),
+      }
+    case 8:
+      return {
+        ...host,
+        lifecycleBeforeChangeArgs: (...args: Any[]) => {
+          const result = host.lifecycleBeforeChangeArgs(...args)
+          result.onDataProcessed = () => {}
+          return result
+        },
+      }
+    case 9:
+      return {
+        ...host,
+        validateLifecycleCallbacks: (...args: Any[]) => ({
+          ...host.validateLifecycleCallbacks(...args),
+          beforeValidation: undefined,
+        }),
+      }
     default:
       throw new Error(`unknown RS_OPS_WRITE_MUTANT ${n}`)
   }

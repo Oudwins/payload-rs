@@ -105,7 +105,7 @@ fn run_select(conn: &rusqlite::Connection, select: &payload_sql_query::Select) -
   let q = select.render().map_err(engine_err)?;
   let fail = |e: rusqlite::Error| ("SqliteError".to_string(), format!("{e}: {}", q.sql));
   let mut stmt = conn.prepare(&q.sql).map_err(fail)?;
-  let params: Vec<DbValue> = q.params.iter().map(to_db).collect();
+  let params: Vec<DbValue> = q.params.iter().map(|p| payload_sql_query::bind_value(p).map(|v| to_db(&v))).collect::<Result<_, _>>().map_err(engine_err)?;
   let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| Ok(cell_to_json(row.get_ref(0)?))).map_err(fail)?;
   rows.collect::<Result<Vec<_>, _>>().map_err(fail)
 }
@@ -144,7 +144,10 @@ fn errors_match(ts: &Failure, rs: &Failure) -> bool {
 /// Bound params as the TS spec encodes them, or the libsql bind error class.
 fn rendered(sql: &Sql) -> Json {
   match sql.render() {
-    Ok(q) => json!({ "params": q.params.iter().map(SqlValue::to_json).collect::<Vec<_>>(), "sql": q.sql }),
+    Ok(q) => match q.params.iter().map(payload_sql_query::bind_value).collect::<Result<Vec<_>, _>>() {
+      Ok(params) => json!({ "params": params.iter().map(SqlValue::to_json).collect::<Vec<_>>(), "sql": q.sql }),
+      Err(e) => json!({ "bindError": e.name }),
+    },
     Err(e) => json!({ "bindError": e.name }),
   }
 }
@@ -564,25 +567,11 @@ fn differential_against_ts_adapter() {
   assert_eq!(grand_matched, grand_total, "differential mismatches (see output above)");
 }
 
-/// drizzle `mapFromDriverValue` of the column classes Payload's raw columns build (`boolean`,
-/// `jsonb` / `geometry`, `numeric`); `null` is not mapped.
+/// drizzle `mapFromDriverValue` of the column (`null` is not mapped), with the decoders the engine
+/// uses in production (payload-sql-find `decode_js`: V8's `JSON.parse`, custom columns, bigints).
 fn map_from_driver(col: &payload_sql_query::Column, v: JsVal) -> payload_engine::error::Result<JsVal> {
-  use payload_sql_query::drizzle::Decoder;
-  use payload_sql_query::js_ops::{js_number, js_string};
   if v.is_null() {
     return Ok(v);
   }
-  Ok(match col.decoder {
-    Decoder::Boolean => JsVal::Bool(js_number(&v) == 1.0),
-    Decoder::Json => {
-      let json: Json = serde_json::from_str(&js_string(&v))
-        .map_err(|e| payload_engine::error::EngineError::new("SyntaxError", e.to_string()))?;
-      JsVal::from_json(&json)
-    }
-    Decoder::Number => match v {
-      JsVal::Num(_) => v,
-      other => JsVal::Num(js_number(&other)),
-    },
-    _ => v,
-  })
+  payload_sql_find::exec::decode_js(col.decoder, payload_sql_find::exec::Driver::Js(v), &payload_engine::host::NoHost)
 }

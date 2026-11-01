@@ -25,7 +25,7 @@ async fn run(args: Val) -> JsResult<Val> {
     let should_commit = truthy(&init_transaction(&req).await?);
 
     // beforeOperation - Global
-    args = config_hooks(&global_config, "beforeOperation", args.clone(), |args| {
+    args = config_hooks(&global_config, "beforeOperation", "globalConfig", args.clone(), |args| {
       call(
         "globalBeforeOperationReqArgs",
         &[args, req.get(), global_config.get(), js::string("restoreVersion"), override_access.get()],
@@ -79,7 +79,7 @@ async fn run(args: Val) -> JsResult<Val> {
       call("pushValue", &[update_access_results.get(), js::boolean(true)])?;
     } else {
       let statuses_to_authorize = call_val("statusesToAuthorize", &[restored_statuses.get()])?;
-      let mut statuses = ForOf::new(statuses_to_authorize.get())?;
+      let mut statuses = ForOf::of(statuses_to_authorize.get(), "statusesToAuthorize")?;
       while let Some(status) = statuses.next()? {
         let status = val(status)?;
         let body = async {
@@ -104,7 +104,7 @@ async fn run(args: Val) -> JsResult<Val> {
     set(g(&req, "context")?, "isRestoringVersion", js::boolean(true))?;
 
     // Update global
-    let mut results = ForOf::new(update_access_results.get())?;
+    let mut results = ForOf::of(update_access_results.get(), "updateAccessResults")?;
     while let Some(update_access_result) = results.next()? {
       let update_access_result = val(update_access_result)?;
       let body = async {
@@ -170,7 +170,7 @@ async fn run(args: Val) -> JsResult<Val> {
     .await?;
 
     // afterRead - Global
-    result = config_hooks(&global_config, "afterRead", result, |doc| {
+    result = config_hooks(&global_config, "afterRead", "globalConfig", result, |doc| {
       call("globalReadHookArgs", &[req.get(), doc, global_config.get(), override_access.get()])
     })
     .await?;
@@ -179,7 +179,7 @@ async fn run(args: Val) -> JsResult<Val> {
     result = await_helper("globalAfterChange", &[req.get(), result.get(), result.get(), global_config.get(), previous_doc.get()]).await?;
 
     // afterChange - Global
-    result = config_hooks(&global_config, "afterChange", result, |doc| {
+    result = config_hooks(&global_config, "afterChange", "globalConfig", result, |doc| {
       call(
         "globalAfterChangeHookArgs",
         &[req.get(), doc, doc, global_config.get(), override_access.get(), previous_doc.get()],

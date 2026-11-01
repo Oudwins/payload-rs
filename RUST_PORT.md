@@ -127,3 +127,109 @@ What this means for maintenance:
   (`test/__rs/sqlite/client.int.spec.ts`: compile options, function and module lists, extension
   functions, encryption). `PRAGMA compile_options` differs from the reference only in its
   `COMPILER=` entry.
+
+## Packaging
+
+How the engine reaches a real install (`npm i payload @payloadcms/db-sqlite ...`) with no API
+change. Users set `PAYLOAD_ENGINE=rs` and nothing else. Verified by
+`node test/__rs/packaging/run.mjs`. That script packs the packages, installs them into an app
+under `/tmp`, and runs a Local API scenario twice with `PAYLOAD_ENGINE` unset and twice with
+`PAYLOAD_ENGINE=rs`. Each `rs` run is diffed exactly against both TS runs. See
+`packages/engine-rs/README.md`.
+
+### What breaks in a built install today
+
+1. **`@payloadcms/engine-rs` exported `src/*.ts`.** `@payloadcms/db-sqlite` imports it statically
+   (`withRustEngine`, `isRustEngineAdapter`, `createClient`), so every sqlite user loads it, even
+   with `PAYLOAD_ENGINE` unset. Node refuses `.ts` under `node_modules`
+   (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). It was also `private`, so `script:pack --all`
+   and the release skip it, and db-sqlite's dependency on it cannot be installed. Fixed in
+   engine-rs: `dist` build, `publishConfig.exports`, `files`. `private` is still to do (see below).
+2. **engine-rs imports payload / drizzle internals by monorepo path.** `../../../payload/src/**`
+   (121 modules) and `../../../drizzle/src/**` (4 modules, including the
+   `InternalBlockTableNameIndex` symbol) are not in an install, and neither package exports them.
+   The identity of these modules matters: error classes, symbols and the hook modules' state are
+   shared. Fixed in the engine-rs build: these paths are rewritten to `payload/internal/*` and
+   `@payloadcms/drizzle/internal/*`. Those packages must export that subpath (edit B). Two more
+   imports are rewritten the same way: payload's `jose` file, imported by path, and
+   `bson-objectid` resolved through `payload/package.json`.
+3. **payload / richtext-lexical import engine-rs by monorepo path.** In `dist`,
+   `'../../../../engine-rs/src/ops/index.js'` resolves to `node_modules/engine-rs/src/...`. That
+   path does not exist: the package is scoped and ships no `src`. `validations.ts`'s default
+   addon `'../../../engine-rs/payload-engine.node'` breaks the same way. With `PAYLOAD_ENGINE=rs`,
+   `import 'payload'` throws `Cannot find module '../../../engine-rs/payload-engine.node'`
+   (edit A).
+4. With `PAYLOAD_ENGINE` unset, a sqlite install also fails without edit B:
+   `ERR_PACKAGE_PATH_NOT_EXPORTED './internal/errors/APIError.js'`. The cause is that db-sqlite
+   always loads engine-rs's adapter module.
+
+### Edit A: dispatch by package name (core / validate / lexical owners)
+
+Each line keeps its `import(/* @vite-ignore */ /* webpackIgnore: true */ specifier)` and only
+changes the string:
+
+| old specifier                                     | new specifier                                 | files (line)                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `'../../../../engine-rs/src/ops/index.js'`        | `'@payloadcms/engine-rs/ops'`                 | `packages/payload/src/collections/operations/`: count.ts:126, countVersions.ts:120, docAccess.ts:78, find.ts:410, findByID.ts:420, findDistinct.ts:371, findVersionByID.ts:291, findVersions.ts:289                                                                                                                                                                                                                                                         |
+| `'../../../engine-rs/src/ops/index.js'`           | `'@payloadcms/engine-rs/ops'`                 | `packages/payload/src/auth/executeAccess.ts:66`                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `'../../../../engine-rs/src/ops-write/index.js'`  | `'@payloadcms/engine-rs/ops-write'`           | `packages/payload/src/collections/operations/`: create.ts:749, delete.ts:597, deleteByID.ts:376, duplicate.ts:39, restoreVersion.ts:490, update.ts:572, updateByID.ts:430, validate.ts:233                                                                                                                                                                                                                                                                  |
+| `'../../../../engine-rs/src/ops-global/index.js'` | `'@payloadcms/engine-rs/ops-global'`          | `packages/payload/src/globals/operations/`: countGlobalVersions.ts:110, docAccess.ts:61, findOne.ts:300, findVersionByID.ts:206, findVersions.ts:210, restoreVersion.ts:292, update.ts:695, validate.ts:224; `packages/payload/src/auth/operations/`: access.ts:33, auth.ts:62, forgotPassword.ts:305, init.ts:43, login.ts:437, logout.ts:121, me.ts:125, refresh.ts:215, registerFirstUser.ts:141, resetPassword.ts:333, unlock.ts:166, verifyEmail.ts:91 |
+| `'../../../../../engine-rs/src/runtime/hooks.js'` | `'@payloadcms/engine-rs/runtime/hooks'`       | `packages/payload/src/fields/hooks/`: afterChange/index.ts:35, afterRead/index.ts:44, beforeChange/index.ts:44, beforeDuplicate/index.ts:26, beforeValidate/index.ts:33                                                                                                                                                                                                                                                                                     |
+| `'../../engine-rs/src/runtime/hooks.js'`          | `'@payloadcms/engine-rs/runtime/hooks'`       | `packages/richtext-lexical/src/hooks.ts:29`                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `'../../../engine-rs/payload-engine.node'`        | `'@payloadcms/engine-rs/payload-engine.node'` | `packages/payload/src/fields/validations.ts:1118` (the `createRequire(import.meta.url)` default)                                                                                                                                                                                                                                                                                                                                                            |
+
+The line numbers are from `32d3954` plus the working tree on 2026-11-01. Check them with
+`grep -rn "engine-rs/src\|engine-rs/payload-engine" packages/payload/src packages/richtext-lexical/src`.
+The result must be empty afterwards.
+
+### Edit B: manifests, then `pnpm install`
+
+- `packages/payload/package.json`:
+  - add `"@payloadcms/engine-rs": "workspace:*"` to `dependencies`.
+  - add `"./internal/*": { "import": "./dist/*", "default": "./dist/*" }` to
+    `publishConfig.exports`. The dev `exports` stays as it is, because engine-rs `src` keeps its
+    relative imports.
+- `packages/drizzle/package.json`: add the same `"./internal/*"` entry to
+  `publishConfig.exports`.
+- `packages/richtext-lexical/package.json`: add `"@payloadcms/engine-rs": "workspace:*"` to
+  `dependencies`.
+- Run `pnpm install`. It links `@payloadcms/engine-rs` into `packages/payload/node_modules` and
+  `packages/richtext-lexical/node_modules`, which edit A needs in the monorepo. It also records
+  the new engine-rs dependencies (`@payloadcms/drizzle`, `jose`, optional peer `@libsql/client`)
+  in the lockfile. Until then, `--frozen-lockfile` reports the lockfile as outdated.
+
+engine-rs depends on `@payloadcms/drizzle` and peer-depends on `payload`. They are not
+peer-resolved, so pnpm keeps one engine-rs instance whether payload, db-sqlite or
+richtext-lexical pulls it in. That instance shares payload's and drizzle's modules: `run.mjs`
+fails if any Payload package resolves from more than one place. `jose` is pinned to payload's
+version (`buildDist.mjs` checks this), so `jose/jwt/decode` is the same file payload loads.
+
+### Release (release owner)
+
+- Remove `"private": true` from `packages/engine-rs/package.json`. Add `'engine-rs'` to
+  `tools/releaser/src/lib/publishList.ts` ahead of its dependents (payload, db-sqlite,
+  richtext-lexical) and after `drizzle`. `publishList.spec.ts` fails if only one of the two
+  changes lands.
+- `test/setupProd.ts`: add `'@payloadcms/engine-rs': 'payloadcms-engine-rs-*'` to
+  `tgzToPkgNameMap`. Also make the overrides cover transitive packed packages. Otherwise
+  `prepare-run-test-against-prod` installs db-sqlite's `@payloadcms/engine-rs` from the registry.
+- The addon: the tarball ships the one `payload-engine.node` for the build machine. Releasing
+  needs napi per-platform packages, i.e. optional dependencies plus a loader that picks
+  `process.platform` / `process.arch`. Every loader must agree on one path: `native.ts`,
+  `sqlite/native.ts`, the bindings in `runtime/`, `ops*/`, `query/` and `validate/`, plus
+  payload's `validations.ts`.
+
+### Not covered yet
+
+- Next.js. `next dev` externalizes payload, db-sqlite and drizzle but bundles richtext-lexical.
+  `next build` bundles payload too (`payload/build-config`). A bundled payload cannot share its
+  internals with an external engine-rs: there would be two payload instances. So with
+  `PAYLOAD_ENGINE=rs`, `withPayload` will have to externalize payload, drizzle, db-sqlite and
+  engine-rs, or let the bundler see literal engine-rs imports. Under pnpm, the bundled
+  richtext-lexical's runtime `import('@payloadcms/engine-rs/runtime/hooks')` from `.next/` only
+  resolves when engine-rs is hoisted. A simpler design: payload's exported `*TraverseFields`
+  dispatch, and richtext-lexical drops its own dispatch. This is unverified.
+- npm / yarn hoisted layouts are expected to work (single top-level copies) but have not been
+  run.
+- `PAYLOAD_ENGINE_ADDON` / `PAYLOAD_CORE_RUNTIME_ADDON` are resolved by each loader relative to
+  its own module, not the cwd. Pass absolute paths.

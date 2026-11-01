@@ -23,7 +23,8 @@ const DATABASE_ADAPTER_SPECIFIER = /^(\.{1,2}\/)+databaseAdapter\.js$/
  * before the async hooks of loaders like tsx or @swc-node/register, which
  * short-circuit resolution without calling the next hook.
  *
- * @param {{ dbSqliteTarget: string; harnessDir: string; target: string; testDir: string }} paths
+ * @param {{ dbSqliteTarget?: string; harnessDir: string; target: string; testDir: string }} paths
+ *   `dbSqliteTarget` unset: `@payloadcms/db-sqlite` is not redirected
  */
 export const createResolveHook = (paths) =>
   function resolve(specifier, context, nextResolve) {
@@ -33,7 +34,7 @@ export const createResolveHook = (paths) =>
       parent.startsWith(paths.testDir) &&
       !parent.startsWith(paths.harnessDir) &&
       !parent.includes('/node_modules/')
-    if (isFromTestModule && specifier === '@payloadcms/db-sqlite') {
+    if (isFromTestModule && paths.dbSqliteTarget && specifier === '@payloadcms/db-sqlite') {
       return { shortCircuit: true, url: paths.dbSqliteTarget }
     }
     const resolved = nextResolve(specifier, context)

@@ -56,7 +56,6 @@ thread_local! {
   static AWAIT_HELPER: RefCell<Option<Persist>> = const { RefCell::new(None) };
   static THEN_RETURN: RefCell<Option<Persist>> = const { RefCell::new(None) };
   static STATS: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
-  static ENTRIES: Cell<u64> = const { Cell::new(0) };
 }
 
 struct Slab {
@@ -85,20 +84,15 @@ pub fn stats() -> (u64, u64) {
   STATS.with(|s| s.get())
 }
 
-/// Counts one call of an exported core engine function (the bindings' call wrappers do), so tests
-/// can tell whether a run reached the engine at all (see [`entries`]).
-pub fn count_entry() {
-  ENTRIES.with(|e| e.set(e.get() + 1));
-}
-
-/// Takes back one [`count_entry`] (for exports that are not engine work, like `stats`).
+/// Takes back one entry count (for exports that are not engine work, like `stats`).
 pub fn uncount_entry() {
-  ENTRIES.with(|e| e.set(e.get().saturating_sub(1)));
+  crate::js::uncount_entry();
 }
 
-/// Number of [`count_entry`] calls on this thread.
+/// Number of Node-API entries into the core engine crates on this thread (counted by
+/// [`crate::js::set_env`]: exports of every binding, validator natives, resume callbacks).
 pub fn entries() -> u64 {
-  ENTRIES.with(|e| e.get())
+  crate::js::entries()
 }
 
 /// Equivalent of calling a JS `async` function: runs `future` synchronously until its first

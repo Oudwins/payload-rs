@@ -128,7 +128,7 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
     }
 
     // beforeLogin - Collection
-    user = config_hooks(&collection_config, "beforeLogin", user.clone(), |user| {
+    user = config_hooks(&collection_config, "beforeLogin", "collectionConfig", user.clone(), |user| {
       call("loginHookArgs", &[args.get(), user, js::undefined(), js::boolean(false)])
     })
     .await?;
@@ -136,7 +136,7 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
     set(req.get(), "user", user.get())?;
 
     // afterLogin - Collection
-    user = config_hooks(&collection_config, "afterLogin", user.clone(), |user| {
+    user = config_hooks(&collection_config, "afterLogin", "collectionConfig", user.clone(), |user| {
       call("loginHookArgs", &[args.get(), user, token.get(), js::boolean(true)])
     })
     .await?;
