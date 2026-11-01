@@ -383,3 +383,4 @@ test/evals/eval-results/runs/
 /target
 .rs-baseline
 packages/engine-rs/*.node
+.metadata_never_index

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /**
- * Per-suite markdown table for packages/engine-rs/MONGO_ENGINE_STATUS.md from runSuites.mjs
- * summaries (later tags override earlier ones per file, i.e. solo reruns):
+ * Per-suite markdown table for packages/engine-rs/MONGO_ENGINE_STATUS.md from run summaries of
+ * test/__rs/mongo-adapter/runSuites.mjs or test/__rs/mongo-harness/runSuites.mjs (same per-file
+ * shape). Each `--column <name>=<tag>[,<tag>...]` is one column; later tags override earlier ones per
+ * file (solo reruns). Totals and every difference / load error are listed below the table.
  *
  *   node test/__rs/mongo-adapter/statusTable.mjs --baseline .rs-baseline/mongodb-all.json \
- *     --loopback madl2,madl3,madl4 --native madn1
+ *     --column loopback=madl2,madl3,madl4 --column native=madn1 --column 'engine rs'=madrs1
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -16,6 +18,7 @@ const option = (name) => {
   const index = argv.indexOf(name)
   return index === -1 ? undefined : argv[index + 1]
 }
+const columnArgs = argv.flatMap((arg, i) => (arg === '--column' ? [argv[i + 1]] : []))
 
 const readRuns = (tags) => {
   const files = {}
@@ -33,8 +36,10 @@ const baseline = new Map(
     (result) => [path.relative(root, result.name), result],
   ),
 )
-const loopback = readRuns(option('--loopback'))
-const native = readRuns(option('--native'))
+const columns = columnArgs.map((arg) => {
+  const [name, tags] = arg.split('=')
+  return { name, runs: readRuns(tags) }
+})
 
 const countsOf = (fileResult) => {
   const counts = { failed: 0, passed: 0, skipped: 0 }
@@ -45,36 +50,43 @@ const countsOf = (fileResult) => {
 }
 const cell = (entry) =>
   entry
-    ? `${entry.counts.passed}/${entry.counts.failed}/${entry.counts.skipped}${entry.differences.length ? ` **${entry.differences.length} diff**` : ''}${entry.loadError ? ' LOAD' : ''}`
+    ? `${entry.counts.passed}/${entry.counts.failed}/${entry.counts.skipped}${entry.differences?.length ? ` **${entry.differences.length} diff**` : ''}${entry.loadError ? ' LOAD' : ''}`
     : '-'
 
 const files = [
-  ...new Set([...baseline.keys(), ...Object.keys(loopback), ...Object.keys(native)]),
+  ...new Set([...baseline.keys(), ...columns.flatMap((column) => Object.keys(column.runs))]),
 ].sort()
 const lines = [
-  '| file | TS baseline p/f/s | loopback p/f/s | native p/f/s | native engine calls |',
-  '|---|---|---|---|---|',
+  `| file | TS baseline p/f/s | ${columns.map((column) => `${column.name} p/f/s`).join(' | ')} |`,
+  `|---|---|${columns.map(() => '---').join('|')}|`,
 ]
-const totals = { loopbackDiffs: 0, nativeDiffs: 0, nativeFiles: 0 }
 for (const file of files) {
-  const base = countsOf(baseline.get(file))
-  totals.loopbackDiffs += loopback[file]?.differences.length ?? 0
-  totals.nativeDiffs += native[file]?.differences.length ?? 0
-  totals.nativeFiles += native[file] ? 1 : 0
+  const base = baseline.get(file)
+  const counts = countsOf(base)
   lines.push(
-    `| ${file} | ${base.passed}/${base.failed}/${base.skipped} | ${cell(loopback[file])} | ${cell(native[file])} | ${native[file]?.engineCalls ?? '-'} |`,
+    `| ${file} | ${base ? `${counts.passed}/${counts.failed}/${counts.skipped}` : '-'} | ${columns.map((column) => cell(column.runs[file])).join(' | ')} |`,
   )
 }
 lines.push('')
-lines.push(`Totals: ${JSON.stringify(totals)}`)
-const differing = files.filter((file) => native[file]?.differences.length)
-if (differing.length) {
-  lines.push('', 'Native differences:', '')
-  for (const file of differing) {
-    for (const difference of native[file].differences) {
+for (const column of columns) {
+  const entries = Object.values(column.runs)
+  const totals = { differences: 0, engineCalls: 0, failed: 0, files: entries.length, passed: 0, skipped: 0 }
+  for (const entry of entries) {
+    totals.passed += entry.counts.passed
+    totals.failed += entry.counts.failed
+    totals.skipped += entry.counts.skipped
+    totals.differences += entry.differences?.length ?? 0
+    totals.engineCalls += entry.engineCalls ?? 0
+  }
+  lines.push(`- ${column.name}: ${JSON.stringify(totals)}`)
+  for (const [file, entry] of Object.entries(column.runs).sort()) {
+    for (const difference of entry.differences ?? []) {
       lines.push(
-        `- ${file}: ${difference.baseline} -> ${difference.status}: ${difference.name}${difference.failure ? ` (${difference.failure.slice(0, 200)})` : ''}`,
+        `  - ${file}: ${difference.baseline} -> ${difference.status}: ${difference.name}${difference.failure ? ` (${String(difference.failure).slice(0, 160)})` : ''}`,
       )
+    }
+    if (entry.loadError) {
+      lines.push(`  - ${file}: load error ${String(entry.loadError).split('\n')[0].slice(0, 160)}`)
     }
   }
 }

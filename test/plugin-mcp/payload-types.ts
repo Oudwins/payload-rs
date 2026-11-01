@@ -114,7 +114,7 @@ export interface Config {
     'payload-llm-instructions': PayloadLlmInstructionsSelect<false> | PayloadLlmInstructionsSelect<true>;
   };
   db: {
-    defaultIDType: number;
+    defaultIDType: string;
   };
   fallbackLocale: ('false' | 'none' | 'null') | false | null | ('en' | 'es' | 'fr') | ('en' | 'es' | 'fr')[];
   globals: {
@@ -160,7 +160,7 @@ export interface UserAuthOperations {
  * via the `definition` "users".
  */
 export interface User {
-  id: number;
+  id: string;
   rbac?:
     | {
         [k: string]: unknown;
@@ -172,11 +172,11 @@ export interface User {
     | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -206,15 +206,15 @@ export interface User {
  * via the `definition` "media".
  */
 export interface Media {
-  id: number;
+  id: string;
   alt?: string | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -243,14 +243,14 @@ export interface Media {
  * via the `definition` "dispatch-media".
  */
 export interface DispatchMedia {
-  id: number;
+  id: string;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -279,7 +279,7 @@ export interface DispatchMedia {
  * via the `definition` "posts".
  */
 export interface Post {
-  id: number;
+  id: string;
   /**
    * The title of the post
    */
@@ -291,7 +291,7 @@ export interface Post {
   /**
    * The author of the post
    */
-  author?: (number | null) | User;
+  author?: (string | null) | User;
   /**
    * Geographic location coordinates
    *
@@ -305,11 +305,11 @@ export interface Post {
   computedTitle?: string | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -320,17 +320,17 @@ export interface Post {
  * via the `definition` "products".
  */
 export interface Product {
-  id: number;
+  id: string;
   title?: string | null;
   description?: string | null;
   price?: number | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -340,7 +340,7 @@ export interface Product {
  * via the `definition` "rolls".
  */
 export interface Roll {
-  id: number;
+  id: string;
   /**
    * The number of sides on the die that was rolled
    */
@@ -352,14 +352,14 @@ export interface Roll {
   /**
    * The user who rolled the die
    */
-  user: number | User;
+  user: string | User;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -369,7 +369,7 @@ export interface Roll {
  * via the `definition` "modified-prompts".
  */
 export interface ModifiedPrompt {
-  id: number;
+  id: string;
   /**
    * The original prompt
    */
@@ -381,14 +381,14 @@ export interface ModifiedPrompt {
   /**
    * The user sent the prompt to modify
    */
-  user: number | User;
+  user: string | User;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -398,7 +398,7 @@ export interface ModifiedPrompt {
  * via the `definition` "returned-resources".
  */
 export interface ReturnedResource {
-  id: number;
+  id: string;
   /**
    * The URI of the resource
    */
@@ -410,14 +410,14 @@ export interface ReturnedResource {
   /**
    * The user sent the prompt to modify
    */
-  user: number | User;
+  user: string | User;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -427,16 +427,16 @@ export interface ReturnedResource {
  * via the `definition` "pages".
  */
 export interface Page {
-  id: number;
+  id: string;
   title: string;
   layout?: (HeroBlock | TextContent)[] | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -467,7 +467,7 @@ export interface TextContent {
  * via the `definition` "field-types".
  */
 export interface FieldType {
-  id: number;
+  id: string;
   /**
    * A simple text field
    */
@@ -536,7 +536,7 @@ export interface FieldType {
   /**
    * An upload field
    */
-  uploadField?: (number | null) | Media;
+  uploadField?: (string | null) | Media;
   /**
    * Text field inside a collapsible container
    */
@@ -558,11 +558,11 @@ export interface FieldType {
   requireGroupField?: boolean | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -572,7 +572,7 @@ export interface FieldType {
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
-  id: number;
+  id: string;
   key: string;
   data:
     | {
@@ -589,52 +589,52 @@ export interface PayloadKv {
  * via the `definition` "payload-locked-documents".
  */
 export interface PayloadLockedDocument {
-  id: number;
+  id: string;
   document?:
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null)
     | ({
         relationTo: 'media';
-        value: number | Media;
+        value: string | Media;
       } | null)
     | ({
         relationTo: 'dispatch-media';
-        value: number | DispatchMedia;
+        value: string | DispatchMedia;
       } | null)
     | ({
         relationTo: 'posts';
-        value: number | Post;
+        value: string | Post;
       } | null)
     | ({
         relationTo: 'products';
-        value: number | Product;
+        value: string | Product;
       } | null)
     | ({
         relationTo: 'rolls';
-        value: number | Roll;
+        value: string | Roll;
       } | null)
     | ({
         relationTo: 'modified-prompts';
-        value: number | ModifiedPrompt;
+        value: string | ModifiedPrompt;
       } | null)
     | ({
         relationTo: 'returned-resources';
-        value: number | ReturnedResource;
+        value: string | ReturnedResource;
       } | null)
     | ({
         relationTo: 'pages';
-        value: number | Page;
+        value: string | Page;
       } | null)
     | ({
         relationTo: 'field-types';
-        value: number | FieldType;
+        value: string | FieldType;
       } | null);
   globalSlug?: string | null;
   user: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   };
   updatedAt: string;
   createdAt: string;
@@ -644,10 +644,10 @@ export interface PayloadLockedDocument {
  * via the `definition` "payload-preferences".
  */
 export interface PayloadPreference {
-  id: number;
+  id: string;
   user: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   };
   key?: string | null;
   value?:
@@ -667,7 +667,7 @@ export interface PayloadPreference {
  * via the `definition` "payload-migrations".
  */
 export interface PayloadMigration {
-  id: number;
+  id: string;
   name?: string | null;
   batch?: number | null;
   updatedAt: string;
@@ -686,11 +686,11 @@ export interface PayloadLlmInstruction {
   systemInstructions?: LexicalRichText<LexicalNodes_3DE324E4> | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -992,7 +992,7 @@ export interface PayloadLlmInstructionsSelect<T extends boolean = true> {
  * via the `definition` "site-settings".
  */
 export interface SiteSetting {
-  id: number;
+  id: string;
   /**
    * The name of the site
    */
@@ -1011,11 +1011,11 @@ export interface SiteSetting {
   contactEmail?: string | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt?: string | null;
   createdAt?: string | null;

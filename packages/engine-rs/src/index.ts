@@ -13,3 +13,9 @@ export type { NativeEngine, NativeSqliteEngine, NativeSqliteEngineClass } from '
 export { applyRawSchemaRS, buildRawSchemaRS, createEngineError } from './schema.js'
 export { createFunctionRegistry, deserializeFromEngine, serializeForEngine } from './serialize.js'
 export type { FunctionRegistry } from './serialize.js'
+export {
+  getRustMongoEngineStats,
+  isRustMongoEngineAdapter,
+  mongoEngineMethods,
+  withRustMongoEngine,
+} from './mongo-adapter/index.js'

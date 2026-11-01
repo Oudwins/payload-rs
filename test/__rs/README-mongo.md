@@ -117,6 +117,10 @@ exporting `mongooseAdapter`.
 - Vitest timeouts are tripled in shadow mode (`PAYLOAD_RS_TIMEOUT_FACTOR`).
 - Reports: `<out>/reports/<file>/<test file>.jsonl` (`divergence`, `unshadowed`, `stats` records);
   `--strict` (`PAYLOAD_RS_SHADOW_STRICT=true`) throws on the first divergence.
+- TS-vs-TS over the whole int suite (135 files incl. child-process suites, `--jobs 1`): 80,203
+  shadowed calls, 3,124 database-state diffs, 0 divergences (`.rs-baseline/mongodb-shadow-ts.json`).
+  Lifecycle methods replay ObjectId counters but not the clock; pair windows are shared with child
+  processes through `PAYLOAD_RS_MONGO_SHADOW_WINDOWS_FILE` (timestamp rule across processes).
 - Self-test: `test/__rs/mongo-harness/shadow.int.spec.ts` (TS vs TS 0 divergences incl.
   transactions, upserts, geo; injected wrong values / key order / ObjectId-vs-string storage /
   thrown errors / unmirrored writes are detected; strict mode).

@@ -10,6 +10,7 @@ import { withMongoClient } from '../../../packages/engine-rs/scripts/mongo/mongo
  *   documents sorted by content then `_id` (see `contentKey`), its indexes (without `ns`) sorted by name and its options.
  */
 import { toComparable } from '../../../packages/engine-rs/src/shadow-mongo/comparable.js'
+import { withoutRacedGlobalType } from '../../../packages/engine-rs/src/shadow-mongo/index.js'
 import { createNormaliser } from '../harness/golden.js'
 
 export const createMongoNormaliser = () => {
@@ -71,6 +72,9 @@ export const dumpRows = () =>
  * so the schema dump does not race them.
  */
 const waitForModelInit = async (payload?: { db: unknown }) => {
+  if ((payload?.db as any)?.connection?.readyState !== 1) {
+    return
+  }
   const models = Object.values(
     ((payload?.db as any)?.connection?.models ?? {}) as Record<string, any>,
   )
@@ -88,7 +92,7 @@ export const dumpSchema = async (payload?: { db: unknown }) => {
         info.type === 'view'
           ? []
           : ((await db.collection(info.name).indexes()) as { name: string; ns?: unknown }[])
-              .map(({ ns: _ns, ...index }) => index)
+              .map(({ ns: _ns, ...index }) => withoutRacedGlobalType(index))
               .sort(byName)
       out[info.name] = { type: info.type, indexes, options: info.options }
     }

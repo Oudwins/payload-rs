@@ -20,6 +20,7 @@ import type {
   UpdateVersionArgs,
 } from 'payload'
 
+import { withRustMongoEngine } from '@payloadcms/engine-rs'
 import mongoose from 'mongoose'
 import { createDatabaseAdapter, defaultBeginTransaction, findMigrationDir } from 'payload'
 
@@ -341,12 +342,14 @@ export function mongooseAdapter({
     })
   }
 
-  return {
+  const adapterObj: DatabaseAdapterObj = {
     name: 'mongoose',
     allowIDOnCreate,
     defaultIDType: 'text',
     init: adapter,
   }
+
+  return process.env.PAYLOAD_ENGINE === 'rs' ? withRustMongoEngine(adapterObj) : adapterObj
 }
 
 export { compatibilityOptions } from './utilities/compatibilityOptions.js'

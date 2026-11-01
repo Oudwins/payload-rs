@@ -15,6 +15,9 @@
  * second database). PAYLOAD_DATABASE stays `mongodb`, so suites select the same tests.
  */
 import { mongooseAdapter } from '@payloadcms/db-mongodb'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 import { mongodbArgs, SUPPORTED_DATABASES } from './args.js'
 
@@ -39,6 +42,13 @@ const loader = new URL('childProcessLoader.mjs', import.meta.url).pathname
 // module instead (childProcessLoader.mjs) and build the same adapter as the test process.
 if (process.env.PAYLOAD_RS_MONGO_CHILD !== 'true') {
   process.env.PAYLOAD_RS_MONGO_HARNESS = 'true'
+  if (process.env.PAYLOAD_RS_MONGO_SHADOW === 'true') {
+    // pair windows shared with shadow adapters of child processes (timestamp rule)
+    const windowsFile = path.join(os.tmpdir(), `rs-mongo-shadow-windows-${process.pid}.jsonl`)
+    fs.rmSync(windowsFile, { force: true })
+    process.env.PAYLOAD_RS_MONGO_SHADOW_WINDOWS_FILE = windowsFile
+    process.once('exit', () => fs.rmSync(windowsFile, { force: true }))
+  }
   const nodeOptions = process.env.NODE_OPTIONS ?? ''
   if (!nodeOptions.includes(loader)) {
     process.env.NODE_OPTIONS = `${nodeOptions} --import ${loader}`.trim()

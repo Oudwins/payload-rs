@@ -192,7 +192,7 @@ export const encodeMongoTree = ({
   value,
 }: {
   hostObjectID?: (value: object) => number | undefined
-  onFunction?: (fn: Function, path: string[]) => unknown
+  onFunction?: (fn: (...args: never[]) => unknown, path: string[]) => unknown
   registry: FunctionRegistry
   value: unknown
 }): unknown => {
@@ -202,7 +202,7 @@ export const encodeMongoTree = ({
       case 'bigint':
         return { $bigint: v.toString() }
       case 'function':
-        return onFunction ? onFunction(v, [...path]) : { $fn: registry.functions.push(v) - 1 }
+        return onFunction ? onFunction(v as (...args: never[]) => unknown, [...path]) : { $fn: registry.functions.push(v) - 1 }
       case 'number':
         return Number.isFinite(v) ? v : { $num: String(v) }
       case 'object': {

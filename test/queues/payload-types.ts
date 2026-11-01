@@ -62,13 +62,13 @@ export type SupportedTimezones =
   | 'Pacific/Fiji';
 /**
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "LexicalNodes_D4A62C8A".
+ * via the `definition` "LexicalNodes_3E1B867C".
  */
-export type LexicalNodes_D4A62C8A =
+export type LexicalNodes_3E1B867C =
   | SerializedTextNode
   | SerializedTabNode
   | SerializedLineBreakNode
-  | SerializedParagraphNode<LexicalNodes_D4A62C8A>
+  | SerializedParagraphNode<LexicalNodes_3E1B867C>
   | SerializedHorizontalRuleNode
   | {
       type: 'upload';
@@ -79,7 +79,7 @@ export type LexicalNodes_D4A62C8A =
       version?: number;
       [k: string]: unknown;
     }
-  | SerializedQuoteNode<LexicalNodes_D4A62C8A>
+  | SerializedQuoteNode<LexicalNodes_3E1B867C>
   | SerializedRelationshipNode<
       | 'posts'
       | 'simple'
@@ -90,11 +90,11 @@ export type LexicalNodes_D4A62C8A =
       | 'payload-preferences'
       | 'payload-migrations'
     >
-  | SerializedAutoLinkNode<LexicalNodes_D4A62C8A, LexicalLinkFields>
-  | SerializedLinkNode<LexicalNodes_D4A62C8A, LexicalLinkFields>
-  | SerializedListNode<LexicalNodes_D4A62C8A>
-  | SerializedListItemNode<LexicalNodes_D4A62C8A>
-  | SerializedHeadingNode<LexicalNodes_D4A62C8A>;
+  | SerializedAutoLinkNode<LexicalNodes_3E1B867C, LexicalLinkFields>
+  | SerializedLinkNode<LexicalNodes_3E1B867C, LexicalLinkFields>
+  | SerializedListNode<LexicalNodes_3E1B867C>
+  | SerializedListItemNode<LexicalNodes_3E1B867C>
+  | SerializedHeadingNode<LexicalNodes_3E1B867C>;
 /**
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "LexicalNodes_3DE324E4".
@@ -137,7 +137,7 @@ export interface Config {
     'payload-llm-instructions': PayloadLlmInstructionsSelect<false> | PayloadLlmInstructionsSelect<true>;
   };
   db: {
-    defaultIDType: number;
+    defaultIDType: string;
   };
   fallbackLocale: null;
   globals: {
@@ -225,18 +225,18 @@ export interface UserAuthOperations {
  * via the `definition` "posts".
  */
 export interface Post {
-  id: number;
+  id: string;
   title: string;
-  content?: LexicalRichText<LexicalNodes_D4A62C8A> | null;
+  content?: LexicalRichText<LexicalNodes_3E1B867C> | null;
   jobStep1Ran?: string | null;
   jobStep2Ran?: string | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -246,14 +246,14 @@ export interface Post {
  * via the `definition` "users".
  */
 export interface User {
-  id: number;
+  id: string;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -280,15 +280,15 @@ export interface User {
  * via the `definition` "simple".
  */
 export interface Simple {
-  id: number;
+  id: string;
   title: string;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -298,7 +298,7 @@ export interface Simple {
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
-  id: number;
+  id: string;
   key: string;
   data:
     | {
@@ -315,7 +315,7 @@ export interface PayloadKv {
  * via the `definition` "payload-jobs".
  */
 export interface PayloadJob {
-  id: number;
+  id: string;
   /**
    * Input data provided to the job
    */
@@ -495,24 +495,24 @@ export interface PayloadJob {
  * via the `definition` "payload-locked-documents".
  */
 export interface PayloadLockedDocument {
-  id: number;
+  id: string;
   document?:
     | ({
         relationTo: 'posts';
-        value: number | Post;
+        value: string | Post;
       } | null)
     | ({
         relationTo: 'simple';
-        value: number | Simple;
+        value: string | Simple;
       } | null)
     | ({
         relationTo: 'users';
-        value: number | User;
+        value: string | User;
       } | null);
   globalSlug?: string | null;
   user: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   };
   updatedAt: string;
   createdAt: string;
@@ -522,10 +522,10 @@ export interface PayloadLockedDocument {
  * via the `definition` "payload-preferences".
  */
 export interface PayloadPreference {
-  id: number;
+  id: string;
   user: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   };
   key?: string | null;
   value?:
@@ -545,7 +545,7 @@ export interface PayloadPreference {
  * via the `definition` "payload-migrations".
  */
 export interface PayloadMigration {
-  id: number;
+  id: string;
   name?: string | null;
   batch?: number | null;
   updatedAt: string;
@@ -564,11 +564,11 @@ export interface PayloadLlmInstruction {
   systemInstructions?: LexicalRichText<LexicalNodes_3DE324E4> | null;
   createdBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedBy?: {
     relationTo: 'users';
-    value: number | User;
+    value: string | User;
   } | null;
   updatedAt: string;
   createdAt: string;
@@ -725,7 +725,7 @@ export interface PayloadLlmInstructionsSelect<T extends boolean = true> {
  * via the `definition` "payload-jobs-stats".
  */
 export interface PayloadJobsStat {
-  id: number;
+  id: string;
   stats?:
     | {
         [k: string]: unknown;
@@ -807,7 +807,7 @@ export interface ActivityWidget {
  */
 export interface MyUpdatePostType {
   input: {
-    post: number | Post;
+    post: string | Post;
     message: string;
   };
   output: {
@@ -820,7 +820,7 @@ export interface MyUpdatePostType {
  */
 export interface TaskUpdatePostStep2 {
   input: {
-    post: number | Post;
+    post: string | Post;
     messageTwice: string;
   };
   output?: unknown;
@@ -932,7 +932,7 @@ export interface WorkflowSelfCancel {
  */
 export interface MyUpdatePostWorkflowType {
   input: {
-    post: number | Post;
+    post: string | Post;
     message: string;
   };
 }
@@ -942,7 +942,7 @@ export interface MyUpdatePostWorkflowType {
  */
 export interface WorkflowUpdatePostJSONWorkflow {
   input: {
-    post: number | Post;
+    post: string | Post;
     message: string;
   };
 }

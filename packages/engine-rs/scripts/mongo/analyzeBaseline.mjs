@@ -75,6 +75,12 @@ const CAUSES = [
     /Hook timed out|Test timed out/,
     'timeout (shared MongoDB server under load from parallel agents)',
   ],
+  [
+    /ERR_PNPM_FETCH_404[\s\S]*engine-rs|engine-rs[\s\S]*ERR_PNPM_FETCH_404/,
+    'PORT REGRESSION: the packed adapter depends on the unpublished @payloadcms/engine-rs (pnpm 404)',
+  ],
+  [/ERR_PNPM_FETCH_404/, 'pnpm registry fetch 404 while installing into a temp project'],
+  [/^RestError/m, 'Azure SDK RestError: no Azurite on :10000 (docker service not running)'],
 ]
 const causeOf = (message = '') => CAUSES.find(([pattern]) => pattern.test(message))?.[1]
 
@@ -192,6 +198,20 @@ md += `\n## Mongo gating in int specs (static scan)\n\n| file | gates |\n|---|--
 for (const g of gating)
   md += `| ${g.file} | ${g.hits.map(([label, n]) => `${label}: ${n}`).join('; ')} |\n`
 
+const shadowFile = path.join(root, '.rs-baseline/mongodb-shadow-ts.json')
+if (fs.existsSync(shadowFile)) {
+  const shadow = Object.values(JSON.parse(fs.readFileSync(shadowFile, 'utf8')).files)
+  const sum = (key) => shadow.reduce((total, r) => total + (r.shadow?.[key] ?? 0), 0)
+  md += `
+## Shadow harness self-check (TS vs TS, \`.rs-baseline/mongodb-shadow-ts.json\`)
+
+${shadow.length} files, ${sum('calls')} shadowed adapter calls, ${sum('dbChecks')} database-state
+diffs, ${sum('rawMirrored')} mirrored raw writes: **${sum('divergences')} divergences**. Files whose
+status differs from this baseline only because of the environment (or the hmr regression) are
+listed in the run summary.
+`
+}
+
 md += `
 ## Notes (investigation, 2026-11-01)
 
@@ -204,12 +224,20 @@ md += `
   shared server allowed only 3 concurrent index builds (\`maxNumActiveUserIndexBuilds\`) while
   several agents' suites created collections, and \`dropDatabase\` alone took 49 s. With the
   parameter raised to 64 the file passes 153/0/0 (this baseline).
-- test/queues/schedules-autocron.int.spec.ts fails on MongoDB (0 jobs completed within the
-  test's fixed 3.5 s window; reproduced alone twice, passes on sqlite). The test duration (62 s for
-  a 3.5 s sleep) points at the loaded shared server delaying the cron-driven job runs; re-check on
-  a quiet server before treating it as an upstream MongoDB behaviour.
-- test/hmr/int.spec.ts "should serve the updated config before an admin request" failed once under
-  load and passed alone (timing).
+- test/queues/schedules-autocron.int.spec.ts failed twice under load (0 jobs completed in its
+  fixed 3.5 s window; 62 s test duration) and passes on a quiet server (this baseline): timing.
+- test/hmr/int.spec.ts (Next dev server): passed 3/1 (1 flaky) before \`@payloadcms/db-mongodb\`
+  imported \`withRustMongoEngine\` statically; since then the dev server cannot bundle
+  \`packages/engine-rs/payload-engine.node\` ("node addon is not placeable in ESM chunks") and every
+  API route returns 500 (suite-level error). A regression of the port's wiring, not of MongoDB;
+  reported in .rs-baseline/mongo-coordination.md. The hmr dev server bundles the shared
+  test/databaseAdapter.js itself.
+- test/create-payload-app/int.spec.ts: 7 failures. 5 are \`ERR_PNPM_FETCH_404\` for
+  \`@payloadcms/engine-rs\` while \`pnpm add\` installs the packed packages into a temp project: the
+  packed \`@payloadcms/db-mongodb\` / \`@payloadcms/db-sqlite\` now depend on the private, unpublished
+  engine-rs package (port regression, not MongoDB-specific; reported in the coordination log). The 2
+  TanStack generator tests fail their build assertion after the same kind of install (log shows
+  no other cause).
 
 ## Mongo-specific behaviour covered by the upstream suite (default adapter args)
 

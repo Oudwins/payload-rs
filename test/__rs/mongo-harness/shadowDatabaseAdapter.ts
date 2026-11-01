@@ -141,6 +141,7 @@ export async function loadShadowMongooseAdapterFactory(options: ShadowMongoOptio
     const candidate = candidateFactory({ ...args, url: candidateURL(url) })
     return createMongoShadowAdapter({
       candidate: wrapCandidate ? wrapCandidate(candidate) : candidate,
+      crossProcessFile: process.env.PAYLOAD_RS_MONGO_SHADOW_WINDOWS_FILE,
       onDivergence: process.env.PAYLOAD_RS_SHADOW_STRICT === 'true' ? 'throw' : 'record',
       reference: tsMongooseAdapter(args),
       report: {

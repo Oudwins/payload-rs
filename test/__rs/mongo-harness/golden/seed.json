@@ -626,7 +626,7 @@
           },
           "name": "_status_1",
           "partialFilterExpression": {
-            "globalType": "site"
+            "globalType": "<raced globalType>"
           }
         }
       ],

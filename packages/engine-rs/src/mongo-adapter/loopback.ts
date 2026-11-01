@@ -136,6 +136,7 @@ export const createLoopbackMongoEngine = ({
           thrown[key] = decode(value)
         }
         errorHandles.set(thrown, handle)
+        // oxlint-disable-next-line typescript/only-throw-error -- stands for the host's thrown value, which need not be an Error
         throw thrown
       }
       return decode((JSON.parse(response) as { ok: unknown }).ok)
@@ -214,7 +215,7 @@ function returnThis(this: unknown) {
 }
 
 /** Runs `fn` (upstream's `() => Promise.resolve(Model.countDocuments(...))`) to capture its query. */
-const captureModelQuery = (fn: Function): RawModelRequest => {
+const captureModelQuery = (fn: () => unknown): RawModelRequest => {
   const previous = capture
   const current: { query?: object } = {}
   capture = current
@@ -342,7 +343,7 @@ const createAdapterView = ({
       out[slug] = createModelStandIn({
         adapter,
         collectionName,
-        model: { kind, slug },
+        model: { slug, kind },
         runModelRequest,
       })
     }
