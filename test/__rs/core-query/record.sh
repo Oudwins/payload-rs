@@ -26,7 +26,9 @@ for suite in "$@"; do
     pnpm vitest run -c test/__rs/core-query/vitest.record.config.ts --project int "$spec" > "$log" 2>&1
   vitest_status=$?
   grep -E "^ *(Test Files|Tests|Errors) |  FAIL | ✗ | × |Unhandled|\[core-query recorder\]" "$log" | sed 's/^/   /'
-  calls=$(grep -c '"type":"call"' "$out" 2>/dev/null || echo 0)
+  # grep -c prints 0 (and exits 1) when nothing matches, and nothing when the file is missing.
+  calls=$(grep -c '"type":"call"' "$out" 2>/dev/null || true)
+  calls=${calls:-0}
   echo "   ${calls} calls, $(du -h "$out" 2>/dev/null | cut -f1)"
   if [ "$vitest_status" -ne 0 ]; then
     echo "   FAILED: vitest exited with $vitest_status (see $log)" >&2

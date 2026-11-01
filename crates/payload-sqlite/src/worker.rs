@@ -18,6 +18,12 @@
 //! before it for any id, and nothing else runs while the job runs. Jobs must not block on the JS thread (it may
 //! itself be blocked in [`call`]).
 //!
+//! Every id also records the database it works on ([`same_database`]): a
+//! client's file (or its own private in-memory database), inherited by the
+//! transactions it begins. `SqliteEngine.call` uses it to reject connection
+//! ids of another database than the adapter's client (the queue no longer
+//! tells them apart).
+//!
 //! The worker thread exits when the queue is empty and no target holds an
 //! open SQLite handle (closed clients, finished
 //! transactions); the next message starts a new one.
@@ -25,6 +31,7 @@
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, mpsc};
 
@@ -118,7 +125,12 @@ impl Session<'_> {
     };
     let conn = db.take().ok_or_else(ClientError::connection_not_open)?;
     let tx_id = next_id();
-    ids().insert(tx_id, self.queue.clone());
+    {
+      let mut ids = ids();
+      // a client released while this job was queued: the transaction is on its own
+      let database = ids.get(&self.id).map_or(Database::Private(tx_id), |owner| owner.database.clone());
+      ids.insert(tx_id, Registered { queue: self.queue.clone(), database });
+    }
     self.targets.insert(tx_id, Target::Transaction(conn));
     Ok(tx_id)
   }
@@ -140,7 +152,25 @@ impl Session<'_> {
   }
 }
 
-static IDS: LazyLock<Mutex<HashMap<ConnId, Arc<Queue>>>> = LazyLock::new(Default::default);
+/// The database an id works on (see [`same_database`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Database {
+  /// A database file, by its canonical directory and file name.
+  File(PathBuf),
+  /// A shared-cache in-memory database (`file::memory:?cache=shared`,
+  /// `file:name?mode=memory&cache=shared`), by its path.
+  SharedMemory(String),
+  /// A database no other client can reach (a private in-memory or temporary
+  /// database), by the id of the client that opened it.
+  Private(ConnId),
+}
+
+struct Registered {
+  queue: Arc<Queue>,
+  database: Database,
+}
+
+static IDS: LazyLock<Mutex<HashMap<ConnId, Registered>>> = LazyLock::new(Default::default);
 static QUEUE: LazyLock<Arc<Queue>> = LazyLock::new(|| {
   Arc::new(Queue {
     state: Mutex::new(QueueState { messages: VecDeque::new(), targets: Some(HashMap::new()), running: false }),
@@ -158,7 +188,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
   m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn ids() -> MutexGuard<'static, HashMap<ConnId, Arc<Queue>>> {
+fn ids() -> MutexGuard<'static, HashMap<ConnId, Registered>> {
   lock(&IDS)
 }
 
@@ -229,12 +259,46 @@ fn run_worker(queue: &Arc<Queue>, linger: bool) {
   IN_WORKER.with(|w| w.set(was_in_worker));
 }
 
-fn register(target: Target) -> ConnId {
+fn register(path: &str, target: Target) -> ConnId {
   let queue = QUEUE.clone();
   let id = next_id();
-  ids().insert(id, queue.clone());
+  ids().insert(id, Registered { queue: queue.clone(), database: database_of(path, id) });
   push(&queue, Message::Adopt(id, target));
   id
+}
+
+/// The database SQLite opens for `path` (`sqlite3_open_v2` with `SQLITE_OPEN_URI`).
+fn database_of(path: &str, id: ConnId) -> Database {
+  // only `file:` paths are URIs; any other path is a file name, `?` included
+  let (file, query) = match path.strip_prefix("file:") {
+    Some(uri) => match uri.split_once('?') {
+      Some((file, query)) => (file, query),
+      None => (uri, ""),
+    },
+    None => (path, ""),
+  };
+  let has_param = |name: &str, value: &str| query.split('&').any(|pair| pair == format!("{name}={value}"));
+  if file.is_empty() || file == ":memory:" || has_param("mode", "memory") {
+    return if has_param("cache", "shared") {
+      Database::SharedMemory(path.to_string())
+    } else {
+      Database::Private(id)
+    };
+  }
+  Database::File(canonical_file(Path::new(file)))
+}
+
+/// `dir/name` with `dir` canonicalized: the same before and after SQLite
+/// creates the file.
+fn canonical_file(file: &Path) -> PathBuf {
+  let dir = match file.parent() {
+    Some(dir) if !dir.as_os_str().is_empty() => dir,
+    _ => Path::new("."),
+  };
+  match (std::fs::canonicalize(dir), file.file_name()) {
+    (Ok(dir), Some(name)) => dir.join(name),
+    _ => file.to_path_buf(),
+  }
 }
 
 /// Registers a client (`Sqlite3Client`) whose `#db` is `conn`, opened from
@@ -246,7 +310,15 @@ pub fn register_client(path: &str, conn: Conn) -> ConnId {
 /// Registers a client whose `#db` is `conn`, opened from `path` with
 /// `options` (also used to reopen `#db` after `transaction()`).
 pub fn register_client_with(path: &str, options: OpenOptions, conn: Conn) -> ConnId {
-  register(Target::Client { path: path.to_string(), options, db: Some(conn) })
+  register(path, Target::Client { path: path.to_string(), options, db: Some(conn) })
+}
+
+/// Registers a client whose `#db` is not open yet: the first job that asks
+/// for its connection opens it ([`Session::conn`]), in queue order. Used by
+/// `createClient`, so `new Database(path, opts)` (open, cipher, key) runs
+/// after every earlier queued call, as with the synchronous binding.
+pub fn register_unopened_client(path: &str, options: OpenOptions) -> ConnId {
+  register(path, Target::Client { path: path.to_string(), options, db: None })
 }
 
 /// [`open_client_with`] without options.
@@ -264,7 +336,7 @@ pub fn open_client_with(path: &str, options: &OpenOptions) -> Result<ConnId> {
 /// Queues `job` for `id`. It runs after every job queued earlier for any id,
 /// and alone.
 pub fn submit(id: ConnId, job: impl FnOnce(&mut Session<'_>) + Send + 'static) -> Result<()> {
-  let queue = ids().get(&id).cloned().ok_or_else(ClientError::connection_not_open)?;
+  let queue = ids().get(&id).map(|registered| registered.queue.clone()).ok_or_else(ClientError::connection_not_open)?;
   push(&queue, Message::Job(id, Box::new(job)));
   Ok(())
 }
@@ -288,19 +360,23 @@ pub fn call<T: Send + 'static>(id: ConnId, f: impl FnOnce(&mut Session<'_>) -> T
 /// Forgets the id: jobs queued before still run, then its connection is
 /// closed. Later [`submit`]s fail with `The database connection is not open`.
 pub fn release(id: ConnId) {
-  if let Some(queue) = ids().remove(&id) {
-    push(&queue, Message::Drop(id));
+  if let Some(registered) = ids().remove(&id) {
+    push(&registered.queue, Message::Drop(id));
   }
 }
 
-/// Whether two ids share a queue (always, for registered ids: there is one).
-pub fn same_queue(a: ConnId, b: ConnId) -> bool {
+/// Whether two registered ids work on the same database: the same file
+/// (clients of one path and their transactions), the same shared-cache
+/// in-memory database, or a private database and the transactions of its
+/// client.
+pub fn same_database(a: ConnId, b: ConnId) -> bool {
   let ids = ids();
   match (ids.get(&a), ids.get(&b)) {
-    (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+    (Some(x), Some(y)) => x.database == y.database,
     _ => false,
   }
 }
+
 
 /// Number of registered ids (diagnostics / leak tests).
 pub fn open_connections() -> usize {
@@ -364,17 +440,64 @@ mod tests {
   }
 
   #[test]
-  fn all_clients_share_one_queue() {
+  fn ids_record_their_database() {
     let _serial = serial();
     let path = temp_db("share");
+    let other_path = temp_db("share-other");
     let a = open_client(&path).unwrap();
-    let b = open_client(&path).unwrap();
+    // the same file through another spelling of its path
+    let dir = std::path::Path::new(&path).parent().unwrap().to_path_buf();
+    let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned();
+    let b = open_client(&format!("{}/./{name}", dir.display())).unwrap();
+    let other = open_client(&other_path).unwrap();
     let m = open_client("file::memory:").unwrap();
-    assert!(same_queue(a, b));
-    assert!(same_queue(a, m));
+    let m2 = open_client(":memory:").unwrap();
+    let shared = open_client("file::memory:?cache=shared").unwrap();
+    let shared2 = open_client("file::memory:?cache=shared").unwrap();
+    assert!(same_database(a, b));
+    assert!(!same_database(a, other));
+    assert!(!same_database(a, m));
+    assert!(!same_database(m, m2));
+    assert!(same_database(m, m));
+    assert!(same_database(shared, shared2));
+    assert!(!same_database(shared, m));
     let tx = call(a, |s| s.begin_transaction("write", IntMode::Number)).unwrap().unwrap();
-    assert!(same_queue(a, tx));
-    for id in [a, b, m, tx] {
+    assert!(same_database(a, tx));
+    assert!(same_database(b, tx));
+    assert!(!same_database(other, tx));
+    let mtx = call(m, |s| s.begin_transaction("write", IntMode::Number)).unwrap().unwrap();
+    assert!(same_database(m, mtx));
+    assert!(!same_database(m2, mtx));
+    for id in [a, b, other, m, m2, shared, shared2, tx, mtx] {
+      release(id);
+    }
+    assert!(!same_database(a, b));
+    cleanup(&path);
+    cleanup(&other_path);
+  }
+
+  /// `createClient`'s open runs as a queued job: after the commit queued
+  /// before it, so keying / reading the header never races it.
+  #[test]
+  fn unopened_clients_open_in_queue_order() {
+    let _serial = serial();
+    let path = temp_db("unopened");
+    let first = open_client(&path).unwrap();
+    exec(first, "create table t(a)").unwrap();
+    let tx = call(first, |s| s.begin_transaction("write", IntMode::Number)).unwrap().unwrap();
+    call(tx, |s| client::tx_execute(s.conn()?, &Statement::sql("insert into t values (1)"), IntMode::Number))
+      .unwrap()
+      .unwrap();
+    submit(tx, |s| {
+      let _ = s.conn().and_then(|c| client::tx_commit(c, IntMode::Number));
+      s.retire_finished_transaction();
+    })
+    .unwrap();
+    let second = register_unopened_client(&path, OpenOptions::default());
+    assert!(same_database(first, second));
+    let rows = exec(second, "select count(*) from t").unwrap().rows;
+    assert_eq!(rows[0][0], SqlCell::Number(1.0));
+    for id in [tx, first, second] {
       release(id);
     }
     cleanup(&path);
@@ -486,7 +609,7 @@ mod tests {
     let _serial = serial();
     let path = temp_db("stop");
     let id = open_client(&path).unwrap();
-    let queue = ids().get(&id).cloned().unwrap();
+    let queue = ids().get(&id).map(|registered| registered.queue.clone()).unwrap();
     call(id, |s| s.close_client()).unwrap();
     for _ in 0..1000 {
       if !lock(&queue.state).running {

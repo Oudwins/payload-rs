@@ -25,6 +25,12 @@ pub fn parse(text: &str) -> Result<Val> {
   parse_units(&units)
 }
 
+/// `JSON.parse(text)` as an engine value (see [`Val::to_js`]): JS key order, any nesting depth,
+/// numbers rounded like V8 (`1e400` is `Infinity`).
+pub fn parse_to_js(text: &str) -> Result<payload_engine::js::JsVal> {
+  Ok(parse(text)?.to_js())
+}
+
 /// `JSON.parse(text)` for any JS string.
 pub fn parse_js(text: &JsStr) -> Result<Val> {
   parse_units(&text.units())
@@ -425,6 +431,7 @@ pub fn stringify(value: &Val) -> Result<Option<String>> {
             work.push(Work::Raw(prefix));
           }
         }
+        Val::BigInt(_) => return Err(EngineError::new("TypeError", "Do not know how to serialize a BigInt")),
         leaf => write_leaf(leaf, &mut out),
       },
     }

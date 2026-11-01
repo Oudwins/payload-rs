@@ -27,7 +27,7 @@ export type Arguments = {
   showHiddenFields?: boolean
 }
 
-export const restoreVersionOperation = async <T extends JsonObject = any>(
+export const restoreVersionOperationTS = async <T extends JsonObject = any>(
   args: Arguments,
 ): Promise<T> => {
   assertNoValidationWrite(args.req)
@@ -274,3 +274,36 @@ export const restoreVersionOperation = async <T extends JsonObject = any>(
     throw error
   }
 }
+
+type RustOperations = {
+  globalRestoreVersionOperation: (args: any) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-global`), selected once at module load:
+ * `PAYLOAD_OPS_GLOBAL_ENGINE=rs|ts`, else `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`.
+ * See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations =
+  (process.env.PAYLOAD_OPS_GLOBAL_ENGINE ||
+    process.env.PAYLOAD_CORE_ENGINE ||
+    process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops-global/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const restoreVersionOperation: typeof restoreVersionOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.globalRestoreVersionOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.globalRestoreVersionOperation(args)
+          })
+  : restoreVersionOperationTS

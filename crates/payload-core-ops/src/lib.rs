@@ -11,9 +11,12 @@
 //! - docs, args, `where`/`select` objects stay the user's JS objects (identity, mutation);
 //! - user callbacks (collection hooks, access functions) are called live with object literals of
 //!   upstream's key order, built by JS helpers;
-//! - query/select/join utilities and `payload.db.*` are the upstream JS functions, called at the
-//!   same point with the same arguments (so they work with any adapter, including the Rust SQL
-//!   engine); `afterRead` is the Rust port of payload-core-runtime.
+//! - the query utilities (`combineQueries`, `sanitizeWhereQuery`, `validateQueryPaths`,
+//!   `validateSortQuery`, `sanitizeJoinQuery`, `getFieldByPath`, `getLocalizedPaths`,
+//!   `prefixWherePaths`) are the live port of payload-core-query, the small where/select/draft
+//!   utilities are ported here (`utilities`), `afterRead` is the Rust port of
+//!   payload-core-runtime; `payload.db.*` is called through JS (any adapter, including the Rust
+//!   SQL engine).
 
 pub mod binding;
 pub mod common;
@@ -25,5 +28,7 @@ pub mod find_distinct;
 pub mod find_version_by_id;
 pub mod find_versions;
 pub mod host;
+pub mod query;
+pub mod utilities;
 
 pub use binding::create_binding;

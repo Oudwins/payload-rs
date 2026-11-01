@@ -11,7 +11,7 @@ use payload_core_runtime::js::{self, JsResult, Local, Thrown};
 
 use super::host::{self, call, truthy, val};
 use super::join::{JoinQueryArgs, sanitize_join_query_body};
-use super::paths::{FieldByPathArgs, LocalizedPathsArgs, get_field_by_path, get_localized_paths};
+use super::paths::{FieldByPathArgs, LocalizedPathArg, LocalizedPathsArgs, get_field_by_path, get_localized_paths};
 use super::validate::{
   QueryPathsArgs, SearchParamArgs, SortQueryArgs, validate_query_paths_body, validate_search_param_body,
   validate_sort_query_body,
@@ -22,6 +22,7 @@ type Body<const N: usize> = fn([Local; N]) -> JsResult<Local>;
 
 fn run<const N: usize>(env: sys::napi_env, info: sys::napi_callback_info, body: Body<N>) -> sys::napi_value {
   js::set_env(env);
+  payload_core_runtime::executor::count_entry();
   let (args, _) = js::callback_args::<N>(env, info);
   match catch_unwind(AssertUnwindSafe(|| body(args))) {
     Ok(Ok(v)) => v.0,
@@ -117,7 +118,7 @@ export!(get_field_by_path_export, 1, |[args]| {
     config: e(0)?,
     fields: e(1)?,
     include_relationships: truthy(e(2)?),
-    localized_path: host::to_string(e(3)?)?,
+    localized_path: LocalizedPathArg::Raw(e(3)?),
     path: e(4)?,
   })?;
   match found {

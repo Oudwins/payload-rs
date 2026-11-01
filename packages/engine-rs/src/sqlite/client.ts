@@ -11,13 +11,18 @@
  * calls take effect strictly in call order as with libsql's synchronous
  * binding.
  *
- * Single statements without named arguments run as queued jobs. Where
- * upstream interleaves JS evaluation with statement execution (batches and
- * migrations read each statement only when it is reached; named arguments
- * are looked up by the parameter names of the prepared statement), the port
- * runs upstream's code verbatim on top of blocking native steps
- * (`executeStmtSync`), exactly as the synchronous `libsql` binding does.
+ * Single statements with positional arguments whose reads have no
+ * observable effect (`hasUnobservableReads`, e.g. drizzle's) run as queued
+ * jobs. Where upstream interleaves JS evaluation with statement execution
+ * (batches and migrations read each statement only when it is reached; named
+ * arguments are looked up by the parameter names of the prepared statement;
+ * statement getters run after the client's `#getDb()` / the transaction's
+ * closed check), the port runs upstream's code verbatim on top of blocking
+ * native steps (`executeStmtSync`), exactly as the synchronous `libsql`
+ * binding does.
  */
+import { types } from 'node:util'
+
 import type { NativeOutcome, NativeResultSet, NativeStatement } from './native.js'
 
 import { LibsqlError, toJsError } from './errors.js'
@@ -214,18 +219,63 @@ const describeThrown = (e: unknown): [string, string] => {
 }
 
 /**
- * Runs one statement as a queued job. Errors of the conversion (and a
- * non-string `sql`) are not thrown here but attached to the statement, so
- * Rust raises them in queue order exactly where `executeStmt` would throw
- * (after the transaction's closed check). Named arguments need the prepared
- * statement's parameter names and run through `runNamed` instead.
+ * Whether reading `stmt` the way `executeStmt` does (`stmt.sql`, `stmt.args`,
+ * each positional value) has no observable effect and gives positional
+ * arguments: no proxies, getters or named arguments. Only then can the
+ * statement be read before upstream's `#getDb()` / closed check (which run in
+ * queue order in Rust) without a visible difference.
+ */
+function hasUnobservableReads(stmt: InStatement): stmt is { args: InValue[]; sql: string } {
+  if (typeof stmt !== 'object' || stmt === null || types.isProxy(stmt)) {
+    return false
+  }
+  const sql = Object.getOwnPropertyDescriptor(stmt, 'sql')
+  const args = Object.getOwnPropertyDescriptor(stmt, 'args')
+  if (!sql || !('value' in sql) || !args || !('value' in args)) {
+    return false
+  }
+  const values: unknown = args.value
+  if (
+    !Array.isArray(values) ||
+    types.isProxy(values) ||
+    Object.getPrototypeOf(values) !== Array.prototype
+  ) {
+    return false
+  }
+  for (let i = 0; i < values.length; i++) {
+    const value = Object.getOwnPropertyDescriptor(values, i)
+    // holes are skipped by `map`
+    if (value && (!('value' in value) || !isUnobservableValue(value.value))) {
+      return false
+    }
+  }
+  return true
+}
+
+/** `valueToSql(value)` reads nothing user-defined from `value`. */
+const isUnobservableValue = (value: unknown) =>
+  value === null ||
+  (typeof value !== 'object' && typeof value !== 'function') ||
+  (typeof value === 'object' &&
+    !types.isProxy(value) &&
+    (ArrayBuffer.isView(value) ||
+      types.isArrayBuffer(value) ||
+      (types.isDate(value) &&
+        Object.getPrototypeOf(value) === Date.prototype &&
+        !Object.hasOwn(value, 'valueOf'))))
+
+/**
+ * Runs one statement (see `hasUnobservableReads`) as a queued job. Errors of
+ * the conversion (and a non-string `sql`) are not thrown here but attached to
+ * the statement, so Rust raises them in queue order exactly where
+ * `executeStmt` would throw (after `#getDb()` / the transaction's closed
+ * check).
  */
 async function executeStmt(
   handle: Handle,
-  stmt: InStatement,
+  stmt: { args: InValue[]; sql: string },
   intMode: IntMode,
   inTransaction: boolean,
-  runNamed: (converted: ConvertedStatement) => ResultSetImpl,
 ): Promise<ResultSetImpl> {
   let converted: ConvertedStatement
   try {
@@ -234,11 +284,11 @@ async function executeStmt(
     return runQueued(handle, { error: describeThrown(e), sql: '' }, intMode, inTransaction)
   }
   const { args, sql } = converted
-  if (!Array.isArray(args)) {
-    return runNamed(converted)
-  }
+  // `args` is an array (`hasUnobservableReads`)
   const native: NativeStatement =
-    typeof sql === 'string' ? { args, sql } : { error: describeThrown(sqlTypeError()), sql: '' }
+    typeof sql === 'string' && Array.isArray(args)
+      ? { args, sql }
+      : { error: describeThrown(sqlTypeError()), sql: '' }
   return runQueued(handle, native, intMode, inTransaction)
 }
 
@@ -364,9 +414,11 @@ export class Sqlite3Client {
   async execute(stmtOrSql: InStatement, args?: InArgs) {
     const stmt = toStatement(stmtOrSql, args)
     this.#checkNotClosed()
-    return executeStmt(this.#handle, stmt, this.#intMode, false, (converted) =>
-      executeConvertedSync(this.#getDb(), converted, this.#intMode),
-    )
+    if (!hasUnobservableReads(stmt)) {
+      // upstream order: `#getDb()`, then `executeStmt` reads the statement
+      return executeStmtSync(this.#getDb(), stmt, this.#intMode)
+    }
+    return executeStmt(this.#handle, stmt, this.#intMode, false)
   }
 
   async executeMultiple(sql: string) {
@@ -465,16 +517,13 @@ export class Sqlite3Transaction {
   }
 
   async execute(stmtOrSql: InStatement, args?: InArgs) {
-    return executeStmt(
-      this.#database,
-      toStatement(stmtOrSql, args),
-      this.#intMode,
-      true,
-      (converted) => {
-        this.#checkNotClosed()
-        return executeConvertedSync(this.#database.id, converted, this.#intMode)
-      },
-    )
+    const stmt = toStatement(stmtOrSql, args)
+    if (!hasUnobservableReads(stmt)) {
+      // upstream order: `#checkNotClosed()`, then `executeStmt` reads the statement
+      this.#checkNotClosed()
+      return executeStmtSync(this.#database.id, stmt, this.#intMode)
+    }
+    return executeStmt(this.#database, stmt, this.#intMode, true)
   }
 
   async executeMultiple(sql: string) {

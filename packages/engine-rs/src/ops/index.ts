@@ -1,18 +1,28 @@
 /**
  * Rust ports of the collection read operations (crates/payload-core-ops, exported by the main
  * addon as `coreOpsBinding()`), as drop-ins with the upstream signatures of
- * `packages/payload/src/collections/operations/*.ts`.
+ * `packages/payload/src/collections/operations/*.ts`. Payload's operation modules load this file
+ * (dynamic import) when the Rust core engine is selected (`PAYLOAD_ENGINE=rs`, overridable with
+ * `PAYLOAD_CORE_ENGINE=rs|ts`), see RUST_OPS_DESIGN.md.
  *
  * The exports are plain functions returning the engine task's promise (not `async` wrappers),
- * so a caller awaiting them takes the same microtask ticks as awaiting the TS `async` function.
+ * so a caller awaiting them takes the same microtask ticks as awaiting the TS `async` function;
+ * a failure to load the engine rejects the returned promise like a throw inside the TS function.
  *
- * `PAYLOAD_OPS_AFTER_READ=ts` makes the Rust operations call the TS `afterRead` instead of the
- * Rust traversal (isolates the operations in differential runs).
+ * - `PAYLOAD_OPS_AFTER_READ=ts`: the Rust operations call the TS `afterRead` instead of the Rust
+ *   traversal (isolates the operations in differential runs).
+ * - `PAYLOAD_RS_OPS_STATS_DIR=<dir>`: every process writes `<dir>/ops-<pid>.json` with the number of
+ *   calls each Rust operation served (throttled, and at exit) so suite runs can prove the engine ran.
+ * - `RS_OPS_MUTANT=<n>`: harness sensitivity checks only; needs an addon built with the
+ *   `payload-core-ops/mutants` feature (the shipped addon rejects it at init).
  */
+import { writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import path from 'node:path'
 
 import type { Access, AccessResult } from '../../../payload/src/config/types.js'
 
+import { getCoreQueryBinding } from '../../../../test/__rs/core-query/glue.js'
 import { afterRead as tsAfterRead } from '../../../payload/src/fields/hooks/afterRead/index.js'
 import { getCoreRuntime } from '../runtime/index.js'
 import { createOpsHost } from './host.js'
@@ -21,6 +31,9 @@ import { createOpsHost } from './host.js'
 type Any = any
 
 export type CoreOpsBinding = {
+  /** Host-helper contract version (crates/payload-core-ops/src/binding.rs `API_VERSION`); an
+   * older addon fails loudly on the first missing helper (`core ops host helper ... is missing`). */
+  apiVersion?: number
   count: (args: unknown) => Promise<unknown>
   countVersions: (args: unknown) => Promise<unknown>
   docAccess: (args: unknown) => Promise<unknown>
@@ -34,6 +47,8 @@ export type CoreOpsBinding = {
   sanitizeSortQuery: (args: unknown) => unknown
 }
 
+type OperationName = Exclude<keyof CoreOpsBinding, 'apiVersion' | 'init' | 'sanitizeSortQuery'>
+
 let binding: CoreOpsBinding | undefined
 
 export const getCoreOps = (): CoreOpsBinding => {
@@ -41,8 +56,11 @@ export const getCoreOps = (): CoreOpsBinding => {
     return binding
   }
   getCoreRuntime()
+  // The operations call the live query port (crates/payload-core-query) directly: its host must
+  // be installed on the same addon instance.
+  getCoreQueryBinding()
   const require = createRequire(import.meta.url)
-  // Same resolution as `getCoreRuntime()`: both bindings must come from one addon instance.
+  // Same resolution as `getCoreRuntime()`: all bindings must come from one addon instance.
   const addonPath =
     process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
     process.env.PAYLOAD_ENGINE_ADDON ??
@@ -56,24 +74,88 @@ export const getCoreOps = (): CoreOpsBinding => {
     ...createOpsHost(
       process.env.PAYLOAD_OPS_AFTER_READ === 'ts' ? (tsAfterRead as Any) : undefined,
     ),
-    // Harness sensitivity checks only (RUST_OPS_DESIGN.md): a deliberately wrong code path.
-    mutant: process.env.RS_OPS_MUTANT ? Number(process.env.RS_OPS_MUTANT) : 0,
+    ...(process.env.RS_OPS_MUTANT ? { mutant: Number(process.env.RS_OPS_MUTANT) } : {}),
   })
   binding = created
   return created
 }
 
-export const findOperation = (args: Any): Promise<Any> => getCoreOps().find(args)
-export const findByIDOperation = (args: Any): Promise<Any> => getCoreOps().findByID(args)
-export const countOperation = (args: Any): Promise<{ totalDocs: number }> =>
-  getCoreOps().count(args) as Promise<{ totalDocs: number }>
-export const countVersionsOperation = (args: Any): Promise<{ totalDocs: number }> =>
-  getCoreOps().countVersions(args) as Promise<{ totalDocs: number }>
-export const findDistinctOperation = (args: Any): Promise<Any> => getCoreOps().findDistinct(args)
-export const findVersionsOperation = (args: Any): Promise<Any> => getCoreOps().findVersions(args)
-export const findVersionByIDOperation = (args: Any): Promise<Any> =>
-  getCoreOps().findVersionByID(args)
-export const docAccessOperation = (args: Any): Promise<Any> => getCoreOps().docAccess(args)
-export const executeAccess = (args: Any, access?: Access): Promise<AccessResult> =>
-  getCoreOps().executeAccess(args, access)
+// ------------------------------------------------------------------------------------------
+// stats
+
+const statsDir = process.env.PAYLOAD_RS_OPS_STATS_DIR
+const calls: Partial<Record<OperationName, number>> = {}
+let deferredCalls = 0
+let lastStatsWrite = 0
+
+const writeStats = () => {
+  writeFileSync(
+    path.join(statsDir!, `ops-${process.pid}.json`),
+    JSON.stringify({ calls, deferredCalls }),
+  )
+}
+
+// Written synchronously (throttled, plus once more at exit): timers could be faked by the suite.
+const recordCall = (name: OperationName) => {
+  calls[name] = (calls[name] ?? 0) + 1
+  if (!statsDir) {
+    return
+  }
+  if (lastStatsWrite === 0) {
+    process.once('exit', writeStats)
+  }
+  const now = performance.now()
+  if (now - lastStatsWrite > 250) {
+    lastStatsWrite = now
+    writeStats()
+  }
+}
+
+/** Calls served by the Rust operations in this process (harness guards). */
+export const getOpsCallCount = (): number =>
+  Object.values(calls).reduce((sum, n) => sum + (n ?? 0), 0)
+
+/**
+ * Called by payload's dispatch when an operation ran before this module finished loading (the call
+ * then waits for the load, which adds microtask ticks upstream does not have).
+ */
+export const recordDeferredCall = (): void => {
+  deferredCalls++
+}
+
+const operation =
+  (name: OperationName) =>
+  (args: Any): Promise<Any> => {
+    let ops: CoreOpsBinding
+    try {
+      ops = getCoreOps()
+    } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- the caught value, unchanged
+      return Promise.reject(error)
+    }
+    recordCall(name)
+    return ops[name](args) as Promise<Any>
+  }
+
+export const findOperation = operation('find')
+export const findByIDOperation = operation('findByID')
+export const countOperation = operation('count') as (args: Any) => Promise<{ totalDocs: number }>
+export const countVersionsOperation = operation('countVersions') as (
+  args: Any,
+) => Promise<{ totalDocs: number }>
+export const findDistinctOperation = operation('findDistinct')
+export const findVersionsOperation = operation('findVersions')
+export const findVersionByIDOperation = operation('findVersionByID')
+export const docAccessOperation = operation('docAccess')
+export const executeAccess = (args: Any, access?: Access): Promise<AccessResult> => {
+  let ops: CoreOpsBinding
+  try {
+    ops = getCoreOps()
+  } catch (error) {
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- the caught value, unchanged
+    return Promise.reject(error)
+  }
+  recordCall('executeAccess')
+  return ops.executeAccess(args, access)
+}
 export const sanitizeSortQuery = (args: Any): Any => getCoreOps().sanitizeSortQuery(args)

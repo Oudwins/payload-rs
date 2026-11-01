@@ -1,16 +1,83 @@
 import type { SerializedEditorState, SerializedLexicalNode } from 'lexical'
 
 import {
-  afterChangeTraverseFields,
-  afterReadTraverseFields,
-  beforeChangeTraverseFields,
-  beforeValidateTraverseFields,
   type RichTextHooks,
+  afterChangeTraverseFields as upstreamAfterChangeTraverseFields,
+  afterReadTraverseFields as upstreamAfterReadTraverseFields,
+  beforeChangeTraverseFields as upstreamBeforeChangeTraverseFields,
+  beforeValidateTraverseFields as upstreamBeforeValidateTraverseFields,
 } from 'payload'
 
 import type { SanitizedServerEditorConfig } from './lexical/config/types.js'
 
 import { recurseNodeTree } from './utilities/recurseNodeTree.js'
+
+type RustCoreTraverseFields = {
+  afterChangeTraverseFields: typeof upstreamAfterChangeTraverseFields
+  afterReadTraverseFields: typeof upstreamAfterReadTraverseFields
+  beforeChangeTraverseFields: typeof upstreamBeforeChangeTraverseFields
+  beforeValidateTraverseFields: typeof upstreamBeforeValidateTraverseFields
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust core engine (`packages/engine-rs/src/runtime/hooks.ts`) for payload's `*TraverseFields`,
+ * selected once at module load like payload's own field-hook modules: `PAYLOAD_CORE_ENGINE=rs|ts`,
+ * else `PAYLOAD_ENGINE=rs`. Unset, these are payload's exports. See RUST_PORT.md.
+ */
+const isRustCoreEngine = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustCoreHooksSpecifier = '../../engine-rs/src/runtime/hooks.js'
+let rustCoreHooks: RustCoreTraverseFields | undefined
+const rustCoreHooksLoad: Promise<RustCoreTraverseFields> | undefined = isRustCoreEngine
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustCoreHooksSpecifier).then(
+      (loaded: RustCoreTraverseFields) => (rustCoreHooks = loaded),
+    )
+  : undefined
+void rustCoreHooksLoad?.catch(() => {})
+
+/** An async `traverseFields` forwarded to the Rust core engine (a synchronous throw rejects). */
+const forwardAsync =
+  <
+    K extends
+      | 'afterChangeTraverseFields'
+      | 'beforeChangeTraverseFields'
+      | 'beforeValidateTraverseFields',
+  >(
+    name: K,
+  ) =>
+  (args: Parameters<RustCoreTraverseFields[K]>[0]): Promise<void> => {
+    try {
+      return rustCoreHooks
+        ? (rustCoreHooks[name] as (args: unknown) => Promise<void>)(args)
+        : rustCoreHooksLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return (loaded[name] as (args: unknown) => Promise<void>)(args)
+          })
+    } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- rejects with the thrown value as is
+      return Promise.reject(error)
+    }
+  }
+
+const afterChangeTraverseFields: typeof upstreamAfterChangeTraverseFields = isRustCoreEngine
+  ? forwardAsync('afterChangeTraverseFields')
+  : upstreamAfterChangeTraverseFields
+const beforeChangeTraverseFields: typeof upstreamBeforeChangeTraverseFields = isRustCoreEngine
+  ? forwardAsync('beforeChangeTraverseFields')
+  : upstreamBeforeChangeTraverseFields
+const beforeValidateTraverseFields: typeof upstreamBeforeValidateTraverseFields = isRustCoreEngine
+  ? forwardAsync('beforeValidateTraverseFields')
+  : upstreamBeforeValidateTraverseFields
+// Synchronous: before the engine module has loaded, upstream's own function runs (counted).
+const afterReadTraverseFields: typeof upstreamAfterReadTraverseFields = isRustCoreEngine
+  ? (args) => {
+      if (rustCoreHooks) {
+        return rustCoreHooks.afterReadTraverseFields(args)
+      }
+      void rustCoreHooksLoad!.then((loaded) => loaded.recordDeferredCall())
+      return upstreamAfterReadTraverseFields(args)
+    }
+  : upstreamAfterReadTraverseFields
 
 export const getLexicalHooks: (args: {
   editorConfig: SanitizedServerEditorConfig

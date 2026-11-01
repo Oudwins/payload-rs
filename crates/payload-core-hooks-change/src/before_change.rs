@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use napi::sys;
 use payload_core_runtime::config::{self, BlockCandidate, FieldDesc, FieldsDesc, Kind, format_number};
-use payload_core_runtime::executor::{await_js, spawn};
+use payload_core_runtime::executor::{Tail, await_js, spawn, spawn_tail};
 use payload_core_runtime::host::{self as rt, call_host};
 use payload_core_runtime::js::{self, JsResult, Local, Thrown, Type, Val};
 
@@ -78,6 +78,125 @@ pub fn before_change(args: Local) -> JsResult<Local> {
   spawn(run(args))
 }
 
+impl Ctx {
+  #[allow(clippy::too_many_arguments)]
+  fn new(
+    id: Val,
+    collection: Val,
+    context: Val,
+    data: Val,
+    doc: Val,
+    doc_with_locales: Val,
+    errors: Val,
+    global: Val,
+    is_validation_operation: Val,
+    merge_locale_actions: Val,
+    operation: Val,
+    override_access: Val,
+    req: Val,
+    skip_hooks: Val,
+    submitted_top_level_field_names: Val,
+  ) -> JsResult<Rc<Ctx>> {
+    let arr = js::array();
+    let values = [
+      &id,
+      &collection,
+      &context,
+      &data,
+      &doc,
+      &doc_with_locales,
+      &errors,
+      &global,
+      &is_validation_operation,
+      &merge_locale_actions,
+      &operation,
+      &override_access,
+      &req,
+      &skip_hooks,
+      &submitted_top_level_field_names,
+    ];
+    for (i, v) in values.into_iter().enumerate() {
+      js::set_element(arr, i as u32, v.get())?;
+    }
+    Ok(Rc::new(Ctx {
+      arr: Val::from_local(arr)?,
+      id,
+      collection,
+      context,
+      data,
+      doc,
+      doc_with_locales,
+      errors,
+      global,
+      is_validation_operation,
+      merge_locale_actions,
+      operation,
+      override_access,
+      req,
+      skip_hooks,
+      submitted_top_level_field_names,
+    }))
+  }
+}
+
+/// `traverseFields(args)` (beforeChange/traverseFields.ts, exported by payload as
+/// `beforeChangeTraverseFields`): `a` is its destructured parameter, in the pattern's order (`id,
+/// blockData, blockFields, collection, context, data, doc, docWithLocales, errors, fieldLabelPath,
+/// fields, global, isValidationOperation, mergeLocaleActions, operation, overrideAccess,
+/// parentIndexPath, parentIsLocalized, parentPath, parentSchemaPath, req, siblingData, siblingDoc,
+/// siblingDocWithLocales, skipHooks, skipValidation, submittedTopLevelFieldNames`; the TS glue
+/// destructures with upstream's pattern and only calls this with string paths). Returns the
+/// traversal's promise.
+pub fn traverse_fields_entry(a: Local) -> JsResult<Local> {
+  let a = Val::from_local(a)?;
+  spawn_tail(async move {
+    let a = a.get();
+    let e = |i: u32| -> JsResult<Val> { Val::from_local(js::get_element(a, i)?) };
+    let s = |i: u32| -> JsResult<Rc<str>> { Ok(js::get_string(js::get_element(a, i)?).unwrap_or_default().into()) };
+    let (id, block_data, block_fields, collection, context) = (e(0)?, e(1)?, e(2)?, e(3)?, e(4)?);
+    let (data, doc, doc_with_locales, errors, field_label_path) = (e(5)?, e(6)?, e(7)?, e(8)?, e(9)?);
+    let fields = config::fields_desc(js::get_element(a, 10)?)?;
+    let (global, is_validation_operation, merge_locale_actions, operation, override_access) =
+      (e(11)?, e(12)?, e(13)?, e(14)?, e(15)?);
+    let (parent_index_path, parent_is_localized, parent_path, parent_schema_path) = (s(16)?, e(17)?, s(18)?, s(19)?);
+    let (req, sibling_data, sibling_doc, sibling_doc_with_locales) = (e(20)?, e(21)?, e(22)?, e(23)?);
+    let (skip_hooks, skip_validation, submitted_top_level_field_names) = (e(24)?, e(25)?, e(26)?);
+    let ctx = Ctx::new(
+      id,
+      collection,
+      context,
+      data,
+      doc,
+      doc_with_locales,
+      errors,
+      global,
+      is_validation_operation,
+      merge_locale_actions,
+      operation,
+      override_access,
+      req,
+      skip_hooks,
+      submitted_top_level_field_names,
+    )?;
+    let trav = Trav {
+      block_data,
+      block_fields,
+      field_label_path,
+      fields,
+      tab_fields: None,
+      parent_index_path,
+      parent_is_localized,
+      parent_path,
+      parent_schema_path,
+      sibling_data,
+      sibling_doc,
+      sibling_doc_with_locales,
+      skip_validation,
+    };
+    traverse_fields(ctx, Rc::new(trav)).await
+  })
+}
+
 /// Port of `index.ts`.
 async fn run(args: Val) -> JsResult<Val> {
   let rh = rt::host()?;
@@ -107,29 +226,7 @@ async fn run(args: Val) -> JsResult<Val> {
 
   call_host(&ch.record_new_doc, &[context.get(), doc_with_locales.get()])?;
 
-  let arr = js::array();
-  let values = [
-    &id,
-    &collection,
-    &context,
-    &data,
-    &doc,
-    &doc_with_locales,
-    &errors,
-    &global,
-    &is_validation_operation,
-    &merge_locale_actions,
-    &operation,
-    &override_access,
-    &req,
-    &skip_hooks,
-    &submitted_top_level_field_names,
-  ];
-  for (i, v) in values.into_iter().enumerate() {
-    js::set_element(arr, i as u32, v.get())?;
-  }
-  let ctx = Rc::new(Ctx {
-    arr: Val::from_local(arr)?,
+  let ctx = Ctx::new(
     id,
     collection,
     context,
@@ -145,7 +242,7 @@ async fn run(args: Val) -> JsResult<Val> {
     req,
     skip_hooks,
     submitted_top_level_field_names,
-  });
+  )?;
 
   let fields = Val::from_local(entity_fields(&ctx)?)?;
   let traversal = traverse(
@@ -215,16 +312,40 @@ fn entity_fields(ctx: &Ctx) -> JsResult<Local> {
 }
 
 /// Calls the async `traverseFields` (runs synchronously to its first await) and returns its
-/// promise.
+/// promise. A fields array made only of leaf fields ([`is_leaf`]) runs upstream's
+/// `traverseFields.ts` body in JS (`beforeChangeLeafTraversal`: `fields.forEach` pushing the leaf
+/// `promise()`, `await Promise.all`); other arrays run the port.
 fn traverse(ctx: &Rc<Ctx>, trav: Trav) -> JsResult<Local> {
-  spawn(traverse_fields(ctx.clone(), Rc::new(trav)))
+  let all_leaves =
+    trav.tab_fields.is_none() && trav.fields.items.as_ref().is_some_and(|items| items.iter().all(|f| is_leaf(f.kind)));
+  if all_leaves && !cfg!(feature = "mutant-reverse-fields") {
+    return call_host(
+      &change_host()?.before_change_leaf_traversal,
+      &[
+        ctx.arr.get(),
+        trav.fields.node.get(),
+        trav.block_data.get(),
+        trav.block_fields.get(),
+        trav.field_label_path.get(),
+        js::string(&trav.parent_index_path),
+        trav.parent_is_localized.get(),
+        js::string(&trav.parent_path),
+        js::string(&trav.parent_schema_path),
+        trav.sibling_data.get(),
+        trav.sibling_doc.get(),
+        trav.sibling_doc_with_locales.get(),
+        trav.skip_validation.get(),
+      ],
+    );
+  }
+  spawn_tail(traverse_fields(ctx.clone(), Rc::new(trav)))
 }
 
 /// Port of `traverseFields.ts`.
-async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
+async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Tail> {
   let Some(items) = &t.fields.items else {
     config::throw_not_array(&t.fields)?;
-    return Ok(Val::Undefined);
+    return Ok(Tail::Return(Val::Undefined));
   };
   let promises = js::array();
   if !cfg!(feature = "mutant-reverse-fields") && t.tab_fields.is_none() {
@@ -234,7 +355,7 @@ async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
     while index < items.len() {
       if !is_leaf(items[index].kind) {
         let desc = &items[index];
-        let promise = spawn(field_promise(ctx.clone(), t.clone(), desc.clone(), Val::Ref(desc.node.clone()), index))?;
+        let promise = spawn_tail(field_promise(ctx.clone(), t.clone(), desc.clone(), Val::Ref(desc.node.clone()), index))?;
         js::push(promises, promise)?;
         index += 1;
         continue;
@@ -266,8 +387,7 @@ async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
       )?;
     }
     let all = call_host(&rt::host()?.promise_all, &[promises])?;
-    await_js(all).await?;
-    return Ok(Val::Undefined);
+    return Ok(Tail::Await(all, Val::Undefined));
   }
   let order: Box<dyn Iterator<Item = (usize, &Rc<FieldDesc>)>> = if cfg!(feature = "mutant-reverse-fields") {
     Box::new(items.iter().enumerate().rev())
@@ -279,12 +399,11 @@ async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
       Some(arr) => Val::from_local(js::get_element(arr.get(), index as u32)?)?,
       None => Val::Ref(desc.node.clone()),
     };
-    let promise = spawn(field_promise(ctx.clone(), t.clone(), desc.clone(), field_js, index))?;
+    let promise = spawn_tail(field_promise(ctx.clone(), t.clone(), desc.clone(), field_js, index))?;
     js::push(promises, promise)?;
   }
   let all = call_host(&rt::host()?.promise_all, &[promises])?;
-  await_js(all).await?;
-  Ok(Val::Undefined)
+  Ok(Tail::Await(all, Val::Undefined))
 }
 
 /// A field whose `promise()` traverses no subfields and calls no editor hooks: the host runs it
@@ -389,7 +508,7 @@ async fn field_promise(
   f: Rc<FieldDesc>,
   field_js: Val,
   field_index: usize,
-) -> JsResult<Val> {
+) -> JsResult<Tail> {
   let rh = rt::host()?;
   let ch = change_host()?;
   let Paths { index_path, path, schema_path } =
@@ -517,7 +636,7 @@ async fn field_promise(
       let message = req_t(req(), "validation:invalidInput")?;
       let error = object(&[("label", label), ("message", message), ("path", js::string(&path))])?;
       js::push(ctx.errors.get(), error)?;
-      return Ok(Val::Undefined);
+      return Ok(Tail::Return(Val::Undefined));
     }
 
     // Validate
@@ -720,7 +839,7 @@ async fn field_promise(
           js::push(promises.get(), p)
         })?;
         let all = call_host(&rh.promise_all, &[promises.get()])?;
-        await_js(all).await?;
+        return Ok(Tail::Await(all, Val::Undefined));
       }
     }
 
@@ -788,7 +907,7 @@ async fn field_promise(
           Ok(())
         })?;
         let all = call_host(&rh.promise_all, &[promises.get()])?;
-        await_js(all).await?;
+        return Ok(Tail::Await(all, Val::Undefined));
       }
     }
 
@@ -813,7 +932,7 @@ async fn field_promise(
           skip_validation: skip_validation_from_here.clone(),
         },
       )?;
-      await_js(p).await?;
+      return Ok(Tail::Await(p, Val::Undefined));
     }
 
     Kind::Group => {
@@ -855,7 +974,7 @@ async fn field_promise(
           skip_validation: skip_validation_from_here.clone(),
         },
       )?;
-      await_js(p).await?;
+      return Ok(Tail::Await(p, Val::Undefined));
     }
 
     Kind::Point => {
@@ -974,7 +1093,7 @@ async fn field_promise(
           skip_validation: skip_validation_from_here.clone(),
         },
       )?;
-      await_js(p).await?;
+      return Ok(Tail::Await(p, Val::Undefined));
     }
 
     Kind::Tabs => {
@@ -999,13 +1118,13 @@ async fn field_promise(
           skip_validation: skip_validation_from_here.clone(),
         },
       )?;
-      await_js(p).await?;
+      return Ok(Tail::Await(p, Val::Undefined));
     }
 
     _ => {}
   }
 
-  Ok(Val::Undefined)
+  Ok(Tail::Return(Val::Undefined))
 }
 
 /// `traverseFields(...)` called from `promise`. The `mutant-inline-traverse` build runs the
@@ -1020,7 +1139,7 @@ fn traverse_or_inline(ctx: &Rc<Ctx>, trav: Trav) -> JsResult<Local> {
         Some(arr) => Val::from_local(js::get_element(arr.get(), index as u32)?)?,
         None => Val::Ref(desc.node.clone()),
       };
-      js::push(promises, spawn(field_promise(ctx.clone(), trav.clone(), desc.clone(), field_js, index))?)?;
+      js::push(promises, spawn_tail(field_promise(ctx.clone(), trav.clone(), desc.clone(), field_js, index))?)?;
     }
     return call_host(&rt::host()?.promise_all, &[promises]);
   }

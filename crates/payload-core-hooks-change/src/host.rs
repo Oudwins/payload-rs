@@ -39,6 +39,9 @@ pub struct ChangeHost {
   /// `traverseFields` over a run of leaf fields: pushes upstream's `promise()` of each (a JS
   /// `async` function) into the traversal's promises array.
   pub before_change_leaves: Persist,
+  /// `traverseFields(...)` for a fields array made only of leaf fields: upstream's
+  /// `traverseFields.ts` body (a JS `async` function) calling the leaf `promise()` per field.
+  pub before_change_leaf_traversal: Persist,
 }
 
 thread_local! {
@@ -74,6 +77,7 @@ pub fn install(obj: Local) -> JsResult<()> {
     parse_float: f("parseFloat")?,
     object_prototype: f("objectPrototype")?,
     before_change_leaves: f("beforeChangeLeaves")?,
+    before_change_leaf_traversal: f("beforeChangeLeafTraversal")?,
   };
   HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
   Ok(())

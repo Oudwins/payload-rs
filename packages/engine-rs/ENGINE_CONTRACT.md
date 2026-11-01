@@ -91,27 +91,29 @@ synchronously when it is issued and its promise is already settled, so concurren
 interleave statement by statement in microtask order. `call` reproduces this
 (`payload_sql_engine::stepped`):
 
-- The method runs on its own thread and stops after each statement (a *step*). The first step runs
-  synchronously inside `call`; each later step runs from a `queueMicrotask` callback; the returned
+- The method runs on a (pooled) thread of its own and stops after each statement (a _step_). The
+  first step runs synchronously inside `call`; each later step runs from a native promise job
+  (`resolvedPromise.then(step)`, one microtask, not replaceable by fake timers); the returned
   promise is resolved / rejected synchronously by the step that finishes (no macrotask). While a
   step runs, the JS thread waits (as during a synchronous libsql statement).
-- During a step the method holds a *lend* of the connection: a job on the `payload-sqlite` queue of
-  `connId` (queued when the step starts, so in call order with every TS client statement) that
-  runs the method's find statements on the worker with libsql's `executeStmt` port
-  (`client.execute` / `tx.execute`) and keeps every other job of the database file waiting.
-  Write-path statements (payload-sql-upsert) run on the method's thread on a non-owning
-  `rusqlite::Connection` of the same SQLite handle, only while the lend is held. The lend ends at
-  each yield and is taken again when the method is resumed.
-- Yield points: after every statement the engine runs itself (find statements, query-crate
-  selects such as `count` / `selectDistinct`), and before a read made through a write-path host
-  callback (upsertRow's read-back, updateOne's `selectDistinct`, deleteOne's `findFirst`, ...)
-  when the write executor ran statements since the last yield.
-- `PAYLOAD_RS_ENGINE_ATOMIC=true` (read once by the addon) runs every call as one atomic job on
-  the queue instead (the previous behaviour; diagnostics and timing comparisons only).
-- JS functions the method calls (custom column `fromDriver`, see `setLiveSchema`) run on the JS
-  thread through `callFunction` while the step waits. Such a function must not start another
-  engine call (rejected with an `Error`: the new call's first statement would wait for the
-  connection the step holds).
+- Every statement, find path and write path (payload-sql-upsert's executor) alike, is its own job
+  on the `payload-sqlite` queue of `connId`, queued when the method reaches it (so in call order
+  with every TS client statement) and run on the connection the id addresses at that moment, like
+  `client.execute` / `tx.execute`: a client's `#getDb()` (re-opened after a transaction took the
+  previous connection, so a call on the client continues on the new connection when a transaction
+  begins between its statements, as in libsql) or the transaction's connection (`tx.execute`'s
+  closed check first). Find statements use libsql's `executeStmt` port; write statements use
+  rusqlite on the same connection with libsql's error kinds. Nothing is held between statements.
+- A step ends after every statement (also a failed one), so every `await` of a statement in the TS
+  method (drizzle awaits each one, no `Promise.all`) is a step boundary, including the statements
+  of one `upsertRow`.
+- `PAYLOAD_RS_ENGINE_ATOMIC=true` (read once by the addon) runs every call as a whole inside
+  `call`, on the JS thread, without steps (no interleaving; diagnostics and timing comparisons
+  only). JS functions work as in stepped calls. If no thread can be started for a call, it runs
+  like that too.
+- JS functions the method calls (custom column `fromDriver` / `toDriver`, see `setLiveSchema`) run
+  on the JS thread through `callFunction` while the step waits. They may use the clients
+  synchronously and may start other engine calls (no statement holds the queue meanwhile).
 - `contextJson = { allowIDOnCreate, limitedBoundParameters, now, blocksAsJSON?, withMutations? }`.
   The flags are the live adapter properties (tests assign `payload.db.allowIDOnCreate = true` after
   init) and win over `optionsJson`; `now` (`Date.now()` of the caller) is used for every "now"
@@ -126,8 +128,11 @@ interleave statement by statement in microtask order. `call` reproduces this
 - Caller-visible `data` mutations the glue makes before the call are not repeated:
   `createGlobal` does not set `data.createdAt` (`create` only sets it when falsy, `updateJobs`'
   `delete data.log` is idempotent).
-- `argsJson` is decoded with `$date` → ISO string and `$bigint` → number (what the write / query
-  modules were verified with). `req` fields read: `req.locale` (`deleteOne`, `deleteMany`).
+- `argsJson` is decoded typed: `$date` is a `Date`, `$bigint` a `bigint`, as the TS method
+  receives them (a `Date` for a text field is stored as `JSON.stringify(date)`, an invalid `Date`
+  for a date field throws `RangeError`, a `Date` where value binds its time value, a `bigint` one a
+  64-bit integer or libsql's `RangeError`). `req` fields read: `req.locale` (`deleteOne`,
+  `deleteMany`).
 - Results are the tree encoding of the return value: own `undefined` keys are kept
   (`{ $undefined: true }`, e.g. `limit` of `find` without a limit, `deleteMany`'s `undefined`),
   user objects whose only key is reserved are `$obj`-escaped.
@@ -138,25 +143,35 @@ interleave statement by statement in microtask order. `call` reproduces this
 `executeSchemaHooks({ type: 'afterSchemaInit' })` the glue passes the live schema:
 
 ```ts
-engine.setLiveSchema(JSON.stringify({
-  // describeDrizzleSchema (test/__rs/find/harness.ts) of the relational schema drizzle was given:
-  // drizzle(client, { schema: adapter.schema }) -> db._.schema / db._.tableNamesMap
-  drizzle: describeDrizzleSchema(db._.schema, db._.tableNamesMap),
-  // adapter.rawTables after beforeSchemaInit (plain JSON), optional
-  rawTables: adapter.rawTables,
-}))
+engine.setLiveSchema(
+  JSON.stringify({
+    // describeDrizzleSchema (test/__rs/find/harness.ts) of the relational schema drizzle was given:
+    // drizzle(client, { schema: adapter.schema }) -> db._.schema / db._.tableNamesMap
+    drizzle: describeDrizzleSchema(db._.schema, db._.tableNamesMap),
+    // adapter.rawTables after beforeSchemaInit (plain JSON), optional
+    rawTables: adapter.rawTables,
+  }),
+)
 ```
 
-- `drizzle` (`DrizzleSchema::from_json`): `{ [tsName]: { dbName, columns: { [key]: { name,
-  columnType, sqlType, mode?, fromDriver? } }, relations: { [key]: { type: 'one' | 'many' |
-  'one-no-config', fields?, references?, referencedTable, relationName, sourceTable } } } }`.
-  `fromDriver` is the `callFunction` registry id of a custom column's `mapFromDriverValue`
-  (`registerHostFunction(column.mapFrom)`); it is called with the driver value
-  (`serializeForEngine` tree, so `callFunction` should decode its argument with
-  `deserializeFromEngine`). Used for every relational query, selection (`SQLiteNumericBigInt` →
-  `cast(... as text)`) and column decoding.
+- `drizzle` (`DrizzleSchema::from_json`, payload-sql-query `drizzle`): `{ [tsName]: { dbName,
+  columns: { [key]: { name, columnType, sqlType, primary, mode?, fromDriver?, toDriver? } },
+  relations: { [key]: { type: 'one' | 'many' | 'one-no-config', fields?, references?,
+  referencedTable, relationName, sourceTable } } } }`. `fromDriver` / `toDriver` are the
+  `callFunction` registry ids of a custom column's `mapFrom` / `mapTo`
+  (`describeDrizzleSchema(schema, tableNamesMap, register)` with the registry's `register`); they
+  are called with the value as a `serializeForEngine` tree, so `callFunction` decodes its argument
+  with `deserializeFromEngine`. This is `adapter.tables` for everything drizzle resolves at call
+  time: every relational query, every `where` / `sort` column (`getTableColumnFromPath`,
+  `buildOrderBy`; values bound through the column's `mapToDriverValue`, custom `toDriver`
+  included), every selection (`SQLiteNumericBigInt` → `cast(... as text)`, also in
+  `selectDistinct` / `findDistinct`) and every decoded column (`mapResultRow` decodes all selected
+  columns in order).
 - `rawTables`: replaces the raw tables the write path builds `insert` / `update` / `delete`
   statements and returned columns from (keys and `null` placeholders kept).
+- Verified end to end through napi against the TS adapter (schema hooks renaming a raw column and
+  replacing drizzle columns with a custom type and a bigint numeric):
+  test/__rs/find/engine/engineCalls.int.spec.ts.
 - Without `setLiveSchema` the engine uses the schema it derived from its own raw schema (identical
   to the live one when no hook changes it).
 
@@ -172,31 +187,28 @@ engine.setLiveSchema(JSON.stringify({
   for unique violations; `errors[].message` is left out so TS fills `req.t('error:valueMustBeUnique')`.
 - `{ name: 'APIError', message, data, status? }` (`status` only when drizzle passes one, e.g. 400).
 - `{ name: 'QueryError', message, data: [{ path }] }`.
-- `{ name: 'LibsqlError', message, data: NativeError }` when the connection of `connId` is gone.
+- A statement whose connection is gone (closed client, finished transaction) fails like any other
+  driver error: `DrizzleQueryError` whose `cause` is libsql's error.
 - JS built-ins (`TypeError`, `RangeError`, `SyntaxError`) and `Error` as `{ name, message, data: null }`.
 
 ### Known differences (Rust side)
 
-- **Statements payload-sql-upsert runs back to back share one step.** The upsert crate's
-  `Executor` runs statements directly on a `rusqlite::Connection` with no per-statement hook, and
-  the engine may only edit its own crates, so e.g. the main-row `update` and the array `insert`s of
-  one `upsertRow` run without a yield between them (TS awaits each). The next yield is at the next
-  read the write path makes (see "Yield points"). Concurrent calls whose interleaving inside such a
-  run matters can still differ from TS. Making it exact needs a statement hook in
-  `payload_sql_upsert::Executor::query_raw` (e.g. a `&dyn Fn()` called after each statement) that
-  the engine would use as a yield point.
 - **Microtask distances.** A step boundary is one microtask; drizzle and Payload put several
   microtasks between two statements of one method. Concurrent calls of the same method (or of
   methods with the same statement sequence) interleave exactly like TS; a call racing TS code with
   a different number of awaits can be ordered differently.
-- **A client connection replaced mid-call.** A call on the client (no transaction) whose client
-  connection is taken by a transaction begun between two of its steps fails with an `Error`
-  (libsql would run its remaining statements on the client's new connection): the write path's
-  connection cannot be switched mid-method.
 - **Columns added to drizzle tables only (`afterSchemaInit` `extendTable`) are read, not
-  written.** Relational queries, selections and decoding use the live drizzle schema, but the
-  write path builds `insert` / `update` statements from raw tables (`setLiveSchema`'s `rawTables`,
-  i.e. `beforeSchemaInit` changes); drizzle would also list the extra columns there.
+  written.** Relational queries, `where` / `sort` columns, selections and decoding use the live
+  drizzle schema, but the write path builds `insert` / `update` statements from raw tables
+  (`setLiveSchema`'s `rawTables`, i.e. `beforeSchemaInit` changes) and encodes values with the raw
+  column types: drizzle would also list the extra columns there and encode values with the drizzle
+  column (custom `toDriver`).
+- **Blob columns and `bigint` where values on the find path.** Binding a value to a drizzle blob
+  column (`Buffer.from(...)`) is an internal error (no `Buffer` value on this side). A `bigint`
+  where value of a find statement is bound as a double (exact on the write path's selects, which
+  bind it as a 64-bit integer).
+- **JS functions as conversion methods.** `Number(x)` / `String(x)` of a where value whose own
+  `valueOf` / `toString` is a JS function (JS would call it) is an internal error.
 - **JS-level interception of the client is bypassed.** Engine statements do not go through
   `payload.db.drizzle.$client.execute`, so monkeypatching it (test/database/sqlite-bound-parameters-limit)
   has no effect on data methods.

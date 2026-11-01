@@ -15,6 +15,7 @@ import { MissingEditorProp } from '../../../payload/src/errors/MissingEditorProp
 import { getDefaultValue } from '../../../payload/src/fields/getDefaultValue.js'
 import { getFieldPaths } from '../../../payload/src/fields/getFieldPaths.js'
 import { relationshipPopulationPromise } from '../../../payload/src/fields/hooks/afterRead/relationshipPopulationPromise.js'
+import { traverseFields as upstreamTraverseFields } from '../../../payload/src/fields/hooks/afterRead/traverseFields.js'
 import { virtualFieldPopulationPromise } from '../../../payload/src/fields/hooks/afterRead/virtualFieldPopulationPromise.js'
 import { deepCopyObjectSimple } from '../../../payload/src/utilities/deepCopyObject.js'
 import { getBlockSelect } from '../../../payload/src/utilities/getBlockSelect.js'
@@ -22,6 +23,11 @@ import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 
 export type CoreRuntimeBinding = {
   afterRead: (args: unknown) => Promise<unknown>
+  /**
+   * afterRead's `traverseFields` with its parameter already destructured: the `afterReadArgs`
+   * layout followed by the `TRAV_*` entries (after_read.rs `traverse_fields_entry`).
+   */
+  afterReadTraverseFields: (destructured: unknown[]) => void
   benchCallJs: (fn: () => unknown, n: number) => number
   benchGetProperty: (obj: object, key: string, n: number) => number
   benchJsonRoundTrip: (json: string) => string
@@ -36,7 +42,8 @@ export type CoreRuntimeBinding = {
   noop: () => void
   probe: (value: unknown, frozen: object) => Record<string, unknown>
   resume: (token: number, ok: boolean, value: unknown) => void
-  stats: () => { awaits: number; tasks: number }
+  /** Executor tasks/awaits and calls of exported core engine functions (excluding `stats`). */
+  stats: () => { awaits: number; entries: number; tasks: number }
 }
 
 let binding: CoreRuntimeBinding | undefined
@@ -394,6 +401,13 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
   created.init({
     awaitValue,
     /**
+     * A tail `await promise; return value` of an engine task that never suspended
+     * (`executor::spawn_tail`): the same single reaction on `promise`, settling the result the
+     * way the async function's promise would.
+     */
+    thenReturn: (promise: Promise<unknown>, value: unknown) =>
+      reflectApply(promiseThen, promise, [() => value]),
+    /**
      * The `afterRead` args destructuring (same pattern, order and `flattenLocales = true`
      * default), plus the two promise arrays. Indices are `after_read.rs` `arg::*`; the engine
      * overwrites `currentDepth`/`depth` with the derived values.
@@ -687,3 +701,119 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
 /** Drop-in for `afterRead` from `payload/src/fields/hooks/afterRead/index.ts`. */
 export const afterRead = <T extends JsonObject>(args: AfterReadArgs<T>): Promise<T> =>
   getCoreRuntime().afterRead(args) as Promise<T>
+
+export type AfterReadTraverseFieldsArgs = Parameters<typeof upstreamTraverseFields>[0]
+
+/**
+ * Drop-in for `traverseFields` from `payload/src/fields/hooks/afterRead/traverseFields.ts`
+ * (synchronous; exported by payload as `afterReadTraverseFields`, called by rich text editor
+ * hooks). The parameter is destructured with upstream's pattern and defaults. The port runs the
+ * traversal unless `triggerAccessControl` or `triggerHooks` is falsy (the engine's own traversals
+ * never are; those flags are not modelled by the port), a path is not a string or `fieldDepth` is
+ * not a number: then upstream's body runs.
+ */
+export const traverseFields = (args: AfterReadTraverseFieldsArgs): void => {
+  const {
+    blockData,
+    collection,
+    context,
+    currentDepth,
+    depth,
+    doc,
+    draft,
+    fallbackLocale,
+    fieldDepth = 0,
+    fieldPromises,
+    fields,
+    findMany,
+    flattenLocales,
+    global,
+    locale,
+    overrideAccess,
+    parentIndexPath,
+    parentIsLocalized,
+    parentPath,
+    parentSchemaPath,
+    populate,
+    populationPromises,
+    req,
+    select,
+    selectMode,
+    showHiddenFields,
+    siblingDoc,
+    triggerAccessControl = true,
+    triggerHooks = true,
+  } = args
+  if (
+    !triggerAccessControl ||
+    !triggerHooks ||
+    typeof parentIndexPath !== 'string' ||
+    typeof parentPath !== 'string' ||
+    typeof parentSchemaPath !== 'string' ||
+    typeof fieldDepth !== 'number'
+  ) {
+    upstreamTraverseFields({
+      blockData,
+      collection,
+      context,
+      currentDepth,
+      depth,
+      doc,
+      draft,
+      fallbackLocale,
+      fieldDepth,
+      fieldPromises,
+      fields,
+      findMany,
+      flattenLocales,
+      global,
+      locale,
+      overrideAccess,
+      parentIndexPath,
+      parentIsLocalized,
+      parentPath,
+      parentSchemaPath,
+      populate,
+      populationPromises,
+      req,
+      select,
+      selectMode,
+      showHiddenFields,
+      siblingDoc,
+      triggerAccessControl,
+      triggerHooks,
+    })
+    return
+  }
+  // `afterReadArgs` layout (ARG_*), then blockData, fieldDepth, fields, parentIndexPath,
+  // parentIsLocalized, parentPath, parentSchemaPath, selectMode, siblingDoc (after_read.rs `trav_arg`)
+  getCoreRuntime().afterReadTraverseFields([
+    collection,
+    context,
+    currentDepth,
+    depth,
+    doc,
+    draft,
+    fallbackLocale,
+    findMany,
+    flattenLocales,
+    global,
+    locale,
+    overrideAccess,
+    populate,
+    req,
+    select,
+    showHiddenFields,
+    fieldPromises,
+    populationPromises,
+    blockData,
+    fieldDepth,
+    fields,
+    parentIndexPath,
+    parentIsLocalized,
+    parentPath,
+    parentSchemaPath,
+    selectMode,
+    siblingDoc,
+  ])
+}

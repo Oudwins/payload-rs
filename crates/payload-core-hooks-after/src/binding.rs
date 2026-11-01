@@ -17,6 +17,7 @@ type Body<const N: usize> = fn([Local; N]) -> JsResult<Local>;
 /// never lets a panic cross the FFI boundary.
 fn run<const N: usize>(env: sys::napi_env, info: sys::napi_callback_info, body: Body<N>) -> sys::napi_value {
   js::set_env(env);
+  payload_core_runtime::executor::count_entry();
   let (args, _) = js::callback_args::<N>(env, info);
   match catch_unwind(AssertUnwindSafe(|| body(args))) {
     Ok(Ok(v)) => v.0,
@@ -49,11 +50,18 @@ export!(after_change_export, 1, |[args]| after_change::after_change(args));
 
 export!(before_duplicate_export, 1, |[args]| before_duplicate::before_duplicate(args));
 
+export!(after_change_traverse_fields_export, 1, |[destructured]| after_change::traverse_fields_entry(destructured));
+
 /// Builds the binding object `{ init, afterChange, beforeDuplicate }`.
 pub fn create() -> JsResult<Local> {
   let o = js::object();
   js::set_named(o, "init", js::create_function("init", init, ptr::null_mut()))?;
   js::set_named(o, "afterChange", js::create_function("afterChange", after_change_export, ptr::null_mut()))?;
+  js::set_named(
+    o,
+    "afterChangeTraverseFields",
+    js::create_function("afterChangeTraverseFields", after_change_traverse_fields_export, ptr::null_mut()),
+  )?;
   js::set_named(
     o,
     "beforeDuplicate",

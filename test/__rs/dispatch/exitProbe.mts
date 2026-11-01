@@ -32,8 +32,21 @@ const fields: any[] = [
       { name: 'ñ', type: 'text', hooks: { afterRead: [async ({ value }: any) => value] } },
     ],
   },
-  // never settles in `pending` mode: a Rust task is still suspended at exit
+  // never settles in `pending` mode: the leaf's JS `hookedLeaf` and the traversal's Rust task are
+  // still suspended at exit
   { name: 'waits', type: 'text', hooks: { afterRead: [() => (mode === 'pending' ? gate : 1)] } },
+  // a container's hooks run in its Rust `promise()` task: in `pending` mode that per-field task
+  // (afterRead), and a `spawn_tail` task that suspended in its first poll (beforeValidate), are
+  // still waiting on a native resume at exit
+  {
+    name: 'waitsGroup',
+    type: 'group',
+    fields: [{ name: 'inner', type: 'text' }],
+    hooks: {
+      afterRead: [({ value }: any) => (mode === 'pending' ? gate : value)],
+      beforeValidate: [({ value }: any) => (mode === 'pending' ? gate : value)],
+    },
+  },
 ]
 const collection = { fields, flattenedFields: fields, slug: 'probe' }
 const req: any = {
@@ -57,7 +70,20 @@ const run = () =>
   })
 
 const pending = Array.from({ length: 50 }, run)
+const validating = Array.from({ length: 10 }, () =>
+  getBeforeValidateBinding().beforeValidate({
+    collection,
+    context: req.context,
+    data: { plain: 'p', waitsGroup: { inner: 'i' } },
+    doc: {},
+    global: null,
+    operation: 'update',
+    overrideAccess: true,
+    req,
+  }),
+)
 if (mode !== 'pending') {
+  await Promise.all(validating)
   const docs = await Promise.all(pending)
   if (docs[0]!['名前'] !== 'n!' || docs[0]!['títle'] !== 'défault') {
     throw new Error(`unexpected afterRead result ${JSON.stringify(docs[0])}`)

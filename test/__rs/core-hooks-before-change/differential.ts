@@ -20,8 +20,18 @@ import type {
 import { types } from 'node:util'
 
 import { beforeChange as beforeChangeRS } from '../../../packages/engine-rs/src/runtime/beforeChange/index.js'
-import { beforeChange as beforeChangeTS } from '../../../packages/payload/src/fields/hooks/beforeChange/index.js'
+import { traverseFields as beforeChangeTraverseFieldsRS } from '../../../packages/engine-rs/src/runtime/beforeChange/index.js'
+import { upstreamBeforeChange as beforeChangeTS } from '../../../packages/payload/src/fields/hooks/beforeChange/index.js'
+import { traverseFields as beforeChangeTraverseFieldsTS } from '../../../packages/payload/src/fields/hooks/beforeChange/traverseFields.js'
 import { createPayloadRequest } from '../../../packages/payload/src/utilities/createPayloadRequest.js'
+import { assertDistinctEngines, startEngineRun } from '../dispatch/engineGuard.js'
+
+assertDistinctEngines('beforeChange', beforeChangeTS, beforeChangeRS)
+assertDistinctEngines(
+  'beforeChange traverseFields',
+  beforeChangeTraverseFieldsTS,
+  beforeChangeTraverseFieldsRS,
+)
 
 export type Engine = 'rs' | 'ts'
 
@@ -164,6 +174,18 @@ const snapArg = (arg: unknown): unknown => {
 
 const record = (event: Record<string, unknown>) => {
   recorder.current?.events.push(event)
+}
+
+/**
+ * Records when the promise of run input `index` settles: the microtask at which a traversal's own
+ * promise settles (its trailing ticks) is compared, not only the callbacks inside it.
+ */
+const recordSettle = <P extends Promise<unknown>>(index: number, promise: P): P => {
+  promise.then(
+    () => record({ inputSettled: index, ok: true }),
+    () => record({ inputSettled: index, ok: false }),
+  )
+  return promise
 }
 
 /** Wraps a user callback so each call (and the settling of its result) is recorded. */
@@ -347,6 +369,7 @@ export const runBeforeChange = async ({
   global,
   inputs,
   payload,
+  traverse,
   variant,
 }: {
   collection?: SanitizedCollectionConfig
@@ -356,9 +379,18 @@ export const runBeforeChange = async ({
   /** Fresh inputs for this run (not cloned: keeps frozen objects, shared references). */
   inputs: BeforeChangeInput[]
   payload: Payload
+  /**
+   * Call the exported `traverseFields` (what rich text editor hooks call) with the arguments
+   * `beforeChange` passes it (on `data` itself, fresh `errors`/`mergeLocaleActions` arrays kept on
+   * the input so they are compared), instead of `beforeChange`.
+   */
+  traverse?: boolean
   variant: Variant
 }): Promise<RunOutcome> => {
   const beforeChange = engine === 'ts' ? beforeChangeTS : beforeChangeRS
+  const traverseFields =
+    engine === 'ts' ? beforeChangeTraverseFieldsTS : beforeChangeTraverseFieldsRS
+  const engineRun = startEngineRun(engine, 'beforeChange')
   const req = await createPayloadRequest({
     context: { rsDifferential: true },
     locale: variant.locale,
@@ -371,24 +403,68 @@ export const runBeforeChange = async ({
   const onDataProcessed = variant.onDataProcessed
     ? wrap(() => undefined, 'onDataProcessed', 'onDataProcessed')
     : undefined
-  const run = (input: BeforeChangeInput) =>
-    beforeChange({
+  const runTraverseFields = (input: BeforeChangeInput & Record<string, unknown>) => {
+    const errors: unknown[] = []
+    const mergeLocaleActions: unknown[] = []
+    input.traverseErrors = errors
+    input.traverseMergeLocaleActions = mergeLocaleActions
+    return traverseFields({
       id: input.id,
       collection: collection ?? null,
       context: req.context,
       data: input.data,
       doc: input.doc,
       docWithLocales: input.docWithLocales,
-      fieldsToValidate: variant.fieldsToValidate ? new Set(variant.fieldsToValidate) : undefined,
+      errors,
+      fieldLabelPath: '',
+      fields: (collection ?? global)!.fields,
       global: global ?? null,
       isValidationOperation: variant.isValidationOperation,
-      onDataProcessed: onDataProcessed as any,
+      mergeLocaleActions,
       operation: variant.operation,
       overrideAccess: variant.overrideAccess,
+      parentIndexPath: '',
+      parentIsLocalized: false,
+      parentPath: '',
+      parentSchemaPath: '',
       req,
+      siblingData: input.data,
+      siblingDoc: input.doc,
+      siblingDocWithLocales: input.docWithLocales,
       skipHooks: variant.skipHooks,
       skipValidation: variant.skipValidation,
-    } as any)
+      submittedTopLevelFieldNames: variant.fieldsToValidate
+        ? new Set(variant.fieldsToValidate)
+        : undefined,
+    } as any).then(async () => {
+      // what beforeChange does with them afterwards (same harness code for both engines)
+      for (const action of mergeLocaleActions as (() => unknown)[]) {
+        await action()
+      }
+    })
+  }
+  const run = (input: BeforeChangeInput) =>
+    traverse
+      ? runTraverseFields(input)
+      : beforeChange({
+          id: input.id,
+          collection: collection ?? null,
+          context: req.context,
+          data: input.data,
+          doc: input.doc,
+          docWithLocales: input.docWithLocales,
+          fieldsToValidate: variant.fieldsToValidate
+            ? new Set(variant.fieldsToValidate)
+            : undefined,
+          global: global ?? null,
+          isValidationOperation: variant.isValidationOperation,
+          onDataProcessed: onDataProcessed as any,
+          operation: variant.operation,
+          overrideAccess: variant.overrideAccess,
+          req,
+          skipHooks: variant.skipHooks,
+          skipValidation: variant.skipValidation,
+        } as any)
   const outcome: RunOutcome = {
     contextAfter: undefined,
     events: [],
@@ -407,10 +483,10 @@ export const runBeforeChange = async ({
   let results: unknown[] = []
   try {
     if (concurrent) {
-      results = await Promise.all(inputs.map(run))
+      results = await Promise.all(inputs.map((input, i) => recordSettle(i, run(input))))
     } else {
-      for (const input of inputs) {
-        results.push(await run(input))
+      for (const [i, input] of inputs.entries()) {
+        results.push(await recordSettle(i, run(input)))
       }
     }
     outcome.resultIsCopy = results.map((result, i) => result !== inputs[i]!.data)
@@ -430,5 +506,6 @@ export const runBeforeChange = async ({
   outcome.contextAfter = Object.entries(req.context).map(([key, value]) => [key, snap(value, 8)])
   outcome.events = recorder.current.events
   recorder.current = undefined
+  engineRun.finish(inputs.length)
   return outcome
 }

@@ -134,7 +134,7 @@ impl Db {
     let args = json!({ "objects": [], "root": args }).to_string();
     let adapter = adapter.map(|a| a.to_string());
     worker::call(id, move |session| {
-      match engine.call_json(&method, &args, adapter.as_deref(), session) {
+      match engine.call_json(&NoHost, &method, &args, adapter.as_deref(), session) {
         Ok(text) => Ok(serde_json::from_str(&text).expect("result JSON")),
         Err(e) => Err(e.to_json()),
       }
@@ -483,7 +483,7 @@ fn run_concurrently(db: &Db, calls: Vec<(&str, Json)>) -> Vec<Result<Json, Json>
   let mut ops = Vec::new();
   for (method, args) in calls {
     let args = json!({ "objects": [], "root": args }).to_string();
-    ops.push(SteppedCall::start(Arc::clone(&db.engine), method.to_string(), args, None, db.id).expect("start"));
+    ops.push(SteppedCall::start(Arc::clone(&db.engine), method.to_string(), args, None, db.id));
   }
   for i in 0..ops.len() {
     queue.push_back(i);
@@ -595,7 +595,10 @@ fn describe(schema: &payload_sql_find::schema::DrizzleSchema) -> Json {
         Decoder::NumericBigInt => "SQLiteNumericBigInt",
         _ => "SQLiteText",
       };
-      columns.insert(key.clone(), json!({ "name": column.name, "columnType": column_type, "sqlType": column.sql_type }));
+      columns.insert(
+        key.clone(),
+        json!({ "name": column.name, "columnType": column_type, "sqlType": column.sql_type, "primary": column.primary }),
+      );
     }
     let mut relations = serde_json::Map::new();
     for (key, relation) in &table.relations {
@@ -650,7 +653,7 @@ fn live_schema_columns_and_custom_decoders() {
   Arc::get_mut(&mut db.engine).expect("no calls in flight").set_live_schema(&json!({ "drizzle": description })).expect("set");
 
   let args = json!({ "objects": [], "root": { "collection": "relation", "where": {} } }).to_string();
-  let op = SteppedCall::start(Arc::clone(&db.engine), "find".into(), args, None, db.id).expect("start");
+  let op = SteppedCall::start(Arc::clone(&db.engine), "find".into(), args, None, db.id);
   let result = loop {
     match op.resume(&DecodingHost) {
       Step::Yielded => continue,
@@ -659,4 +662,139 @@ fn live_schema_columns_and_custom_decoders() {
   };
   let result: Json = serde_json::from_str(&result).expect("result JSON");
   assert_eq!(result["docs"][0]["name"], "decoded:x", "{result}");
+}
+
+/// Runs a stepped call to completion with `host`.
+fn finish(op: &payload_sql_engine::stepped::SteppedCall, host: &dyn payload_engine::host::Host) -> Result<Json, Json> {
+  use payload_sql_engine::stepped::Step;
+  loop {
+    match op.resume(host) {
+      Step::Yielded => continue,
+      Step::Done(result) => {
+        return result.map(|text| serde_json::from_str(&text).expect("result JSON")).map_err(|e| e.to_json());
+      }
+    }
+  }
+}
+
+/// The reviewer's scenario: a call on the client (no transaction) whose client connection is
+/// taken by a transaction begun between two of its steps (`Promise.all([find, create])`, where the
+/// create begins its transaction). libsql's `client.execute` resolves `#getDb()` per statement, so
+/// the TS method continues on the client's new connection; the call must finish like that, and
+/// the transaction stays usable.
+#[test]
+fn a_transaction_begun_between_steps_does_not_fail_the_call() {
+  use payload_sql_engine::stepped::{Step, SteppedCall};
+  let Some(fixture) = fixture("versions") else { return };
+  let db = open("versions-tx-between-steps", &fixture, "number");
+  let job = db.ok("create", json!({ "collection": "payload-jobs", "data": { "input": {}, "queue": "default" } }));
+  let calls = [
+    ("find", json!({ "collection": "payload-jobs", "where": where_eq("queue", json!("default")) }), "write"),
+    ("count", json!({ "collection": "payload-jobs" }), "write"),
+    // a deferred transaction takes no lock until its first statement, so the update can write
+    ("updateOne", json!({ "collection": "payload-jobs", "id": job["id"], "data": { "queue": "other" } }), "deferred"),
+  ];
+  for (method, args, mode) in calls {
+    let expected = db.ok(method, args.clone());
+    let encoded = json!({ "objects": [], "root": args }).to_string();
+    let op = SteppedCall::start(Arc::clone(&db.engine), method.to_string(), encoded, None, db.id);
+    assert!(matches!(op.resume(&NoHost), Step::Yielded), "{method}: the first statement ends the first step");
+    let mode = mode.to_string();
+    let tx = worker::call(db.id, move |session| session.begin_transaction(&mode, payload_sqlite::IntMode::Number))
+      .expect("job")
+      .expect("begin");
+    let result = finish(&op, &NoHost).unwrap_or_else(|e| panic!("{method} failed after a transaction began: {e}"));
+    let strip = |v: &Json| {
+      let mut v = v.clone();
+      for doc in v["docs"].as_array_mut().into_iter().flatten() {
+        if let Some(o) = doc.as_object_mut() {
+          o.remove("updatedAt");
+        }
+      }
+      if let Some(o) = v.as_object_mut() {
+        o.remove("updatedAt");
+      }
+      v
+    };
+    assert_eq!(strip(&result), strip(&expected), "{method}");
+    // the transaction is unaffected by the call
+    db.call_on(tx, "count", json!({ "collection": "payload-jobs" })).expect("count in tx");
+    worker::call(tx, |session| session.conn().expect("conn").exec("ROLLBACK")).expect("job").expect("rollback");
+    worker::call(tx, |session| session.retire_finished_transaction()).expect("job");
+  }
+}
+
+/// A host function that makes a blocking client call while a step waits for it (TS
+/// `sqliteExecuteSync` from a custom column's `fromDriver`) runs: no statement holds the queue
+/// between statements.
+#[test]
+fn host_functions_can_use_the_queue_during_a_step() {
+  use payload_sql_engine::stepped::SteppedCall;
+  struct QueueUsingHost {
+    id: ConnId,
+  }
+  impl payload_engine::host::Host for QueueUsingHost {
+    fn call(&self, id: u32, arg: &Json) -> payload_engine::error::Result<payload_engine::js::JsVal> {
+      assert_eq!(id, 7);
+      let rows = worker::call(self.id, |session| session.conn().expect("conn").execute_sql("select 41 + 1", payload_sqlite::IntMode::Number))
+        .expect("job")
+        .expect("select");
+      Ok(payload_engine::js::JsVal::str(format!("{}:{:?}", arg.as_str().unwrap_or("?"), rows.rows[0][0])))
+    }
+  }
+  let Some(fixture) = fixture("relationships") else { return };
+  let mut db = open("relationships-host-queue", &fixture, "number");
+  let mut description = describe(db.engine.drizzle_schema());
+  db.ok("create", json!({ "collection": "relation", "data": { "name": "x" } }));
+  description["relation"]["columns"]["name"] =
+    json!({ "name": "name", "columnType": "SQLiteCustomColumn", "sqlType": "text", "fromDriver": 7 });
+  Arc::get_mut(&mut db.engine).expect("no calls in flight").set_live_schema(&json!({ "drizzle": description })).expect("set");
+  let engine = Arc::clone(&db.engine);
+  let id = db.id;
+  let (done, finished) = std::sync::mpsc::channel();
+  std::thread::spawn(move || {
+    let args = json!({ "objects": [], "root": { "collection": "relation", "where": {} } }).to_string();
+    let op = SteppedCall::start(engine, "find".into(), args, None, id);
+    let _ = done.send(finish(&op, &QueueUsingHost { id }));
+  });
+  let result = finished.recv_timeout(std::time::Duration::from_secs(30)).expect("the call deadlocked").expect("find");
+  assert_eq!(result["docs"][0]["name"], "x:Number(42.0)", "{result}");
+}
+
+/// Statements of one `upsertRow` are separate steps (TS awaits each): two concurrent updates that
+/// replace the same document's array both delete the rows first, then both insert theirs, so both
+/// read-backs see both rows. With the update / delete / insert run back to back in one step the
+/// second call's delete would remove the first call's row before either reads.
+#[test]
+fn upsert_row_statements_interleave_with_concurrent_calls() {
+  let Some(fixture) = fixture("versions") else { return };
+  let db = open("versions-upsert-interleave", &fixture, "number");
+  let job = db.ok("create", json!({ "collection": "payload-jobs", "data": { "input": {}, "queue": "default" } }));
+  let update = |i: usize| {
+    (
+      "updateOne",
+      json!({
+        "collection": "payload-jobs",
+        "id": job["id"],
+        "data": { "log": [{
+          "id": format!("{i:024x}"),
+          "executedAt": "2025-01-01T00:00:00.000Z",
+          "completedAt": "2025-01-01T00:00:00.000Z",
+          "taskSlug": "inline",
+          "taskID": format!("task {i}"),
+          "input": {},
+          "state": "succeeded",
+        }] },
+      }),
+    )
+  };
+  let results = run_concurrently(&db, vec![update(1), update(2)]);
+  for result in &results {
+    let doc = result.as_ref().unwrap_or_else(|e| panic!("updateOne failed: {e}"));
+    let ids: Vec<&str> = doc["log"].as_array().into_iter().flatten().filter_map(|row| row["id"].as_str()).collect();
+    assert_eq!(ids, vec![format!("{:024x}", 1), format!("{:024x}", 2)], "{doc}");
+  }
+  // run one after another, the second update replaces the first one's row
+  let (method, args) = update(3);
+  assert_eq!(db.ok(method, args)["log"].as_array().map(Vec::len), Some(1));
 }

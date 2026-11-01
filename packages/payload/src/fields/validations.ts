@@ -512,7 +512,7 @@ export type BlocksFieldValidation = Validate<unknown, unknown, unknown, BlocksFi
  *
  * @internal - this may break or be removed at any time
  */
-export let validateBlocksFilterOptions = async function validateBlocksFilterOptions({
+export async function validateBlocksFilterOptions({
   id,
   data,
   filterOptions,
@@ -1075,51 +1075,77 @@ export let point: PointFieldValidation = (value = ['', ''], { req: { t }, requir
   return true
 }
 
-type RustValidations = Record<string, (...args: unknown[]) => unknown>
-
 /**
- * Rust validators (`packages/engine-rs/src/validate/validations.ts`), selected once at module
- * load: `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_PORT.md. This module is
- * also bundled for the browser, where `process` may not exist.
+ * Rust validators (crates/payload-core-validate/live), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs` (see RUST_PORT.md). The addon
+ * (`PAYLOAD_CORE_RUNTIME_ADDON`, else `PAYLOAD_ENGINE_ADDON`, else engine-rs/payload-engine.node) is
+ * loaded synchronously, so every export is the Rust-backed validator, with the upstream name,
+ * `length` and sync/async kind, before anything can call it. This module is also bundled for the
+ * browser, where `process` may not exist.
  */
 const isRustCoreEngine =
   typeof process !== 'undefined' &&
   (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
 
 if (isRustCoreEngine) {
-  const rustValidationsSpecifier = '../../../engine-rs/src/validate/validations.js'
-  let rustValidations: RustValidations | undefined
-  const rustValidationsLoad: Promise<RustValidations> = import(
-    /* @vite-ignore */ /* webpackIgnore: true */ rustValidationsSpecifier
-  ).then((loaded: RustValidations) => (rustValidations = loaded))
-  void rustValidationsLoad.catch(() => {})
-  const forwardToRust = <F>(name: string): F =>
-    ((...args: unknown[]) =>
-      rustValidations
-        ? rustValidations[name]!(...args)
-        : rustValidationsLoad.then((loaded) => loaded[name]!(...args))) as F
+  type RustValidations = {
+    array: ArrayFieldValidation
+    blocks: BlocksFieldValidation
+    checkbox: CheckboxFieldValidation
+    code: CodeFieldValidation
+    confirmPassword: ConfirmPasswordFieldValidation
+    date: DateFieldValidation
+    email: EmailFieldValidation
+    json: JSONFieldValidation
+    number: NumberFieldValidation
+    password: PasswordFieldValidation
+    point: PointFieldValidation
+    radio: RadioFieldValidation
+    relationship: RelationshipFieldValidation
+    richText: RichTextFieldValidation
+    select: SelectFieldValidation
+    slug: SlugFieldValidation
+    text: TextFieldValidation
+    textarea: TextareaFieldValidation
+    upload: UploadFieldValidation
+    username: UsernameFieldValidation
+    validateBlocksFilterOptions: typeof validateBlocksFilterOptions
+  }
+  const { createRequire } = process.getBuiltinModule('node:module')
+  const addonPath =
+    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
+    process.env.PAYLOAD_ENGINE_ADDON ??
+    '../../../engine-rs/payload-engine.node'
+  const addon = createRequire(import.meta.url)(addonPath) as {
+    validateBinding: (deps: object) => RustValidations
+  }
+  const rust = addon.validateBinding({ ObjectId, validateJSONSchema })
+  if ('init' in rust) {
+    throw new Error(`The engine addon at ${addonPath} is outdated (validateBinding); rebuild it`)
+  }
 
-  text = forwardToRust('text')
-  slug = forwardToRust('slug')
-  password = forwardToRust('password')
-  confirmPassword = forwardToRust('confirmPassword')
-  email = forwardToRust('email')
-  username = forwardToRust('username')
-  textarea = forwardToRust('textarea')
-  code = forwardToRust('code')
-  json = forwardToRust('json')
-  checkbox = forwardToRust('checkbox')
-  date = forwardToRust('date')
-  richText = forwardToRust('richText')
-  number = forwardToRust('number')
-  array = forwardToRust('array')
-  validateBlocksFilterOptions = forwardToRust('validateBlocksFilterOptions')
-  blocks = forwardToRust('blocks')
-  upload = forwardToRust('upload')
-  relationship = forwardToRust('relationship')
-  select = forwardToRust('select')
-  radio = forwardToRust('radio')
-  point = forwardToRust('point')
+  text = rust.text
+  slug = rust.slug
+  password = rust.password
+  confirmPassword = rust.confirmPassword
+  email = rust.email
+  username = rust.username
+  textarea = rust.textarea
+  code = rust.code
+  json = rust.json
+  checkbox = rust.checkbox
+  date = rust.date
+  richText = rust.richText
+  number = rust.number
+  array = rust.array
+  // @ts-expect-error -- a function declaration is a mutable binding; reassigned once, at load
+  validateBlocksFilterOptions = rust.validateBlocksFilterOptions
+  blocks = rust.blocks
+  upload = rust.upload
+  relationship = rust.relationship
+  select = rust.select
+  radio = rust.radio
+  point = rust.point
 }
 
 /**

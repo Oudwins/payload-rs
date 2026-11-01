@@ -10,6 +10,8 @@
  *
  * Use a release build of payload-node for meaningful numbers. BENCH_ROUNDS / BENCH_DOCS tune it.
  */
+import fs from 'node:fs'
+import inspector from 'node:inspector'
 import { expect } from 'vitest'
 
 import { afterChange as afterChangeRS } from '../../../packages/engine-rs/src/runtime/afterChange/index.js'
@@ -17,11 +19,11 @@ import { beforeChange as beforeChangeRS } from '../../../packages/engine-rs/src/
 import { beforeDuplicate as beforeDuplicateRS } from '../../../packages/engine-rs/src/runtime/beforeDuplicate/index.js'
 import { beforeValidate as beforeValidateRS } from '../../../packages/engine-rs/src/runtime/beforeValidate/index.js'
 import { afterRead as afterReadRS } from '../../../packages/engine-rs/src/runtime/index.js'
-import { afterChange as afterChangeTS } from '../../../packages/payload/src/fields/hooks/afterChange/index.js'
-import { afterRead as afterReadTS } from '../../../packages/payload/src/fields/hooks/afterRead/index.js'
-import { beforeChange as beforeChangeTS } from '../../../packages/payload/src/fields/hooks/beforeChange/index.js'
-import { beforeDuplicate as beforeDuplicateTS } from '../../../packages/payload/src/fields/hooks/beforeDuplicate/index.js'
-import { beforeValidate as beforeValidateTS } from '../../../packages/payload/src/fields/hooks/beforeValidate/index.js'
+import { upstreamAfterChange as afterChangeTS } from '../../../packages/payload/src/fields/hooks/afterChange/index.js'
+import { upstreamAfterRead as afterReadTS } from '../../../packages/payload/src/fields/hooks/afterRead/index.js'
+import { upstreamBeforeChange as beforeChangeTS } from '../../../packages/payload/src/fields/hooks/beforeChange/index.js'
+import { upstreamBeforeDuplicate as beforeDuplicateTS } from '../../../packages/payload/src/fields/hooks/beforeDuplicate/index.js'
+import { upstreamBeforeValidate as beforeValidateTS } from '../../../packages/payload/src/fields/hooks/beforeValidate/index.js'
 import { createPayloadRequest } from '../../../packages/payload/src/utilities/createPayloadRequest.js'
 import { test } from '../../__helpers/int/vitest.js'
 
@@ -144,10 +146,30 @@ test.suite('dispatch: field traversal benchmark', { config: './benchConfig.ts' }
         beforeDuplicateRS,
       )
 
+      // BENCH_ONLY=<traversal>, BENCH_SLUG=plain|hooked: restrict the table (e.g. for profiling)
+      const only = process.env.BENCH_ONLY
+      const slugs = process.env.BENCH_SLUG ? [process.env.BENCH_SLUG] : ['plain', 'hooked']
       const table: Record<string, Record<string, string>> = {}
-      for (const slug of ['plain', 'hooked']) {
+      // BENCH_CPU_PROFILE=<file>: V8 CPU profile of the measured rounds (node:inspector)
+      const profileFile = process.env.BENCH_CPU_PROFILE
+      const session = profileFile ? new inspector.Session() : undefined
+      const post = (method: string, params?: object) =>
+        new Promise<any>((resolve, reject) =>
+          session!.post(method, params, (error, result) =>
+            error ? reject(error) : resolve(result),
+          ),
+        )
+      if (session) {
+        session.connect()
+        await post('Profiler.enable')
+        await post('Profiler.setSamplingInterval', { interval: 100 })
+      }
+      for (const slug of slugs) {
         const collection = payload.collections[slug]!.config
         for (const [name, engines] of Object.entries(traversals)) {
+          if (only && name !== only) {
+            continue
+          }
           // same output from both engines on this input (a cheap guard against benchmarking a no-op)
           const [ts, rs] = [
             await engines.TS(collection, makeDoc()),
@@ -162,8 +184,16 @@ test.suite('dispatch: field traversal benchmark', { config: './benchConfig.ts' }
               await fn(collection, makeDoc())
             }
           }
+          if (session) {
+            await post('Profiler.start')
+          }
           for (let r = 0; r < rounds; r++) {
             for (const engine of r % 2 ? (['RS', 'TS'] as const) : (['TS', 'RS'] as const)) {
+              // BENCH_ENGINE=RS|TS: measure one engine only (profiling)
+              if (process.env.BENCH_ENGINE && engine !== process.env.BENCH_ENGINE) {
+                samples[engine].push(1)
+                continue
+              }
               const docs = Array.from({ length: perRound }, makeDoc)
               const start = process.threadCpuUsage()
               for (const doc of docs) {
@@ -172,6 +202,10 @@ test.suite('dispatch: field traversal benchmark', { config: './benchConfig.ts' }
               const cpu = process.threadCpuUsage(start)
               samples[engine].push((cpu.user + cpu.system) / perRound)
             }
+          }
+          if (session) {
+            const { profile } = await post('Profiler.stop')
+            fs.writeFileSync(`${profileFile}.${slug}.${name}.cpuprofile`, JSON.stringify(profile))
           }
           const ts_ = median(samples.TS)
           const rs_ = median(samples.RS)
@@ -183,7 +217,7 @@ test.suite('dispatch: field traversal benchmark', { config: './benchConfig.ts' }
         }
       }
       console.table(table)
-      expect(Object.keys(table)).toHaveLength(10)
+      expect(Object.keys(table)).toHaveLength(only ? slugs.length : 5 * slugs.length)
     },
   )
 })

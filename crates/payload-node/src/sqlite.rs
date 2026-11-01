@@ -475,9 +475,12 @@ fn spawn<'env>(
 // ---------------------------------------------------------------------------
 // exported functions
 
-/// `createClient(config)`: resolves the URL, opens the database (on the
-/// calling thread, as `new Database(path, opts)` does) and runs
-/// `SELECT 1 AS checkThatTheDatabaseCanBeOpened` in order on the queue.
+/// `createClient(config)`: resolves the URL, then opens the database
+/// (`new Database(path, opts)`: open, cipher, key) and runs
+/// `SELECT 1 AS checkThatTheDatabaseCanBeOpened` as one job on the queue,
+/// blocking the JS thread: like the synchronous binding, both run after every
+/// earlier call (e.g. an un-awaited `commit()`) and errors surface
+/// synchronously.
 /// Returns `{ ok: { id, path, intMode } }`; `id` addresses the client.
 /// `encryption_key` is `config.encryptionKey ?? ""` when that is a string;
 /// the `is_*_valid` flags tell whether `authToken` / `encryptionKey` are
@@ -496,8 +499,9 @@ pub fn sqlite_create_client(
   let created = (|| -> payload_sqlite::Result<CreatedClientData> {
     let target = resolve_config(&config)?;
     let options: OpenOptions = target.options.clone();
-    let id = worker::open_client_with(&target.path, &options)?;
+    let id = worker::register_unopened_client(&target.path, options);
     let check_mode = target.int_mode;
+    // `conn()` opens the unopened client's `#db`
     let checked = worker::call(id, move |session| {
       session.conn()?.execute_sql("SELECT 1 AS checkThatTheDatabaseCanBeOpened", check_mode).map(|_| ())
     })
@@ -692,6 +696,20 @@ pub fn sqlite_client_close(id: u32) {
 #[napi]
 pub fn sqlite_release(id: u32) {
   worker::release(id);
+}
+
+/// Starts recording the statements of connections opened with
+/// `PAYLOAD_SQLITE_TRACE=true` (`payload_sqlite::conn::start_statement_trace`).
+#[napi]
+pub fn sqlite_start_statement_trace() {
+  payload_sqlite::conn::start_statement_trace();
+}
+
+/// The `[sql, bound parameter count]` of every statement recorded since
+/// `sqliteStartStatementTrace`, in run order; stops recording.
+#[napi]
+pub fn sqlite_take_statement_trace() -> Vec<(String, i32)> {
+  payload_sqlite::conn::take_statement_trace()
 }
 
 /// `[registered ids, queues that currently own a worker thread]` (leak

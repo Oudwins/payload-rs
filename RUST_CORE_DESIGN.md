@@ -8,23 +8,27 @@ This document compares strategies with measurements, picks one, and reports a wo
 
 Code:
 
-| path                                                | what                                                      |
-| --------------------------------------------------- | --------------------------------------------------------- |
-| `crates/payload-core-runtime/src/js.rs`             | raw Node-API wrappers, `Local`/`Val`/`Persist`/slot table |
-| `crates/payload-core-runtime/src/executor.rs`       | JS-microtask-driven executor for Rust `async` code        |
-| `crates/payload-core-runtime/src/host.rs`           | JS host helpers + JS-semantic property operations         |
-| `crates/payload-core-runtime/src/config.rs`         | field descriptors decoded once from the live config       |
-| `crates/payload-core-runtime/src/after_read.rs`     | port of `afterRead/{index,traverseFields,promise}.ts`     |
-| `crates/payload-core-runtime/src/bench.rs`          | micro-benchmarks used below                               |
-| `crates/payload-node/src/runtime.rs`                | `coreRuntimeBinding()` export of the main addon           |
-| `crates/payload-core-runtime/examples/dev_addon.rs` | standalone addon exposing only the runtime                |
-| `packages/engine-rs/src/runtime/index.ts`           | loads the binding, installs host helpers, `afterRead`     |
-| `crates/payload-core-hooks-{validate,change,after}` | beforeValidate, beforeChange, afterChange/beforeDuplicate |
-| `packages/engine-rs/src/runtime/*/`                 | their TS glue (host helpers, leaf `promise()` bodies)     |
-| `packages/engine-rs/src/runtime/hooks.ts`           | entry payload's hook modules load under `PAYLOAD_ENGINE`  |
-| `test/__rs/core-runtime/`                           | differential suites, adversarial config, benchmarks       |
-| `test/__rs/core-hooks-*/`                           | differential suites of the other traversals               |
-| `test/__rs/dispatch/`                               | upstream int suite runner, traversal benchmark, exit probe |
+| path                                                | what                                                                                    |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `crates/payload-core-runtime/src/js.rs`             | raw Node-API wrappers, `Local`/`Val`/`Persist`/slot table                               |
+| `crates/payload-core-runtime/src/executor.rs`       | JS-microtask-driven executor for Rust `async` code                                      |
+| `crates/payload-core-runtime/src/host.rs`           | JS host helpers + JS-semantic property operations                                       |
+| `crates/payload-core-runtime/src/config.rs`         | field descriptors decoded once from the live config                                     |
+| `crates/payload-core-runtime/src/after_read.rs`     | port of `afterRead/{index,traverseFields,promise}.ts`                                   |
+| `crates/payload-core-runtime/src/bench.rs`          | micro-benchmarks used below                                                             |
+| `crates/payload-node/src/runtime.rs`                | `coreRuntimeBinding()` export of the main addon                                         |
+| `crates/payload-core-runtime/examples/dev_addon.rs` | standalone addon exposing only the runtime                                              |
+| `packages/engine-rs/src/runtime/index.ts`           | loads the binding, installs host helpers, `afterRead`                                   |
+| `crates/payload-core-hooks-{validate,change,after}` | beforeValidate, beforeChange, afterChange/beforeDuplicate                               |
+| `packages/engine-rs/src/runtime/*/`                 | their TS glue (host helpers, leaf `promise()` bodies)                                   |
+| `packages/engine-rs/src/runtime/hooks.ts`           | entry payload's hook modules load under `PAYLOAD_ENGINE`                                |
+| `test/__rs/core-runtime/`                           | differential suites, adversarial config, benchmarks                                     |
+| `test/__rs/core-hooks-*/`                           | differential suites of the other traversals                                             |
+| `test/__rs/dispatch/`                               | upstream int suite runner, traversal benchmark, exit probe, harness engine guard        |
+| `crates/payload-core-query/src/live/`               | query validation (`validateQueryPaths`, `sanitizeJoinQuery`, ...) on live JS objects    |
+| `crates/payload-node/src/core_query.rs`             | `coreQueryBinding()` export (needs `coreRuntimeBinding` of the same addon file)         |
+| `crates/payload-core-query/examples/query_addon.rs` | standalone addon exporting every core binding (runtime, query, hook traversals)         |
+| `test/__rs/core-query/`                             | query glue (`glue.ts`), live differential (`live/`), replay recorder, upstream redirect |
 
 ## 1. What "exact" means here (read from the TS)
 
@@ -276,6 +280,28 @@ interleaving between documents and hooks).
   field names are recreated from their UTF-16 copy, ASCII strings are created as Latin-1, and
   `getFieldPaths` no longer allocates intermediate vectors.
 
+### Tail awaits (`executor::spawn_tail`)
+
+Most engine `async` functions end with `await x; return v` where `x` is a native promise
+(`await Promise.all(promises)` in every `traverseFields`; `await traverseFields(...)` /
+`await Promise.all(rows)` at the end of every container `promise()`; `await traverseFields(...);
+return data` in the `beforeValidate`/`afterChange`/`beforeDuplicate` entries). For such a body that
+reaches its tail in the first, synchronous poll (it never suspended), the function's promise is
+`%Promise.prototype.then%.call(x, () => v)` (host `thenReturn`) instead of a task promise plus an
+await/resume round trip:
+
+- `await x` of a native promise is one `PerformPromiseThen(x, resume)` (PromiseResolve returns `x`
+  itself), so the function resumes in the reaction job of `x` and resolves its promise with `v`
+  there. `then(() => v)` performs the same single reaction on `x` and resolves its result with `v`
+  in that same job (a thenable `v` goes through the same `ResolvePromise` path); a rejection of `x`
+  rejects both in that job. Promises created and reaction jobs queued are the same, in the same
+  order, so the microtask interleaving is unchanged.
+- A body that suspended before its tail is an ordinary task (deferred created once it suspends)
+  and its tail is a real `await_js`.
+
+The body returns `Tail::Await(x, v)` / `Tail::Return(v)`; mutation test:
+`mutant-tail-skip-tick` (feature of payload-core-runtime: return `x` itself, one tick less).
+
 ### Leaf fields of the other traversals run upstream's `promise()` in JS
 
 For beforeValidate, beforeChange, afterChange and beforeDuplicate, every field whose type is not
@@ -293,6 +319,16 @@ context array the crate builds once per call. Being the upstream code, a leaf is
 construction (reads, writes, awaits, `for...of`, V8 messages); the differential suites check the
 dispatch around it (argument plumbing, order, promise count). Tab traversals (`field.tabs` copies)
 keep the ported path.
+
+A `traverseFields` call whose fields array contains only leaves (rows of arrays/blocks of leaf
+fields, groups and collapsibles of leaves, collections without containers) runs upstream's
+`traverseFields.ts` body in JS as well (`beforeValidateLeafTraversal`, `beforeChangeLeafTraversal`,
+`afterChangeLeafTraversal`, `beforeDuplicateLeafTraversal`: `unflattenData` where upstream has it,
+`fields.forEach` pushing the leaf `promise()`, `await Promise.all(promises)`), called where the
+crate would spawn its `traverse_fields`. The crates keep the field promises of container fields
+(arrays, blocks, groups, collapsibles, rows, tabs, rich text) and every traversal that contains
+one. Mutation test: BV `M13` (the leaf traversal returns `Promise.all` without its own async
+function).
 
 Nothing here changes what user code can observe: the same objects, the same property operations
 in the same order (checked with recording proxies, see section 4), the same calls with the same
@@ -492,6 +528,28 @@ runs leaf `promise()` bodies in JS (section 3). beforeChange is dominated by val
 block, group and collapsible is a spawned `traverseFields` task with its own native promise,
 `Promise.all` and resume, plus a descriptor lookup and path strings per traversal.
 
+**Tail awaits and leaf-only traversals** (section 3; same benchmark, release `payload-node`,
+2026-11-01, two back-to-back runs at machine load 11-19; RS/TS ratio of the medians, TS µs/doc in
+parentheses):
+
+| traversal       | plain: before | plain: now            | hooked: before | hooked: now            |
+| --------------- | ------------- | --------------------- | -------------- | ---------------------- |
+| beforeValidate  | 1.29          | 1.31 / 1.32 (73 / 88) | 1.37           | 1.30 / 1.34 (88 / 129) |
+| beforeChange    | 1.07          | 1.05 / 1.08           | 1.04           | 1.03 / 1.10            |
+| afterChange     | 1.35          | 1.19 / 1.46 (86 / 76) | 1.26           | 1.22 / 1.20 (99 / 126) |
+| afterRead       | 0.67          | 0.61 / 0.66           | 0.91           | 0.87 / 0.87            |
+| beforeDuplicate | 1.33          | 1.16 / 1.32           | 1.30           | 1.30 / 1.11            |
+
+("before" is the previous build measured the same day at load ~5.) Run-to-run noise on this shared
+machine is about ±0.15, so only beforeValidate is clearly still above 1.2x for hooked docs. What
+remains is the Rust side of the container `promise()`s and of the traversals that contain
+containers (in the benchmark document: the root, the two `rows` rows, and the group, collapsible,
+`rows`, `nested` and `layout` field promises): every JS-observable read or call of those bodies is
+a Node-API crossing (CPU profiles attribute ~25-35 µs per document to the native frames and the
+napi trampolines, against ~5 µs for the same work in V8). beforeValidate's container bodies are the
+heaviest (sanitization reads, fallback/`isRestoringVersion` checks, hooks/access/`onFieldAccess`
+probes before every subfield traversal).
+
 Optimization roadmap status:
 
 1. Batch descriptor-driven no-callback subtrees: done as plain-leaf runs, plain array rows and
@@ -512,16 +570,43 @@ Optimization roadmap status:
   `after_read.rs`; changing one side means changing the other.
 - **Dispatch (done).** `packages/payload/src/fields/hooks/{afterRead,beforeValidate,beforeChange,
   afterChange,beforeDuplicate}/index.ts` select the engine once at module load:
-  `PAYLOAD_CORE_ENGINE=rs|ts` if set, else `PAYLOAD_ENGINE === 'rs'`. Unset, the exported function
-  is upstream's own (same body; only the `export const` binding replaces `export async function`
-  for `afterRead`). Set, it is a forwarder to `packages/engine-rs/src/runtime/hooks.ts`, which
-  each module starts loading with a dynamic `import()` at module load (payload has no
-  `@payloadcms/engine-rs` dependency; the relative specifier is a variable so neither `tsc` nor
-  bundlers follow it). The forwarder calls the Rust function directly (no extra tick); a call
+  `PAYLOAD_CORE_ENGINE=rs|ts` if set, else `PAYLOAD_ENGINE === 'rs'`. Each module also exports
+  upstream's function itself as `upstream<Name>` (e.g. `upstreamAfterRead`), whatever the flags:
+  unset, the hook export _is_ that function (same body and `name`; only the `export const`
+  binding replaces upstream's `export async function`/`export const ... = async` form). Set, it
+  is a forwarder to `packages/engine-rs/src/runtime/hooks.ts`, which each module starts loading
+  with a dynamic `import()` at module load (payload has no `@payloadcms/engine-rs` dependency; the
+  relative specifier is a variable so neither `tsc` nor bundlers follow it). The forwarder calls
+  the Rust function directly (no extra tick) and turns a synchronous throw (addon load failure,
+  stats file write) into a rejected promise, as calling upstream's async function would; a call
   made before the import settled waits for it and is counted (`deferredCalls`, 0 in every suite
-  run). `packages/payload/src/fields/validations.ts` does the same for the default validators
+  run).
+- **Rich text sub-fields.** payload re-exports the TS `traverseFields` of four traversals
+  (`afterReadTraverseFields`, `beforeValidateTraverseFields`, `beforeChangeTraverseFields`,
+  `afterChangeTraverseFields`) for editor hooks. `packages/richtext-lexical/src/hooks.ts` selects
+  them under the same flags (same dynamic import): set, its block/link sub-field traversals call
+  the Rust entries (`hooks.ts` exports, counted in the stats file). The beforeValidate entry
+  destructures in Rust; the other three are destructured by their TS drop-in with upstream's
+  pattern and defaults and passed positionally (`afterChangeTraverseFields`,
+  `beforeChangeTraverseFields`, `afterReadTraverseFields` of the bindings). Arguments the port
+  does not model run upstream's own `traverseFields` instead: non-string paths, a non-number
+  `fieldDepth`, and for afterRead a falsy `triggerAccessControl`/`triggerHooks` (the engine's own
+  traversals always pass `true`). afterRead's is synchronous; before the engine module has loaded,
+  lexical's forwarder runs upstream's function (counted as deferred). `packages/payload/src/fields/validations.ts` does the same for the default validators
   (`export let` bindings reassigned to forwarders into `packages/engine-rs/src/validate`).
   `PAYLOAD_RS_CORE_STATS_FILE` makes `hooks.ts` write per-traversal call counts.
+- **Query validation (live).** `crates/payload-core-query/src/live` ports `validateQueryPaths`,
+  `validateSearchParam`, `validateSortQuery`, `sanitizeJoinQuery`, `getLocalizedPaths`,
+  `getFieldByPath`, `combineQueries`, `prefixWherePaths` and `sanitizeWhereQuery` on live JS values
+  with the same executor rules. `coreQueryBinding()` (payload-node, or the `query_addon` example)
+  must come from the same addon file as `coreRuntimeBinding()` (shared executor and slot table);
+  its `init(host)` installs the helpers of `test/__rs/core-query/glue.ts` once per process (a
+  second `init` replaces them for every user of that addon instance). Destructuring patterns
+  (`const { joinPath } = join`, the args of each export) and argument-dependent expressions
+  (`getFieldByPath`'s `` `${localizedPath ? `${localizedPath}.` : ''}${segment}` `` in its first
+  iteration, `incomingPath.replace(/__/g, '.')` for a non-string path) run as host code, so V8's
+  messages and ToString calls happen where upstream's do. payload selects it only through
+  `test/__rs/core-query/vitest.upstream.config.ts` (module redirects), not yet by flag.
 - `engine-rs` imports `relationshipPopulationPromise`, `virtualFieldPopulationPromise` and the
   `afterRead` types from payload sources by relative path, because they are not exported (and
   engine-rs has no installed `payload` link). Exporting them from `payload/internal` would make
@@ -545,6 +630,29 @@ are the baseline's own: `plugin-import-export` 71, `plugin-cloud-storage` 3, `kv
 the dynamic import. `test/cli` failed 5 tests in the parallel run on files another process
 deleted (`test/cli/generated`, shared with concurrent runs) and passes 64/64 alone. Core mode on
 hooks, fields, localization, versions, validate, relationships, joins and lexical: 996/0/27, equal.
+
+Rerun after the tail-await / leaf-traversal / rich text wiring changes (2026-11-01, debug addon,
+`node test/__rs/adapter/runSuites.mjs --jobs 4` over the same 107 files): 3285 passed / 86 failed /
+137 skipped vs baseline 3269 / 77 / 162. The only baseline-passing tests that did not pass were
+environmental and pass when their file runs alone: `test/cli` (2, shared `generated` folder),
+`test/file-versioning` int + rename (9, shared media folders / a 90 s timeout at load ~50), and
+`test/create-payload-app` (11 skipped: its package packing step failed with the disk nearly full;
+the file makes 0 engine calls). `test/lexical/lexical.int.spec.ts` alone through
+`test/__rs/dispatch/runSuites.mjs`: 124/124, with lexical's sub-field traversals served by Rust
+(`afterReadTraverseFields` 580, `beforeChangeTraverseFields` 75, `afterChangeTraverseFields` 75
+calls, 0 deferred).
+
+### Differential harnesses: the reference is upstream TS
+
+The four harnesses (`core-runtime`, `core-hooks-{before-validate,before-change,after}`) import the
+`upstream<Name>` exports and upstream's `traverseFields` modules, never the dispatching exports,
+and `test/__rs/dispatch/engineGuard.ts` checks every run: a TS run must not call the Rust core
+engine at all (`stats().entries`, every exported engine function call except `stats`, plus
+`tasks`; this also catches nested dispatch such as relationship population reaching a Rust
+`afterRead` when `PAYLOAD_ENGINE` is set), and a Rust run must. The `run.sh` scripts unset
+`PAYLOAD_ENGINE`/`PAYLOAD_CORE_ENGINE`. Each harness also compares the exported `traverseFields`
+(TS vs the Rust entry) on the same inputs. The live query harness refuses to start when a TS
+reference function is the Rust port (e.g. under `vitest.upstream.config.ts`).
 
 ## 7. Known gaps
 
@@ -577,16 +685,26 @@ hooks, fields, localization, versions, validate, relationships, joins and lexica
 - No Rust unit tests inside the crate (behaviour is verified end to end through the binding);
   `rustfmt`/`clippy` are not installed in this environment (no repo rustfmt config either), so
   Rust formatting follows the existing 2-space style by hand.
-- Lexical's editor hooks still call payload's TS `beforeValidateTraverseFields` /
-  `afterReadTraverseFields` / `beforeChangeTraverseFields` / `afterChangeTraverseFields` for block
-  and link sub-fields: payload re-exports those from `packages/payload/src/index.ts`, outside the
-  dispatch files. `hooks.ts` exports `beforeValidateTraverseFields` (the Rust drop-in) for that
-  wiring; the other three need Rust `traverseFields` entries first (afterRead's is synchronous
-  and takes `triggerAccessControl`/`triggerHooks`, which the engine's `afterRead` never varies).
-- The dispatch loads `hooks.ts` with a dynamic `import()` of a relative source path: it works
-  where payload runs from source (vitest, `pnpm dev`), not from a published `dist` build (engine-rs
-  is private). A call before that import settles waits for it (extra microtask ticks); none
-  happened in the suite runs (`deferredCalls` 0).
+- Rich text sub-fields: other editors than lexical (and `recursivelyPopulateFieldsForGraphQL` in
+  richtext-lexical, outside its hooks) still import payload's TS `*TraverseFields`. The
+  afterRead entry does not model `triggerAccessControl`/`triggerHooks = false` and the entries do
+  not model non-string paths: those calls run upstream's `traverseFields` (exact, but TS). The
+  `beforeValidateTraverseFields` entry converts non-string paths with `String()`. Path strings
+  reach Rust as UTF-8 (a lone surrogate in a parent path would not round-trip).
+- Live query port: a non-string path that has its own working `split` (getLocalizedPaths /
+  getFieldByPath) or `replace` (exported validateSearchParam) raises an engine error after calling
+  it, where upstream would continue with the returned value. Without such a method the V8
+  TypeError is upstream's.
+- Leaf-only traversals iterate the live fields array (`fields.forEach`, like upstream); the
+  ported traversals iterate the decoded descriptors (see the first item).
+- Tail awaits (`spawn_tail`) call `%Promise.prototype.then%` where `await` performs the same
+  reaction internally: it reads `x.constructor` / `@@species` like `then` does (`await` reads
+  `constructor` only), observable only with a patched `Promise[Symbol.species]`.
+- The dispatch (payload's hook modules and richtext-lexical's hooks) loads `hooks.ts` with a
+  dynamic `import()` of a relative source path: it works where payload runs from source (vitest,
+  `pnpm dev`), not from a published `dist` build (engine-rs is private). A call before that import
+  settles waits for it (extra microtask ticks; afterRead's synchronous `traverseFields` runs
+  upstream's instead); none happened in the suite runs (`deferredCalls` 0).
 - Process exit: `Slot`/`Persist` drops during thread-local teardown skip their napi calls
   (`env()` uses `try_with`, the env cleanup hook clears it, slots use `SLOTS.try_with`).
   `test/__rs/dispatch/exitProbe.mts` checks natural exit, `process.exit()` and exit with Rust

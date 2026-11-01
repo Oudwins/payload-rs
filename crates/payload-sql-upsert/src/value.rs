@@ -125,28 +125,10 @@ pub fn map_from_driver(column_type: &str, value: JsVal) -> Result<JsVal> {
   })
 }
 
-/// `JSON.parse(text)` with JS object key order (integer-like keys first) and V8's
-/// `SyntaxError` messages.
+/// `JSON.parse(text)` with JS object key order (integer-like keys first), any nesting depth,
+/// V8's number rounding (`1e400` is `Infinity`) and V8's `SyntaxError` messages.
 pub fn json_parse(text: &str) -> Result<JsVal> {
-  payload_sql_read::json::parse(text)?;
-  // Valid JSON; serde only rejects escaped lone surrogates, which a `JsVal` string cannot hold.
-  let json: serde_json::Value = serde_json::from_str(text)
-    .map_err(|e| EngineError::internal(format!("JSON text with lone surrogates is not supported: {e}")))?;
-  Ok(from_json_js(&json))
-}
-
-fn from_json_js(json: &serde_json::Value) -> JsVal {
-  match json {
-    serde_json::Value::Array(a) => JsVal::arr(a.iter().map(from_json_js).collect()),
-    serde_json::Value::Object(o) => {
-      let mut out = Obj::new();
-      for (k, v) in o {
-        js_insert(&mut out, k.clone(), from_json_js(v));
-      }
-      JsVal::obj(out)
-    }
-    other => JsVal::from_json(other),
-  }
+  payload_sql_read::json::parse_to_js(text)
 }
 
 /// JS `Number(value)` for driver values (a blob is an `ArrayBuffer`: `NaN`).
@@ -185,5 +167,32 @@ mod tests {
     let err = map_from_driver("jsonb", JsVal::Num(f64::INFINITY)).unwrap_err();
     assert_eq!(err.message, "\"Infinity\" is not valid JSON");
     assert!(matches!(map_from_driver("jsonb", JsVal::Num(5.0)).unwrap(), JsVal::Num(n) if n == 5.0));
+  }
+
+  /// `JSON.parse` has no nesting limit and rounds out-of-range literals to infinities; keys come
+  /// in JS order (integer-like keys first).
+  #[test]
+  fn json_parse_is_exact() {
+    // engine calls run on threads with a 16 MB stack (payload-sql-engine `stepped`)
+    let deep = std::thread::Builder::new()
+      .stack_size(16 * 1024 * 1024)
+      .spawn(|| {
+        let deep = format!("{}1{}", "[".repeat(5000), "]".repeat(5000));
+        let parsed = json_parse(&deep).unwrap();
+        let mut value = parsed.clone();
+        for _ in 0..5000 {
+          value = value.as_arr().expect("array")[0].clone();
+        }
+        matches!(value, JsVal::Num(n) if n == 1.0)
+      })
+      .unwrap()
+      .join()
+      .unwrap();
+    assert!(deep);
+    assert!(matches!(json_parse("1e400").unwrap(), JsVal::Num(n) if n == f64::INFINITY));
+    assert!(matches!(json_parse("-1e400").unwrap(), JsVal::Num(n) if n == f64::NEG_INFINITY));
+    assert!(matches!(json_parse("-0").unwrap(), JsVal::Num(n) if n == 0.0 && n.is_sign_negative()));
+    let keys: Vec<String> = json_parse(r#"{"b":1,"2":2,"a":3,"1":4}"#).unwrap().as_obj().unwrap().keys().cloned().collect();
+    assert_eq!(keys, ["1", "2", "b", "a"]);
   }
 }

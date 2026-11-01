@@ -113,6 +113,30 @@ export const encodeValue = (
 }
 
 /**
+ * `encodeValue` for values that may be cyclic: a reference back to an object the value is inside
+ * of is `{ $undefined: true }`, which is what payload-engine's `encode_value` writes for it, so
+ * cyclic outputs and data compare with the Rust side's encoding. Same as `encodeValue` otherwise.
+ */
+export const encodeTree = (root: unknown): unknown => {
+  const ancestors: object[] = []
+  const encode: Encode = (v, depth) => {
+    if (v && typeof v === 'object' && !(v instanceof Date)) {
+      if (ancestors.includes(v)) {
+        return { $undefined: true }
+      }
+      ancestors.push(v)
+      try {
+        return encodeValue(v, 0, encode)
+      } finally {
+        ancestors.pop()
+      }
+    }
+    return encodeValue(v, depth, encode)
+  }
+  return encode(root, 0)
+}
+
+/**
  * `{ objects, root }` (`decode_graph_typed`): objects reachable more than once (or from inside
  * themselves) are stored once in `objects` and referenced as `{"$ref": id}`.
  */
@@ -314,10 +338,10 @@ export const wrapTransformForWrite = <F extends (args: any) => any>(original: F)
       if (threw) {
         call.error = { name: (error as Error)?.name, message: (error as Error)?.message }
       } else {
-        call.output = encodeValue(output)
+        call.output = encodeTree(output)
       }
       try {
-        call.dataAfter = encodeValue(args.data)
+        call.dataAfter = encodeTree(args.data)
         group.calls.push(call)
       } catch {
         // not encodable, skip

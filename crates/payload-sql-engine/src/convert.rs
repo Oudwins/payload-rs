@@ -10,56 +10,16 @@
 //! Every conversion is structural: no conversion interprets user data as an internal marker.
 
 use payload_engine::error::{EngineError, Result};
-use payload_engine::js::{JsVal, Obj};
+use payload_engine::js::JsVal;
 use payload_sql_find::sql::Sql as FindSql;
 use payload_sql_query::{Query, Sql as QuerySql, SqlValue};
 use payload_sql_read::Val;
-use payload_sql_read::value::Builtin;
 use payload_sql_upsert::SqlFragment;
 use serde_json::Value as Json;
 
-/// A read-transform result as an engine value. `Date`s become typed [`JsVal::date`]s, inherited
-/// built-in functions `undefined` (what `serializeForEngine` would send for them), and a reference
-/// back to an ancestor (only possible through user mutation) `undefined`.
+/// A read-transform result as an engine value ([`Val::to_js`]).
 pub fn val_to_js(value: &Val) -> JsVal {
-  let mut ancestors = Vec::new();
-  val_to_js_inner(value, &mut ancestors)
-}
-
-fn val_to_js_inner(value: &Val, ancestors: &mut Vec<usize>) -> JsVal {
-  match value {
-    Val::Undefined | Val::Builtin(Builtin::Function(_)) => JsVal::Undefined,
-    Val::Builtin(Builtin::ObjectPrototype) => JsVal::obj(Obj::new()),
-    Val::Null => JsVal::Null,
-    Val::Bool(b) => JsVal::Bool(*b),
-    Val::Num(n) => JsVal::Num(*n),
-    Val::Str(s) => JsVal::str(s.to_lossy().as_ref()),
-    Val::Date(ms) => JsVal::date(*ms),
-    Val::Arr(a) => {
-      let id = std::rc::Rc::as_ptr(a) as usize;
-      if ancestors.contains(&id) {
-        return JsVal::Undefined;
-      }
-      ancestors.push(id);
-      let items = a.borrow().iter().map(|v| val_to_js_inner(v, ancestors)).collect();
-      ancestors.pop();
-      JsVal::arr(items)
-    }
-    Val::Obj(o) => {
-      let id = std::rc::Rc::as_ptr(o) as usize;
-      if ancestors.contains(&id) {
-        return JsVal::Undefined;
-      }
-      ancestors.push(id);
-      let entries = o.borrow().entries();
-      let mut out = Obj::with_capacity(entries.len());
-      for (k, v) in entries {
-        out.insert(k.to_lossy().into_owned(), val_to_js_inner(&v, ancestors));
-      }
-      ancestors.pop();
-      JsVal::obj(out)
-    }
-  }
+  value.to_js()
 }
 
 /// A raw drizzle row (payload-sql-find JSON) as a mutable read-transform input, with JS property
@@ -78,6 +38,7 @@ pub fn sql_value_to_js(value: &SqlValue) -> JsVal {
   match value {
     SqlValue::Null => JsVal::Null,
     SqlValue::Real(n) => JsVal::Num(*n),
+    SqlValue::Integer(n) => JsVal::bigint(n.to_string()),
     SqlValue::Text(s) => JsVal::str(s.as_str()),
   }
 }

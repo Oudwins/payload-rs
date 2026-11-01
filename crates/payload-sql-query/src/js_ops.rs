@@ -156,15 +156,39 @@ pub fn js_number(v: &JsVal) -> f64 {
   }
 }
 
-/// Whether `ToPrimitive(value)` throws: an object (or an array item, through `join`) whose own
-/// `toString` is not callable has no usable conversion for either hint (`valueOf` inherited from
-/// `Object.prototype` returns the object itself). Own functions are not called here.
-fn check_to_primitive(v: &JsVal, joining: &mut Vec<usize>) -> Result<()> {
+/// The hint of `ToPrimitive`: `Number(value)` asks for a number, `String(value)` for a string.
+#[derive(Clone, Copy, PartialEq)]
+enum Hint {
+  Number,
+  String,
+}
+
+/// Whether `ToPrimitive(value, hint)` (`OrdinaryToPrimitive`) throws. An object's conversion
+/// methods are tried in hint order (`valueOf` then `toString` for numbers, the reverse for
+/// strings): a method that is not callable is skipped, the inherited `Object.prototype.valueOf`
+/// returns the object itself (skipped too) and the inherited `toString` gives `"[object Object]"`.
+/// When neither gives a primitive it is a `TypeError`. An own method that is a JS function would
+/// be called, which this side cannot do: that is an internal error, not a guessed result. Array
+/// items are converted with the string hint (`join`).
+fn check_to_primitive(v: &JsVal, hint: Hint, joining: &mut Vec<usize>) -> Result<()> {
   if v.typed().is_some() {
     return Ok(());
   }
   match v {
-    JsVal::Obj(o) if o.get("toString").is_some_and(|f| !matches!(f, JsVal::Fn(_))) => {
+    JsVal::Obj(o) => {
+      let order = if hint == Hint::Number { ["valueOf", "toString"] } else { ["toString", "valueOf"] };
+      for name in order {
+        match o.get(name) {
+          Some(JsVal::Fn(_)) => {
+            return Err(EngineError::internal(format!(
+              "payload-sql-query: converting an object whose own `{name}` is a function to a primitive is not supported"
+            )));
+          }
+          Some(_) => {}
+          None if name == "toString" => return Ok(()),
+          None => {}
+        }
+      }
       Err(EngineError::new("TypeError", "Cannot convert object to primitive value"))
     }
     JsVal::Arr(items) => {
@@ -174,7 +198,7 @@ fn check_to_primitive(v: &JsVal, joining: &mut Vec<usize>) -> Result<()> {
       }
       joining.push(id);
       for item in items.iter() {
-        check_to_primitive(item, joining)?;
+        check_to_primitive(item, Hint::String, joining)?;
       }
       joining.pop();
       Ok(())
@@ -185,13 +209,13 @@ fn check_to_primitive(v: &JsVal, joining: &mut Vec<usize>) -> Result<()> {
 
 /// JS `Number(value)`, including the `TypeError` of an object without a primitive value.
 pub fn js_number_checked(v: &JsVal) -> Result<f64> {
-  check_to_primitive(v, &mut Vec::new())?;
+  check_to_primitive(v, Hint::Number, &mut Vec::new())?;
   Ok(js_number(v))
 }
 
 /// JS `String(value)`, including the `TypeError` of an object without a primitive value.
 pub fn js_string_checked(v: &JsVal) -> Result<String> {
-  check_to_primitive(v, &mut Vec::new())?;
+  check_to_primitive(v, Hint::String, &mut Vec::new())?;
   Ok(js_string(v))
 }
 

@@ -37,7 +37,11 @@ export const createLoopbackEngine = ({
   optionsJson: string
   registry: FunctionRegistry
 }): LoopbackEngine => {
-  const rawSchema = getNativeEngine().buildRawSchema(graphJson, optionsJson, callFunction)
+  // the wire format of `SqliteEngine.rawSchema()` (with `undefinedProperties`)
+  const native = getNativeEngine()
+  const rawSchema = native.SqliteEngine
+    ? native.SqliteEngine.create(graphJson, optionsJson, callFunction).rawSchema()
+    : native.buildRawSchema(graphJson, optionsJson, callFunction)
   const connections = new Map<number, unknown>()
   let attachedClient: number | undefined
 
@@ -45,7 +49,7 @@ export const createLoopbackEngine = ({
     attachClient: (clientId) => {
       attachedClient = clientId
     },
-    call: async (method, argsJson, connId) => {
+    call: async (method, argsJson, connId, contextJson) => {
       const upstream = methods[method]
       if (!upstream) {
         throw new Error(
@@ -59,11 +63,13 @@ export const createLoopbackEngine = ({
       if (!db) {
         throw new Error(JSON.stringify({ name: 'Error', message: `Unknown connection ${connId}` }))
       }
-      const args = decodeGraph(argsJson, registry)
+      const args = decodeGraph(argsJson, registry) as AnyObject
       // the reduced req carries no transactionID: `getTransaction` resolves to `drizzle`
       const view = Object.create(adapter, {
         drizzle: { configurable: true, enumerable: true, value: db, writable: true },
       })
+      // the one mutation the native engine reports (ENGINE_CONTRACT.md `withMutations`)
+      const isCreatedAtUnset = method === 'updateGlobal' && !args.data?.createdAt
       let result: unknown
       try {
         result = await upstream.call(view, args)
@@ -71,11 +77,21 @@ export const createLoopbackEngine = ({
         const described = describeError({ encode: (value) => encodeTree(value, registry), error })
         throw new Error(JSON.stringify(described ?? { name: 'Error', message: String(error) }))
       }
-      return JSON.stringify(encodeTree(result, registry))
+      const tree = encodeTree(result, registry)
+      if (JSON.parse(contextJson ?? '{}').withMutations !== true) {
+        return JSON.stringify(tree)
+      }
+      const mutations =
+        isCreatedAtUnset && args.data.createdAt
+          ? [[['data', 'createdAt'], encodeTree(args.data.createdAt, registry)]]
+          : []
+      return JSON.stringify({ mutations, result: tree })
     },
     rawSchema: () => rawSchema,
+    // the upstream methods read the live schema from the adapter themselves
     registerConnection: (connId, db) => {
       connections.set(connId, db)
     },
+    setLiveSchema: () => {},
   }
 }

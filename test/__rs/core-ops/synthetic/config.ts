@@ -3,7 +3,9 @@
  * collection hook kind with different tick counts, hooks that replace args/docs/results, return
  * falsy values or throw (sync and async, custom error class), access returning `true`, `false`, a
  * where or a promise, field access and hidden fields, drafts, lock status, relationships with a
- * virtual field (sort and findDistinct through it), and an upload collection with versions.
+ * virtual field (sort and findDistinct through it), an upload collection with versions, a
+ * custom-ID collection with a custom lock duration (findByID's custom-ID path validation), and an
+ * auth collection with `maxLoginAttempts` (docAccess' `unlock` operation).
  * Behaviour is steered per request through `req.context` and logged there, so TS and Rust runs on
  * cloned requests are comparable.
  */
@@ -199,13 +201,23 @@ const media: CollectionConfig = {
 
 const users: CollectionConfig = {
   slug: 'users',
-  auth: true,
+  auth: { maxLoginAttempts: 5 },
   fields: [{ name: 'name', type: 'text' }],
+}
+
+const customIDs: CollectionConfig = {
+  slug: 'custom-ids',
+  access: { read: steeredAccess('read') },
+  fields: [
+    { name: 'id', type: 'text' },
+    { name: 'title', type: 'text' },
+  ],
+  lockDocuments: { duration: 600 },
 }
 
 export default buildConfigWithDefaults({
   config: {
     admin: { user: 'users' },
-    collections: [users, posts, targets, media],
+    collections: [users, posts, targets, media, customIDs],
   },
 })

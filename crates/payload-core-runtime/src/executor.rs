@@ -25,10 +25,24 @@ pub type TaskFuture = Pin<Box<dyn Future<Output = JsResult<Val>>>>;
 
 struct Task {
   future: RefCell<Option<TaskFuture>>,
+  /// Null while a [`spawn_tail`] task runs its first (synchronous) poll: its promise is only
+  /// created if it suspends or does not end in a tail await.
   deferred: Cell<sys::napi_deferred>,
   /// Set when a resume arrives while the task is being polled; the running poll then polls again
   /// instead of dropping the wake-up.
   repoll: Cell<bool>,
+  /// The tail await a [`spawn_tail`] body reached in its first poll: `(promise, value)`.
+  tail: RefCell<Option<(Local, Val)>>,
+}
+
+/// How a [`spawn_tail`] task body ends.
+pub enum Tail {
+  /// `return value`
+  Return(Val),
+  /// `await promise; return value` as the body's last two steps, where `promise` is a native
+  /// promise (`Promise.all(...)`, an engine task promise). Must be used right away (it holds a
+  /// `Local`): return it from the body.
+  Await(Local, Val),
 }
 
 struct AwaitSlot {
@@ -40,7 +54,9 @@ thread_local! {
   static CURRENT: RefCell<Vec<Rc<Task>>> = const { RefCell::new(Vec::new()) };
   static WAITING: RefCell<Slab> = const { RefCell::new(Slab { items: Vec::new(), free: Vec::new() }) };
   static AWAIT_HELPER: RefCell<Option<Persist>> = const { RefCell::new(None) };
+  static THEN_RETURN: RefCell<Option<Persist>> = const { RefCell::new(None) };
   static STATS: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+  static ENTRIES: Cell<u64> = const { Cell::new(0) };
 }
 
 struct Slab {
@@ -56,9 +72,33 @@ pub fn install_await_helper(helper: Local) -> JsResult<()> {
   Ok(())
 }
 
+/// Installs the JS helper `(promise, value) => %Promise.prototype.then%.call(promise, () => value)`
+/// used for tail awaits (see [`spawn_tail`]).
+pub fn install_then_return_helper(helper: Local) -> JsResult<()> {
+  let p = Persist::new(helper)?;
+  THEN_RETURN.with(|h| *h.borrow_mut() = Some(p));
+  Ok(())
+}
+
 /// Number of tasks spawned and JS awaits performed on this thread (for benchmarks/tests).
 pub fn stats() -> (u64, u64) {
   STATS.with(|s| s.get())
+}
+
+/// Counts one call of an exported core engine function (the bindings' call wrappers do), so tests
+/// can tell whether a run reached the engine at all (see [`entries`]).
+pub fn count_entry() {
+  ENTRIES.with(|e| e.set(e.get() + 1));
+}
+
+/// Takes back one [`count_entry`] (for exports that are not engine work, like `stats`).
+pub fn uncount_entry() {
+  ENTRIES.with(|e| e.set(e.get().saturating_sub(1)));
+}
+
+/// Number of [`count_entry`] calls on this thread.
+pub fn entries() -> u64 {
+  ENTRIES.with(|e| e.get())
 }
 
 /// Equivalent of calling a JS `async` function: runs `future` synchronously until its first
@@ -73,17 +113,99 @@ pub fn spawn(future: impl Future<Output = JsResult<Val>> + 'static) -> JsResult<
     future: RefCell::new(Some(Box::pin(future))),
     deferred: Cell::new(deferred),
     repoll: Cell::new(false),
+    tail: RefCell::new(None),
   });
   poll_task(&task);
   Ok(promise)
 }
 
+/// [`spawn`] for an async function body that may end with `await promise; return value`
+/// ([`Tail::Await`]). When the body gets there in its first, synchronous poll (it never suspended),
+/// no task promise, resume or deferred is needed: the call returns
+/// `%Promise.prototype.then%.call(promise, () => value)`, which settles in the same reaction job
+/// as the async function's promise would (`await` of a native promise is one `PerformPromiseThen`
+/// on it; the function then returns `value`, which resolves its promise exactly as returning
+/// `value` from the `then` callback does; a rejection passes through the same way). Otherwise it
+/// is a [`spawn`]ed task whose tail is a real [`await_js`].
+pub fn spawn_tail(future: impl Future<Output = JsResult<Tail>> + 'static) -> JsResult<Local> {
+  STATS.with(|s| {
+    let (t, a) = s.get();
+    s.set((t + 1, a))
+  });
+  let wrapped = async move {
+    match future.await? {
+      Tail::Return(value) => Ok(value),
+      Tail::Await(promise, value) => {
+        let first_poll = CURRENT.with(|c| {
+          let c = c.borrow();
+          match c.last() {
+            Some(task) if task.deferred.get().is_null() => {
+              *task.tail.borrow_mut() = Some((promise, value.clone()));
+              true
+            }
+            _ => false,
+          }
+        });
+        if first_poll {
+          return Ok(Val::Undefined);
+        }
+        await_js(promise).await?;
+        Ok(value)
+      }
+    }
+  };
+  let task = Rc::new(Task {
+    future: RefCell::new(Some(Box::pin(wrapped))),
+    deferred: Cell::new(std::ptr::null_mut()),
+    repoll: Cell::new(false),
+    tail: RefCell::new(None),
+  });
+  match poll_ready(&task) {
+    Some(Poll::Ready(result)) => {
+      if let Some((promise, value)) = task.tail.borrow_mut().take() {
+        if cfg!(feature = "mutant-tail-skip-tick") && value.is_undefined() {
+          return Ok(promise);
+        }
+        let helper = THEN_RETURN.with(|h| h.borrow().as_ref().map(|p| p.get()));
+        let Some(helper) = helper else {
+          return Err(js::engine_error("core runtime not initialized"));
+        };
+        return js::call(helper, js::undefined(), &[promise, value.get()]);
+      }
+      let (deferred, promise) = js::create_promise()?;
+      match result {
+        Ok(v) => js::resolve_deferred(deferred, v.get()),
+        Err(Thrown(e)) => js::reject_deferred(deferred, e.get()),
+      }
+      Ok(promise)
+    }
+    _ => {
+      // Suspended: from now on it is an ordinary task, settled through its deferred.
+      let (deferred, promise) = js::create_promise()?;
+      task.deferred.set(deferred);
+      Ok(promise)
+    }
+  }
+}
+
 fn poll_task(task: &Rc<Task>) {
+  if let Some(Poll::Ready(result)) = poll_ready(task) {
+    let deferred = task.deferred.get();
+    match result {
+      Ok(v) => js::resolve_deferred(deferred, v.get()),
+      Err(Thrown(e)) => js::reject_deferred(deferred, e.get()),
+    }
+  }
+}
+
+/// Polls `task` (again while resumes arrive during the poll). `None` if it is being polled
+/// already (the running poll will poll again); on completion the future is dropped.
+fn poll_ready(task: &Rc<Task>) -> Option<Poll<JsResult<Val>>> {
   let waker = noop_waker();
   let mut cx = Context::from_waker(&waker);
   let Ok(mut slot) = task.future.try_borrow_mut() else {
     task.repoll.set(true);
-    return;
+    return None;
   };
   CURRENT.with(|c| c.borrow_mut().push(task.clone()));
   let result = loop {
@@ -97,16 +219,12 @@ fn poll_task(task: &Rc<Task>) {
     }
   };
   CURRENT.with(|c| c.borrow_mut().pop());
-  if let Poll::Ready(result) = result {
+  if result.is_ready() {
     let future = slot.take();
     drop(slot);
-    let deferred = task.deferred.get();
-    match result {
-      Ok(v) => js::resolve_deferred(deferred, v.get()),
-      Err(Thrown(e)) => js::reject_deferred(deferred, e.get()),
-    }
     drop(future);
   }
+  Some(result)
 }
 
 /// JS `await value`. `value` must be a handle created in the current synchronous segment; the

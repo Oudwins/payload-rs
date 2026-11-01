@@ -507,6 +507,28 @@ name = "payload-core-ops"
 version = "0.1.0"
 dependencies = [
  "napi",
+ "payload-core-query",
+ "payload-core-runtime",
+]
+
+[[package]]
+name = "payload-core-ops-global"
+version = "0.1.0"
+dependencies = [
+ "napi",
+ "payload-core-ops",
+ "payload-core-runtime",
+]
+
+[[package]]
+name = "payload-core-ops-write"
+version = "0.1.0"
+dependencies = [
+ "napi",
+ "payload-core-hooks-after",
+ "payload-core-hooks-change",
+ "payload-core-hooks-validate",
+ "payload-core-ops",
  "payload-core-runtime",
 ]
 
@@ -517,6 +539,9 @@ dependencies = [
  "indexmap",
  "napi",
  "napi-derive",
+ "payload-core-hooks-after",
+ "payload-core-hooks-change",
+ "payload-core-hooks-validate",
  "payload-core-runtime",
  "payload-engine",
  "payload-sql-read",
@@ -570,6 +595,8 @@ dependencies = [
  "payload-core-hooks-change",
  "payload-core-hooks-validate",
  "payload-core-ops",
+ "payload-core-ops-global",
+ "payload-core-ops-write",
  "payload-core-query",
  "payload-core-runtime",
  "payload-core-validate",

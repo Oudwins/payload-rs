@@ -6,24 +6,21 @@
  * - object literals handed to user code, adapters or upstream utilities (same key order, same
  *   property-read order),
  * - destructuring patterns of the operations (same defaults, getter order and V8 errors),
- * - upstream utilities that are called rather than ported (query/select/join validation and
- *   sanitization, error classes, `replaceWithDraftIfAvailable`, `checkFileAccess`, ...),
- * - synchronous segments without user callbacks (`docs.map` spreads, lock-status filtering).
+ * - upstream utilities that are called rather than ported (`sanitizeSelect`/`resolveSelect`,
+ *   `buildVersionCollectionFields`, `getEntityPermissions`, `sanitizePermissions`,
+ *   `replaceWithDraftIfAvailable`, `checkFileAccess`, `markHistoricalFileURLs`,
+ *   `relationshipPopulationPromise`, error classes),
+ * - JS built-ins whose semantics the engine must not re-implement (`Array.isArray`,
+ *   `Array.prototype.map/filter/find` driving a native callback, `for...of` / `for...in` loops as
+ *   generators, `new Date(v).getTime()`).
  *
- * Control flow (hooks, access, awaits, branches) stays in Rust. Payload internals are imported
- * by relative path, like `../runtime`: engine-rs has no installed `payload` link.
+ * Control flow (hooks, access, awaits, branches, loops) and the query utilities
+ * (crates/payload-core-query `live`, installed by `getCoreOps()`) are Rust. Payload internals are
+ * imported by relative path, like `../runtime`: engine-rs has no installed `payload` link.
  */
 import type { SanitizedCollectionConfig } from '../../../payload/src/collections/config/types.js'
-import type { FlattenedField } from '../../../payload/src/fields/config/types.js'
 
 import { prefetchVersionForInheritedReadAccess } from '../../../payload/src/collections/operations/utilities/prefetchVersionForInheritedReadAccess.js'
-import { combineQueries } from '../../../payload/src/database/combineQueries.js'
-import { getLocalizedPaths } from '../../../payload/src/database/getLocalizedPaths.js'
-import { prefixWherePaths } from '../../../payload/src/database/prefixWherePaths.js'
-import { validateQueryPaths } from '../../../payload/src/database/queryValidation/validateQueryPaths.js'
-import { validateSortQuery } from '../../../payload/src/database/queryValidation/validateSortQuery.js'
-import { sanitizeJoinQuery } from '../../../payload/src/database/sanitizeJoinQuery.js'
-import { sanitizeWhereQuery } from '../../../payload/src/database/sanitizeWhereQuery.js'
 import { APIError } from '../../../payload/src/errors/APIError.js'
 import { Forbidden } from '../../../payload/src/errors/Forbidden.js'
 import { NotFound } from '../../../payload/src/errors/NotFound.js'
@@ -32,19 +29,12 @@ import { relationshipPopulationPromise } from '../../../payload/src/fields/hooks
 import { lockedDocumentsCollectionSlug } from '../../../payload/src/locked-documents/config.js'
 import { checkFileAccess } from '../../../payload/src/uploads/checkFileAccess.js'
 import { markHistoricalFileURLs } from '../../../payload/src/uploads/fileVersioning/markHistoricalFileURLs.js'
-import { appendNonTrashedFilter } from '../../../payload/src/utilities/appendNonTrashedFilter.js'
 import { getEntityPermissions } from '../../../payload/src/utilities/getEntityPermissions/getEntityPermissions.js'
-import { getFieldByPath } from '../../../payload/src/utilities/getFieldByPath.js'
-import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { httpStatus } from '../../../payload/src/utilities/httpStatus.js'
 import { resolveSelect } from '../../../payload/src/utilities/resolveSelect.js'
-import { sanitizeInternalFields } from '../../../payload/src/utilities/sanitizeInternalFields.js'
 import { sanitizePermissions } from '../../../payload/src/utilities/sanitizePermissions.js'
 import { sanitizeSelect } from '../../../payload/src/utilities/sanitizeSelect.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
-import { appendVersionToQueryKey } from '../../../payload/src/versions/drafts/appendVersionToQueryKey.js'
-import { getQueryDraftsSelect } from '../../../payload/src/versions/drafts/getQueryDraftsSelect.js'
-import { getQueryDraftsSort } from '../../../payload/src/versions/drafts/getQueryDraftsSort.js'
 import { replaceWithDraftIfAvailable } from '../../../payload/src/versions/drafts/replaceWithDraftIfAvailable.js'
 import {
   isInheritedReadVersionsAccess,
@@ -54,12 +44,11 @@ import {
 /* eslint-disable @typescript-eslint/no-explicit-any -- the helpers mirror untyped TS expressions */
 type Any = any
 
-const lockDurationDefault = 300 // Default 5 minutes in seconds (find.ts / findByID.ts)
-
-const allOperations = ['create', 'read', 'update', 'delete', 'validate']
+/** What the loop generators return when the loop is done. */
+const DONE = Symbol('done')
 
 /** `sanitizeSort` of sanitizeSortQuery.ts (private there); the engine handles string sorts. */
-const sanitizeSortValue = (fields: FlattenedField[], sort: Any): string => {
+const sanitizeSortValue = (fields: Any[], sort: Any): string => {
   let sortProperty = sort
   let desc = false
   if (sort.indexOf('-') === 0) {
@@ -92,26 +81,71 @@ export const createOpsHost = (
   afterRead?: (args: Any) => Promise<unknown>,
 ): Record<string, unknown> => ({
   afterRead,
+  DONE,
 
   // ---------------------------------------------------------------- generic JS semantics
   /** V8's `TypeError` for calling a non-callable `expr(...)`. */
   notAFunction: (expr: string) => new TypeError(`${expr} is not a function`),
-  /** `for (const x of v)` over a non-array: collects (or throws V8's not-iterable error). */
+  /** `[...v]` (the write / global operation crates loop over it by index). */
+  isArray: Array.isArray,
   spreadIterable: (v: Any) => [...v],
-  /** The error `docs.map(...)` throws for a non-array `docs` (`expr` is its source text). */
-  mapGuard: (docs: Any, expr: string) => {
-    if (docs === null || docs === undefined) {
-      return new TypeError(`Cannot read properties of ${docs} (reading 'map')`)
+  /**
+   * `for (const item of <expr>)` as a generator the engine steps with `next`. `Symbol.iterator`
+   * is read once, as `GetIterator` does; a missing one throws V8's `<expr> is not iterable`.
+   */
+  *forOf(v: Any, expr?: string) {
+    if (expr === undefined) {
+      for (const item of v) {
+        yield item
+      }
+      return
     }
-    if (typeof docs.map === 'function') {
-      return new Error(`core ops: ${expr} is not an array (unsupported)`)
+    const method = v === null || v === undefined ? undefined : v[Symbol.iterator]
+    if (typeof method !== 'function') {
+      throw new TypeError(`${expr} is not iterable`)
     }
-    return new TypeError(`${expr}.map is not a function`)
+    for (const item of { [Symbol.iterator]: () => Reflect.apply(method, v, []) }) {
+      yield item
+    }
+  },
+  /** `for (const key in o)` as a generator the engine steps with `next`. */
+  *forIn(o: Any) {
+    for (const key in o) {
+      yield key
+    }
+  },
+  next: (generator: Generator<unknown>) => {
+    const result = generator.next()
+    return result.done ? DONE : result.value
+  },
+  /** A loop body threw: `IteratorClose` (errors of `return` are ignored for a throw completion). */
+  closeLoop: (generator: Generator<unknown>) => {
+    try {
+      generator.return(undefined)
+    } catch {
+      // the loop body's error wins
+    }
+  },
+  /** `<expr>.map(callback)`: V8's errors for a nullish value or a non-callable `map`. */
+  filterWith: (array: Any, callback: Any) => array.filter(callback),
+  findWith: (array: Any, callback: Any) => array.find(callback),
+  mapWith: (array: Any, expr: string, callback: Any) => {
+    if (array === null || array === undefined) {
+      throw new TypeError(`Cannot read properties of ${array} (reading 'map')`)
+    }
+    const map = array.map
+    if (typeof map !== 'function') {
+      throw new TypeError(`${expr}.map is not a function`)
+    }
+    return Reflect.apply(map, array, [callback])
   },
   /** `name in o` for a primitive `o` (throws V8's TypeError). */
+  dateTime: (value: Any) => new Date(value).getTime(),
   hasIn: (o: Any, name: string) => name in o,
   lessThan: (a: Any, b: Any) => a < b,
   now: () => new Date().getTime(),
+  spreadObject: (value: Any) => ({ ...value }),
+  times1000: (value: Any) => value * 1000,
 
   // ---------------------------------------------------------------- errors
   distinctFieldNotFound: (field: Any, slug: Any) =>
@@ -186,19 +220,57 @@ export const createOpsHost = (
   prefixSort: (desc: boolean, virtualPath: string) => `${desc ? '-' : ''}${virtualPath}`,
   sanitizeSortValue,
 
-  // ---------------------------------------------------------------- query / select utilities
-  appendNonTrashedFilter: (enableTrash: Any, trash: Any, where: Any) =>
-    appendNonTrashedFilter({ enableTrash, trash, where }),
-  appendNonTrashedVersionFilter: (enableTrash: Any, trash: Any, where: Any) =>
-    appendNonTrashedFilter({ deletedAtPath: 'version.deletedAt', enableTrash, trash, where }),
-  appendVersionToQueryKey: (where: Any) => appendVersionToQueryKey(where),
-  combineQueries: (where: Any, access: Any) => combineQueries(where, access),
-  getSelectMode: (select: Any) => getSelectMode(select),
-  idWhere: (id: Any) => ({ id: { equals: id } }),
-  prefixWherePaths: (prefix: Any, where: Any) => prefixWherePaths({ prefix, where }),
-  sanitizeWhereQuery: (fields: Any, payload: Any, where: Any) => {
-    sanitizeWhereQuery({ fields, payload, where })
+  // ---------------------------------------------------------------- where / select / sort literals
+  /** `{ [deletedAtPath]: { exists: false } }` (appendNonTrashedFilter.ts) */
+  notTrashedFilter: (deletedAtPath: string) => ({
+    [deletedAtPath]: { exists: false },
+  }),
+  /** `{ ...where, and: [...where.and, notTrashedFilter] }` (appendNonTrashedFilter.ts) */
+  appendToAnd: (where: Any, notTrashedFilter: Any) => ({
+    ...where,
+    and: [...where.and, notTrashedFilter],
+  }),
+  /** `{ and: [notTrashedFilter, ...(where ? [where] : [])] }` (appendNonTrashedFilter.ts) */
+  andWithOptional: (notTrashedFilter: Any, where: Any) => ({
+    and: [notTrashedFilter, ...(where ? [where] : [])],
+  }),
+  /** getQueryDraftsSelect.ts */
+  draftsSelect: (select: Any, include: boolean) =>
+    include
+      ? {
+          parent: true,
+          version: select,
+        }
+      : {
+          version: select,
+        },
+  /** The `sort.map` arrow of getQueryDraftsSort.ts (the engine handles string fields). */
+  buildVersionFields: (config: Any, collectionConfig: Any) =>
+    buildVersionCollectionFields(config, collectionConfig, true),
+  draftsSortField: (field: Any) => {
+    let orderBy: string
+    let direction = ''
+    if (field[0] === '-') {
+      orderBy = field.substring(1)
+      direction = '-'
+    } else {
+      orderBy = field
+    }
+
+    if (orderBy === 'id') {
+      return `${direction}parent`
+    }
+
+    return `${direction}version.${orderBy}`
   },
+  idWhere: (id: Any) => ({ id: { equals: id } }),
+  /** `{ [args.field]: { exists: true } }` (findDistinct.ts) */
+  existsWhere: (field: Any) => ({
+    [field]: {
+      exists: true,
+    },
+  }),
+  sanitizeSortQueryArgs: ({ fields, sort }: Any) => [fields, sort],
   selectRead: (collectionConfig: Any, req: Any, incomingSelect: Any) =>
     sanitizeSelect({
       fields: collectionConfig.flattenedFields,
@@ -220,64 +292,13 @@ export const createOpsHost = (
       }),
       versions: true,
     }),
-  validateQueryPaths: (collectionConfig: Any, overrideAccess: Any, req: Any, where: Any) =>
-    validateQueryPaths({ collectionConfig, overrideAccess, req, where }),
-  validateQueryPathsOrEmpty: (collectionConfig: Any, overrideAccess: Any, req: Any, where: Any) =>
-    validateQueryPaths({ collectionConfig, overrideAccess, req, where: where ?? {} }),
-  validateQueryPathsVersions: (
-    collectionConfig: Any,
-    overrideAccess: Any,
-    req: Any,
-    versionFields: Any,
-    where: Any,
-  ) => validateQueryPaths({ collectionConfig, overrideAccess, req, versionFields, where }),
-  versionFields: (payload: Any, collectionConfig: Any) =>
-    buildVersionCollectionFields(payload.config, collectionConfig, true),
-  /** find.ts drafts branch (`collection.config` and `payload.config` read in the literal). */
-  validateQueryPathsCollectionDrafts: (
-    collection: Any,
-    overrideAccess: Any,
-    req: Any,
-    payload: Any,
-    where: Any,
-  ) =>
-    validateQueryPaths({
-      collectionConfig: collection.config,
-      overrideAccess,
-      req,
-      versionFields: buildVersionCollectionFields(payload.config, collection.config, true),
-      where: appendVersionToQueryKey(where),
-    }),
-  /** findByID.ts drafts branch. */
-  sanitizeJoinQuery: (collectionConfig: Any, joins: Any, overrideAccess: Any, req: Any) =>
-    sanitizeJoinQuery({ collectionConfig, joins, overrideAccess, req }),
-  validateQueryPathsByIDDrafts: (
-    collectionConfig: Any,
-    overrideAccess: Any,
-    req: Any,
-    where: Any,
-  ) =>
-    validateQueryPaths({
-      collectionConfig,
-      overrideAccess,
-      req,
-      versionFields: buildVersionCollectionFields(req.payload.config, collectionConfig, true),
-      where: appendVersionToQueryKey(where),
-    }),
-  validateSortQuery: (collectionConfig: Any, overrideAccess: Any, req: Any, sort: Any) =>
-    validateSortQuery({ collectionConfig, overrideAccess, req, sort }),
-  validateSortQueryVersions: (
-    collectionConfig: Any,
-    overrideAccess: Any,
-    req: Any,
-    sort: Any,
-    versionFields: Any,
-  ) => validateSortQuery({ collectionConfig, overrideAccess, req, sort, versionFields }),
+  /** `{ ...doc, collection: collectionConfig.slug }` (auth collections, find.ts / findByID.ts) */
+  withCollection: (doc: Any, collectionConfig: Any) => ({
+    ...doc,
+    collection: collectionConfig.slug,
+  }),
 
   // ---------------------------------------------------------------- find
-  authDocs: (result: Any, collectionConfig: Any) => {
-    result.docs = result.docs.map((doc: Any) => ({ ...doc, collection: collectionConfig.slug }))
-  },
   emptyFindResult: (limit: Any) => ({
     docs: [],
     hasNextPage: false,
@@ -387,26 +408,6 @@ export const createOpsHost = (
     sort,
     where: fullWhere,
   }),
-  findLockApply: (
-    lockedDocuments: Any,
-    result: Any,
-    now: number,
-    lockDurationInMilliseconds: number,
-  ) => {
-    const lockedDocs = Array.isArray(lockedDocuments?.docs) ? lockedDocuments.docs : []
-
-    // Filter out stale locks
-    const validLockedDocs = lockedDocs.filter((lock: Any) => {
-      const lastEditedAt = new Date(lock?.updatedAt).getTime()
-      return lastEditedAt + lockDurationInMilliseconds > now
-    })
-
-    for (const doc of result.docs) {
-      const lockedDoc = validLockedDocs.find((lock: Any) => lock?.document?.value === doc.id)
-      doc._isLocked = !!lockedDoc
-      doc._userEditing = lockedDoc ? lockedDoc?.user?.value : null
-    }
-  },
   findLockArgs: (
     collectionConfig: Any,
     sanitizedLimit: Any,
@@ -442,12 +443,8 @@ export const createOpsHost = (
       ],
     },
   }),
-  findLockReset: (result: Any) => {
-    for (const doc of result.docs) {
-      doc._isLocked = false
-      doc._userEditing = null
-    }
-  },
+  /** The `payload.db.queryDrafts` literal of find.ts; `evaluate(0)` / `evaluate(1)` are the
+   * engine's `getQueryDraftsSelect({ select })` / `getQueryDraftsSort({ collectionConfig, sort })`. */
   findQueryDraftsArgs: (
     collectionConfig: Any,
     req: Any,
@@ -456,9 +453,8 @@ export const createOpsHost = (
     locale: Any,
     sanitizedPage: Any,
     usePagination: Any,
-    select: Any,
-    sort: Any,
     fullWhere: Any,
+    evaluate: (which: number) => Any,
   ) => ({
     collection: collectionConfig.slug,
     joins: req.payloadAPI === 'GraphQL' ? false : sanitizedJoins,
@@ -467,34 +463,21 @@ export const createOpsHost = (
     page: sanitizedPage,
     pagination: usePagination,
     req,
-    select: getQueryDraftsSelect({ select }),
-    sort: getQueryDraftsSort({
-      collectionConfig,
-      sort,
-    }),
+    select: evaluate(0),
+    sort: evaluate(1),
     where: fullWhere,
   }),
-  lockDurationMs: (collectionConfig: Any) => {
-    const lockDocumentsProp = collectionConfig?.lockDocuments
-
-    const lockDuration =
-      typeof lockDocumentsProp === 'object' ? lockDocumentsProp.duration : lockDurationDefault
-    return lockDuration * 1000
-  },
 
   // ---------------------------------------------------------------- findByID
-  applyLockStatus: (result: Any, lockStatus: Any) => {
-    result._isLocked = !!lockStatus
-    result._userEditing = lockStatus?.user?.value ?? null
-  },
-  existingVersionsArgs: (collectionConfig: Any, locale: Any, req: Any, where: Any) => ({
+  /** `where: appendVersionToQueryKey(where)` is the engine's `evaluate()`. */
+  existingVersionsArgs: (collectionConfig: Any, locale: Any, req: Any, evaluate: () => Any) => ({
     collection: collectionConfig.slug,
     limit: 1,
     locale: locale!,
     pagination: false,
     req,
     select: { parent: true },
-    where: appendVersionToQueryKey(where),
+    where: evaluate(),
   }),
   findByIDAfterReadArgs: (
     collectionConfig: Any,
@@ -600,13 +583,14 @@ export const createOpsHost = (
       ],
     },
   }),
+  /** `select: getQueryDraftsSelect({ select })` is the engine's `evaluate()`. */
   findByIDQueryDraftsArgs: (
     collectionConfig: Any,
     req: Any,
     sanitizedJoins: Any,
     locale: Any,
-    select: Any,
     query: Any,
+    evaluate: () => Any,
   ) => ({
     collection: collectionConfig.slug,
     joins: req.payloadAPI === 'GraphQL' ? false : sanitizedJoins,
@@ -614,7 +598,7 @@ export const createOpsHost = (
     locale: locale!,
     pagination: false,
     req,
-    select: getQueryDraftsSelect({ select }),
+    select: evaluate(),
     where: query,
   }),
   findOneArgs: (
@@ -636,13 +620,6 @@ export const createOpsHost = (
     select: dbSelect,
     where: fullWhere,
   }),
-  lockStatusOf: (lockedDocument: Any) => {
-    let lockStatus = null
-    if (lockedDocument && lockedDocument.docs.length > 0) {
-      lockStatus = lockedDocument.docs[0]!
-    }
-    return lockStatus
-  },
   replaceWithDraftIfAvailable: (
     accessResult: Any,
     doc: Any,
@@ -661,11 +638,6 @@ export const createOpsHost = (
       select,
     }),
   selectWithTimestamps: (select: Any) => ({ ...select, createdAt: true, updatedAt: true }),
-  spreadCollection: (result: Any, collectionConfig: Any) => ({
-    ...result,
-    collection: collectionConfig.slug,
-  }),
-
   // ---------------------------------------------------------------- count / countVersions
   countArgs: (args: Any) => {
     const {
@@ -705,55 +677,6 @@ export const createOpsHost = (
   }),
 
   // ---------------------------------------------------------------- findDistinct
-  distinctFieldByPath: (payload: Any, collectionConfig: Any, args: Any) =>
-    getFieldByPath({
-      config: payload.config,
-      fields: collectionConfig.flattenedFields,
-      includeRelationships: true,
-      path: args.field,
-    }),
-  distinctLocalizedPaths: (collectionConfig: Any, args: Any, req: Any, payload: Any) =>
-    getLocalizedPaths({
-      collectionSlug: collectionConfig.slug,
-      fields: collectionConfig.flattenedFields,
-      incomingPath: args.field,
-      locale: req.locale!,
-      overrideAccess: true,
-      payload,
-    }),
-  distinctTrimIDPath: (paths: Any) => {
-    if (paths.at(-1)?.path === 'id') {
-      const previousField = paths.at(-2)?.field
-      if (
-        previousField &&
-        (previousField.type === 'relationship' || previousField.type === 'upload') &&
-        typeof previousField.relationTo === 'string'
-      ) {
-        paths.pop()
-      }
-    }
-  },
-  distinctVirtualPath: (collectionConfig: Any, fieldResult: Any) => {
-    let relationPath: string = ''
-    let currentFields: FlattenedField[] = collectionConfig.flattenedFields
-    const fieldPathSegments = fieldResult.field.virtual.split('.')
-    for (const segment of fieldResult.field.virtual.split('.')) {
-      relationPath = `${relationPath}${segment}`
-      fieldPathSegments.shift()
-      const field: Any = currentFields.find((e) => e.name === segment)!
-      if (
-        (field.type === 'relationship' || field.type === 'upload') &&
-        typeof field.relationTo === 'string'
-      ) {
-        break
-      }
-      if ('flattenedFields' in field) {
-        currentFields = field.flattenedFields
-      }
-    }
-
-    return `${relationPath}.${fieldPathSegments.join('.')}`
-  },
   emptyDistinctResult: (limit: Any) => ({
     hasNextPage: false,
     hasPrevPage: false,
@@ -808,34 +731,6 @@ export const createOpsHost = (
     sort: args.sort,
     where: fullWhere,
   }),
-  relationshipPath: (paths: Any, pathIndex: number) =>
-    paths
-      .slice(0, pathIndex)
-      .map(({ path }: Any) => path)
-      .join('.'),
-  renameDistinctValues: (result: Any, args: Any, path: Any) => {
-    for (const val of result.values) {
-      val[args.field] = val[path]
-      delete val[path]
-    }
-  },
-  validateQueryPathsDistinctField: (
-    collectionConfig: Any,
-    req: Any,
-    showHiddenFields: Any,
-    args: Any,
-  ) =>
-    validateQueryPaths({
-      collectionConfig,
-      overrideAccess: false,
-      req,
-      showHiddenFields,
-      where: {
-        [args.field]: {
-          exists: true,
-        },
-      },
-    }),
   virtualFindDistinctArgs: (
     collectionConfig: Any,
     args: Any,
@@ -864,33 +759,22 @@ export const createOpsHost = (
     trash,
     where,
   }),
-  /** The population loop of findDistinct.ts up to `Promise.all(populationPromises)`. */
-  distinctPopulate: (fieldResult: Any, result: Any, args: Any, populate: Any, req: Any) => {
-    const populationPromises: Promise<void>[] = []
-    const sanitizedField = { ...fieldResult.field }
-    if (fieldResult.field.hasMany) {
-      sanitizedField.hasMany = false
-    }
-    for (const doc of result.values) {
-      populationPromises.push(
-        relationshipPopulationPromise({
-          currentDepth: 0,
-          depth: args.depth,
-          draft: false,
-          fallbackLocale: req.fallbackLocale || null,
-          field: sanitizedField,
-          locale: req.locale || null,
-          overrideAccess: args.overrideAccess ?? false,
-          parentIsLocalized: false,
-          populate,
-          req,
-          showHiddenFields: false,
-          siblingDoc: doc,
-        }),
-      )
-    }
-    return Promise.all(populationPromises)
-  },
+  /** The `relationshipPopulationPromise({...})` call of findDistinct.ts' population loop. */
+  distinctPopulation: (sanitizedField: Any, doc: Any, args: Any, populate: Any, req: Any) =>
+    relationshipPopulationPromise({
+      currentDepth: 0,
+      depth: args.depth,
+      draft: false,
+      fallbackLocale: req.fallbackLocale || null,
+      field: sanitizedField,
+      locale: req.locale || null,
+      overrideAccess: args.overrideAccess ?? false,
+      parentIsLocalized: false,
+      populate,
+      req,
+      showHiddenFields: false,
+      siblingDoc: doc,
+    }),
 
   // ---------------------------------------------------------------- findVersions / findVersionByID
   findVersionsArgs: (args: Any) => {
@@ -1015,17 +899,16 @@ export const createOpsHost = (
     showHiddenFields: showHiddenFields!,
   }),
   isInheritedReadVersionsAccess: (access: Any) => isInheritedReadVersionsAccess(access),
-  markHistoricalVersions: (result: Any, collectionConfig: Any, req: Any) => {
-    result.docs = result.docs.map((row: Any) => ({
-      ...row,
-      version: markHistoricalFileURLs({
-        collectionSlug: collectionConfig.slug,
-        doc: row.version,
-        req,
-        versionID: row.id,
-      }),
-    }))
-  },
+  /** The `result.docs.map` arrow of findVersions.ts for upload collections. */
+  markHistoricalRow: (row: Any, collectionConfig: Any, req: Any) => ({
+    ...row,
+    version: markHistoricalFileURLs({
+      collectionSlug: collectionConfig.slug,
+      doc: row.version,
+      req,
+      versionID: row.id,
+    }),
+  }),
   prefetchVersion: (
     id: Any,
     collectionConfig: Any,
@@ -1042,9 +925,6 @@ export const createOpsHost = (
       select,
       trash,
     }),
-  sanitizeInternalDocs: (result: Any) => {
-    result.docs = result.docs.map((doc: Any) => sanitizeInternalFields(doc))
-  },
   /** The access function findVersionByID.ts passes for inherited `readVersions` access. */
   findVersionByIDAfterReadArgs: (
     collectionConfig: Any,
@@ -1104,7 +984,6 @@ export const createOpsHost = (
   },
 
   // ---------------------------------------------------------------- docAccess
-  allOperations: () => [...allOperations],
   docAccessArgs: (args: Any) => {
     const {
       id,
@@ -1126,9 +1005,6 @@ export const createOpsHost = (
       operations: collectionOperations,
       req,
     }),
-  pushOperation: (operations: Any[], operation: string) => {
-    operations.push(operation)
-  },
   sanitizeCollectionPermissions: (config: Any, result: Any) =>
     sanitizePermissions({
       collections: {

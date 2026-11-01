@@ -658,7 +658,7 @@ fn build_has_many_relationship_condition(
 
   crate::sql::check_join_aliases(&nested_joins)?;
   let related_subquery = Select {
-    fields: vec![adapter.col(&related_table, "id").map(|e| sql::expr_sql(&e)).unwrap_or_default()],
+    fields: vec![adapter.col(&related_table, "id").map(|e| sql::selection_sql(&e)).unwrap_or_default()],
     from: Some(related_table.clone()),
     joins: nested_joins,
     where_: sql::and(related_constraints),
@@ -669,7 +669,7 @@ fn build_has_many_relationship_condition(
     let mut constraints = row_constraints.clone();
     constraints.push(Some(check));
     Select {
-      fields: vec![adapter.col(&relationship_table, "parent").map(|e| sql::expr_sql(&e)).unwrap_or_default()],
+      fields: vec![adapter.col(&relationship_table, "parent").map(|e| sql::selection_sql(&e)).unwrap_or_default()],
       from: Some(relationship_table.clone()),
       where_: sql::and(constraints),
       ..Select::default()

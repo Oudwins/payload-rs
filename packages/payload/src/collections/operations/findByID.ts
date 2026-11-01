@@ -57,7 +57,7 @@ export type FindByIDArgs = {
 } & Pick<AfterReadArgs<JsonObject>, 'flattenLocales'> &
   Pick<FindOptions<string, SelectType>, 'select'>
 
-export const findByIDOperation = async <
+export const findByIDOperationTS = async <
   TSlug extends CollectionSlug,
   TDisableErrors extends boolean,
   TSelect extends SelectFromCollectionSlug<TSlug>,
@@ -406,3 +406,32 @@ export const findByIDOperation = async <
 
   return result as ApplyDisableErrors<TransformCollectionWithSelect<TSlug, TSelect>, TDisableErrors>
 }
+
+type RustOperations = {
+  findByIDOperation: (args: FindByIDArgs) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops`), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const findByIDOperation: typeof findByIDOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.findByIDOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.findByIDOperation(args)
+          })
+  : findByIDOperationTS

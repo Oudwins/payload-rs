@@ -48,6 +48,7 @@ thread_local! {
 pub fn install(obj: Local) -> JsResult<()> {
   let f = |name: &str| -> JsResult<Persist> { Persist::new(js::get_named(obj, name)?) };
   executor::install_await_helper(js::get_named(obj, "awaitValue")?)?;
+  executor::install_then_return_helper(js::get_named(obj, "thenReturn")?)?;
   let host = Host {
     obj: Persist::new(obj)?,
     get: f("get")?,

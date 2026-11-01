@@ -10,6 +10,7 @@
 pub mod adapter;
 pub mod build_query;
 pub mod columns;
+pub mod drizzle;
 pub mod js_date;
 pub mod js_ops;
 pub mod json_query;

@@ -37,6 +37,11 @@ pub struct Host {
   pub after_change_leaves: Persist,
   /// The same for beforeDuplicate.
   pub before_duplicate_leaves: Persist,
+  /// afterChange `traverseFields(...)` for a fields array made only of leaf fields: upstream's
+  /// `traverseFields.ts` body (a JS `async` function) calling the leaf `promise()` per field.
+  pub after_change_leaf_traversal: Persist,
+  /// The same for beforeDuplicate.
+  pub before_duplicate_leaf_traversal: Persist,
 }
 
 thread_local! {
@@ -59,6 +64,8 @@ pub fn install(obj: Local) -> JsResult<()> {
     locale_codes_for_each: f("localeCodesForEach")?,
     after_change_leaves: f("afterChangeLeaves")?,
     before_duplicate_leaves: f("beforeDuplicateLeaves")?,
+    after_change_leaf_traversal: f("afterChangeLeafTraversal")?,
+    before_duplicate_leaf_traversal: f("beforeDuplicateLeafTraversal")?,
   };
   HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
   Ok(())

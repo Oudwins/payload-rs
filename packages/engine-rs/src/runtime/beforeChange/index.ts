@@ -16,8 +16,12 @@ import type { Field, TabAsField, Validate } from '../../../../payload/src/fields
 
 import { ValidationError } from '../../../../payload/src/errors/ValidationError.js'
 import { recordNewDoc } from '../../../../payload/src/fields/baseFields/authorship/index.js'
-import { fieldAffectsData, fieldShouldBeLocalized } from '../../../../payload/src/fields/config/types.js'
+import {
+  fieldAffectsData,
+  fieldShouldBeLocalized,
+} from '../../../../payload/src/fields/config/types.js'
 import { getFieldPaths } from '../../../../payload/src/fields/getFieldPaths.js'
+import { traverseFields as upstreamTraverseFields } from '../../../../payload/src/fields/hooks/beforeChange/traverseFields.js'
 import { flattenValidationData } from '../../../../payload/src/fields/hooks/beforeChange/flattenValidationData.js'
 import { validateBlocksFilterOptions } from '../../../../payload/src/fields/validations.js'
 import { deepMergeWithSourceArrays } from '../../../../payload/src/utilities/deepMerge.js'
@@ -27,6 +31,11 @@ import { getCoreRuntime } from '../index.js'
 
 export type BeforeChangeBinding = {
   beforeChange: (args: unknown) => Promise<unknown>
+  /**
+   * `traverseFields` of beforeChange with its parameter already destructured (array in the
+   * pattern's order, string paths): see crates/payload-core-hooks-change before_change.rs.
+   */
+  beforeChangeTraverseFields: (destructured: unknown[]) => Promise<void>
   init: (host: Record<string, unknown>) => void
   runMergeLocaleAction: (state: unknown) => void
 }
@@ -487,6 +496,51 @@ export const getBeforeChangeBinding = (): BeforeChangeBinding => {
   const created = addon.hooksBeforeChangeBinding()
 
   created.init({
+    /**
+     * `beforeChange/traverseFields.ts` for a fields array made only of leaf fields (the crate's
+     * `traverse`): upstream's body, with `promise()` being the leaf body.
+     */
+    beforeChangeLeafTraversal: async (
+      c: any[],
+      fields: any[],
+      blockData: unknown,
+      blockFields: unknown,
+      fieldLabelPath: unknown,
+      parentIndexPath: string,
+      parentIsLocalized: unknown,
+      parentPath: string,
+      parentSchemaPath: string,
+      siblingData: unknown,
+      siblingDoc: unknown,
+      siblingDocWithLocales: unknown,
+      skipValidation: unknown,
+    ): Promise<void> => {
+      const promises: Promise<void>[] = []
+
+      fields.forEach((field, fieldIndex) => {
+        promises.push(
+          beforeChangeLeaf(
+            c,
+            field,
+            fieldIndex,
+            blockData,
+            blockFields,
+            fieldLabelPath,
+            parentIndexPath,
+            parentIsLocalized,
+            parentPath,
+            parentSchemaPath,
+            siblingData,
+            siblingDoc,
+            siblingDocWithLocales,
+            fields,
+            skipValidation,
+          ),
+        )
+      })
+
+      await Promise.all(promises)
+    },
     /** `promises.push(promise({...}))` of `traverseFields` for the leaf fields `start..end`. */
     beforeChangeLeaves: (
       c: any[],
@@ -834,3 +888,111 @@ export const getBeforeChangeBinding = (): BeforeChangeBinding => {
 /** Drop-in for `beforeChange` from `payload/src/fields/hooks/beforeChange/index.ts`. */
 export const beforeChange = <T extends JsonObject>(args: BeforeChangeArgs<T>): Promise<T> =>
   getBeforeChangeBinding().beforeChange(args) as Promise<T>
+
+export type BeforeChangeTraverseFieldsArgs = Parameters<typeof upstreamTraverseFields>[0]
+
+/**
+ * Drop-in for `traverseFields` from `payload/src/fields/hooks/beforeChange/traverseFields.ts`
+ * (exported by payload as `beforeChangeTraverseFields`, called by rich text editor hooks). The
+ * parameter is destructured with upstream's pattern (in an async function, so a throw there is a
+ * rejection). Non-string paths, which the port holds as Rust strings, run upstream's body.
+ */
+export const traverseFields = (args: BeforeChangeTraverseFieldsArgs): Promise<void> => {
+  try {
+    const {
+      id,
+      blockData,
+      blockFields,
+      collection,
+      context,
+      data,
+      doc,
+      docWithLocales,
+      errors,
+      fieldLabelPath,
+      fields,
+      global,
+      isValidationOperation,
+      mergeLocaleActions,
+      operation,
+      overrideAccess,
+      parentIndexPath,
+      parentIsLocalized,
+      parentPath,
+      parentSchemaPath,
+      req,
+      siblingData,
+      siblingDoc,
+      siblingDocWithLocales,
+      skipHooks,
+      skipValidation,
+      submittedTopLevelFieldNames,
+    } = args
+    if (
+      typeof parentIndexPath !== 'string' ||
+      typeof parentPath !== 'string' ||
+      typeof parentSchemaPath !== 'string'
+    ) {
+      return upstreamTraverseFields({
+        id,
+        blockData,
+        blockFields,
+        collection,
+        context,
+        data,
+        doc,
+        docWithLocales,
+        errors,
+        fieldLabelPath,
+        fields,
+        global,
+        isValidationOperation,
+        mergeLocaleActions,
+        operation,
+        overrideAccess,
+        parentIndexPath,
+        parentIsLocalized,
+        parentPath,
+        parentSchemaPath,
+        req,
+        siblingData,
+        siblingDoc,
+        siblingDocWithLocales,
+        skipHooks,
+        skipValidation,
+        submittedTopLevelFieldNames,
+      })
+    }
+    return getBeforeChangeBinding().beforeChangeTraverseFields([
+      id,
+      blockData,
+      blockFields,
+      collection,
+      context,
+      data,
+      doc,
+      docWithLocales,
+      errors,
+      fieldLabelPath,
+      fields,
+      global,
+      isValidationOperation,
+      mergeLocaleActions,
+      operation,
+      overrideAccess,
+      parentIndexPath,
+      parentIsLocalized,
+      parentPath,
+      parentSchemaPath,
+      req,
+      siblingData,
+      siblingDoc,
+      siblingDocWithLocales,
+      skipHooks,
+      skipValidation,
+      submittedTopLevelFieldNames,
+    ])
+  } catch (error) {
+    return Promise.reject(error)
+  }
+}

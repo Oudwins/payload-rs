@@ -36,7 +36,7 @@ pub(crate) fn dispatch(
   let config = root.get("config");
   let collections = root.get("collections");
   let blocks = root.get("blocks");
-  let qa = QueryAdapter::new(&engine.schema, config, collections, blocks, options.query.clone());
+  let qa = QueryAdapter::new(&engine.schema, config, collections, blocks, options.query.clone()).with_drizzle(&engine.drizzle);
   let qb = SqlQueryBuilder::new(&qa);
   let find = FindContext {
     schema: &engine.drizzle,
@@ -71,9 +71,8 @@ pub(crate) fn dispatch(
     read: &read,
     write: &write,
     conn: env.conn,
-    raw: env.raw,
+    statements: env.statements,
     host: env.host,
-    steps: env.steps,
     options,
     mutations: Default::default(),
   };
@@ -465,11 +464,7 @@ fn find_distinct(call: &Call<'_>, args: &JsVal) -> Result<JsVal> {
     .into_iter()
     .map(|row| {
       let value = row.into_iter().next().map(|(_, v)| v).unwrap_or_default();
-      match (&selected, value) {
-        (_, JsVal::Null) => Ok(JsVal::Null),
-        (Some(Expr::Col(column)), value) => column.map_from_driver_value(value),
-        (_, value) => Ok(value),
-      }
+      call.decode(selected.as_ref().and_then(Expr::as_col).map(|c| c.decoder), value)
     })
     .collect::<Result<Vec<_>>>()?;
 

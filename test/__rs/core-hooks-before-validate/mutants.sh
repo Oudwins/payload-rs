@@ -6,7 +6,7 @@
 #   PAYLOAD_ENGINE_ADDON=/tmp/bv-mutants.node test/__rs/core-hooks-before-validate/mutants.sh "M1 M2" "synthetic hooks"
 # Prints one `mutant suite runs=.. diffs=..` line per pair (diffs > 0 = mutant killed).
 cd "$(dirname "$0")/../../.."
-mutants="${1:-M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12}"
+mutants="${1:-M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12 M13}"
 suites="${2:-synthetic hooks fields localization core-runtime}"
 db="/tmp/rs-before-validate.db"
 for mutant in $mutants; do

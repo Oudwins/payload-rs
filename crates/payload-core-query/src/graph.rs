@@ -76,6 +76,11 @@ impl DataDecoder<'_> {
             "$undefined" | "$fn" | "$cfg" => return Val::Undefined,
             "$num" => return Val::Num(non_finite(v)),
             "$date" => return Val::Date(v.as_str().map(parse_date).unwrap_or(f64::NAN)),
+            "$bigint" => {
+              if let Some(digits) = v.as_str() {
+                return Val::BigInt(digits.into());
+              }
+            }
             "$obj" => return self.plain(v.as_object().cloned().unwrap_or_default().iter()),
             "$ref" => return self.reference(v.as_u64().unwrap_or(u64::MAX) as usize),
             _ => {}
@@ -181,6 +186,7 @@ impl DataEncoder {
       Val::Num(n) if !n.is_finite() => marker("$num", Json::String(payload_engine::js::num_to_js_string(*n))),
       Val::Num(n) => num_to_json(*n),
       Val::Str(s) => Json::String(s.to_lossy().into_owned()),
+      Val::BigInt(d) => marker("$bigint", Json::String(d.to_string())),
       Val::Builtin(_) => marker("$undefined", Json::Bool(true)),
       Val::Date(t) => marker("$date", Json::String(to_iso_string(*t).unwrap_or_else(|_| "Invalid Date".into()))),
       Val::Obj(_) | Val::Arr(_) => {

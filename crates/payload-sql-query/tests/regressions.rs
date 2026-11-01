@@ -9,7 +9,7 @@ use std::process::Command;
 
 use payload_engine::error::EngineError;
 use payload_engine::host::Host;
-use payload_engine::js::{JsVal, Obj, decode_graph};
+use payload_engine::js::{JsVal, Obj, decode_graph_typed};
 use payload_engine::sql::schema::{RawSchema, SchemaInput, SchemaOptions, build_raw_schema};
 use payload_sql_query::{
   AdapterOptions, BuildQueryArgs, Query, QueryAdapter, SqlValue, WhereVal, build_query, find_ids_select,
@@ -45,7 +45,7 @@ fn env() -> Option<Env> {
   assert!(path.exists(), "{} is missing (record it with RS_QUERY_SUITE=rsq-uuid)", path.display());
   let out = Command::new("gzip").arg("-dc").arg(&path).output().expect("run gzip");
   let fixture: Json = serde_json::from_slice(&out.stdout).expect("parse fixture");
-  let root = decode_graph(&fixture["graph"]).expect("decode graph");
+  let root = decode_graph_typed(&fixture["graph"]).expect("decode graph");
   let schema = build_raw_schema(
     &FixtureHost { calls: &fixture["hostCalls"] },
     SchemaInput { config: root.get("config"), collections: root.get("collections"), blocks: root.get("blocks"), block_table_name_index: Default::default() },
@@ -226,4 +226,14 @@ fn objects_without_primitive_value_throw() {
   // an own non-callable `valueOf` falls back to the inherited `toString`
   let q = env.where_sql(path_op("title", "contains", obj(vec![("valueOf", JsVal::Num(1.0))]))).unwrap();
   assert_eq!(q.params, vec![SqlValue::Text("%[object Object]%".into())]);
+  // `{ toString: 1, valueOf() {...} }`: JS calls the own `valueOf` (no TypeError); its result is
+  // unknown here, so the conversion is refused instead of guessed
+  let calls_value_of = obj(vec![("toString", JsVal::Num(1.0)), ("valueOf", JsVal::Fn(3))]);
+  let err = env.where_sql(path_op("title", "contains", calls_value_of)).unwrap_err();
+  assert_eq!(err.name, "Error", "{err:?}");
+  assert!(err.message.contains("`valueOf` is a function"), "{err:?}");
+  // the same for an own callable `toString` (`String(x)` calls it first)
+  let calls_to_string = obj(vec![("toString", JsVal::Fn(3))]);
+  let err = env.where_sql(path_op("title", "contains", calls_to_string)).unwrap_err();
+  assert!(err.message.contains("`toString` is a function"), "{err:?}");
 }

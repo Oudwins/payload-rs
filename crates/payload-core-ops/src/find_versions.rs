@@ -10,7 +10,9 @@ use crate::common::{
   AccessArgs, HookTarget, ReadHooks, at, build_after_operation, build_before_operation, db_call, execute_access,
   has_hooks, has_hooks_strict, has_versions_enabled, nullish_or, or,
 };
-use crate::host::{self, call, call_val, get, get_val, val};
+use crate::host::{self, ForOf, call, call_val, get, get_val, loop_body, val};
+use crate::query;
+use crate::utilities::{append_non_trashed_filter, sanitize_internal_fields};
 
 /// `findVersionsOperation(args)`: returns its promise.
 pub fn find_versions(args: Local) -> JsResult<Local> {
@@ -85,26 +87,34 @@ async fn run(args: Val) -> JsResult<Val> {
     access_results = await_js(p).await?;
   }
 
-  let version_fields = call_val("versionFields", &[payload.get(), collection_config.get()])?;
+  let version_fields = call_val("buildVersionFields", &[get(payload.get(), "config")?, collection_config.get()])?;
 
-  let p = call(
-    "validateQueryPathsVersions",
-    &[collection_config.get(), override_access.get(), req.get(), version_fields.get(), where_.get()],
+  let p = query::validate_query_paths(query::QueryPaths {
+    collection_config: collection_config.clone(),
+    override_access: override_access.clone(),
+    req: req.clone(),
+    show_hidden_fields: Val::Undefined,
+    version_fields: version_fields.clone(),
+    where_: where_.clone(),
+  })?;
+  await_js(p).await?;
+
+  let p = query::validate_sort_query(
+    collection_config.clone(),
+    override_access.clone(),
+    req.clone(),
+    sort.clone(),
+    version_fields.clone(),
   )?;
   await_js(p).await?;
 
-  let p = call(
-    "validateSortQueryVersions",
-    &[collection_config.get(), override_access.get(), req.get(), sort.get(), version_fields.get()],
-  )?;
-  await_js(p).await?;
+  let mut full_where = query::combine_queries(where_.get(), access_results.get())?;
 
-  let mut full_where = call_val("combineQueries", &[where_.get(), access_results.get()])?;
-
+  // Exclude trashed documents when trash: false
   let enable_trash = get(collection_config.get(), "trash")?;
-  full_where = call_val("appendNonTrashedVersionFilter", &[enable_trash, trash.get(), full_where.get()])?;
+  full_where = val(append_non_trashed_filter("version.deletedAt", enable_trash, trash.get(), full_where.get())?)?;
 
-  call("sanitizeWhereQuery", &[version_fields.get(), payload.get(), full_where.get()])?;
+  query::sanitize_where_query(version_fields.get(), payload.get(), full_where.get())?;
 
   let select =
     call_val("selectVersions", &[version_fields.get(), collection_config.get(), req.get(), incoming_select.get()])?;
@@ -138,13 +148,15 @@ async fn run(args: Val) -> JsResult<Val> {
   let paginated_docs = await_js(p).await?;
 
   if js::truthy(get(collection_config.get(), "upload")?) && !js::truthy(override_access.get()) {
-    let docs = host::iterable(get(paginated_docs.get(), "docs")?)?;
-    let mut i = 0;
-    while i < js::array_length(docs.get()) {
-      let row = host::element(docs.get(), i)?;
-      let p = call("checkFileAccessVersion", &[args.get(), row, req.get()])?;
-      await_js(p).await?;
-      i += 1;
+    let mut rows = ForOf::of(get(paginated_docs.get(), "docs")?, "paginatedDocs.docs")?;
+    while let Some(row) = rows.next()? {
+      let row = val(row)?;
+      let body = async {
+        let p = call("checkFileAccessVersion", &[args.get(), row.get(), req.get()])?;
+        await_js(p).await?;
+        Ok(())
+      };
+      loop_body(&rows, body).await?;
     }
   }
 
@@ -226,11 +238,19 @@ async fn run(args: Val) -> JsResult<Val> {
   }
 
   if js::truthy(get(collection_config.get(), "upload")?) {
-    call("markHistoricalVersions", &[result.get(), collection_config.get(), req.get()])?;
+    // result.docs = result.docs.map((row) => ({ ...row, version: markHistoricalFileURLs({...}) }))
+    let docs = get(result.get(), "docs")?;
+    let docs = host::map_array(docs, "result.docs", |row| {
+      call("markHistoricalRow", &[row, collection_config.get(), req.get()])
+    })?;
+    host::set(result.get(), "docs", docs)?;
   }
 
   // Return results
-  call("sanitizeInternalDocs", &[result.get()])?;
+  // result.docs = result.docs.map((doc) => sanitizeInternalFields(doc))
+  let docs = get(result.get(), "docs")?;
+  let docs = host::map_array(docs, "result.docs", sanitize_internal_fields)?;
+  host::set(result.get(), "docs", docs)?;
 
   // afterOperation - Collection
   let p = build_after_operation(args, collection_config, "findVersions", override_access, result)?;

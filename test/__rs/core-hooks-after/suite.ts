@@ -441,10 +441,17 @@ export const registerAfterHooksSuite = ({
             ]
             for (const set of runs) {
               const inputJSON = JSON.stringify(docs) + JSON.stringify(set.cases())
-              for (const concurrent of set.concurrency) {
+              // afterChange itself, then the exported traverseFields (sequential, and concurrent
+              // with `siblingFields`) on the same cases
+              const modes = [
+                ...set.concurrency.map((concurrent) => ({ concurrent, traverse: undefined })),
+                { concurrent: false, traverse: 'fields' as const },
+                { concurrent: true, traverse: 'siblingFields' as const },
+              ]
+              for (const { concurrent, traverse } of modes) {
                 await compare(
                   stats,
-                  `${slug} [${locale ?? '-'}, ${set.label}${concurrent ? ', concurrent' : ''}]`,
+                  `${slug} [${locale ?? '-'}, ${set.label}${concurrent ? ', concurrent' : ''}${traverse ? `, traverseFields(${traverse})` : ''}]`,
                   set.cases().length,
                   inputJSON,
                   (engine) =>
@@ -456,6 +463,7 @@ export const registerAfterHooksSuite = ({
                       global: target.global,
                       operation: set.operation,
                       payload,
+                      traverse,
                       variant,
                     }),
                 )

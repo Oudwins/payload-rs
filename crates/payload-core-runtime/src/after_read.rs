@@ -142,7 +142,13 @@ fn prologue(args: Local) -> JsResult<(Rc<Ctx>, Val)> {
     if js::truthy(incoming_current_depth) { incoming_current_depth } else { js::number(1.0) };
   js::set_element(arr, arg::CURRENT_DEPTH, current_depth)?;
   js::set_element(arr, arg::DEPTH, depth)?;
+  Ok((ctx_from(arr)?, val(arg::SELECT)?))
+}
 
+/// The run state from an `afterReadArgs`-layout array (`currentDepth`/`depth` final).
+fn ctx_from(arr: Local) -> JsResult<Rc<Ctx>> {
+  let el = |i: u32| js::get_element(arr, i);
+  let val = |i: u32| -> JsResult<Val> { Val::from_local(el(i)?) };
   let override_access = val(arg::OVERRIDE_ACCESS)?;
   let locale = val(arg::LOCALE)?;
   let show_hidden_fields = val(arg::SHOW_HIDDEN_FIELDS)?;
@@ -150,8 +156,8 @@ fn prologue(args: Local) -> JsResult<(Rc<Ctx>, Val)> {
   let ctx = Rc::new(Ctx {
     collection: val(arg::COLLECTION)?,
     context: val(arg::CONTEXT)?,
-    current_depth: Val::from_local(current_depth)?,
-    depth: Val::from_local(depth)?,
+    current_depth: val(arg::CURRENT_DEPTH)?,
+    depth: val(arg::DEPTH)?,
     doc: val(arg::DOC)?,
     draft: val(arg::DRAFT)?,
     fallback_locale: val(arg::FALLBACK_LOCALE)?,
@@ -165,13 +171,56 @@ fn prologue(args: Local) -> JsResult<(Rc<Ctx>, Val)> {
     override_access_truthy: js::truthy(override_access.get()),
     override_access,
     populate: val(arg::POPULATE)?,
-    req,
+    req: val(arg::REQ)?,
     show_hidden_fields,
     field_promises: val(arg::FIELD_PROMISES)?,
     population_promises: val(arg::POPULATION_PROMISES)?,
     arr: Val::from_local(arr)?,
   });
-  Ok((ctx, val(arg::SELECT)?))
+  Ok(ctx)
+}
+
+/// Indices of the `traverseFields` arguments that follow the `afterReadArgs` layout in the array
+/// [`traverse_fields_entry`] receives (mirrored in packages/engine-rs/src/runtime/index.ts).
+mod trav_arg {
+  pub const BLOCK_DATA: u32 = 18;
+  pub const FIELD_DEPTH: u32 = 19;
+  pub const FIELDS: u32 = 20;
+  pub const PARENT_INDEX_PATH: u32 = 21;
+  pub const PARENT_IS_LOCALIZED: u32 = 22;
+  pub const PARENT_PATH: u32 = 23;
+  pub const PARENT_SCHEMA_PATH: u32 = 24;
+  pub const SELECT_MODE: u32 = 25;
+  pub const SIBLING_DOC: u32 = 26;
+}
+
+/// afterRead's `traverseFields(args)` (synchronous; exported by payload as
+/// `afterReadTraverseFields`, called by rich text editor hooks). `arr` is its destructured
+/// parameter: the `afterReadArgs` layout ([`arg`], `currentDepth`/`depth` as passed) followed by
+/// [`trav_arg`]. The TS glue destructures with upstream's pattern and calls this only when
+/// `triggerAccessControl` and `triggerHooks` are truthy (the engine's own traversals always run
+/// with both), the paths are strings and `fieldDepth` is a number.
+pub fn traverse_fields_entry(arr: Local) -> JsResult<()> {
+  let ctx = ctx_from(arr)?;
+  let el = |i: u32| js::get_element(arr, i);
+  let val = |i: u32| -> JsResult<Val> { Val::from_local(el(i)?) };
+  let string = |i: u32| -> JsResult<Rc<str>> { Ok(js::get_string(el(i)?).unwrap_or_default().into()) };
+  traverse_fields(
+    &ctx,
+    Rc::new(Trav {
+      block_data: val(trav_arg::BLOCK_DATA)?,
+      field_depth: js::get_f64(el(trav_arg::FIELD_DEPTH)?),
+      fields: config::fields_desc(el(trav_arg::FIELDS)?)?,
+      tab_fields: None,
+      parent_index_path: string(trav_arg::PARENT_INDEX_PATH)?,
+      parent_is_localized: val(trav_arg::PARENT_IS_LOCALIZED)?,
+      parent_path: string(trav_arg::PARENT_PATH)?,
+      parent_schema_path: string(trav_arg::PARENT_SCHEMA_PATH)?,
+      select: val(arg::SELECT)?,
+      select_mode: val(trav_arg::SELECT_MODE)?,
+      sibling_doc: val(trav_arg::SIBLING_DOC)?,
+    }),
+  )
 }
 
 async fn run(ctx: Rc<Ctx>, select: Val) -> JsResult<Val> {

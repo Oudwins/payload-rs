@@ -79,6 +79,24 @@ export const orderingScenarios: OrderingScenario[] = [
     },
   },
   {
+    // `new Database()` (open, and keying with an encryption key) runs after the pending commit
+    name: 'createClient after an unawaited commit',
+    run: async ({ createClient, log, url }) => {
+      const c = createClient({ url })
+      await seed(c, 1000)
+      const tx = await c.transaction('write')
+      await tx.execute('insert into u values (1)')
+      const commit = tx.commit()
+      const other = createClient({ url })
+      await settle(log, 'commit, read on a new client', [
+        ['commit', commit],
+        ['read', other.execute('select count(*) n from u')],
+      ])
+      other.close()
+      c.close()
+    },
+  },
+  {
     name: 'client read racing a commit',
     run: async ({ createClient, log, url }) => {
       const c = createClient({ url })

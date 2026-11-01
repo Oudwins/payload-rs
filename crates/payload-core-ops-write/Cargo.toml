@@ -1,0 +1,18 @@
+[package]
+name = "payload-core-ops-write"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Ports of the collection write operations of packages/payload/src/collections/operations
+# (create, update, updateByID, utilities/update, delete, deleteByID, duplicate, restoreVersion,
+# validate) on the payload-core-runtime (strategy B, RUST_CORE_DESIGN.md), built on the read
+# operations crate (executeAccess, before/afterOperation) and the field traversal crates.
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-hooks-after = { path = "../payload-core-hooks-after" }
+payload-core-hooks-change = { path = "../payload-core-hooks-change" }
+payload-core-hooks-validate = { path = "../payload-core-hooks-validate" }
+payload-core-ops = { path = "../payload-core-ops" }
+payload-core-runtime = { path = "../payload-core-runtime" }

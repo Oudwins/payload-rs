@@ -17,7 +17,7 @@
 use std::rc::Rc;
 
 use payload_core_runtime::config::{self, FieldDesc, FieldsDesc, Kind};
-use payload_core_runtime::executor::{await_js, spawn};
+use payload_core_runtime::executor::{Tail, await_js, spawn_tail};
 use payload_core_runtime::host as rt;
 use payload_core_runtime::js::{self, JsResult, Local, Thrown, Type, Val};
 
@@ -56,34 +56,23 @@ struct Trav {
   previous_sibling_doc: Val,
   sibling_data: Val,
   sibling_doc: Val,
+  /// The `siblingFields` argument of `traverseFields` (passed on to every `promise()`): only an
+  /// external caller can set it; upstream's own calls leave it `undefined`.
+  sibling_fields: Val,
 }
 
 /// `afterChange(args)`: the promise of `args.doc` (same identity) after the field hooks ran.
 pub fn after_change(args: Local) -> JsResult<Local> {
   let args = Val::from_local(args)?;
-  spawn(run(args))
+  spawn_tail(run(args))
 }
 
-async fn run(args: Val) -> JsResult<Val> {
+async fn run(args: Val) -> JsResult<Tail> {
   let a = args.get();
   let g = |name: &str| -> JsResult<Val> { Val::from_local(rt::get_named(a, name)?) };
   let (collection, context, data, doc) = (g("collection")?, g("context")?, g("data")?, g("doc")?);
   let (global, operation, previous_doc, req) = (g("global")?, g("operation")?, g("previousDoc")?, g("req")?);
-  let arr = js::array();
-  for (i, v) in [&collection, &context, &data, &doc, &global, &operation, &previous_doc, &req].into_iter().enumerate() {
-    js::set_element(arr, i as u32, v.get())?;
-  }
-  let ctx = Rc::new(Ctx {
-    arr: Val::from_local(arr)?,
-    collection,
-    context,
-    data,
-    doc,
-    global,
-    operation,
-    previous_doc,
-    req,
-  });
+  let ctx = new_ctx(collection, context, data, doc, global, operation, previous_doc, req)?;
 
   // fields: (collection?.fields || global?.fields)!
   let collection_fields = rt::get_optional(ctx.collection.get(), js::key("fields"))?;
@@ -106,21 +95,107 @@ async fn run(args: Val) -> JsResult<Val> {
       previous_sibling_doc: ctx.previous_doc.clone(),
       sibling_data: ctx.data.clone(),
       sibling_doc: ctx.doc.clone(),
+      sibling_fields: Val::Undefined,
     },
   )?;
-  await_js(p).await?;
-  Ok(ctx.doc.clone())
+  Ok(Tail::Await(p, ctx.doc.clone()))
 }
 
-/// Calls `traverseFields` (an async function) and returns its promise.
+#[allow(clippy::too_many_arguments)]
+fn new_ctx(
+  collection: Val,
+  context: Val,
+  data: Val,
+  doc: Val,
+  global: Val,
+  operation: Val,
+  previous_doc: Val,
+  req: Val,
+) -> JsResult<Rc<Ctx>> {
+  let arr = js::array();
+  for (i, v) in [&collection, &context, &data, &doc, &global, &operation, &previous_doc, &req].into_iter().enumerate() {
+    js::set_element(arr, i as u32, v.get())?;
+  }
+  Ok(Rc::new(Ctx {
+    arr: Val::from_local(arr)?,
+    collection,
+    context,
+    data,
+    doc,
+    global,
+    operation,
+    previous_doc,
+    req,
+  }))
+}
+
+/// `traverseFields(args)` (afterChange/traverseFields.ts, exported by payload as
+/// `afterChangeTraverseFields`): `a` is its destructured parameter, in the pattern's order
+/// (`blockData, collection, context, data, doc, fields, global, operation, parentIndexPath,
+/// parentIsLocalized, parentPath, parentSchemaPath, previousDoc, previousSiblingDoc, req,
+/// siblingData, siblingDoc, siblingFields`; the TS glue destructures with upstream's pattern and
+/// only calls this with string paths). Returns the traversal's promise.
+pub fn traverse_fields_entry(a: Local) -> JsResult<Local> {
+  let a = Val::from_local(a)?;
+  spawn_tail(async move {
+    let a = a.get();
+    let e = |i: u32| -> JsResult<Val> { Val::from_local(js::get_element(a, i)?) };
+    let s = |i: u32| -> JsResult<Rc<str>> { Ok(js::get_string(js::get_element(a, i)?).unwrap_or_default().into()) };
+    let (block_data, collection, context, data, doc) = (e(0)?, e(1)?, e(2)?, e(3)?, e(4)?);
+    let fields = config::fields_desc(js::get_element(a, 5)?)?;
+    let (global, operation) = (e(6)?, e(7)?);
+    let (parent_index_path, parent_is_localized, parent_path, parent_schema_path) = (s(8)?, e(9)?, s(10)?, s(11)?);
+    let (previous_doc, previous_sibling_doc, req) = (e(12)?, e(13)?, e(14)?);
+    let (sibling_data, sibling_doc, sibling_fields) = (e(15)?, e(16)?, e(17)?);
+    let ctx = new_ctx(collection, context, data, doc, global, operation, previous_doc, req)?;
+    let trav = Trav {
+      block_data,
+      fields,
+      tab_fields: None,
+      parent_index_path,
+      parent_is_localized,
+      parent_path,
+      parent_schema_path,
+      previous_sibling_doc,
+      sibling_data,
+      sibling_doc,
+      sibling_fields,
+    };
+    traverse_fields_body(ctx, Rc::new(trav)).await
+  })
+}
+
+/// Calls `traverseFields` (an async function) and returns its promise. A fields array made only of
+/// leaf fields ([`is_leaf`]) runs upstream's `traverseFields.ts` body in JS
+/// (`afterChangeLeafTraversal`: `fields.forEach` pushing the leaf `promise()`, `await
+/// Promise.all`); other arrays run the port.
 fn traverse_fields(ctx: &Rc<Ctx>, trav: Trav) -> JsResult<Local> {
-  spawn(traverse_fields_body(ctx.clone(), Rc::new(trav)))
+  let all_leaves =
+    trav.tab_fields.is_none() && trav.fields.items.as_ref().is_some_and(|items| items.iter().all(|f| is_leaf(f.kind)));
+  if all_leaves {
+    return host::call(
+      &host::host()?.after_change_leaf_traversal,
+      &[
+        ctx.arr.get(),
+        trav.fields.node.get(),
+        trav.block_data.get(),
+        js::string(&trav.parent_index_path),
+        js::string(&trav.parent_path),
+        js::string(&trav.parent_schema_path),
+        trav.previous_sibling_doc.get(),
+        trav.sibling_data.get(),
+        trav.sibling_doc.get(),
+        trav.sibling_fields.get(),
+      ],
+    );
+  }
+  spawn_tail(traverse_fields_body(ctx.clone(), Rc::new(trav)))
 }
 
-async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
+async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Tail> {
   let Some(items) = &t.fields.items else {
     config::throw_not_array(&t.fields)?;
-    return Ok(Val::Undefined);
+    return Ok(Tail::Return(Val::Undefined));
   };
   let promises = js::array();
   let mut index = 0;
@@ -147,6 +222,7 @@ async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
           t.previous_sibling_doc.get(),
           t.sibling_data.get(),
           t.sibling_doc.get(),
+          t.sibling_fields.get(),
         ],
       )?;
       continue;
@@ -156,12 +232,11 @@ async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
       Some(arr) => Val::from_local(js::get_element(arr.get(), index as u32)?)?,
       None => Val::Ref(desc.node.clone()),
     };
-    let p = spawn(field_promise(ctx.clone(), t.clone(), desc.clone(), field_js, index))?;
+    let p = spawn_tail(field_promise(ctx.clone(), t.clone(), desc.clone(), field_js, index))?;
     js::push(promises, p)?;
     index += 1;
   }
-  await_js(promise_all(promises)?).await?;
-  Ok(Val::Undefined)
+  Ok(Tail::Await(promise_all(promises)?, Val::Undefined))
 }
 
 /// Port of `promise.ts` (leaf fields run in the host, see [`is_leaf`]).
@@ -171,7 +246,7 @@ async fn field_promise(
   f: Rc<FieldDesc>,
   field_js: Val,
   field_index: usize,
-) -> JsResult<Val> {
+) -> JsResult<Tail> {
   let paths = get_field_paths(&f, field_index, &t.parent_index_path, &t.parent_path, &t.parent_schema_path);
   let Paths { index_path, path, schema_path } = &paths;
   let segments = Segments::new();
@@ -229,7 +304,7 @@ async fn field_promise(
             ctx.req.get(),
             segments.schema_path(&paths)?,
             t.sibling_data.get(),
-            js::undefined(),
+            t.sibling_fields.get(),
             value,
           ],
         )?;
@@ -274,11 +349,12 @@ async fn field_promise(
               previous_sibling_doc,
               sibling_data,
               sibling_doc,
+              sibling_fields: Val::Undefined,
             },
           )?;
           js::push(promises.get(), p)
         })?;
-        await_js(promise_all(promises.get())?).await?;
+        return Ok(Tail::Await(promise_all(promises.get())?, Val::Undefined));
       }
     }
 
@@ -318,17 +394,18 @@ async fn field_promise(
               previous_sibling_doc,
               sibling_data,
               sibling_doc,
+              sibling_fields: Val::Undefined,
             },
           )?;
           js::push(promises.get(), p)
         })?;
-        await_js(promise_all(promises.get())?).await?;
+        return Ok(Tail::Await(promise_all(promises.get())?, Val::Undefined));
       }
     }
 
     Kind::Collapsible | Kind::Row => {
       let p = traverse_fields(&ctx, passthrough(&t, f.children()?, index_path, schema_path)?)?;
-      await_js(p).await?;
+      return Ok(Tail::Await(p, Val::Undefined));
     }
 
     Kind::Group => {
@@ -352,12 +429,13 @@ async fn field_promise(
             previous_sibling_doc,
             sibling_data,
             sibling_doc,
+            sibling_fields: Val::Undefined,
           },
         )?
       } else {
         traverse_fields(&ctx, passthrough(&t, f.children()?, index_path, schema_path)?)?
       };
-      await_js(p).await?;
+      return Ok(Tail::Await(p, Val::Undefined));
     }
 
     Kind::RichText => {
@@ -443,9 +521,10 @@ async fn field_promise(
           previous_sibling_doc,
           sibling_data,
           sibling_doc,
+          sibling_fields: Val::Undefined,
         },
       )?;
-      await_js(p).await?;
+      return Ok(Tail::Await(p, Val::Undefined));
     }
 
     Kind::Tabs => {
@@ -469,15 +548,16 @@ async fn field_promise(
           previous_sibling_doc,
           sibling_data,
           sibling_doc,
+          sibling_fields: Val::Undefined,
         },
       )?;
-      await_js(p).await?;
+      return Ok(Tail::Await(p, Val::Undefined));
     }
 
     _ => {}
   }
 
-  Ok(Val::Undefined)
+  Ok(Tail::Return(Val::Undefined))
 }
 
 /// Args of the row/collapsible/unnamed-group traversal: same data level, spread copies of
@@ -497,5 +577,6 @@ fn passthrough(t: &Trav, fields: Rc<FieldsDesc>, index_path: &str, schema_path: 
     previous_sibling_doc,
     sibling_data,
     sibling_doc,
+    sibling_fields: Val::Undefined,
   })
 }

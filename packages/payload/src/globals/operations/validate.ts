@@ -34,7 +34,7 @@ export type Arguments<TSlug extends GlobalSlug> = {
   validationOperation?: 'update' | 'validate'
 }
 
-export async function validateOperation<TSlug extends GlobalSlug>(
+export async function validateOperationTS<TSlug extends GlobalSlug>(
   args: Arguments<TSlug>,
 ): Promise<ValidationResult> {
   const previousOperation = args.req.operation
@@ -206,3 +206,36 @@ async function resolveValidationGlobalSource({
 function hasGlobalSource(source: JsonObject | null | undefined): source is JsonObject {
   return Boolean(source && Object.keys(source).length > 0)
 }
+
+type RustOperations = {
+  globalValidateOperation: (args: any) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-global`), selected once at module load:
+ * `PAYLOAD_OPS_GLOBAL_ENGINE=rs|ts`, else `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`.
+ * See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations =
+  (process.env.PAYLOAD_OPS_GLOBAL_ENGINE ||
+    process.env.PAYLOAD_CORE_ENGINE ||
+    process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops-global/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const validateOperation: typeof validateOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.globalValidateOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.globalValidateOperation(args)
+          })
+  : validateOperationTS

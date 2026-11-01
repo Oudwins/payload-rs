@@ -10,7 +10,7 @@
 use std::rc::Rc;
 
 use payload_core_runtime::config::{self, FieldDesc, FieldsDesc, Kind};
-use payload_core_runtime::executor::{await_js, spawn};
+use payload_core_runtime::executor::{Tail, await_js, spawn_tail};
 use payload_core_runtime::host as rt;
 use payload_core_runtime::js::{self, JsResult, Local, Type, Val};
 
@@ -56,10 +56,10 @@ impl Trav {
 /// `beforeDuplicate(args)`: the promise of `args.doc` (same identity) after the hooks ran.
 pub fn before_duplicate(args: Local) -> JsResult<Local> {
   let args = Val::from_local(args)?;
-  spawn(run(args))
+  spawn_tail(run(args))
 }
 
-async fn run(args: Val) -> JsResult<Val> {
+async fn run(args: Val) -> JsResult<Tail> {
   let a = args.get();
   let g = |name: &str| -> JsResult<Val> { Val::from_local(rt::get_named(a, name)?) };
   // destructuring order: id, collection, context, doc, overrideAccess, req
@@ -90,19 +90,38 @@ async fn run(args: Val) -> JsResult<Val> {
       sibling_doc: ctx.doc.clone(),
     },
   )?;
-  await_js(p).await?;
-  Ok(ctx.doc.clone())
+  Ok(Tail::Await(p, ctx.doc.clone()))
 }
 
 /// Calls `traverseFields` (an async function) and returns its promise.
 fn traverse_fields(ctx: &Rc<Ctx>, trav: Trav) -> JsResult<Local> {
-  spawn(traverse_fields_body(ctx.clone(), Rc::new(trav)))
+  // A fields array made only of leaf fields runs upstream's `traverseFields.ts` body in JS
+  // (`beforeDuplicateLeafTraversal`: `fields.forEach` pushing the leaf `promise()`, `await
+  // Promise.all`); other arrays run the port.
+  let all_leaves =
+    trav.tab_fields.is_none() && trav.fields.items.as_ref().is_some_and(|items| items.iter().all(|f| is_leaf(f.kind)));
+  if all_leaves {
+    return host::call(
+      &host::host()?.before_duplicate_leaf_traversal,
+      &[
+        ctx.arr.get(),
+        trav.fields.node.get(),
+        trav.block_data.get(),
+        js::string(&trav.parent_index_path),
+        trav.parent_is_localized.get(),
+        js::string(&trav.parent_path),
+        js::string(&trav.parent_schema_path),
+        trav.sibling_doc.get(),
+      ],
+    );
+  }
+  spawn_tail(traverse_fields_body(ctx.clone(), Rc::new(trav)))
 }
 
-async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
+async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Tail> {
   let Some(items) = &t.fields.items else {
     config::throw_not_array(&t.fields)?;
-    return Ok(Val::Undefined);
+    return Ok(Tail::Return(Val::Undefined));
   };
   let promises = js::array();
   let mut index = 0;
@@ -137,12 +156,11 @@ async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
       Some(arr) => Val::from_local(js::get_element(arr.get(), index as u32)?)?,
       None => Val::Ref(desc.node.clone()),
     };
-    let p = spawn(field_promise(ctx.clone(), t.clone(), desc.clone(), field_js, index))?;
+    let p = spawn_tail(field_promise(ctx.clone(), t.clone(), desc.clone(), field_js, index))?;
     js::push(promises, p)?;
     index += 1;
   }
-  await_js(promise_all(promises)?).await?;
-  Ok(Val::Undefined)
+  Ok(Tail::Await(promise_all(promises)?, Val::Undefined))
 }
 
 /// `typeof v !== 'undefined'`
@@ -157,7 +175,7 @@ async fn field_promise(
   f: Rc<FieldDesc>,
   field_js: Val,
   field_index: usize,
-) -> JsResult<Val> {
+) -> JsResult<Tail> {
   let paths = get_field_paths(&f, field_index, &t.parent_index_path, &t.parent_path, &t.parent_schema_path);
   let Paths { index_path, path, schema_path } = &paths;
 
@@ -187,7 +205,7 @@ async fn field_promise(
     let field = field_js.get();
     if js::has_property(field, js::key("disableDuplicate"))? && js::truthy(rt::get_named(field, "disableDuplicate")?) {
       rt::del(sib(), name())?;
-      return Ok(Val::Undefined);
+      return Ok(Tail::Return(Val::Undefined));
     }
 
     // let fieldData = siblingDoc?.[field.name!]
@@ -355,7 +373,7 @@ async fn field_promise(
         })?;
       }
 
-      await_js(promise_all(promises.get())?).await?;
+      return Ok(Tail::Await(promise_all(promises.get())?, Val::Undefined));
     } else {
       match f.kind {
         Kind::Array => {
@@ -375,7 +393,7 @@ async fn field_promise(
               )?;
               js::push(promises.get(), p)
             })?;
-            await_js(promise_all(promises.get())?).await?;
+            return Ok(Tail::Await(promise_all(promises.get())?, Val::Undefined));
           }
         }
         Kind::Blocks => {
@@ -401,7 +419,7 @@ async fn field_promise(
               )?;
               js::push(promises.get(), p)
             })?;
-            await_js(promise_all(promises.get())?).await?;
+            return Ok(Tail::Await(promise_all(promises.get())?, Val::Undefined));
           }
         }
         Kind::Group | Kind::Tab => {
@@ -414,7 +432,7 @@ async fn field_promise(
             &ctx,
             child(f.children()?, t.block_data.clone(), path.clone(), schema_path.clone(), group_doc),
           )?;
-          await_js(p).await?;
+          return Ok(Tail::Await(p, Val::Undefined));
         }
         _ => {}
       }
@@ -434,7 +452,7 @@ async fn field_promise(
     match f.kind {
       Kind::Collapsible | Kind::Group | Kind::Row | Kind::Tab => {
         let p = traverse_fields(&ctx, same_level(f.children()?, None, t.parent_path.clone()))?;
-        await_js(p).await?;
+        return Ok(Tail::Await(p, Val::Undefined));
       }
       Kind::Tabs => {
         let tabs_desc = f.tabs()?;
@@ -443,11 +461,11 @@ async fn field_promise(
           &ctx,
           same_level(tabs_desc, Some(Val::from_local(tab_fields)?), path.as_str().into()),
         )?;
-        await_js(p).await?;
+        return Ok(Tail::Await(p, Val::Undefined));
       }
       _ => {}
     }
   }
 
-  Ok(Val::Undefined)
+  Ok(Tail::Return(Val::Undefined))
 }

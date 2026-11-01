@@ -8,7 +8,7 @@
 use payload_core_runtime::executor::{await_js, spawn};
 use payload_core_runtime::js::{self, JsResult, Local, Type, Val};
 
-use crate::host::{self, call, call_fn, get, get_val, has, is_typeof_object, opt, val};
+use crate::host::{self, ForOf, call, call_fn, get, get_val, has, is_typeof_object, loop_body, opt, val};
 
 /// The destructured `executeAccess` operation args (`isReadingStaticFile` before its default).
 pub struct AccessArgs {
@@ -69,8 +69,10 @@ pub async fn execute_access_body(a: AccessArgs, access: Val) -> JsResult<Val> {
   }
 }
 
-/// `operationToHookOperation` (collections/operations/utilities/types.ts).
-pub fn hook_operation(operation: &str) -> &'static str {
+/// `operationToHookOperation[operation]` (collections/operations/utilities/types.ts):
+/// `None` (`undefined`) for operations the map does not list.
+pub fn hook_operation(operation: &str) -> Option<&'static str> {
+  Some(
   match operation {
     "count" => "count",
     "countVersions" => "countVersions",
@@ -85,8 +87,8 @@ pub fn hook_operation(operation: &str) -> &'static str {
     "restoreVersion" => "restoreVersion",
     "unlock" => "unlock",
     "update" | "updateByID" => "update",
-    _ => "",
-  }
+    _ => return None,
+  })
 }
 
 /// `buildBeforeOperation({ args, collection, operation, overrideAccess })`: returns its promise.
@@ -102,24 +104,27 @@ pub fn build_before_operation(
     let config = get(get(args.get(), "collection")?, "config")?;
     let length = opt(opt(get(config, "hooks")?, "beforeOperation")?, "length")?;
     if js::truthy(length) {
-      let hook_operation = hook_operation(operation);
+      let hook_operation = hook_operation(operation).map_or_else(js::undefined, js::string);
+      let hook_operation = val(hook_operation)?;
       let config = get(get(args.get(), "collection")?, "config")?;
-      let hooks = host::iterable(get(get(config, "hooks")?, "beforeOperation")?)?;
-      let mut i = 0;
-      while i < js::array_length(hooks.get()) {
-        let hook = host::element(hooks.get(), i)?;
-        let context = get(get(args.get(), "req")?, "context")?;
-        let req = get(args.get(), "req")?;
-        let hook_args = call(
-          "beforeOperationArgs",
-          &[new_args.get(), collection.get(), context, js::string(hook_operation), override_access.get(), req],
-        )?;
-        let p = call_fn(hook, js::undefined(), &[hook_args], "hook")?;
-        let hook_result = await_js(p).await?;
-        if !hook_result.is_undefined() {
-          new_args = hook_result;
-        }
-        i += 1;
+      let mut hooks = ForOf::of(get(get(config, "hooks")?, "beforeOperation")?, "args.collection.config.hooks.beforeOperation")?;
+      while let Some(hook) = hooks.next()? {
+        let hook = val(hook)?;
+        let body = async {
+          let context = get(get(args.get(), "req")?, "context")?;
+          let req = get(args.get(), "req")?;
+          let hook_args = call(
+            "beforeOperationArgs",
+            &[new_args.get(), collection.get(), context, hook_operation.get(), override_access.get(), req],
+          )?;
+          let p = call_fn(hook.get(), js::undefined(), &[hook_args], "hook")?;
+          let hook_result = await_js(p).await?;
+          if !hook_result.is_undefined() {
+            new_args = hook_result;
+          }
+          Ok(())
+        };
+        loop_body(&hooks, body).await?;
       }
     }
     Ok(new_args)
@@ -142,21 +147,23 @@ pub fn build_after_operation(
     let length = opt(opt(get(config, "hooks")?, "afterOperation")?, "length")?;
     if js::truthy(length) && !host::mutant(3) {
       let config = get(get(args.get(), "collection")?, "config")?;
-      let hooks = host::iterable(get(get(config, "hooks")?, "afterOperation")?)?;
-      let mut i = 0;
-      while i < js::array_length(hooks.get()) {
-        let hook = host::element(hooks.get(), i)?;
-        let req = get(args.get(), "req")?;
-        let hook_args = call(
-          "afterOperationArgs",
-          &[args.get(), collection.get(), js::string(operation), override_access.get(), req, new_result.get()],
-        )?;
-        let p = call_fn(hook, js::undefined(), &[hook_args], "hook")?;
-        let hook_result = await_js(p).await?;
-        if !hook_result.is_undefined() {
-          new_result = hook_result;
-        }
-        i += 1;
+      let mut hooks = ForOf::of(get(get(config, "hooks")?, "afterOperation")?, "args.collection.config.hooks.afterOperation")?;
+      while let Some(hook) = hooks.next()? {
+        let hook = val(hook)?;
+        let body = async {
+          let req = get(args.get(), "req")?;
+          let hook_args = call(
+            "afterOperationArgs",
+            &[args.get(), collection.get(), js::string(operation), override_access.get(), req, new_result.get()],
+          )?;
+          let p = call_fn(hook.get(), js::undefined(), &[hook_args], "hook")?;
+          let hook_result = await_js(p).await?;
+          if !hook_result.is_undefined() {
+            new_result = hook_result;
+          }
+          Ok(())
+        };
+        loop_body(&hooks, body).await?;
       }
     }
     Ok(new_result)
@@ -185,7 +192,7 @@ pub fn sanitize_sort_query(fields: Local, sort: Local) -> JsResult<Local> {
   if !js::truthy(sort) {
     return Ok(js::undefined());
   }
-  if js::is_array(sort) {
+  if host::is_array(sort)? {
     // sort.map((sort) => sanitizeSort({ fields, sort }))
     return host::map_array(sort, "sort", |item| sanitize_sort(fields, item));
   }
@@ -248,40 +255,53 @@ pub struct ReadHooks {
 
 impl ReadHooks {
   pub async fn run(&self, target: HookTarget) -> JsResult<Val> {
-    let hooks = host::iterable(get(get(self.collection_config.get(), "hooks")?, self.hook_name)?)?;
+    let mut hooks = ForOf::of(
+      get(get(self.collection_config.get(), "hooks")?, self.hook_name)?,
+      &format!("collectionConfig.hooks.{}", self.hook_name),
+    )?;
     let mut doc_ref = match &target {
       HookTarget::Doc(doc) => doc.clone(),
       HookTarget::Version(_) => Val::Undefined,
     };
-    let mut i = 0;
-    while i < js::array_length(hooks.get()) {
-      let hook = host::element(hooks.get(), i)?;
-      let context = get(self.req.get(), "context")?;
-      let doc = match &target {
-        HookTarget::Doc(_) => doc_ref.get(),
-        HookTarget::Version(obj) => get(obj.get(), "version")?,
-      };
-      let hook_args = call(
-        if self.find_many && !host::mutant(5) { "readManyHookArgs" } else { "readHookArgs" },
-        &[self.collection_config.get(), context, doc, self.override_access.get(), self.query.get(), self.req.get()],
-      )?;
-      let p = call_fn(hook, js::undefined(), &[hook_args], "hook")?;
-      let hook_result = if host::mutant(1) && !host::is_promise(p) { Val::from_local(p)? } else { await_js(p).await? };
-      match &target {
-        HookTarget::Doc(_) => {
-          if js::truthy(hook_result.get()) {
-            doc_ref = hook_result;
+    while let Some(hook) = hooks.next()? {
+      let hook = val(hook)?;
+      let body = async {
+        let context = get(self.req.get(), "context")?;
+        let doc = match &target {
+          HookTarget::Doc(_) => doc_ref.get(),
+          HookTarget::Version(obj) => get(obj.get(), "version")?,
+        };
+        let hook_args = call(
+          if self.find_many && !host::mutant(5) { "readManyHookArgs" } else { "readHookArgs" },
+          &[self.collection_config.get(), context, doc, self.override_access.get(), self.query.get(), self.req.get()],
+        )?;
+        let p = call_fn(hook.get(), js::undefined(), &[hook_args], "hook")?;
+        let hook_result =
+          if host::mutant(1) && !is_promise(p) { Val::from_local(p)? } else { await_js(p).await? };
+        match &target {
+          HookTarget::Doc(_) => {
+            if js::truthy(hook_result.get()) {
+              doc_ref = hook_result;
+            }
+          }
+          HookTarget::Version(obj) => {
+            let value = if js::truthy(hook_result.get()) { hook_result.get() } else { get(obj.get(), "version")? };
+            host::set(obj.get(), "version", value)?;
           }
         }
-        HookTarget::Version(obj) => {
-          let value = if js::truthy(hook_result.get()) { hook_result.get() } else { get(obj.get(), "version")? };
-          host::set(obj.get(), "version", value)?;
-        }
-      }
-      i += 1;
+        Ok(())
+      };
+      loop_body(&hooks, body).await?;
     }
     Ok(doc_ref)
   }
+}
+
+/// `v instanceof Promise` (native promises only; mutant 1 only).
+fn is_promise(v: Local) -> bool {
+  let mut r = false;
+  unsafe { napi::sys::napi_is_promise(js::env(), v.0, &mut r) };
+  r
 }
 
 /// `collectionConfig?.hooks?.[name]?.length` (truthiness).

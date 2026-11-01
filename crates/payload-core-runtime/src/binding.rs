@@ -19,6 +19,7 @@ fn run<const N: usize>(
   body: Body<N>,
 ) -> sys::napi_value {
   js::set_env(env);
+  executor::count_entry();
   let (args, _) = js::callback_args::<N>(env, info);
   match catch_unwind(AssertUnwindSafe(|| body(args))) {
     Ok(Ok(v)) => v.0,
@@ -58,11 +59,19 @@ export!(resume, 3, |[token, ok, value]| {
 
 export!(after_read_export, 1, |[args]| after_read::after_read(args));
 
+export!(after_read_traverse_fields_export, 1, |[destructured]| {
+  after_read::traverse_fields_entry(destructured)?;
+  Ok(js::undefined())
+});
+
 export!(stats, 0, |[]| {
+  // `stats` calls are not engine work
+  executor::uncount_entry();
   let (tasks, awaits) = executor::stats();
   let o = js::object();
   js::set_named(o, "tasks", js::number(tasks as f64))?;
   js::set_named(o, "awaits", js::number(awaits as f64))?;
+  js::set_named(o, "entries", js::number(executor::entries() as f64))?;
   Ok(o)
 });
 
@@ -132,6 +141,7 @@ pub fn create() -> JsResult<Local> {
   add!("init", init);
   add!("resume", resume);
   add!("afterRead", after_read_export);
+  add!("afterReadTraverseFields", after_read_traverse_fields_export);
   add!("stats", stats);
   add!("noop", noop);
   add!("probe", probe);

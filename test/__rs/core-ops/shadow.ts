@@ -16,14 +16,17 @@
  *   (beforeOperation/beforeRead/afterRead/afterOperation), collection and field read access,
  *   field afterRead hook, nested operation and `payload.db.*` call with a snapshot of its args at
  *   call time, the sync return or async settlement of each (snapshot of the value), the
- *   operation outcome (result or error), `req.context` and the args object afterwards (in-place
- *   mutations such as `sanitizeWhereQuery`). Snapshots keep key order, `undefined` own keys,
+ *   operation outcome (result or error), `req.context`, the request's own properties (shallow:
+ *   `locale`, `transactionID`, `user`, ...) and the args object afterwards (in-place mutations
+ *   such as `sanitizeWhereQuery`). Snapshots keep key order, `undefined` own keys,
  *   class names and object identity (numbered by first appearance per branch); config objects,
  *   `req`, `context`, `payload`, the args object are compared by role.
  *   Nested operations inside a branch run the branch's implementation (routed through
  *   AsyncLocalStorage), so a Rust branch is Rust all the way down.
  *   A branch diff is re-checked by a second TS branch: if TS differs from itself, the case is
  *   counted as `unstable` (hook side effects, time) instead of a diff.
+ *   Engine guard: the TS branch must not call the Rust operations and the Rust branch must call
+ *   them (counted per branch), otherwise the case counts as `engineMismatch` (summarize fails).
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
@@ -42,6 +45,8 @@ type Branch = {
   next: number
   req: Any
   roles: Map<object, string>
+  /** Calls of the Rust operations made inside this branch (top-level and nested). */
+  rustCalls: number
   ticker?: { count: number }
 }
 
@@ -49,6 +54,7 @@ type OpStats = {
   calls: number
   compared: number
   diffs: number
+  engineMismatch: number
   equal: number
   events: number
   rejections: number
@@ -81,6 +87,7 @@ const statsFor = (op: string): OpStats =>
     calls: 0,
     compared: 0,
     diffs: 0,
+    engineMismatch: 0,
     equal: 0,
     events: 0,
     rejections: 0,
@@ -120,7 +127,21 @@ export const flushReport = (testFile: string): void => {
  * The operation function payload imports. `getTs`/`getRs` are read lazily (import cycles).
  * `ts`/`rs` modes return a plain forwarding function (no extra ticks).
  */
-export const dispatch = (name: string, getTs: () => Fn, getRs: () => Fn): Fn => {
+export const dispatch = (name: string, getTs: () => Fn, getRustOperation: () => Fn): Fn => {
+  // counts the Rust calls of the branch it runs in (engine guard)
+  const getRs = (): Fn => {
+    const rs = getRustOperation()
+    if (rs === getTs()) {
+      throw new Error(`core ops harness: the reference of ${name} is the Rust operation`)
+    }
+    return (...a: Any[]) => {
+      const branch = als.getStore()
+      if (branch) {
+        branch.rustCalls++
+      }
+      return rs(...a)
+    }
+  }
   if (mode === 'rs') {
     return (args: Any) => {
       statsFor(name).calls++
@@ -170,8 +191,13 @@ const shadowTop = async (name: string, ts: Fn, rs: Fn, args: Any): Promise<Any> 
   }
 
   try {
-    const tsLog = await runBranch('ts', ts, cloneArgs(pristine))
-    const rsLog = await runBranch('rs', rs, cloneArgs(pristine))
+    const tsBranch = await runBranch('ts', ts, cloneArgs(pristine))
+    const rsBranch = await runBranch('rs', rs, cloneArgs(pristine))
+    const tsLog = tsBranch.log
+    const rsLog = rsBranch.log
+    if (tsBranch.rustCalls !== 0 || rsBranch.rustCalls === 0) {
+      s.engineMismatch++
+    }
     s.compared++
     s.events += tsLog.length
     if (tsLog.some((e) => e.startsWith('{"ev":"outcome","ok":false'))) {
@@ -187,7 +213,7 @@ const shadowTop = async (name: string, ts: Fn, rs: Fn, args: Any): Promise<Any> 
     if (at === -1) {
       s.equal++
     } else {
-      const ts2Log = await runBranch('ts', ts, cloneArgs(pristine))
+      const ts2Log = (await runBranch('ts', ts, cloneArgs(pristine))).log
       if (firstDiff(tsLog, ts2Log) !== -1) {
         s.unstable++
       } else {
@@ -238,7 +264,7 @@ const firstDiff = (a: string[], b: string[]): number => {
 const newBranch = (kind: Branch['kind'], args: Any): Branch => {
   const roles = new Map<object, string>()
   const req = args?.req
-  const branch: Branch = { args, ids: new Map(), kind, log: [], next: 0, req, roles }
+  const branch: Branch = { args, ids: new Map(), kind, log: [], next: 0, req, roles, rustCalls: 0 }
   if (args && typeof args === 'object') {
     roles.set(args, '$args')
   }
@@ -254,7 +280,7 @@ const newBranch = (kind: Branch['kind'], args: Any): Branch => {
   return branch
 }
 
-const runBranch = async (kind: 'rs' | 'ts', impl: Fn, args: Any): Promise<string[]> => {
+const runBranch = async (kind: 'rs' | 'ts', impl: Fn, args: Any): Promise<Branch> => {
   const branch = newBranch(kind, args)
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<'timeout'>((resolve) => {
@@ -274,7 +300,7 @@ const runBranch = async (kind: 'rs' | 'ts', impl: Fn, args: Any): Promise<string
   realClearTimeout(timer)
   if (outcome === 'timeout') {
     push(branch, { ev: 'outcome', timeout: true })
-    return branch.log
+    return branch
   }
   if (outcome.ok) {
     push(branch, { ev: 'outcome', ok: true, value: snap(branch, outcome.value) })
@@ -287,8 +313,28 @@ const runBranch = async (kind: 'rs' | 'ts', impl: Fn, args: Any): Promise<string
     })
   }
   push(branch, { ev: 'context', value: snap(branch, branch.req?.context) })
+  push(branch, { ev: 'req', value: snapReq(branch, branch.req) })
   push(branch, { ev: 'args', value: snapShallowArgs(branch, args) })
-  return branch.log
+  return branch
+}
+
+/** The request's own enumerable properties, one level deep (objects by role or shallowly). */
+const snapReq = (branch: Branch, req: Any): unknown => {
+  if (!req || typeof req !== 'object') {
+    return snap(branch, req)
+  }
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(req)) {
+    let value: Any
+    try {
+      value = req[key]
+    } catch (error) {
+      value = { $getterThrew: String(error) }
+    }
+    // depth 23: the value's own properties are snapshotted, anything below is an id reference
+    out[key] = snap(branch, value, 23)
+  }
+  return out
 }
 
 /** Microtasks a ticker counts after each event before it stops (then gaps read `far`). */

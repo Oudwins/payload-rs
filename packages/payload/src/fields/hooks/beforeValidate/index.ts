@@ -39,6 +39,51 @@ const rustCoreHooksLoad: Promise<RustCoreHooks> | undefined = isRustCoreEngine
   : undefined
 void rustCoreHooksLoad?.catch(() => {})
 
+const upstream = {
+  beforeValidate: async <T extends JsonObject>({
+    id,
+    collection,
+    context,
+    data: incomingData,
+    doc,
+    docForHooks,
+    global,
+    onFieldAccess,
+    operation,
+    overrideAccess,
+    req,
+  }: Args<T>): Promise<T> => {
+    await traverseFields({
+      id,
+      collection,
+      context,
+      data: incomingData,
+      doc,
+      docForHooks,
+      fields: (collection?.fields || global?.fields)!,
+      global,
+      onFieldAccess,
+      operation,
+      overrideAccess,
+      parentIndexPath: '',
+      parentIsLocalized: false,
+      parentPath: '',
+      parentSchemaPath: '',
+      req,
+      siblingData: incomingData,
+      siblingDoc: doc!,
+    })
+
+    return incomingData
+  },
+}
+
+/**
+ * Upstream's `beforeValidate`, whichever engine is selected: the export when the Rust core engine is
+ * not selected, and the TS reference of the Rust port's differential harnesses (test/__rs).
+ */
+export const upstreamBeforeValidate = upstream.beforeValidate
+
 /**
  * This function is responsible for the following actions, in order:
  * - Sanitize incoming data
@@ -47,47 +92,20 @@ void rustCoreHooksLoad?.catch(() => {})
  * - Merge original document data into incoming data
  * - Compute default values for undefined fields
  */
-export const beforeValidate: <T extends JsonObject>(args: Args<T>) => Promise<T> = isRustCoreEngine
-  ? (args) =>
-      rustCoreHooks
-        ? rustCoreHooks.beforeValidate(args)
-        : rustCoreHooksLoad!.then((loaded) => {
-            loaded.recordDeferredCall()
-            return loaded.beforeValidate(args)
-          })
-  : async <T extends JsonObject>({
-      id,
-      collection,
-      context,
-      data: incomingData,
-      doc,
-      docForHooks,
-      global,
-      onFieldAccess,
-      operation,
-      overrideAccess,
-      req,
-    }: Args<T>): Promise<T> => {
-      await traverseFields({
-        id,
-        collection,
-        context,
-        data: incomingData,
-        doc,
-        docForHooks,
-        fields: (collection?.fields || global?.fields)!,
-        global,
-        onFieldAccess,
-        operation,
-        overrideAccess,
-        parentIndexPath: '',
-        parentIsLocalized: false,
-        parentPath: '',
-        parentSchemaPath: '',
-        req,
-        siblingData: incomingData,
-        siblingDoc: doc!,
-      })
-
-      return incomingData
+export const beforeValidate: typeof upstreamBeforeValidate = isRustCoreEngine
+  ? (args) => {
+      // A synchronous throw (e.g. the addon failing to load) is a rejection, as from upstream's
+      // async function.
+      try {
+        return rustCoreHooks
+          ? rustCoreHooks.beforeValidate(args)
+          : rustCoreHooksLoad!.then((loaded) => {
+              loaded.recordDeferredCall()
+              return loaded.beforeValidate(args)
+            })
+      } catch (error) {
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- rejects with the thrown value as is
+      return Promise.reject(error)
+      }
     }
+  : upstreamBeforeValidate

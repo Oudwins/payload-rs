@@ -51,7 +51,10 @@ export type Arguments<TSlug extends CollectionSlug, TSelect extends SelectType> 
   trash?: boolean
 } & Pick<FindOptions<TSlug, TSelect>, 'select'>
 
-export const deleteByIDOperation = async <TSlug extends CollectionSlug, TSelect extends SelectType>(
+export const deleteByIDOperationTS = async <
+  TSlug extends CollectionSlug,
+  TSelect extends SelectType,
+>(
   incomingArgs: Arguments<TSlug, TSelect>,
 ): Promise<TransformCollectionWithSelect<TSlug, TSelect>> => {
   let args = incomingArgs
@@ -358,3 +361,33 @@ export const deleteByIDOperation = async <TSlug extends CollectionSlug, TSelect 
     }
   }
 }
+
+type RustWriteOperations = {
+  deleteByIDOperation: (args: Parameters<typeof deleteByIDOperationTS>[0]) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-write`), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ */
+const isRustWriteOperations =
+  (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustWriteOperationsSpecifier = '../../../../engine-rs/src/ops-write/index.js'
+let rustWriteOperations: RustWriteOperations | undefined
+const rustWriteOperationsLoad: Promise<RustWriteOperations> | undefined = isRustWriteOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustWriteOperationsSpecifier).then(
+      (loaded: RustWriteOperations) => (rustWriteOperations = loaded),
+    )
+  : undefined
+void rustWriteOperationsLoad?.catch(() => {})
+
+export const deleteByIDOperation: typeof deleteByIDOperationTS = isRustWriteOperations
+  ? (args) =>
+      rustWriteOperations
+        ? rustWriteOperations.deleteByIDOperation(args)
+        : rustWriteOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.deleteByIDOperation(args)
+          })
+  : deleteByIDOperationTS

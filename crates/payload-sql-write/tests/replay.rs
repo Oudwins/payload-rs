@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use indexmap::IndexMap;
-use payload_engine::js::{JsVal, decode_graph, decode_graph_typed};
+use payload_engine::js::{JsVal, decode_graph_typed};
 use payload_sql_write::{StaticWriteAdapter, TransformForWriteArgs, encode_value, transform_for_write};
 use serde_json::{Value as Json, json};
 
@@ -16,7 +16,7 @@ fn fixtures_dir() -> PathBuf {
 }
 
 fn decode(v: &Json) -> JsVal {
-  decode_graph(&json!({ "objects": [], "root": v })).expect("decodable fixture value")
+  decode_graph_typed(&json!({ "objects": [], "root": v })).expect("decodable fixture value")
 }
 
 /// Ordered deep equality (key order matters, numbers compare by value).

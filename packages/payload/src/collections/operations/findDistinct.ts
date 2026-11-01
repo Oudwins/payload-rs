@@ -55,7 +55,7 @@ const getEmptyResult = ({
   values: [],
 })
 
-export const findDistinctOperation = async (
+export const findDistinctOperationTS = async (
   incomingArgs: Arguments,
 ): Promise<PaginatedDistinctDocs<Record<string, unknown>>> => {
   let args = incomingArgs
@@ -357,3 +357,32 @@ export const findDistinctOperation = async (
 
   return result
 }
+
+type RustOperations = {
+  findDistinctOperation: (args: Arguments) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops`), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const findDistinctOperation: typeof findDistinctOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.findDistinctOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.findDistinctOperation(args)
+          })
+  : findDistinctOperationTS

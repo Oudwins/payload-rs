@@ -19,9 +19,20 @@ import type {
 
 import { afterChange as afterChangeRS } from '../../../packages/engine-rs/src/runtime/afterChange/index.js'
 import { beforeDuplicate as beforeDuplicateRS } from '../../../packages/engine-rs/src/runtime/beforeDuplicate/index.js'
-import { afterChange as afterChangeTS } from '../../../packages/payload/src/fields/hooks/afterChange/index.js'
-import { beforeDuplicate as beforeDuplicateTS } from '../../../packages/payload/src/fields/hooks/beforeDuplicate/index.js'
+import { traverseFields as afterChangeTraverseFieldsRS } from '../../../packages/engine-rs/src/runtime/afterChange/index.js'
+import { upstreamAfterChange as afterChangeTS } from '../../../packages/payload/src/fields/hooks/afterChange/index.js'
+import { traverseFields as afterChangeTraverseFieldsTS } from '../../../packages/payload/src/fields/hooks/afterChange/traverseFields.js'
+import { upstreamBeforeDuplicate as beforeDuplicateTS } from '../../../packages/payload/src/fields/hooks/beforeDuplicate/index.js'
 import { createPayloadRequest } from '../../../packages/payload/src/utilities/createPayloadRequest.js'
+import { assertDistinctEngines, startEngineRun } from '../dispatch/engineGuard.js'
+
+assertDistinctEngines('afterChange', afterChangeTS, afterChangeRS)
+assertDistinctEngines(
+  'afterChange traverseFields',
+  afterChangeTraverseFieldsTS,
+  afterChangeTraverseFieldsRS,
+)
+assertDistinctEngines('beforeDuplicate', beforeDuplicateTS, beforeDuplicateRS)
 
 export type Engine = 'rs' | 'ts'
 
@@ -139,6 +150,18 @@ const snapArg = (arg: unknown): unknown => {
 
 const record = (event: Record<string, unknown>) => {
   recorder.current?.events.push(event)
+}
+
+/**
+ * Records when the promise of run input `index` settles: the microtask at which a traversal's own
+ * promise settles (its trailing ticks) is compared, not only the callbacks inside it.
+ */
+const recordSettle = <P extends Promise<unknown>>(index: number, promise: P): P => {
+  promise.then(
+    () => record({ inputSettled: index, ok: true }),
+    () => record({ inputSettled: index, ok: false }),
+  )
+  return promise
 }
 
 const describeError = (error: unknown) =>
@@ -336,11 +359,11 @@ const runCases = async <C>({
     try {
       let results: unknown[]
       if (concurrent) {
-        results = await Promise.all(cases.map(invoke))
+        results = await Promise.all(cases.map((c, i) => recordSettle(i, invoke(c))))
       } else {
         results = []
-        for (const c of cases) {
-          results.push(await invoke(c))
+        for (const [i, c] of cases.entries()) {
+          results.push(await recordSettle(i, invoke(c)))
         }
       }
       outcome.identity = results.map((result, i) => result === resultOf(cases[i]!))
@@ -395,6 +418,7 @@ export const runAfterChange = async ({
   global,
   operation,
   payload,
+  traverse,
   variant,
 }: {
   cases: () => AfterChangeCase[]
@@ -404,30 +428,62 @@ export const runAfterChange = async ({
   global?: SanitizedGlobalConfig
   operation: 'create' | 'update'
   payload: Payload
+  /**
+   * Call the exported `traverseFields` (what rich text editor hooks call) with the arguments
+   * `afterChange` passes it, instead of `afterChange`; `siblingFields` also passes the fields as
+   * `siblingFields` (only an external caller can).
+   */
+  traverse?: 'fields' | 'siblingFields'
   variant: RequestVariant
 }): Promise<RunOutcome> => {
   const afterChange = engine === 'ts' ? afterChangeTS : afterChangeRS
+  const traverseFields = engine === 'ts' ? afterChangeTraverseFieldsTS : afterChangeTraverseFieldsRS
+  const engineRun = startEngineRun(engine, 'afterChange')
   const req = await makeRequest(payload, variant)
   const cases = makeCases()
   recorder.current = { events: [], ids: new WeakMap(), nextID: 0, req, thrown: [] }
-  return runCases({
+  const outcome = await runCases({
     cases,
     concurrent,
     invoke: (c) =>
-      afterChange({
-        collection: collection ?? null,
-        context: req.context,
-        data: c.data,
-        doc: c.doc,
-        global: global ?? null,
-        operation,
-        previousDoc: c.previousDoc,
-        req,
-      }),
+      traverse
+        ? traverseFields({
+            blockData: undefined,
+            collection: collection ?? null,
+            context: req.context,
+            data: c.data,
+            doc: c.doc,
+            fields: (collection ?? global)!.fields,
+            global: global ?? null,
+            operation,
+            parentIndexPath: '',
+            parentIsLocalized: false,
+            parentPath: '',
+            parentSchemaPath: '',
+            previousDoc: c.previousDoc,
+            previousSiblingDoc: c.previousDoc,
+            req,
+            siblingData: c.data,
+            siblingDoc: c.doc,
+            siblingFields:
+              traverse === 'siblingFields' ? (collection ?? global)!.fields : undefined,
+          })
+        : afterChange({
+            collection: collection ?? null,
+            context: req.context,
+            data: c.data,
+            doc: c.doc,
+            global: global ?? null,
+            operation,
+            previousDoc: c.previousDoc,
+            req,
+          }),
     req,
     resultOf: (c) => c.doc,
     snapshot: () => snap(cases),
   })
+  engineRun.finish(cases.length)
+  return outcome
 }
 
 /** Runs beforeDuplicate for each doc (fresh copies) with one engine. */
@@ -449,10 +505,11 @@ export const runBeforeDuplicate = async ({
   variant: RequestVariant
 }): Promise<RunOutcome> => {
   const beforeDuplicate = engine === 'ts' ? beforeDuplicateTS : beforeDuplicateRS
+  const engineRun = startEngineRun(engine, 'beforeDuplicate')
   const req = await makeRequest(payload, variant)
   const docs = makeDocs()
   recorder.current = { events: [], ids: new WeakMap(), nextID: 0, req, thrown: [] }
-  return runCases({
+  const outcome = await runCases({
     cases: docs,
     concurrent,
     invoke: (doc) =>
@@ -468,4 +525,6 @@ export const runBeforeDuplicate = async ({
     resultOf: (doc) => doc,
     snapshot: () => snap(docs),
   })
+  engineRun.finish(docs.length)
+  return outcome
 }

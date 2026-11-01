@@ -35,7 +35,7 @@ export type Arguments<TSlug extends CollectionSlug> = {
   validationOperation?: 'create' | 'update' | 'validate'
 }
 
-export async function validateOperation<TSlug extends CollectionSlug>(
+export async function validateOperationTS<TSlug extends CollectionSlug>(
   args: Arguments<TSlug>,
 ): Promise<ValidationResult> {
   const previousOperation = args.req.operation
@@ -218,3 +218,33 @@ async function validateOperationWithScopedRequest<TSlug extends CollectionSlug>(
     validationOperation,
   })
 }
+
+type RustWriteOperations = {
+  validateOperation: (args: Parameters<typeof validateOperationTS>[0]) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-write`), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ */
+const isRustWriteOperations =
+  (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustWriteOperationsSpecifier = '../../../../engine-rs/src/ops-write/index.js'
+let rustWriteOperations: RustWriteOperations | undefined
+const rustWriteOperationsLoad: Promise<RustWriteOperations> | undefined = isRustWriteOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustWriteOperationsSpecifier).then(
+      (loaded: RustWriteOperations) => (rustWriteOperations = loaded),
+    )
+  : undefined
+void rustWriteOperationsLoad?.catch(() => {})
+
+export const validateOperation: typeof validateOperationTS = isRustWriteOperations
+  ? (args) =>
+      rustWriteOperations
+        ? rustWriteOperations.validateOperation(args)
+        : rustWriteOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.validateOperation(args)
+          })
+  : validateOperationTS

@@ -2,7 +2,9 @@
  * Summarizes a test/__rs/core-ops/run.sh output dir: per suite, per-test outcome parity of
  * `PAYLOAD_OPS=rs` (and `shadow`) against `ts`, Rust operation call counts, and the shadow
  * differential (cases compared, equal, diffs, unstable). Exits 1 on any diff, any outcome
- * difference, a missing report, or when a suite compared zero cases.
+ * difference, a missing report of a requested mode (`MODES`, default "ts rs shadow"), when a suite
+ * compared zero cases, when a shadow branch ran the wrong engine, or when the synthetic suite's
+ * recorded `rs` operation outcomes differ from the `ts` ones.
  *
  *   node test/__rs/core-ops/summarize.mjs /tmp/rs-ops sort fields
  */
@@ -50,6 +52,7 @@ const opReports = (dir) => {
   return { diffs, files: files.length, total }
 }
 
+const modes = (process.env.MODES ?? 'ts rs shadow').split(/\s+/).filter(Boolean)
 const rows = []
 for (const suite of suites) {
   const tag = suite.replaceAll('/', '_')
@@ -58,7 +61,13 @@ for (const suite of suites) {
   for (const mode of ['ts', 'rs', 'shadow']) {
     const o = outcomes(path.join(outDir, mode, `${tag}.json`))
     if (!o) {
+      if (modes.includes(mode)) {
+        fail(`${suite}: missing ${mode} report`)
+      }
       continue
+    }
+    if (o.size === 0) {
+      fail(`${suite} ${mode}: no test ran`)
     }
     const counts = { failed: 0, passed: 0, skipped: 0 }
     for (const status of o.values()) {
@@ -93,6 +102,10 @@ for (const suite of suites) {
       row.unstable = sum('unstable')
       row.events = sum('events')
       row.rejections = sum('rejections')
+      row.engineMismatch = sum('engineMismatch')
+      if (row.engineMismatch > 0) {
+        fail(`${suite} shadow: ${row.engineMismatch} branches ran the wrong engine`)
+      }
       row.perOp = Object.entries(ops.total)
         .map(
           ([op, s]) =>
@@ -112,8 +125,36 @@ for (const suite of suites) {
       }
     }
   }
-  if (!row.ts) {
-    fail(`${suite}: missing ts report`)
+  // operation outcomes the synthetic suite records in ts / rs mode
+  const recorded = Object.fromEntries(
+    ['ts', 'rs'].map((mode) => {
+      const file = path.join(outDir, mode, `ops-${tag}`, 'synthetic.outcomes')
+      return [mode, fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined]
+    }),
+  )
+  if (recorded.ts || recorded.rs) {
+    if (!recorded.ts?.length || !recorded.rs?.length) {
+      fail(
+        `${suite}: synthetic outcomes missing or empty (ts ${recorded.ts?.length}, rs ${recorded.rs?.length})`,
+      )
+    } else {
+      row.outcomes = recorded.ts.length
+      const n = Math.max(recorded.ts.length, recorded.rs.length)
+      let differing = 0
+      for (let i = 0; i < n; i++) {
+        if (recorded.ts[i] !== recorded.rs[i]) {
+          if (differing++ < 5) {
+            console.log(
+              `  outcome ${i}\n    ts: ${String(recorded.ts[i]).slice(0, 400)}\n    rs: ${String(recorded.rs[i]).slice(0, 400)}`,
+            )
+          }
+        }
+      }
+      row.outcomeDiffs = differing
+      if (differing) {
+        fail(`${suite}: ${differing} rs operation outcomes differ from ts`)
+      }
+    }
   }
   rows.push(row)
 }

@@ -407,15 +407,16 @@ pub fn js_json_parse(text: &str) -> Result<Json> {
   Ok(normalize_numbers(parsed))
 }
 
-/// `JSON.parse` producing a JS value.
+/// `JSON.parse` producing a JS value (JS key order, any depth, V8 number rounding and errors).
 pub fn js_json_parse_js(text: &str) -> Result<JsVal> {
-  Ok(JsVal::from_json(&js_json_parse(text)?))
+  payload_sql_read::json::parse_to_js(text)
 }
 
 /// Rounds every number to an IEEE double, as `JSON.parse` would.
 pub fn normalize_numbers(value: Json) -> Json {
   match value {
-    Json::Number(n) => num_to_json(n.as_f64().unwrap_or(f64::NAN)),
+    // `as_f64` gives `None` for literals beyond the double range (`1e400` is `Infinity` in JS)
+    Json::Number(n) => num_to_json(n.as_f64().or_else(|| n.to_string().parse::<f64>().ok()).unwrap_or(f64::NAN)),
     Json::Array(a) => Json::Array(a.into_iter().map(normalize_numbers).collect()),
     Json::Object(o) => Json::Object(o.into_iter().map(|(k, v)| (k, normalize_numbers(v))).collect()),
     other => other,

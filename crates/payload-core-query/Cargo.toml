@@ -19,6 +19,10 @@ serde_json.workspace = true
 
 [dev-dependencies]
 napi-derive = "3"
+# for the standalone `query_addon` example (exports every core binding)
+payload-core-hooks-after = { path = "../payload-core-hooks-after" }
+payload-core-hooks-change = { path = "../payload-core-hooks-change" }
+payload-core-hooks-validate = { path = "../payload-core-hooks-validate" }
 
 [[example]]
 name = "query_addon"

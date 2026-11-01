@@ -134,9 +134,11 @@ pub async fn validate_query_paths_body(a: QueryPathsArgs) -> JsResult<Val> {
             fields: fields.clone(),
             global_config: a.global_config.clone(),
             operator: operator_units,
+            operator_raw: None,
             override_access: a.override_access.clone(),
             parent_is_localized: Val::Undefined,
             path: path_units.clone(),
+            path_raw: None,
             policies: policies.clone(),
             polymorphic_join: a.polymorphic_join.clone(),
             req: a.req.clone(),
@@ -166,10 +168,17 @@ pub struct SearchParamArgs {
   pub errors: Val,
   pub fields: Val,
   pub global_config: Val,
+  /// `operator` when it is a string (empty otherwise, see `operator_raw`).
   pub operator: Units,
+  /// A non-string `operator` (only possible through the exported function): compared with
+  /// `===` (never equal) and used as a key as is.
+  pub operator_raw: Option<Val>,
   pub override_access: Val,
   pub parent_is_localized: Val,
+  /// `path` when it is a string (empty otherwise, see `path_raw`).
   pub path: Units,
+  /// A non-string `path` (only possible through the exported function).
+  pub path_raw: Option<Val>,
   pub policies: Val,
   pub polymorphic_join: Val,
   pub req: Val,
@@ -180,20 +189,30 @@ pub struct SearchParamArgs {
 
 impl SearchParamArgs {
   /// From the `validateSearchParamArgs` host destructuring (same order). `operator` and `path`
-  /// are strings in every upstream call; other values are converted with `String()`.
+  /// are strings in every upstream call; other values are kept as they are (no conversion).
   pub fn from_array(a: Local) -> JsResult<Self> {
     let e = |i| -> JsResult<Val> { val(js::get_element(a, i)?) };
-    let s = |i| -> JsResult<Units> { super::host::to_string(js::get_element(a, i)?) };
+    let s = |i| -> JsResult<(Units, Option<Val>)> {
+      let v = js::get_element(a, i)?;
+      Ok(match units_of(v) {
+        Some(u) => (u, None),
+        None => (Units::new(), Some(val(v)?)),
+      })
+    };
+    let (operator, operator_raw) = s(5)?;
+    let (path, path_raw) = s(8)?;
     Ok(Self {
       collection_config: e(0)?,
       constraint: e(1)?,
       errors: e(2)?,
       fields: e(3)?,
       global_config: e(4)?,
-      operator: s(5)?,
+      operator,
+      operator_raw,
       override_access: e(6)?,
       parent_is_localized: e(7)?,
-      path: s(8)?,
+      path,
+      path_raw,
       policies: e(9)?,
       polymorphic_join: e(10)?,
       req: e(11)?,
@@ -201,6 +220,14 @@ impl SearchParamArgs {
       val: e(13)?,
       version_fields: e(14)?,
     })
+  }
+}
+
+/// The `operator` value (the string, or the non-string value as passed).
+fn operator_value(a: &SearchParamArgs) -> Local {
+  match &a.operator_raw {
+    Some(raw) => raw.get(),
+    None => string(&a.operator),
   }
 }
 
@@ -220,6 +247,12 @@ async fn assign_permissions(policies: &Val, group: &str, slug: &Val, helper: Loc
 pub async fn validate_search_param_body(a: SearchParamArgs) -> JsResult<Val> {
   let h = host()?;
   let incoming_path = a.path.clone();
+  if let Some(raw) = &a.path_raw {
+    // `incomingPath === '_id'` is false; `incomingPath.replace(/__/g, '.')` throws V8's TypeError
+    // unless the value has its own `replace`, whose result the port cannot use as a path.
+    call(&h.replace_dunder, &[raw.get()])?;
+    return Err(js::engine_error("core query: a non-string path with its own `replace` method is not supported"));
+  }
   let sanitized_path =
     if eq(&incoming_path, "_id") { units("id") } else { replace_all(&incoming_path, "__", ".") };
   let mut paths: Vec<PathToQuery> = Vec::new();
@@ -254,7 +287,7 @@ pub async fn validate_search_param_body(a: SearchParamArgs) -> JsResult<Val> {
   }
   let promises: Rc<RefCell<Vec<Val>>> = Rc::new(RefCell::new(Vec::new()));
   let operator = a.operator.clone();
-  let operator_is = |o: &str| eq(&operator, o);
+  let operator_is = |o: &str| a.operator_raw.is_none() && eq(&operator, o);
 
   let relationship_field = if paths.len() == 1 { paths[0].field.get() } else { js::undefined() };
   let has_nested_where = truthy(call(&h.is_nested_relationship_query, &[a.val.get()])?);
@@ -425,7 +458,7 @@ async fn path_callback(s: Rc<Shared>, i: usize) -> JsResult<Val> {
                 existing_and,
                 string(&relationship_path),
                 string(&related_field_path),
-                string(&a.operator),
+                operator_value(&a),
                 a.val.get(),
                 read,
               ],
@@ -479,7 +512,7 @@ async fn path_callback(s: Rc<Shared>, i: usize) -> JsResult<Val> {
     // paths.slice(1).reverse(): only the first entry (the deepest path) is validated
     if let Some(deepest) = s.paths.last() {
       let collection_config = call(&h.collection_config_of, &[a.req.get(), deepest.collection_slug.get()])?;
-      let where_ = call(&h.nested_where, &[string(&deepest.path), string(&a.operator), a.val.get()])?;
+      let where_ = call(&h.nested_where, &[string(&deepest.path), operator_value(&a), a.val.get()])?;
       let promise = validate_query_paths(QueryPathsArgs {
         collection_config: val(collection_config)?,
         errors: errors.clone(),

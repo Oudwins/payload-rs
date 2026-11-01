@@ -9,9 +9,13 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use std::cell::Cell as StdCell;
+
 use payload_engine::error::{EngineError, Result};
+use payload_engine::host::Host;
 use payload_engine::js::JsVal;
 
+use crate::drizzle::Decoder;
 use crate::js_ops::{js_string, json_stringify};
 
 static ACCESS_ID: AtomicU64 = AtomicU64::new(1);
@@ -40,7 +44,7 @@ impl TableRef {
   }
 }
 
-/// A column of a [`TableRef`], with the raw column type that selects its driver encoder.
+/// A column of a [`TableRef`], with the drizzle column class that selects its driver encoder.
 #[derive(Clone, Debug)]
 pub struct Column {
   pub table: TableRef,
@@ -48,8 +52,10 @@ pub struct Column {
   pub key: String,
   /// SQL column name (`_parent_id`).
   pub name: String,
-  /// RawColumn `type` (`boolean`, `jsonb`, `numeric`, ...).
-  pub col_type: String,
+  /// The drizzle column class (`mapToDriverValue` / `mapFromDriverValue`).
+  pub decoder: Decoder,
+  /// Function id of a custom column's `mapTo` (`toDriver`).
+  pub to_driver: Option<u32>,
   pub primary: bool,
   /// Columns of aliased tables are new proxies on every property access in drizzle, so they
   /// are never `===` to each other. Non-zero for such accesses.
@@ -74,39 +80,68 @@ impl Column {
     format!("{}.{}", quote(self.table.ref_name()), quote(&self.name))
   }
 
-  /// The column's `mapToDriverValue` (`sqlite/schema/buildDrizzleTable.ts` column builders).
-  pub fn map_to_driver_value(&self, v: &JsVal) -> JsVal {
-    match self.col_type.as_str() {
-      "boolean" => JsVal::Num(if v.truthy() { 1.0 } else { 0.0 }),
-      "jsonb" | "geometry" => json_stringify(v).map(JsVal::str).unwrap_or(JsVal::Undefined),
-      "numeric" => JsVal::str(js_string(v)),
-      _ => v.clone(),
-    }
+  /// The column's `mapToDriverValue` (drizzle-orm `sqlite-core/columns/*.js`). A custom
+  /// column's `mapTo` runs through the host installed with [`with_driver_host`].
+  pub fn map_to_driver_value(&self, v: &JsVal) -> Result<JsVal> {
+    Ok(match self.decoder {
+      Decoder::Boolean => JsVal::Num(if v.truthy() { 1.0 } else { 0.0 }),
+      Decoder::Json => json_stringify(v).map(JsVal::str).unwrap_or(JsVal::Undefined),
+      // `mapToDriverValue = String`
+      Decoder::Number | Decoder::NumericBigInt => JsVal::str(js_string(v)),
+      // `const unix = value.getTime()`
+      Decoder::Timestamp | Decoder::TimestampMs => {
+        let unix = match (v.as_date(), v) {
+          (Some(ms), _) => ms,
+          (None, JsVal::Undefined) => {
+            return Err(EngineError::new("TypeError", "Cannot read properties of undefined (reading 'getTime')"));
+          }
+          (None, _) => return Err(EngineError::new("TypeError", "value.getTime is not a function")),
+        };
+        JsVal::Num(if self.decoder == Decoder::Timestamp { (unix / 1e3).floor() } else { unix })
+      }
+      // `Buffer.from(...)`: no `Buffer` value exists on this side
+      Decoder::BlobBuffer | Decoder::BlobJson | Decoder::BlobBigInt => {
+        return Err(EngineError::internal(format!(
+          "payload-sql-query: binding a value to the blob column \"{}\" is not supported",
+          self.name
+        )));
+      }
+      Decoder::Custom(_) => match self.to_driver {
+        Some(id) => call_driver_host(id, v)?,
+        None => v.clone(),
+      },
+      Decoder::Identity | Decoder::NumericString => v.clone(),
+    })
   }
 }
 
-impl Column {
-  /// The column's `mapFromDriverValue` for a non-null result value (drizzle skips `null`):
-  /// sqlite `integer({ mode: 'boolean' })`, `text({ mode: 'json' })`, `numeric({ mode: 'number' })`.
-  pub fn map_from_driver_value(&self, v: JsVal) -> Result<JsVal> {
-    if v.is_null() {
-      return Ok(v);
+thread_local! {
+  /// The host of the call rendering statements on this thread (see [`with_driver_host`]).
+  static DRIVER_HOST: StdCell<Option<*const (dyn Host + 'static)>> = const { StdCell::new(None) };
+}
+
+/// Runs `f` with `host` as the host that runs custom columns' `mapTo` while statements are
+/// rendered on this thread.
+pub fn with_driver_host<R>(host: &dyn Host, f: impl FnOnce() -> R) -> R {
+  struct Restore(Option<*const (dyn Host + 'static)>);
+  impl Drop for Restore {
+    fn drop(&mut self) {
+      DRIVER_HOST.with(|h| h.set(self.0));
     }
-    Ok(match self.col_type.as_str() {
-      "boolean" => JsVal::Bool(crate::js_ops::js_number(&v) == 1.0),
-      "jsonb" | "geometry" => {
-        let text = js_string(&v);
-        let json: serde_json::Value =
-          serde_json::from_str(&text).map_err(|e| EngineError::new("SyntaxError", format!("{e}")))?;
-        JsVal::from_json(&json)
-      }
-      "numeric" => match v {
-        JsVal::Num(_) => v,
-        other => JsVal::Num(crate::js_ops::js_number(&other)),
-      },
-      _ => v,
-    })
   }
+  // SAFETY: only the lifetime is erased; the pointer is removed again (`Restore`, also on unwind)
+  // before `host` goes out of scope, and is only dereferenced on this thread meanwhile.
+  let erased: &'static dyn Host = unsafe { std::mem::transmute::<&dyn Host, &'static dyn Host>(host) };
+  let _restore = Restore(DRIVER_HOST.with(|h| h.replace(Some(erased as *const _))));
+  f()
+}
+
+fn call_driver_host(id: u32, v: &JsVal) -> Result<JsVal> {
+  let host = DRIVER_HOST.with(StdCell::get).ok_or_else(|| {
+    EngineError::internal("payload-sql-query: a custom column's toDriver needs a host (with_driver_host)")
+  })?;
+  // SAFETY: see `with_driver_host`.
+  unsafe { (*host).call(id, &payload_engine::js::encode_value(v)) }
 }
 
 /// A selectable / comparable expression: a column or a raw SQL expression.
@@ -183,6 +218,8 @@ pub struct Sql {
 pub enum SqlValue {
   Null,
   Real(f64),
+  /// A `bigint` (libsql binds it as a 64-bit integer).
+  Integer(i64),
   Text(String),
 }
 
@@ -191,6 +228,7 @@ impl SqlValue {
     match self {
       SqlValue::Null => serde_json::Value::Null,
       SqlValue::Real(n) => payload_engine::js::num_to_json(*n),
+      SqlValue::Integer(n) => serde_json::Value::from(*n),
       SqlValue::Text(s) => serde_json::Value::String(s.clone()),
     }
   }
@@ -212,6 +250,11 @@ fn bind_value(v: &JsVal) -> Result<SqlValue> {
   // `value.valueOf()`; an invalid date binds `NaN`, which SQLite stores as NULL
   if let Some(ms) = v.as_date() {
     return Ok(SqlValue::Real(ms));
+  }
+  if let Some(decimal) = v.as_bigint() {
+    return decimal.parse::<i64>().map(SqlValue::Integer).map_err(|_| {
+      EngineError::new("RangeError", "bigint is too large to be represented as a 64-bit integer and passed as argument")
+    });
   }
   Ok(match v {
     JsVal::Null => SqlValue::Null,
@@ -284,7 +327,7 @@ fn render_chunk(chunk: &Chunk, q: &mut Query) -> Result<()> {
     Chunk::Str(s) => q.sql.push_str(s),
     Chunk::Col(c) => q.sql.push_str(&c.render()),
     Chunk::Param(v, col) => {
-      let mapped = if v.is_null() { JsVal::Null } else { col.map_to_driver_value(v) };
+      let mapped = if v.is_null() { JsVal::Null } else { col.map_to_driver_value(v)? };
       q.sql.push('?');
       q.params.push(bind_value(&mapped)?);
     }
@@ -599,4 +642,15 @@ impl Select {
 
 pub fn expr_sql(e: &Expr) -> Sql {
   Sql::new(vec![e.chunk()])
+}
+
+/// An expression as a selected field (drizzle `buildSelection`): `SQLiteNumericBigInt` columns are
+/// selected as `cast("table"."column" as text)`.
+pub fn selection_sql(e: &Expr) -> Sql {
+  match e {
+    Expr::Col(c) if c.decoder == Decoder::NumericBigInt => {
+      Sql::new(vec![Chunk::Str("cast(".into()), e.chunk(), Chunk::Str(" as text)".into())])
+    }
+    _ => expr_sql(e),
+  }
 }

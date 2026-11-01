@@ -15,8 +15,10 @@
  * the summary shows that the engine served the data methods (and how many calls ran the upstream
  * TS method because an adapter internal or the client's `execute` was replaced). Writes
  * <out>/summary.json and prints a markdown table plus every test whose status differs from the
- * baseline. Exits non-zero when a file differs, has no result, has no baseline entry, or when the
- * run compared no tests or made no engine calls at all.
+ * baseline. Exits non-zero when a file differs, has no result, has no baseline entry, ran its
+ * data methods only through the upstream TS methods (upstream calls but no engine call), or when
+ * the run compared no tests or made no engine calls at all. Files where most calls ran upstream
+ * are flagged `(mostly upstream)`.
  */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -178,6 +180,7 @@ const compare = ({ code, durationMs, file, jsonFile, statsFile }) => {
   return {
     baseline: baseCounts,
     calls,
+    isEngineBypassed: calls === 0 && upstreamCalls > 0,
     hasBaseline: baselineByFile.has(file),
     upstreamCalls,
     upstreamReasons: stats?.upstreamReasons,
@@ -227,12 +230,14 @@ results.sort((a, b) => a.file.localeCompare(b.file))
 let md =
   '| suite | baseline pass/fail/skip | rs pass/fail/skip | diffs | engine calls | upstream calls |\n|---|---|---|---|---|---|\n'
 for (const r of results) {
-  md += `| ${r.file} | ${r.baseline.passed}/${r.baseline.failed}/${r.baseline.skipped} | ${r.counts.passed}/${r.counts.failed}/${r.counts.skipped} | ${r.differences.length}${r.loadError ? ' (load error)' : ''}${r.hasBaseline ? '' : ' (no baseline)'} | ${r.calls} | ${r.upstreamCalls}${r.upstreamCalls ? ` (${Object.keys(r.upstreamReasons ?? {}).join(', ')})` : ''} |\n`
+  md += `| ${r.file} | ${r.baseline.passed}/${r.baseline.failed}/${r.baseline.skipped} | ${r.counts.passed}/${r.counts.failed}/${r.counts.skipped} | ${r.differences.length}${r.loadError ? ' (load error)' : ''}${r.hasBaseline ? '' : ' (no baseline)'} | ${r.calls}${r.isEngineBypassed ? ' (engine bypassed)' : r.upstreamCalls > r.calls ? ' (mostly upstream)' : ''} | ${r.upstreamCalls}${r.upstreamCalls ? ` (${Object.keys(r.upstreamReasons ?? {}).join(', ')})` : ''} |\n`
 }
 const totals = results.reduce(
   (sum, r) => ({
     calls: sum.calls + r.calls,
-    differing: sum.differing + (r.differences.length || r.loadError || !r.hasBaseline ? 1 : 0),
+    differing:
+      sum.differing +
+      (r.differences.length || r.loadError || !r.hasBaseline || r.isEngineBypassed ? 1 : 0),
     tests: sum.tests + r.counts.passed + r.counts.failed + r.counts.skipped,
     upstream: sum.upstream + r.upstreamCalls,
   }),

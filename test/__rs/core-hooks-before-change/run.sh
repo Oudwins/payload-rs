@@ -5,6 +5,8 @@
 #   PAYLOAD_CORE_RUNTIME_ADDON=/path/to/addon.node test/__rs/core-hooks-before-change/run.sh [hooks fields localization validate synthetic]
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
+# The TS reference must be upstream TS (the harness also fails if a reference run reaches Rust).
+unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE
 suites=("${@:-hooks fields localization validate synthetic}")
 for suite in ${suites[@]}; do
   db="${RS_CORE_HOOKS_BC_DB:-/tmp/rs-before-change.db}"

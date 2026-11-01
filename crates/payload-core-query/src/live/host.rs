@@ -99,6 +99,8 @@ query_host! {
   and_of => "andOf",
   path_to_query => "pathToQuery",
   field_by_path_result => "fieldByPathResult",
+  join_path_of => "joinPathOf",
+  replace_dunder => "replaceDunder",
 }
 
 thread_local! {

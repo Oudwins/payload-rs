@@ -8,7 +8,12 @@ use crate::common::{
   has_drafts_enabled, has_hooks, nullish_or,
 };
 use crate::find::LOCKED_DOCUMENTS_SLUG;
-use crate::host::{self, call, call_fn, call_val, get, get_val, is_false, opt, val};
+use crate::host::{self, call, call_fn, call_val, get, get_val, is_false, opt, val, with_callback};
+use crate::query;
+use crate::utilities::{
+  append_non_trashed_filter, append_version_to_query_key, apply_lock_status, get_query_drafts_select, get_select_mode,
+  lock_duration_ms, lock_status_of,
+};
 
 /// `findByIDOperation(incomingArgs)`: returns its promise.
 pub fn find_by_id(incoming_args: Local) -> JsResult<Local> {
@@ -76,23 +81,31 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
 
   let where_ = call_val("idWhere", &[id.get()])?;
 
-  let mut full_where = call_val("combineQueries", &[where_.get(), access_result.get()])?;
+  let mut full_where = query::combine_queries(where_.get(), access_result.get())?;
 
+  // Exclude trashed documents when trash: false
   let enable_trash = get(collection_config.get(), "trash")?;
-  full_where = call_val("appendNonTrashedFilter", &[enable_trash, trash.get(), full_where.get()])?;
+  full_where = val(append_non_trashed_filter("deletedAt", enable_trash, trash.get(), full_where.get())?)?;
 
   let flattened_fields = get(collection_config.get(), "flattenedFields")?;
   let payload = get(get(args.get(), "req")?, "payload")?;
-  call("sanitizeWhereQuery", &[flattened_fields, payload, full_where.get()])?;
+  query::sanitize_where_query(flattened_fields, payload, full_where.get())?;
 
-  let p = call("sanitizeJoinQuery", &[collection_config.get(), joins.get(), override_access.get(), req.get()])?;
+  let p = query::sanitize_join_query(collection_config.clone(), joins.clone(), override_access.clone(), req.clone())?;
   let sanitized_joins = await_js(p).await?;
 
   // execute only if there's a custom ID and potentially overwriten access on id
   let collections = get(get(req.get(), "payload")?, "collections")?;
   let slug = get(collection_config.get(), "slug")?;
   if js::truthy(get(host::get_key(collections, slug)?, "customIDType")?) {
-    let p = call("validateQueryPaths", &[collection_config.get(), override_access.get(), req.get(), where_.get()])?;
+    let p = query::validate_query_paths(query::QueryPaths {
+      collection_config: collection_config.clone(),
+      override_access: override_access.clone(),
+      req: req.clone(),
+      show_hidden_fields: Val::Undefined,
+      version_fields: Val::Undefined,
+      where_: where_.clone(),
+    })?;
     await_js(p).await?;
   }
 
@@ -110,7 +123,7 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
   if js::truthy(opt(get(collection_config.get(), "versions")?, "drafts")?)
     && js::truthy(replace_with_version.get())
     && js::truthy(select.get())
-    && js::str_equals(call("getSelectMode", &[select.get()])?, "include")
+    && get_select_mode(select.get())? == "include"
   {
     db_select = call_val("selectWithTimestamps", &[select.get()])?;
   }
@@ -129,18 +142,30 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
   )?;
 
   if should_query_drafts {
-    query = call_val("appendVersionToQueryKey", &[full_where.get()])?;
+    query = val(append_version_to_query_key(full_where.get())?)?;
 
-    let p = call(
-      "validateQueryPathsByIDDrafts",
-      &[collection_config.get(), override_access.get(), req.get(), where_.get()],
-    )?;
+    // validateQueryPaths({ collectionConfig, overrideAccess, req,
+    //   versionFields: buildVersionCollectionFields(req.payload.config, collectionConfig, true),
+    //   where: appendVersionToQueryKey(where) })
+    let version_fields =
+      call_val("buildVersionFields", &[get(get(req.get(), "payload")?, "config")?, collection_config.get()])?;
+    let version_where = val(append_version_to_query_key(where_.get())?)?;
+    let p = query::validate_query_paths(query::QueryPaths {
+      collection_config: collection_config.clone(),
+      override_access: override_access.clone(),
+      req: req.clone(),
+      show_hidden_fields: Val::Undefined,
+      version_fields,
+      where_: version_where,
+    })?;
     await_js(p).await?;
 
     let p = db_call(get(req.get(), "payload")?, "queryDrafts", || {
-      call(
+      // `select: getQueryDraftsSelect({ select })` is evaluated in place
+      with_callback(
         "findByIDQueryDraftsArgs",
-        &[collection_config.get(), req.get(), sanitized_joins.get(), locale.get(), select.get(), query.get()],
+        &[collection_config.get(), req.get(), sanitized_joins.get(), locale.get(), query.get()],
+        |_| get_query_drafts_select(select.get()),
       )
     })?;
     let drafts = await_js(p).await?;
@@ -149,7 +174,10 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
 
     if !js::truthy(doc_with_locales.get()) {
       let p = db_call(get(req.get(), "payload")?, "queryDrafts", || {
-        call("existingVersionsArgs", &[collection_config.get(), locale.get(), req.get(), where_.get()])
+        // `where: appendVersionToQueryKey(where)` is evaluated in place
+        with_callback("existingVersionsArgs", &[collection_config.get(), locale.get(), req.get()], |_| {
+          append_version_to_query_key(where_.get())
+        })
       })?;
       let existing = await_js(p).await?;
       let existing_versions = get(existing.get(), "docs")?;
@@ -177,26 +205,27 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
 
   // Add collection property for auth collections
   if js::truthy(get(collection_config.get(), "auth")?) {
-    result = call_val("spreadCollection", &[result.get(), collection_config.get()])?;
+    // { ...result, collection: collectionConfig.slug }
+    result = call_val("withCollection", &[result.get(), collection_config.get()])?;
   }
 
   // Include Lock Status if required
   if include_lock_status && js::truthy(id.get()) {
     let mut lock_status = Val::Null;
     let locked: JsResult<Val> = async {
-      let lock_ms = call_val("lockDurationMs", &[collection_config.get()])?;
+      let lock_ms = lock_duration_ms(collection_config.get())?;
       let payload = get(req.get(), "payload")?;
       let find = get(payload, "find")?;
       let find_args = call("findByIDLockArgs", &[collection_config.get(), id.get(), req.get(), lock_ms.get()])?;
       let p = call_fn(find, payload, &[find_args], "req.payload.find")?;
       let locked_document = await_js(p).await?;
-      call_val("lockStatusOf", &[locked_document.get()])
+      lock_status_of(locked_document.get())
     }
     .await;
     if let Ok(status) = locked {
       lock_status = status;
     }
-    call("applyLockStatus", &[result.get(), lock_status.get()])?;
+    apply_lock_status(result.get(), lock_status.get())?;
   }
 
   // Replace document with draft if available

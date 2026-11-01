@@ -38,7 +38,7 @@ export type Arguments = {
   where?: Where
 } & Pick<FindOptions<string, SelectType>, 'select'>
 
-export const findVersionsOperation = async <TData extends TypeWithVersion<TData>>(
+export const findVersionsOperationTS = async <TData extends TypeWithVersion<TData>>(
   args: Arguments,
 ): Promise<PaginatedDocs<TData>> => {
   // /////////////////////////////////////
@@ -275,3 +275,32 @@ export const findVersionsOperation = async <TData extends TypeWithVersion<TData>
 
   return result
 }
+
+type RustOperations = {
+  findVersionsOperation: (args: Arguments) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops`), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const findVersionsOperation: typeof findVersionsOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.findVersionsOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.findVersionsOperation(args)
+          })
+  : findVersionsOperationTS

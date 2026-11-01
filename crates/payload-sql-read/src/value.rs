@@ -95,6 +95,8 @@ pub enum Val {
   Str(JsStr),
   /// A `Date` instance, stored as its time value in milliseconds (NaN for invalid dates).
   Date(f64),
+  /// A `bigint` primitive, as its decimal `toString()`.
+  BigInt(std::sync::Arc<str>),
   Arr(ArrRef),
   Obj(ObjRef),
   /// A JS built-in reachable through `Object.prototype` (e.g. `{}.constructor`).
@@ -257,6 +259,7 @@ impl Val {
       Val::Bool(b) => *b,
       Val::Num(n) => *n != 0.0 && !n.is_nan(),
       Val::Str(s) => !s.is_empty(),
+      Val::BigInt(d) => &**d != "0",
       Val::Date(_) | Val::Arr(_) | Val::Obj(_) | Val::Builtin(_) => true,
     }
   }
@@ -302,6 +305,7 @@ impl Val {
       (Val::Bool(a), Val::Bool(b)) => a == b,
       (Val::Num(a), Val::Num(b)) => a == b,
       (Val::Str(a), Val::Str(b)) => a == b,
+      (Val::BigInt(a), Val::BigInt(b)) => a == b,
       (Val::Arr(a), Val::Arr(b)) => Rc::ptr_eq(a, b),
       (Val::Obj(a), Val::Obj(b)) => Rc::ptr_eq(a, b),
       (Val::Builtin(a), Val::Builtin(b)) => a == b,
@@ -317,6 +321,7 @@ impl Val {
       (Val::Bool(a), JsVal::Bool(b)) => a == b,
       (Val::Num(a), JsVal::Num(b)) => a == b,
       (Val::Str(a), JsVal::Str(b)) => a.as_str() == Some(&**b),
+      (Val::BigInt(a), b) => b.as_bigint().is_some_and(|b| *a == b),
       _ => false,
     }
   }
@@ -361,16 +366,64 @@ impl Val {
       Val::Num(n) => num_to_string(*n),
       Val::Str(s) => s.to_lossy().into_owned(),
       Val::Date(t) => crate::date::date_to_string(*t),
+      Val::BigInt(d) => d.to_string(),
       Val::Arr(_) => self.to_js_str().to_lossy().into_owned(),
       Val::Obj(_) | Val::Builtin(Builtin::ObjectPrototype) => "[object Object]".into(),
       Val::Builtin(Builtin::Function(name)) => format!("function {name}() {{ [native code] }}"),
     }
   }
 
+  /// This value as an engine value. `Date`s become typed [`JsVal::date`]s, inherited built-in
+  /// functions `undefined` (what `serializeForEngine` would send for them), `Object.prototype` an
+  /// empty object, and a reference back to an ancestor (only possible through mutation)
+  /// `undefined`. Lone surrogates in strings become U+FFFD.
+  pub fn to_js(&self) -> JsVal {
+    fn convert(value: &Val, ancestors: &mut Vec<usize>) -> JsVal {
+      match value {
+        Val::Undefined | Val::Builtin(Builtin::Function(_)) => JsVal::Undefined,
+        Val::Builtin(Builtin::ObjectPrototype) => JsVal::obj(payload_engine::js::Obj::new()),
+        Val::Null => JsVal::Null,
+        Val::Bool(b) => JsVal::Bool(*b),
+        Val::Num(n) => JsVal::Num(*n),
+        Val::Str(s) => JsVal::str(s.to_lossy().as_ref()),
+        Val::Date(ms) => JsVal::date(*ms),
+        Val::BigInt(d) => JsVal::bigint(d.clone()),
+        Val::Arr(a) => {
+          let id = Rc::as_ptr(a) as usize;
+          if ancestors.contains(&id) {
+            return JsVal::Undefined;
+          }
+          ancestors.push(id);
+          let items = a.borrow().iter().map(|v| convert(v, ancestors)).collect();
+          ancestors.pop();
+          JsVal::arr(items)
+        }
+        Val::Obj(o) => {
+          let id = Rc::as_ptr(o) as usize;
+          if ancestors.contains(&id) {
+            return JsVal::Undefined;
+          }
+          ancestors.push(id);
+          let entries = o.borrow().entries();
+          let mut out = payload_engine::js::Obj::with_capacity(entries.len());
+          for (k, v) in entries {
+            out.insert(k.to_lossy().into_owned(), convert(&v, ancestors));
+          }
+          ancestors.pop();
+          JsVal::obj(out)
+        }
+      }
+    }
+    convert(self, &mut Vec::new())
+  }
+
   /// Copies an immutable config value into a fresh mutable value.
   pub fn from_js(value: &JsVal) -> Val {
     if let Some(t) = value.as_date() {
       return Val::Date(t);
+    }
+    if let Some(d) = value.as_bigint() {
+      return Val::BigInt(d);
     }
     match value {
       JsVal::Undefined | JsVal::Fn(_) => Val::Undefined,

@@ -22,8 +22,20 @@ Ported (crate `crates/payload-core-ops`), verified differentially (section 5):
 | `collections/operations/utilities/buildAfterOperation.ts`                   | `common.rs`                       |
 | `collections/operations/utilities/sanitizeSortQuery.ts`                     | `common.rs` `sanitize_sort_query` |
 | `utilities/getVersionsConfig.ts` (`hasVersionsEnabled`, `hasDraftsEnabled`) | `common.rs`                       |
+| `utilities/appendNonTrashedFilter.ts`                                       | `utilities.rs`                    |
+| `versions/drafts/appendVersionToQueryKey.ts`                                | `utilities.rs`                    |
+| `utilities/getSelectMode.ts`                                                | `utilities.rs`                    |
+| `versions/drafts/getQueryDraftsSelect.ts`, `getQueryDraftsSort.ts`          | `utilities.rs`                    |
+| `utilities/sanitizeInternalFields.ts`                                       | `utilities.rs`                    |
+| lock-status blocks of `find.ts` / `findByID.ts`                             | `utilities.rs`                    |
 
-Not yet ported: write operations, global operations, auth operations (plan in section 6).
+The query utilities (`combineQueries`, `sanitizeWhereQuery`, `prefixWherePaths`,
+`validateQueryPaths`, `validateSortQuery`, `sanitizeJoinQuery`, `getFieldByPath`,
+`getLocalizedPaths`) are the live port of `crates/payload-core-query` (`live`), called directly
+from Rust (`query.rs`).
+
+Write operations, global operations and auth operations live in `crates/payload-core-ops-write`
+and `crates/payload-core-ops-global` (built on this crate's `host`).
 
 ## 2. Architecture
 
@@ -46,26 +58,29 @@ costs the same ticks as awaiting the TS `async` function).
 
 ### What runs where
 
-| part                                                                                                                                                                                                                                                                                                                                                  | implementation                                                                                                     |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| control flow, branches, loops over hooks/docs, every `await`, `Promise.all` fan-out                                                                                                                                                                                                                                                                   | Rust                                                                                                               |
-| `executeAccess`, `buildBeforeOperation`, `buildAfterOperation`, `sanitizeSortQuery`                                                                                                                                                                                                                                                                   | Rust (JS helpers only for literals, errors, and `fields.find` by name)                                             |
-| collection hooks, access functions                                                                                                                                                                                                                                                                                                                    | user JS, called live by Rust (args literal built by a helper with upstream key order)                              |
-| `afterRead` field traversal                                                                                                                                                                                                                                                                                                                           | Rust (`payload_core_runtime::after_read::after_read`); `PAYLOAD_OPS_AFTER_READ=ts` uses TS instead                 |
-| `payload.db.*`                                                                                                                                                                                                                                                                                                                                        | whatever adapter is installed, called through JS (`payload.db[method]` read, then called with `this = payload.db`) |
-| query/select/join utilities (`combineQueries`, `sanitizeWhereQuery`, `appendNonTrashedFilter`, `sanitizeSelect`/`resolveSelect`, `validateQueryPaths`, `validateSortQuery`, `sanitizeJoinQuery`, `appendVersionToQueryKey`, `getQueryDrafts{Select,Sort}`, `buildVersionCollectionFields`, `getFieldByPath`, `getLocalizedPaths`, `prefixWherePaths`) | upstream JS, called at the same point with the same arguments                                                      |
-| `replaceWithDraftIfAvailable`, `checkFileAccess`, `markHistoricalFileURLs`, `sanitizeInternalFields`, `prefetchVersionForInheritedReadAccess`, `getEntityPermissions`, `sanitizePermissions`, `relationshipPopulationPromise` (findDistinct)                                                                                                          | upstream JS                                                                                                        |
-| Payload error classes (`Forbidden`, `NotFound`, `APIError`, `QueryError`)                                                                                                                                                                                                                                                                             | constructed by JS helpers (same class, message, status, data)                                                      |
-| synchronous segments without user callbacks: `docs.map((doc) => ({ ...doc, collection }))`, lock-status filtering/assignment, `markHistoricalFileURLs` / `sanitizeInternalFields` maps, findDistinct path trimming and value renaming                                                                                                                 | JS helpers (one call per segment, same operations in the same order)                                               |
+| part                                                                                                                                                                                                                                                                                                                          | implementation                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| control flow, branches, loops over hooks/docs, every `await`, `Promise.all` fan-out                                                                                                                                                                                                                                           | Rust                                                                                                               |
+| `executeAccess`, `buildBeforeOperation`, `buildAfterOperation`, `sanitizeSortQuery`, `docAccess` (operation list, `unlock` / `readVersions`, result lookup)                                                                                                                                                                   | Rust                                                                                                               |
+| query utilities: `combineQueries`, `sanitizeWhereQuery`, `prefixWherePaths`, `validateQueryPaths`, `validateSortQuery`, `sanitizeJoinQuery`, `getFieldByPath`, `getLocalizedPaths`                                                                                                                                            | Rust (`payload_core_query::live`, via `query.rs`)                                                                  |
+| `appendNonTrashedFilter`, `appendVersionToQueryKey`, `getSelectMode`, `getQueryDraftsSelect`, `getQueryDraftsSort`, `sanitizeInternalFields`, lock-status filtering and marking, findDistinct path trimming / relationship paths / virtual path / value renaming / population loop, auth-doc and version-row `docs.map` loops | Rust (`utilities.rs`, the operation files)                                                                         |
+| collection hooks, access functions                                                                                                                                                                                                                                                                                            | user JS, called live by Rust (args literal built by a helper with upstream key order)                              |
+| `afterRead` field traversal                                                                                                                                                                                                                                                                                                   | Rust (`payload_core_runtime::after_read::after_read`); `PAYLOAD_OPS_AFTER_READ=ts` uses TS instead                 |
+| `payload.db.*`                                                                                                                                                                                                                                                                                                                | whatever adapter is installed, called through JS (`payload.db[method]` read, then called with `this = payload.db`) |
+| `sanitizeSelect`/`resolveSelect`, `buildVersionCollectionFields`, `getEntityPermissions`, `sanitizePermissions`, `replaceWithDraftIfAvailable`, `checkFileAccess`, `markHistoricalFileURLs`, `prefetchVersionForInheritedReadAccess`, `relationshipPopulationPromise`                                                         | upstream JS (called with the TS argument literal)                                                                  |
+| Payload error classes (`Forbidden`, `NotFound`, `APIError`, `QueryError`)                                                                                                                                                                                                                                                     | constructed by JS helpers (same class, message, status, data)                                                      |
+| object literals, spreads (`{ ...doc, collection }`, `{ ...where, and: [...] }`), destructuring patterns                                                                                                                                                                                                                       | JS helpers (one expression each)                                                                                   |
+| `Array.isArray`, `Array.prototype.map/filter/find`, `for...of`, `for...in`, `new Date(v).getTime()`                                                                                                                                                                                                                           | the JS built-ins, driven from Rust (below)                                                                         |
 
-Why the query utilities are JS and not `crates/payload-core-query`: that crate works on decoded
-Rust values (`payload_sql_read::Val`), not on the caller's JS objects. The operations hand the
-same `where` object to `sanitizeWhereQuery` (which mutates it in place), to hooks
-(`query: fullWhere`) and to the adapter, and `combineQueries` returns the caller's object when
-access is `true`. Converting to Rust values and back would break that identity and the in-place
-mutation the caller observes (the harness compares the args object after the operation). The
-crate becomes usable here once it can operate on JS handles (or for adapter-internal use, where
-no JS identity is observable).
+The query utilities come from `crates/payload-core-query/src/live` (strategy B on the same
+runtime): they work on the caller's `where` / `joins` objects, so `sanitizeWhereQuery`'s in-place
+mutation, `combineQueries` returning the caller's object and the identity of the `where` handed to
+hooks and adapters are upstream's. `getCoreOps()` installs that port's host
+(`getCoreQueryBinding()`, `test/__rs/core-query/glue.ts`, owned by the query port; to move to
+`packages/engine-rs/src/query`). Their async entries are spawned as their own tasks
+(`validate_query_paths`, `spawn(validate_sort_query_body(..))`, `spawn(sanitize_join_query_body(..))`),
+like calling the TS `async` function. The decoded-value modules of that crate (`sort.rs`,
+`select.rs`, `where_query.rs`) are not used: they work on copies.
 
 ### Exactness rules applied (in addition to RUST_CORE_DESIGN.md section 3)
 
@@ -79,8 +94,24 @@ no JS identity is observable).
 - Callee before arguments: `payload.db.queryDrafts(...)` reads `payload.db` and `queryDrafts`
   before the args literal is built. A non-callable throws V8's `TypeError: <expr> is not a
   function` (`hook`, `access`, `payload.db.find`, ...).
-- `for (const hook of hooks)`: the iterable is read once, iterated by index with a live length;
-  non-arrays are collected with `[...v]`. `(await hook(...)) || docRef` and
+- `for (const x of <expr>)` (`host::ForOf`): plain arrays (`napi_is_array`) are iterated by index
+  with a live length (what the array iterator does); anything else, including proxies of arrays,
+  through the host generator `forOf(v, expr)`, which reads `Symbol.iterator` once (V8's
+  `<expr> is not iterable` with the TS source text) and runs a real `for...of`, stepped by Rust
+  between awaits. A throwing loop body closes the iterator (`generator.return()`, its errors
+  ignored), like `IteratorClose` on a throw completion. `for...in` is the generator `forIn`.
+- `Array.isArray(v)` is `host::is_array`: `napi_is_array`, else the JS `Array.isArray` for objects
+  (true for proxies of arrays, throws for revoked proxies).
+- `<expr>.map(async (x) => ...)`, `.filter(...)`, `.find(...)`: `host::map_array` /
+  `host::with_callback` read `map` from the value and call it with a native callback that runs the
+  Rust closure (the arrow's body) for each element, so holes, proxies, patched `map` /
+  `Symbol.species` and V8's errors (`Cannot read properties of undefined (reading 'map')`,
+  `<expr>.map is not a function`) are upstream's. The callback is only valid while the call it was
+  passed to runs (a later call throws an engine error).
+- Literals that evaluate a ported utility in the middle (`select: getQueryDraftsSelect({ select })`
+  in the `queryDrafts` args, `where: appendVersionToQueryKey(where)`) get a native callback
+  `evaluate(i)` so the utility runs at its position in the literal's evaluation order.
+- `(await hook(...)) || docRef` and
   `obj.version = (await hook({ doc: obj.version })) || obj.version` re-read `obj.version` after
   the await, as the TS does. `hookResult !== undefined` for before/afterOperation.
 - `result.docs = await Promise.all(result.docs.map(async (doc) => ...))`: each async arrow is a
@@ -107,75 +138,51 @@ common::execute_access(AccessArgs, access: Val) -> JsResult<Local>
 common::execute_access_body(AccessArgs, access: Val) -> impl Future  // inline in an existing task
 common::build_before_operation(args, collection, operation: &'static str, override_access) -> JsResult<Local>
 common::build_after_operation(args, collection, operation, override_access, result) -> JsResult<Local>
+common::hook_operation(operation) -> Option<&'static str>  // operationToHookOperation[op] (None = undefined)
 common::sanitize_sort_query(fields: Local, sort: Local) -> JsResult<Local>
 common::ReadHooks { collection_config, hook_name, find_many, override_access, query, req }.run(HookTarget)
+query::{combine_queries, sanitize_where_query, prefix_where_paths, validate_query_paths(QueryPaths),
+        validate_sort_query, sanitize_join_query, get_field_by_path_with_relationships,
+        get_localized_paths_override_access}
+utilities::{append_non_trashed_filter, append_version_to_query_key, get_select_mode,
+            get_query_drafts_select, get_query_drafts_sort, sanitize_internal_fields,
+            lock_duration_ms, apply_find_lock_status, reset_find_lock_status, lock_status_of,
+            apply_lock_status}
+host::{ForOf::{new, of, next, close}, ForIn, loop_body, is_array, map_array, with_callback,
+       iterable / element (index loops, kept for the write / global crates), call, call_fn, ...}
 binding::create_binding(env)  // { init(host), find, findByID, count, countVersions, findDistinct,
                               //   findVersions, findVersionByID, docAccess, executeAccess, sanitizeSortQuery }
 ```
 
-`init(host)` takes the object of `createOpsHost()` (helpers by name), an optional `afterRead`
-override and `mutant` (section 5, 0 in normal use).
+`init(host)` takes the object of `createOpsHost()` (helpers by name) and an optional `afterRead`
+override. The operation exports and `executeAccess` never throw synchronously: anything thrown
+before the task starts rejects the returned promise (upstream's are `async` functions).
 
-## 4. Dispatch (proposed lines for `packages/payload`, not applied: files not owned)
+## 4. Dispatch (applied)
 
-`payload` cannot import `@payloadcms/engine-rs` (engine-rs depends on payload). The binding is
-therefore registered on a global symbol by engine-rs and looked up synchronously by payload, so the
-dispatch adds no await and no tick.
+`payload` cannot import `@payloadcms/engine-rs` (engine-rs depends on payload). Each operation
+file selects the engine once at module load, like the field-hook modules
+(`packages/payload/src/fields/hooks/*/index.ts`):
 
-1. New file `packages/payload/src/utilities/rustEngine.ts` (payload side, 6 lines):
+- `PAYLOAD_CORE_ENGINE=rs|ts` if set, else `PAYLOAD_ENGINE === 'rs'`.
+- The upstream function is renamed `<op>TS` (body unchanged, exported: the differential harness
+  imports it as the reference) and `<op>` is exported as `isRustOperations ? dispatcher : <op>TS`,
+  so with the flags unset payload runs the upstream function itself.
+- Selected, the module starts `import('../../../../engine-rs/src/ops/index.js')` at load; the
+  dispatcher calls the loaded drop-in directly (no extra tick). A call made before the import
+  finished waits for it and is counted (`recordDeferredCall`; 0 in every suite run).
 
-```ts
-/** Set by `@payloadcms/engine-rs/ops` when `PAYLOAD_ENGINE=rs`; read synchronously per call. */
-export const getRustOperations = (): Record<string, (args: any) => Promise<any>> | undefined =>
-  process.env.PAYLOAD_ENGINE === 'rs'
-    ? (globalThis as any)[Symbol.for('payload.engine-rs.operations')]
-    : undefined
-```
+Files: `collections/operations/{find,findByID,count,countVersions,findDistinct,findVersions,
+findVersionByID,docAccess}.ts`. `auth/executeAccess.ts` is not switched (not owned; the Rust
+operations use the Rust `executeAccess` internally).
 
-2. In each operation file, rename the upstream function (`findOperation` → `findOperationTS`) and
-   export a dispatcher with the upstream name and generics, e.g. `find.ts`:
+`packages/engine-rs/src/ops/index.ts`: `getCoreOps()` (core runtime, query port host, ops binding
+from one addon), the drop-ins, `PAYLOAD_RS_OPS_STATS_DIR=<dir>` (each process writes
+`ops-<pid>.json` with calls per operation and deferred calls), `getOpsCallCount()`.
 
-```ts
-export const findOperation = <
-  TSlug extends CollectionSlug,
-  TSelect extends SelectFromCollectionSlug<TSlug>,
->(
-  incomingArgs: Arguments,
-): Promise<PaginatedDocs<TransformCollectionWithSelect<TSlug, TSelect>>> =>
-  (getRustOperations()?.find ?? findOperationTS)(incomingArgs) as any
-```
-
-Same one-liner for `findByID.ts` (`findByID`), `count.ts` (`count`), `countVersions.ts`
-(`countVersions`), `findDistinct.ts` (`findDistinct`), `findVersions.ts` (`findVersions`),
-`findVersionByID.ts` (`findVersionByID`), `docAccess.ts` (`docAccess`), and in
-`auth/executeAccess.ts` (`executeAccess`, called with two arguments).
-
-3. engine-rs side (`packages/engine-rs/src/ops/register.ts`, imported by the sqlite adapter's
-   `withRustEngine` or by `getPayload` when `PAYLOAD_ENGINE=rs`):
-
-```ts
-;(globalThis as any)[Symbol.for('payload.engine-rs.operations')] = {
-  count: countOperation,
-  countVersions: countVersionsOperation,
-  docAccess: docAccessOperation,
-  executeAccess,
-  find: findOperation,
-  findByID: findByIDOperation,
-  findDistinct: findDistinctOperation,
-  findVersionByID: findVersionByIDOperation,
-  findVersions: findVersionsOperation,
-}
-```
-
-plus a `./ops` export in `packages/engine-rs/package.json`.
-
-Until that lands, `test/__rs/core-ops/vitest.config.ts` performs the same switch for every
-importer with a `resolveId` plugin (upstream module → `test/__rs/core-ops/wrap/<op>.ts`).
-
-The Rust operations call `afterRead` in Rust and the TS query utilities; nested operations they
-trigger (population through `req.payloadDataLoader`, lock status `payload.find`, the findDistinct
-virtual-field `payload.findDistinct`) go through the dispatched upstream exports, so they are Rust
-as well once dispatched.
+Nested operations the Rust operations trigger (population through `req.payloadDataLoader`, lock
+status `payload.find`, the findDistinct virtual-field `payload.findDistinct`) go through the
+dispatched exports, so they are Rust as well.
 
 ## 5. Verification
 
@@ -202,12 +209,25 @@ as well once dispatched.
   and object identity (numbered per branch by first appearance); config objects, `req`,
   `context`, `payload`, `db` and the args object are compared by role. Dates within a day of "now"
   (lock-status queries) compare as `recent`.
-  A diff is re-checked with a second TS branch; if TS differs from itself (hook side effects,
-  time) the case is counted as `unstable`, otherwise as a diff. `summarize.mjs` fails on any
-  diff, on any rs/ts outcome difference, on a missing report and when a suite compared zero cases.
+  The request's own properties are compared too (one level: `locale`, `transactionID`, `user`,
+  ...). A diff is re-checked with a second TS branch; if TS differs from itself (hook side
+  effects, time) the case is counted as `unstable`, otherwise as a diff.
+  Engine guard: the reference is the upstream `<op>TS` function (never the dispatcher); the TS
+  branch must make 0 Rust operation calls and the Rust branch at least one (counted per branch
+  through AsyncLocalStorage), otherwise the case counts as `engineMismatch`.
+- `run.sh` unsets `PAYLOAD_ENGINE` / `PAYLOAD_CORE_ENGINE` (`RS_OPS_SQL_ENGINE=rs` runs every mode on
+  the Rust SQL adapter with TS field hooks).
+- The synthetic suite records every operation outcome (result or error class / message / status /
+  data, dates and generated row ids normalized, plus the `req.context` hook log) in `ts` and `rs`
+  mode; `summarize.mjs` compares them.
 
-Mutation switches (`RS_OPS_MUTANT=n`, read by the glue into `init({ mutant })`, 0 otherwise)
-prove the harness sees the deviations that matter:
+`summarize.mjs` fails on any diff, any rs/ts per-test outcome difference, any synthetic outcome
+difference, a missing report of a requested mode, a suite that compared zero cases or ran no
+test, and any `engineMismatch`.
+
+Mutation switches prove the harness sees the deviations that matter. They are compiled only with
+the `payload-core-ops/mutants` cargo feature (`host::mutant(n)` is a constant `false` otherwise;
+the shipped addon rejects `init({ mutant })`); `RS_OPS_MUTANT=n` selects one in a feature build:
 
 | mutant | deviation                                                                              |
 | ------ | -------------------------------------------------------------------------------------- |
@@ -279,42 +299,63 @@ branches each against its own copy.
 
 ## 7. Results and known gaps
 
-2026-11-01, debug addon, TZ=UTC, SQLite (TS drizzle adapter unless noted),
-`PAYLOAD_ENGINE_ADDON=<copy of target/shared/debug/libpayload_node.dylib> test/__rs/core-ops/run.sh <suites>`:
+2026-11-01 (phase E), debug addon, TZ=UTC, SQLite (TS drizzle adapter, TS field hooks: the
+reference never runs Rust), `PAYLOAD_ENGINE_ADDON=<copy of target/shared/debug/libpayload_node.dylib>
+test/__rs/core-ops/run.sh <suites>`:
 
-| suite                            | ts pass/fail/skip | rs pass/fail/skip | Rust op calls (rs) | shadow cases compared | diffs | unstable | events compared | rejections compared |
-| -------------------------------- | ----------------- | ----------------- | ------------------ | --------------------- | ----- | -------- | --------------- | ------------------- |
-| sort                             | 44/0/0            | 44/0/0            | 306                | 287                   | 0     | 0        | 1,887           | 0                   |
-| select                           | 115/0/0           | 115/0/0           | 147                | 136                   | 0     | 0        | 950             | 0                   |
-| fields                           | 221/0/13          | 221/0/13          | 767                | 744                   | 0     | 0        | 4,661           | 14                  |
-| relationships                    | 69/0/5            | 69/0/5            | 772                | 665                   | 0     | 0        | 4,870           | 0                   |
-| localization                     | 158/0/0           | 158/0/0           | 253                | 223                   | 0     | 0        | 1,712           | 0                   |
-| access-control                   | 84/0/0            | 84/0/0            | 168                | 157                   | 0     | 0        | 1,808           | 27                  |
-| joins                            | 115/0/8           | 115/0/8           | 598                | 483                   | 0     | 0        | 8,612           | 37                  |
-| versions                         | 153/0/0           | 153/0/0           | 373                | 363                   | 0     | 0        | 2,531           | 11                  |
-| core-ops synthetic (adversarial) | 5/0/0             | 5/0/0             | 4,874              | 2,683                 | 0     | 0        | 115,320         | 756                 |
+| suite                            | ts pass/fail/skip | rs pass/fail/skip | Rust op calls (rs) | shadow cases compared | diffs | unstable | engine mismatch | events compared | rejections compared |
+| -------------------------------- | ----------------- | ----------------- | ------------------ | --------------------- | ----- | -------- | --------------- | --------------- | ------------------- |
+| sort                             | 44/0/0            | 44/0/0            | 306                | 287                   | 0     | 0        | 0               | 2,174           | 0                   |
+| select                           | 115/0/0           | 115/0/0           | 147                | 136                   | 0     | 0        | 0               | 1,086           | 0                   |
+| fields                           | 221/0/13          | 221/0/13          | 767                | 744                   | 0     | 0        | 0               | 5,405           | 14                  |
+| relationships                    | 69/0/5            | 69/0/5            | 772                | 665                   | 0     | 0        | 0               | 5,535           | 0                   |
+| localization                     | 158/0/0           | 158/0/0           | 253                | 223                   | 0     | 0        | 0               | 1,935           | 0                   |
+| access-control                   | 84/0/0            | 84/0/0            | 168                | 157                   | 0     | 0        | 0               | 1,965           | 27                  |
+| joins                            | 115/0/8           | 115/0/8           | 598                | 483                   | 0     | 0        | 0               | 9,095           | 37                  |
+| versions                         | 153/0/0           | 153/0/0           | 373                | 363                   | 0     | 0        | 0               | 2,894           | 11                  |
+| core-ops synthetic (adversarial) | 6/0/0             | 6/0/0             | 5,813              | 3,071                 | 0     | 0        | 0               | 138,856         | 879                 |
 
-- `rs`: per-test outcomes identical to `ts` in every suite (0 changed).
+- `rs`: per-test outcomes identical to `ts` in every suite (0 changed); synthetic: 5,937 recorded
+  operation outcomes, identical in `ts` and `rs`.
 - `shadow`: one upstream test (`access-control` "should reuse the version lookup when inherited
   read access returns a boolean") fails only in shadow mode because it counts
   `payload.db.findVersions` calls with a spy, and shadow mode runs every operation three times.
-- With `PAYLOAD_ENGINE=rs` (Rust SQL engine adapter), `rs` vs `ts` outcomes are identical for sort
-  (44), versions (153) and relationships (69/0/5).
-- Synthetic per operation: find 840, findByID 598, count 92, countVersions 46, findDistinct 506,
-  findVersions 278, findVersionByID 276, docAccess 47 cases.
-- Mutants (synthetic suite, shadow): M1 668 diffs, M2 643, M3 1,586, M4 679, M5 1,307 (M1-M3/M5
-  measured before the per-event microtask `gap` was added to the log, M4 after; the first M4
-  variant, "no tick when access returns a non-promise", never fires because sanitized collection
-  access is always wrapped async by `withBaseAccess`).
+- Synthetic per operation: find 996, findByID 782, count 92, countVersions 46, findDistinct 506,
+  findVersions 324, findVersionByID 276, docAccess 49 cases (now including a custom-ID collection
+  with a custom lock duration, GraphQL requests, an auth collection with `maxLoginAttempts`, and
+  proxies of the sort array and of every collection hook list).
+- Mutants (`payload-core-ops/mutants` build, synthetic, shadow): M1 1,593 diffs, M2 1,576, M3 1,757,
+  M4 863, M5 1,506; the same build with no mutant selected: 0 diffs.
+- Payload dispatch (`PAYLOAD_ENGINE=rs`: Rust SQL engine + Rust field hooks + validators + Rust
+  read operations), `PAYLOAD_RS_OPS_STATS_DIR=... node test/__rs/adapter/runSuites.mjs --jobs 3`
+  over all 135 files of `.rs-baseline/sqlite-all.json` (machine load 30-80): 126/135 identical to the
+  baseline, 11,304 read-operation calls served by Rust (find 8,745, findByID 2,274, count 84,
+  findVersionByID 76, findVersions 60, findDistinct 47, docAccess 10, countVersions 8), 0 deferred.
+  The 9 others: `select` (+37) and `uploads` (+1) pass tests the baseline failed; `hooks`, `lexical`,
+  `live-preview`, `versions` failed with another module's newer TS glue than the run's addon
+  (`beforeChangeTraverseFields is not a function`) and pass 44/44, 124/124, 18/18, 153/153 with an
+  addon rebuilt from the same tree; `cli` (3) and `validate` (1) are ENOENT on fixture folders shared
+  with concurrent runs; `queues` "should recover a job after its worker process is killed" also
+  fails on the pure TS engine under the same load (worker start timeout).
 
 Known gaps:
 
-- The upstream int suites run with Rust operations only through the vitest alias config; payload
-  itself is not switched (section 4 lines not applied).
-- `Array.prototype.map` over `docs` ignores a patched `Symbol.species`/`map`; non-array `docs`
-  give V8's TypeError for `null`/`undefined` and `<expr>.map is not a function` otherwise
-  (an object with its own `map` method is rejected as unsupported).
+- `auth/executeAccess.ts` is not dispatched (not owned); the Rust operations use the Rust
+  `executeAccess`, other callers (globals, write operations, auth) the TS one.
+- The dynamic import of `packages/engine-rs/src/ops/index.js` is a relative source path: it works
+  where payload runs from source (vitest, dev), not from a published dist build, and the glue
+  imports payload internals (error classes) by relative source path, so they are the same module
+  instances only in that setup.
+- `getCoreOps()` installs the query port's host from `test/__rs/core-query/glue.ts` (owned by the
+  query port, to move to `packages/engine-rs/src/query`).
+- Still upstream JS called from Rust: `sanitizeSelect`/`resolveSelect`,
+  `buildVersionCollectionFields`, `getEntityPermissions`, `sanitizePermissions`,
+  `replaceWithDraftIfAvailable`, `checkFileAccess`, `markHistoricalFileURLs`,
+  `prefetchVersionForInheritedReadAccess`, `relationshipPopulationPromise`.
+- `sanitizeSortQuery` has its live port here (`common.rs`); payload-core-query's `sort.rs` is the
+  decoded-value version (not usable on live values).
+- `for (const x of <plain array>)` iterates by index (a patched `Array.prototype[Symbol.iterator]`
+  is not observed); proxies and other iterables use the real iterator.
 - Engine-created errors have Rust/host stacks; class, message, status and data are identical.
 - Concurrent operations: each operation's own event order is compared; interleaving between
   concurrent top-level operations is not (the shadow runs branches sequentially).
-- Write operations, globals, auth: not ported (section 6).

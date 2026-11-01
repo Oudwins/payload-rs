@@ -64,7 +64,14 @@ export type NativeSqlite = {
   /** `db.prepare(sql)` and its parameter names (`null` when nameless), synchronously. */
   sqliteParameterNamesSync: (id: number, sql: string) => NativeOutcome<Array<null | string>>
   sqliteRelease: (id: number) => void
+  /**
+   * Starts recording the statements of connections opened with `PAYLOAD_SQLITE_TRACE=true`
+   * (diagnostics: the engine's SQL bypasses `client.execute`).
+   */
+  sqliteStartStatementTrace: () => void
   sqliteStats: () => [registered: number, liveWorkers: number]
+  /** `[sql, bound parameter count]` of every statement recorded since the start; stops recording. */
+  sqliteTakeStatementTrace: () => [sql: string, parameterCount: number][]
   sqliteTransaction: (id: number, mode: string, intMode: string) => Promise<NativeOutcome<number>>
   sqliteTransactionClose: (id: number, intMode: string) => void
   sqliteTransactionEnd: (

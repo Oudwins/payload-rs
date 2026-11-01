@@ -9,7 +9,7 @@ use payload_engine::js::JsVal;
 
 use crate::adapter::{QueryAdapter, type_error};
 use crate::build_query::{BuildQueryResult, Order};
-use crate::sql::{Chunk, Expr, Join, Select, Sql, expr_sql};
+use crate::sql::{Chunk, Expr, Join, Select, Sql, expr_sql, selection_sql};
 
 /// How the ids returned by [`find_ids_select`] must be post-processed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,7 +65,7 @@ pub fn find_ids_select(
   let main = adapter.table_req(Some(table_name), "id")?;
   crate::sql::check_join_aliases(&result.joins)?;
   let main_id = adapter.col(&main, "id");
-  let id_sql = || main_id.as_ref().map(expr_sql).unwrap_or_default();
+  let id_sql = || main_id.as_ref().map(selection_sql).unwrap_or_default();
 
   let one_to_many: HashSet<&str> = result.joins.iter().filter(|j| j.is_one_to_many).map(|j| j.table.ref_name()).collect();
   let has_sort_on_one_to_many =
@@ -105,7 +105,7 @@ pub fn find_ids_select(
     let mut fields = Vec::new();
     for (_, field) in &result.select_fields {
       match field {
-        Some(e) => fields.push(expr_sql(e)),
+        Some(e) => fields.push(selection_sql(e)),
         None => return Err(type_error("Cannot convert undefined or null to object")),
       }
     }
@@ -147,7 +147,7 @@ pub fn docs_by_ids_select(adapter: &QueryAdapter, table_name: &str, keys: &[Stri
   let id = adapter.col(&main, "id");
   let values = JsVal::arr(keys.iter().map(|k| JsVal::str(k.as_str())).collect());
   Ok(Select {
-    fields: vec![id.as_ref().map(expr_sql).unwrap_or_default()],
+    fields: vec![id.as_ref().map(selection_sql).unwrap_or_default()],
     from: Some(main),
     where_: Some(crate::sql::in_array(id.as_ref(), values)),
     ..Select::default()
@@ -243,7 +243,7 @@ pub fn find_distinct_select(
   let Some(selected_expr) = selected.clone() else {
     return Err(type_error("Cannot convert undefined or null to object"));
   };
-  let mut fields = vec![expr_sql(&selected_expr)];
+  let mut fields = vec![selection_sql(&selected_expr)];
   if let Some(order) = &order_column {
     fields.push(order.clone());
   }

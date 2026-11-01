@@ -4,6 +4,8 @@
 #   PAYLOAD_ENGINE_ADDON=/path/to/payload-node.node test/__rs/core-hooks-after/run.sh [hooks fields localization synthetic]
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
+# The TS reference must be upstream TS (the harness also fails if a reference run reaches Rust).
+unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE
 suites=("${@:-hooks fields localization synthetic}")
 for suite in ${suites[@]}; do
   db="${RS_CORE_HOOKS_AFTER_DB:-/tmp/rs-after-change.db}"

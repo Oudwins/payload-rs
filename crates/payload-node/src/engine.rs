@@ -12,12 +12,13 @@
 //!
 //! `call` runs the method statement by statement ([`payload_sql_engine::stepped`]): the first step
 //! runs synchronously inside `call` (like the synchronous start of the TS method), every later
-//! step from a microtask (`queueMicrotask`), and the promise is settled from the step that
-//! finishes. Each statement runs on the ordered `payload-sqlite` queue of `connId` (the adapter's
-//! client or the active transaction), on that connection, while the JS thread waits, like the
-//! synchronous statements of the `libsql` binding; concurrent calls therefore interleave at
-//! statement granularity in await order instead of running as one atomic job each. Errors reject
-//! with an `Error` whose message is the JSON of the engine error.
+//! step from a microtask (a native promise job, `resolvedPromise.then(step)`), and the promise is
+//! settled from the step that finishes. Each statement is one job on the ordered `payload-sqlite`
+//! queue of `connId` (the adapter's client or the active transaction), on the connection the id
+//! addresses at that moment, while the JS thread waits, like the synchronous statements of the
+//! `libsql` binding; concurrent calls therefore interleave at statement granularity in await order
+//! instead of running as one atomic job each. Errors reject with an `Error` whose message is the
+//! JSON of the engine error.
 
 use std::cell::Cell;
 use std::ptr;
@@ -68,16 +69,10 @@ fn parse_json(input: &str, what: &str) -> std::result::Result<Json, EngineError>
   serde_json::from_str(input).map_err(|e| EngineError::internal(format!("invalid {what} JSON: {e}")))
 }
 
-/// `PAYLOAD_RS_ENGINE_ATOMIC=true` (read once): run every call as one atomic queue job, the
-/// pre-stepping behaviour (diagnostics and timing comparisons only).
+/// `PAYLOAD_RS_ENGINE_ATOMIC=true` (read once): run every call as a whole inside `call`, without
+/// steps, so concurrent calls do not interleave (diagnostics and timing comparisons only).
 static ATOMIC_CALLS: std::sync::LazyLock<bool> =
   std::sync::LazyLock::new(|| std::env::var("PAYLOAD_RS_ENGINE_ATOMIC").is_ok_and(|v| v == "true"));
-
-thread_local! {
-  /// Set while the JS thread waits for a step: a JS function called by the step must not start
-  /// another engine call (its first statement would wait for the connection the step holds).
-  static IN_STEP: Cell<bool> = const { Cell::new(false) };
-}
 
 #[napi(js_name = "SqliteEngine")]
 pub struct SqliteEngineJs {
@@ -141,33 +136,23 @@ impl SqliteEngineJs {
     conn_id: u32,
     context_json: Option<String>,
   ) -> Result<Object<'env>> {
-    if *ATOMIC_CALLS {
-      // diagnostic switch: the whole method as one job on the connection's queue
-      let engine = Arc::clone(&self.engine);
-      return crate::sqlite::queue_job(env, conn_id, move |session| {
-        engine.call_json(&method, &args_json, context_json.as_deref(), session).map_err(to_napi_error)
-      });
-    }
     let (deferred, promise) = create_promise(env)?;
     let rejected = |error: EngineError| -> Result<Object<'env>> {
       settle(env, deferred, Err(error));
       Ok(promise)
     };
     if let Some(client) = self.client_id {
-      if client != conn_id && !worker::same_queue(client, conn_id) {
+      if client != conn_id && !worker::same_database(client, conn_id) {
         return rejected(EngineError::internal(format!(
           "connection {conn_id} does not belong to the adapter's client {client}"
         )));
       }
     }
-    if IN_STEP.with(Cell::get) {
-      return rejected(EngineError::internal(
-        "payload-sql-engine: a JS function called during an engine statement cannot start another engine call",
-      ));
-    }
-    let op = match SteppedCall::start(Arc::clone(&self.engine), method, args_json, context_json, conn_id) {
-      Ok(op) => op,
-      Err(error) => return rejected(error),
+    let engine = Arc::clone(&self.engine);
+    let op = if *ATOMIC_CALLS {
+      SteppedCall::start_atomic(engine, method, args_json, context_json, conn_id)
+    } else {
+      SteppedCall::start(engine, method, args_json, context_json, conn_id)
     };
     let pending = Rc::new(Pending { op, deferred: Cell::new(deferred), callback: Rc::clone(&self.callback) });
     drive(env, &pending);
@@ -189,10 +174,7 @@ fn drive(env: &Env, pending: &Rc<Pending>) {
   let step = match pending.callback.borrow_back(env) {
     Ok(callback) => {
       let host = CallbackHost { callback: &callback };
-      IN_STEP.with(|s| s.set(true));
-      let step = pending.op.resume(&host);
-      IN_STEP.with(|s| s.set(false));
-      step
+      pending.op.resume(&host)
     }
     Err(error) => Step::Done(Err(EngineError::internal(format!("engine host callback is gone: {}", error.reason)))),
   };

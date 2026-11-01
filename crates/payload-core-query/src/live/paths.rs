@@ -221,7 +221,7 @@ pub fn get_localized_paths(args: &LocalizedPathsArgs) -> JsResult<Vec<PathToQuer
                 config: js::undefined(),
                 fields: get_named(related, "flattenedFields")?,
                 include_relationships: false,
-                localized_path: Units::new(),
+                localized_path: LocalizedPathArg::Units(Units::new()),
                 path: get_named(matched, "on")?,
               })?;
               if let Some(found) = found {
@@ -280,8 +280,14 @@ pub struct FieldByPathArgs {
   pub config: Local,
   pub fields: Local,
   pub include_relationships: bool,
-  pub localized_path: Units,
+  pub localized_path: LocalizedPathArg,
   pub path: Local,
+}
+
+/// The `localizedPath` argument: a string built by the port, or the caller's value (any type).
+pub enum LocalizedPathArg {
+  Units(Units),
+  Raw(Local),
 }
 
 pub struct FieldByPath {
@@ -305,11 +311,25 @@ pub fn get_field_by_path(args: &FieldByPathArgs) -> JsResult<Option<FieldByPath>
   let mut current_fields = args.fields;
   let mut current_field: Option<Local> = None;
   let mut segments: std::collections::VecDeque<Units> = split_incoming(args.path)?.into();
-  let mut localized_path = args.localized_path.clone();
+  // `localizedPath` is evaluated (truthiness, then ToString) in the first iteration, after the split.
+  let mut raw_localized_path = match &args.localized_path {
+    LocalizedPathArg::Raw(raw) => Some(*raw),
+    LocalizedPathArg::Units(_) => None,
+  };
+  let mut localized_path = match &args.localized_path {
+    LocalizedPathArg::Units(u) => u.clone(),
+    LocalizedPathArg::Raw(_) => Units::new(),
+  };
   let mut path_has_localized = false;
 
   while let Some(segment) = segments.pop_front() {
-    localized_path = if localized_path.is_empty() { segment.clone() } else { dot(&localized_path, &segment) };
+    // `${localizedPath ? `${localizedPath}.` : ''}${segment}`
+    localized_path = match raw_localized_path.take() {
+      Some(raw) if truthy(raw) => dot(&to_string(raw)?, &segment),
+      Some(_) => segment.clone(),
+      None if localized_path.is_empty() => segment.clone(),
+      None => dot(&localized_path, &segment),
+    };
     let field = call(&h.find_current, &[current_fields, string(&segment)])?;
     if !truthy(field) {
       return Ok(None);
@@ -352,7 +372,7 @@ pub fn get_field_by_path(args: &FieldByPathArgs) -> JsResult<Option<FieldByPath>
           config: args.config,
           fields: get_named(block, "flattenedFields")?,
           include_relationships: args.include_relationships,
-          localized_path,
+          localized_path: LocalizedPathArg::Units(localized_path),
           path: string(&join_dot(&rest)),
         });
       }

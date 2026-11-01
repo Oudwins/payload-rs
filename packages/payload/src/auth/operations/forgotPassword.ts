@@ -35,7 +35,7 @@ export type Arguments<TSlug extends AuthCollectionSlug> = {
 
 export type Result = string
 
-export const forgotPasswordOperation = async <TSlug extends AuthCollectionSlug>(
+export const forgotPasswordOperationTS = async <TSlug extends AuthCollectionSlug>(
   incomingArgs: Arguments<TSlug>,
 ): Promise<null | string> => {
   assertNoValidationWrite(incomingArgs.req)
@@ -287,3 +287,36 @@ export const forgotPasswordOperation = async <TSlug extends AuthCollectionSlug>(
     throw error
   }
 }
+
+type RustOperations = {
+  forgotPasswordOperation: (args: any) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-global`), selected once at module load:
+ * `PAYLOAD_OPS_GLOBAL_ENGINE=rs|ts`, else `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`.
+ * See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations =
+  (process.env.PAYLOAD_OPS_GLOBAL_ENGINE ||
+    process.env.PAYLOAD_CORE_ENGINE ||
+    process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops-global/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const forgotPasswordOperation: typeof forgotPasswordOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.forgotPasswordOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.forgotPasswordOperation(args)
+          })
+  : forgotPasswordOperationTS

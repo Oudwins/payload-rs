@@ -351,12 +351,21 @@ const extraCases = (payload: Payload, variants: ReqVariant[]): Case[] => {
       ['authors', 'contains', { name: { equals: 'x' } }],
       ['_id', 'equals', 1],
       ['nope', 'exists', true],
+      // non-string path / operator (only reachable through the export)
+      [undefined, 'equals', 'x'],
+      [7, 'equals', 'x'],
+      [null, 'equals', 'x'],
+      ['title', 7, 'x'],
+      ['title', undefined, 'x'],
+      ['title', Symbol('op'), 'x'],
+      ['author.name', { toString: () => 'like' }, 'x'],
+      ['authors', null, { name: { equals: 'x' } }],
     ] as const) {
       cases.push({
         fn: 'validateSearchParam',
         make: ({ req: r }) => {
           const inputs = {
-            constraint: { [path]: { [operator]: value } },
+            constraint: { [path as any]: { [operator as any]: value } },
             errors: [] as unknown[],
             policies: { collections: {}, globals: {} },
           }
@@ -378,7 +387,7 @@ const extraCases = (payload: Payload, variants: ReqVariant[]): Case[] => {
             inputs,
           }
         },
-        name: `vsp ${path} ${operator} ${req.name}`,
+        name: `vsp ${String(path)} ${String(operator)} ${req.name}`,
         req,
       })
     }

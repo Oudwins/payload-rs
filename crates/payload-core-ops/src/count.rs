@@ -6,6 +6,8 @@ use payload_core_runtime::js::{self, JsResult, Local, Val};
 
 use crate::common::{AccessArgs, at, build_after_operation, build_before_operation, db_call, execute_access};
 use crate::host::{call, call_val, get, get_val, is_false, val};
+use crate::query;
+use crate::utilities::append_non_trashed_filter;
 
 /// `countOperation(incomingArgs)`: returns its promise.
 pub fn count(incoming_args: Local) -> JsResult<Local> {
@@ -43,14 +45,22 @@ async fn run_count(incoming_args: Val) -> JsResult<Val> {
     }
   }
 
-  let mut full_where = call_val("combineQueries", &[where_.get(), access_result.get()])?;
+  let mut full_where = query::combine_queries(where_.get(), access_result.get())?;
   let flattened_fields = get(collection_config.get(), "flattenedFields")?;
-  call("sanitizeWhereQuery", &[flattened_fields, payload.get(), full_where.get()])?;
+  query::sanitize_where_query(flattened_fields, payload.get(), full_where.get())?;
 
+  // Exclude trashed documents when trash: false
   let enable_trash = get(collection_config.get(), "trash")?;
-  full_where = call_val("appendNonTrashedFilter", &[enable_trash, trash.get(), full_where.get()])?;
+  full_where = val(append_non_trashed_filter("deletedAt", enable_trash, trash.get(), full_where.get())?)?;
 
-  let p = call("validateQueryPaths", &[collection_config.get(), override_access.get(), req.get(), where_.get()])?;
+  let p = query::validate_query_paths(query::QueryPaths {
+    collection_config: collection_config.clone(),
+    override_access: override_access.clone(),
+    req: req.clone(),
+    show_hidden_fields: Val::Undefined,
+    version_fields: Val::Undefined,
+    where_: where_.clone(),
+  })?;
   await_js(p).await?;
 
   let p = db_call(payload.get(), "count", || {
@@ -101,16 +111,20 @@ async fn run_count_versions(incoming_args: Val) -> JsResult<Val> {
     }
   }
 
-  let full_where = call_val("combineQueries", &[where_.get(), access_result.get()])?;
+  let full_where = query::combine_queries(where_.get(), access_result.get())?;
 
-  let version_fields = call_val("versionFields", &[payload.get(), collection_config.get()])?;
+  let version_fields = call_val("buildVersionFields", &[get(payload.get(), "config")?, collection_config.get()])?;
 
-  call("sanitizeWhereQuery", &[version_fields.get(), payload.get(), full_where.get()])?;
+  query::sanitize_where_query(version_fields.get(), payload.get(), full_where.get())?;
 
-  let p = call(
-    "validateQueryPathsVersions",
-    &[collection_config.get(), override_access.get(), req.get(), version_fields.get(), where_.get()],
-  )?;
+  let p = query::validate_query_paths(query::QueryPaths {
+    collection_config: collection_config.clone(),
+    override_access: override_access.clone(),
+    req: req.clone(),
+    show_hidden_fields: Val::Undefined,
+    version_fields: version_fields.clone(),
+    where_: where_.clone(),
+  })?;
   await_js(p).await?;
 
   let p = db_call(payload.get(), "countVersions", || {

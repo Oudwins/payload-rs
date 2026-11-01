@@ -9,7 +9,12 @@ use crate::common::{
   AccessArgs, HookTarget, ReadHooks, at, build_after_operation, build_before_operation, db_call, execute_access,
   has_drafts_enabled, has_hooks, nullish_or, or, sanitize_sort_query,
 };
-use crate::host::{self, call, call_fn, call_val, get, get_val, is_false, opt, val};
+use crate::host::{self, call, call_fn, call_val, get, get_val, is_false, opt, val, with_callback};
+use crate::query;
+use crate::utilities::{
+  append_non_trashed_filter, append_version_to_query_key, apply_find_lock_status, get_query_drafts_select,
+  get_query_drafts_sort, lock_duration_ms, reset_find_lock_status,
+};
 
 pub const LOCKED_DOCUMENTS_SLUG: &str = "payload-locked-documents";
 
@@ -87,35 +92,56 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
     nullish_or(limit.clone(), || Ok(Val::Num(if js::truthy(use_pagination.get()) { 10.0 } else { 0.0 })))?;
   let sanitized_page = or(page.clone(), || Ok(Val::Num(1.0)))?;
 
-  let mut full_where = call_val("combineQueries", &[where_.get(), access_result.get()])?;
+  let mut full_where = query::combine_queries(where_.get(), access_result.get())?;
   let flattened_fields = get(cc, "flattenedFields")?;
-  call("sanitizeWhereQuery", &[flattened_fields, payload.get(), full_where.get()])?;
+  query::sanitize_where_query(flattened_fields, payload.get(), full_where.get())?;
 
+  // Exclude trashed documents when trash: false
   let enable_trash = get(cc, "trash")?;
-  full_where = call_val("appendNonTrashedFilter", &[enable_trash, trash.get(), full_where.get()])?;
+  full_where = val(append_non_trashed_filter("deletedAt", enable_trash, trash.get(), full_where.get())?)?;
 
   let sort_fields = get(get(collection.get(), "config")?, "flattenedFields")?;
   let sort_value = or(incoming_sort.clone(), || get_val(collection_config.get(), "defaultSort"))?;
   let sort = val(sanitize_sort_query(sort_fields, sort_value.get())?)?;
 
-  let p = call("validateSortQuery", &[cc, override_access.get(), req.get(), sort.get()])?;
+  let p = query::validate_sort_query(
+    collection_config.clone(),
+    override_access.clone(),
+    req.clone(),
+    sort.clone(),
+    Val::Undefined,
+  )?;
   await_js(p).await?;
 
-  let p = call("sanitizeJoinQuery", &[collection_config.get(), joins.get(), override_access.get(), req.get()])?;
+  let p = query::sanitize_join_query(collection_config.clone(), joins.clone(), override_access.clone(), req.clone())?;
   let sanitized_joins = await_js(p).await?;
 
   let mut result;
   if has_drafts_enabled(collection_config.get())? && js::truthy(drafts_enabled.get()) {
-    full_where = call_val("appendVersionToQueryKey", &[full_where.get()])?;
+    full_where = val(append_version_to_query_key(full_where.get())?)?;
 
-    let p = call(
-      "validateQueryPathsCollectionDrafts",
-      &[collection.get(), override_access.get(), req.get(), payload.get(), where_.get()],
+    // validateQueryPaths({ collectionConfig: collection.config, overrideAccess, req,
+    //   versionFields: buildVersionCollectionFields(payload.config, collection.config, true),
+    //   where: appendVersionToQueryKey(where) })
+    let collection_config_arg = get_val(collection.get(), "config")?;
+    let version_fields = call_val(
+      "buildVersionFields",
+      &[get(payload.get(), "config")?, get(collection.get(), "config")?],
     )?;
+    let version_where = val(append_version_to_query_key(where_.get())?)?;
+    let p = query::validate_query_paths(query::QueryPaths {
+      collection_config: collection_config_arg,
+      override_access: override_access.clone(),
+      req: req.clone(),
+      show_hidden_fields: Val::Undefined,
+      version_fields,
+      where_: version_where,
+    })?;
     await_js(p).await?;
 
     let p = db_call(payload.get(), "queryDrafts", || {
-      call(
+      // the literal evaluates `getQueryDraftsSelect` (0) and `getQueryDraftsSort` (1) in place
+      with_callback(
         "findQueryDraftsArgs",
         &[
           collection_config.get(),
@@ -125,15 +151,27 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
           locale.get(),
           sanitized_page.get(),
           use_pagination.get(),
-          select.get(),
-          sort.get(),
           full_where.get(),
         ],
+        |which| {
+          if js::get_f64(which) == 0.0 {
+            get_query_drafts_select(select.get())
+          } else {
+            get_query_drafts_sort(collection_config.get(), sort.get())
+          }
+        },
       )
     })?;
     result = await_js(p).await?;
   } else {
-    let p = call("validateQueryPaths", &[collection_config.get(), override_access.get(), req.get(), where_.get()])?;
+    let p = query::validate_query_paths(query::QueryPaths {
+      collection_config: collection_config.clone(),
+      override_access: override_access.clone(),
+      req: req.clone(),
+      show_hidden_fields: Val::Undefined,
+      version_fields: Val::Undefined,
+      where_: where_.clone(),
+    })?;
     await_js(p).await?;
 
     let p = db_call(payload.get(), "find", || {
@@ -159,12 +197,15 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
 
   // Add collection property for auth collections
   if js::truthy(get(collection_config.get(), "auth")?) {
-    call("authDocs", &[result.get(), collection_config.get()])?;
+    // result.docs = result.docs.map((doc) => ({ ...doc, collection: collectionConfig.slug }))
+    let docs = get(result.get(), "docs")?;
+    let docs = host::map_array(docs, "result.docs", |doc| call("withCollection", &[doc, collection_config.get()]))?;
+    host::set(result.get(), "docs", docs)?;
   }
 
   if include_lock_status {
     let locked: JsResult<()> = async {
-      let lock_ms = call_val("lockDurationMs", &[collection_config.get()])?;
+      let lock_ms = lock_duration_ms(collection_config.get())?;
       let now = call_val("now", &[])?;
       let find = get(payload.get(), "find")?;
       let find_args = call(
@@ -173,12 +214,11 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
       )?;
       let p = call_fn(find, payload.get(), &[find_args], "payload.find")?;
       let locked_documents = await_js(p).await?;
-      call("findLockApply", &[locked_documents.get(), result.get(), now.get(), lock_ms.get()])?;
-      Ok(())
+      apply_find_lock_status(locked_documents.get(), result.get(), js::get_f64(now.get()), js::get_f64(lock_ms.get()))
     }
     .await;
     if locked.is_err() {
-      call("findLockReset", &[result.get()])?;
+      reset_find_lock_status(result.get())?;
     }
   }
 

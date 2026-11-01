@@ -15,6 +15,7 @@ type Body<const N: usize> = fn([Local; N]) -> JsResult<Local>;
 /// never lets a panic cross the FFI boundary.
 fn run<const N: usize>(env: sys::napi_env, info: sys::napi_callback_info, body: Body<N>) -> sys::napi_value {
   js::set_env(env);
+  payload_core_runtime::executor::count_entry();
   let (args, _) = js::callback_args::<N>(env, info);
   match catch_unwind(AssertUnwindSafe(|| body(args))) {
     Ok(Ok(v)) => v.0,
@@ -45,6 +46,8 @@ export!(init, 1, |[host_obj]| {
 
 export!(before_change_export, 1, |[args]| before_change::before_change(args));
 
+export!(before_change_traverse_fields_export, 1, |[destructured]| before_change::traverse_fields_entry(destructured));
+
 export!(run_merge_locale_action, 1, |[state]| {
   before_change::run_merge_locale_action(state)?;
   Ok(js::undefined())
@@ -55,6 +58,11 @@ pub fn create() -> JsResult<Local> {
   let o = js::object();
   js::set_named(o, "init", js::create_function("init", init, ptr::null_mut()))?;
   js::set_named(o, "beforeChange", js::create_function("beforeChange", before_change_export, ptr::null_mut()))?;
+  js::set_named(
+    o,
+    "beforeChangeTraverseFields",
+    js::create_function("beforeChangeTraverseFields", before_change_traverse_fields_export, ptr::null_mut()),
+  )?;
   js::set_named(
     o,
     "runMergeLocaleAction",

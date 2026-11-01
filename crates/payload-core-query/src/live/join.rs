@@ -79,7 +79,8 @@ struct JoinState {
 /// `sanitizeJoinFieldQuery({ collectionSlug, errors, join, joinsQuery, overrideAccess, promises, req })`
 async fn sanitize_join_field_query(s: Rc<JoinState>, collection_slug: Val, join: Val) -> JsResult<Val> {
   let h = host()?;
-  let join_path = val(get_named(join.get(), "joinPath")?)?;
+  // `const { joinPath } = join` (V8's destructuring TypeError for a nullish `join`)
+  let join_path = val(call(&h.join_path_of, &[join.get()])?)?;
 
   if is_false(get(s.joins_query.get(), join_path.get())?) {
     return Ok(Val::Undefined);

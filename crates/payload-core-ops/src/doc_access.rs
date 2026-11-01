@@ -1,10 +1,16 @@
 //! Port of `packages/payload/src/collections/operations/docAccess.ts` (`docAccessOperation`).
+//!
+//! `getEntityPermissions` (the permission traversal shared with the `access` operation) and
+//! `sanitizePermissions` are the upstream JS, called with the TS argument literals.
 
 use payload_core_runtime::executor::{await_js, spawn};
 use payload_core_runtime::js::{self, JsResult, Local, Type, Val};
 
 use crate::common::at;
 use crate::host::{call, call_val, get, is_nullish, opt, val};
+
+/// `allOperations` of docAccess.ts.
+const ALL_OPERATIONS: [&str; 5] = ["create", "read", "update", "delete", "validate"];
 
 /// `docAccessOperation(args)`: returns its promise.
 pub fn doc_access(args: Local) -> JsResult<Local> {
@@ -13,30 +19,36 @@ pub fn doc_access(args: Local) -> JsResult<Local> {
 }
 
 async fn run(args: Val) -> JsResult<Val> {
+  // const { id, collection: { config }, data, req } = args
   let d = call("docAccessArgs", &[args.get()])?;
   let id = at(d, 0)?;
   let config = at(d, 1)?;
   let data = at(d, 2)?;
   let req = at(d, 3)?;
 
-  // [...allOperations]
-  let collection_operations = call_val("allOperations", &[])?;
+  // const collectionOperations = [...allOperations]
+  let collection_operations = js::array();
+  for (i, operation) in ALL_OPERATIONS.iter().enumerate() {
+    js::set_element(collection_operations, i as u32, js::string(operation))?;
+  }
+  let collection_operations = val(collection_operations)?;
 
   // config.auth && typeof config.auth.maxLoginAttempts !== 'undefined' && config.auth.maxLoginAttempts !== 0
   if js::truthy(get(config.get(), "auth")?)
     && js::type_of(get(get(config.get(), "auth")?, "maxLoginAttempts")?) != Type::Undefined
     && !js::strict_equals(get(get(config.get(), "auth")?, "maxLoginAttempts")?, js::number(0.0))
   {
-    call("pushOperation", &[collection_operations.get(), js::string("unlock")])?;
+    js::push(collection_operations.get(), js::string("unlock"))?;
   }
 
   if js::truthy(get(config.get(), "versions")?) {
-    call("pushOperation", &[collection_operations.get(), js::string("readVersions")])?;
+    js::push(collection_operations.get(), js::string("readVersions"))?;
   }
 
   let p = call("getEntityPermissions", &[id.get(), data.get(), config.get(), collection_operations.get(), req.get()])?;
   let result = await_js(p).await?;
 
+  // sanitizePermissions({ collections: { [config.slug]: result } })
   let sanitized_permissions = call("sanitizeCollectionPermissions", &[config.get(), result.get()])?;
 
   // sanitizedPermissions?.collections?.[config.slug]
@@ -47,6 +59,7 @@ async fn run(args: Val) -> JsResult<Val> {
     let slug = get(config.get(), "slug")?;
     payload_core_runtime::host::get(collections, slug)?
   };
+  // collectionPermissions ?? { fields: {} }
   if is_nullish(collection_permissions) {
     return call_val("emptyPermissions", &[]);
   }

@@ -34,6 +34,9 @@ pub struct BvHost {
   /// `traverseFields` over a run of leaf fields: pushes upstream's `promise()` of each (a JS
   /// `async` function, see `before_validate::is_leaf`) into the traversal's promises array.
   pub before_validate_leaves: Persist,
+  /// `traverseFields(...)` for a fields array made only of leaf fields: upstream's
+  /// `traverseFields.ts` body (a JS `async` function) calling the leaf `promise()` per field.
+  pub before_validate_leaf_traversal: Persist,
 }
 
 thread_local! {
@@ -54,6 +57,7 @@ fn install(obj: Local) -> JsResult<()> {
     hook_args: f("hookArgs")?,
     editor_hook_args: f("editorHookArgs")?,
     before_validate_leaves: f("beforeValidateLeaves")?,
+    before_validate_leaf_traversal: f("beforeValidateLeafTraversal")?,
   };
   BV_HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
   Ok(())
@@ -70,6 +74,7 @@ type Body<const N: usize> = fn([Local; N]) -> JsResult<Local>;
 /// Sets the env, converts `Err(Thrown)` into a JS throw, never lets a panic cross the FFI.
 fn run<const N: usize>(env: sys::napi_env, info: sys::napi_callback_info, body: Body<N>) -> sys::napi_value {
   js::set_env(env);
+  payload_core_runtime::executor::count_entry();
   let (args, _) = js::callback_args::<N>(env, info);
   match catch_unwind(AssertUnwindSafe(|| body(args))) {
     Ok(Ok(v)) => v.0,

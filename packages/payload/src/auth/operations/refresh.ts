@@ -28,7 +28,7 @@ export type Arguments = {
   req: PayloadRequest
 }
 
-export const refreshOperation = async (incomingArgs: Arguments): Promise<Result> => {
+export const refreshOperationTS = async (incomingArgs: Arguments): Promise<Result> => {
   let args = incomingArgs
 
   assertNoValidationWrite(args.req)
@@ -197,3 +197,36 @@ export const refreshOperation = async (incomingArgs: Arguments): Promise<Result>
     throw error
   }
 }
+
+type RustOperations = {
+  recordDeferredCall: () => void
+  refreshOperation: (args: any) => Promise<any>
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-global`), selected once at module load:
+ * `PAYLOAD_OPS_GLOBAL_ENGINE=rs|ts`, else `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`.
+ * See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations =
+  (process.env.PAYLOAD_OPS_GLOBAL_ENGINE ||
+    process.env.PAYLOAD_CORE_ENGINE ||
+    process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops-global/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const refreshOperation: typeof refreshOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.refreshOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.refreshOperation(args)
+          })
+  : refreshOperationTS

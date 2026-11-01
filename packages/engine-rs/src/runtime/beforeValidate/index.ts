@@ -21,7 +21,10 @@ import type {
 import type { TypeWithID } from '../../../../payload/src/collections/config/types.js'
 import type { JsonValue } from '../../../../payload/src/types/index.js'
 
-import { fieldAffectsData, valueIsValueWithRelation } from '../../../../payload/src/fields/config/types.js'
+import {
+  fieldAffectsData,
+  valueIsValueWithRelation,
+} from '../../../../payload/src/fields/config/types.js'
 import { getFieldPaths } from '../../../../payload/src/fields/getFieldPaths.js'
 import { cloneDataFromOriginalDoc } from '../../../../payload/src/fields/hooks/beforeChange/cloneDataFromOriginalDoc.js'
 import { getFallbackValue } from '../../../../payload/src/fields/hooks/beforeValidate/getFallbackValue.js'
@@ -390,6 +393,46 @@ const beforeValidateLeaf = async <T>(
   }
 }
 
+/**
+ * `beforeValidate/traverseFields.ts` for a fields array made only of leaf fields (the crate's
+ * `traverse`): upstream's body, with `promise()` being the leaf body above.
+ */
+const beforeValidateLeafTraversal = async (
+  c: any[],
+  fields: any[],
+  blockData: unknown,
+  docForHooks: unknown,
+  parentIndexPath: string,
+  parentPath: string,
+  parentSchemaPath: string,
+  siblingData: any,
+  siblingDoc: unknown,
+): Promise<void> => {
+  unflattenData(siblingData)
+
+  const promises: Promise<void>[] = []
+
+  fields.forEach((field, fieldIndex) => {
+    promises.push(
+      beforeValidateLeaf(
+        c,
+        field,
+        fieldIndex,
+        blockData,
+        docForHooks,
+        parentIndexPath,
+        parentPath,
+        parentSchemaPath,
+        siblingData,
+        siblingDoc,
+        fields,
+      ),
+    )
+  })
+
+  await Promise.all(promises)
+}
+
 export const getBeforeValidateBinding = (): BeforeValidateBinding => {
   if (binding) {
     return binding
@@ -441,6 +484,7 @@ export const getBeforeValidateBinding = (): BeforeValidateBinding => {
         )
       }
     },
+    beforeValidateLeafTraversal,
     cloneDataFromOriginalDoc,
     // The args object literal of the rich text editor hooks in `promise.ts` (same key order).
     editorHookArgs: (

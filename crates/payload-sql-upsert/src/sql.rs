@@ -76,6 +76,10 @@ pub struct DbError {
   /// libsql message: `${code}: ${sqliteMessage}`.
   pub message: String,
   pub raw_code: Option<i32>,
+  /// Whether the statement compiled and returns rows: libsql runs such statements with
+  /// `stmt.all()`, whose bind / step errors escape as the raw native error (`kind: 'native'`);
+  /// prepare errors and errors of `stmt.run()` are `SqliteError`s (`kind: 'sqlite'`).
+  pub returns_rows: bool,
   pub query: String,
   pub params: Vec<JsVal>,
 }
@@ -84,10 +88,11 @@ impl DbError {
   /// The `DrizzleQueryError` thrown to the caller.
   pub fn to_engine_error(&self) -> EngineError {
     let params = self.params.iter().map(drizzle_param_to_string).collect::<Vec<_>>().join(",");
+    let kind = if self.returns_rows { "native" } else { "sqlite" };
     EngineError::new("Error", format!("Failed query: {}\nparams: {}", self.query, params)).with_data(json!({
       "query": self.query,
       "params": self.params.iter().map(encode_value).collect::<Vec<_>>(),
-      "cause": { "code": self.code, "message": self.message, "rawCode": self.raw_code },
+      "cause": { "code": self.code, "kind": kind, "message": self.message, "rawCode": self.raw_code },
     }))
   }
 }
@@ -430,59 +435,84 @@ pub fn build_delete(t: Table<'_>, where_: Option<&SqlFragment>) -> SqlFragment {
   out
 }
 
-/// Executes statements on a rusqlite connection and records them.
+/// Rows of a statement as `(columnName, value)` lists.
+pub type RawRows = Vec<Vec<(String, JsVal)>>;
+
+/// Where an [`Executor`]'s statements run, one call per statement and in order. The engine runs
+/// each one as its own job on the connection the call's session has at that moment (libsql's
+/// `#getDb()` per `execute`) and ends the statement's step afterwards, as the `await` of every
+/// drizzle statement does; a plain [`Connection`] runs them directly.
+pub trait Statements {
+  fn run(&self, q: &SqlFragment) -> ExecResult<RawRows>;
+}
+
+impl Statements for Connection {
+  fn run(&self, q: &SqlFragment) -> ExecResult<RawRows> {
+    run_statement(self, q)
+  }
+}
+
+fn db_error(e: rusqlite::Error, q: &SqlFragment, returns_rows: bool) -> ExecError {
+  let (code, raw_code, msg) = match &e {
+    rusqlite::Error::SqliteFailure(f, m) => {
+      let base = rusqlite::ffi::code_to_str(f.extended_code).to_string();
+      (sqlite_code_name(f.extended_code), Some(f.extended_code), m.clone().unwrap_or(base))
+    }
+    other => ("SQLITE_ERROR".to_string(), None, other.to_string()),
+  };
+  ExecError::Db(DbError {
+    message: format!("{code}: {msg}"),
+    code,
+    raw_code,
+    returns_rows,
+    query: q.sql.clone(),
+    params: q.params.clone(),
+  })
+}
+
+/// Runs one statement on `conn` (libsql `executeStmt`: params converted first, then prepared and
+/// stepped) and returns its rows as `(columnName, value)` lists.
+pub fn run_statement(conn: &Connection, q: &SqlFragment) -> ExecResult<RawRows> {
+  let params = q.params.iter().map(bind_value).collect::<Result<Vec<_>>>()?;
+  let mut stmt = conn.prepare(&q.sql).map_err(|e| db_error(e, q, false))?;
+  let returns_rows = stmt.column_count() > 0;
+  let names = stmt.column_names().iter().map(|s| s.to_string()).collect::<Vec<_>>();
+  let mut rows = stmt.query(rusqlite::params_from_iter(params.iter())).map_err(|e| db_error(e, q, returns_rows))?;
+  let mut out = vec![];
+  loop {
+    match rows.next() {
+      Ok(Some(row)) => {
+        let mut cells = Vec::with_capacity(names.len());
+        for (i, name) in names.iter().enumerate() {
+          let v = row.get_ref(i).map_err(|e| db_error(e, q, returns_rows))?;
+          cells.push((name.clone(), value_from_sql(v)?));
+        }
+        out.push(cells);
+      }
+      Ok(None) => break,
+      Err(e) => return Err(db_error(e, q, returns_rows)),
+    }
+  }
+  Ok(out)
+}
+
+/// Executes statements through [`Statements`] and records them.
 pub struct Executor<'c> {
-  pub conn: &'c Connection,
+  pub conn: &'c dyn Statements,
   pub statements: Vec<ExecutedStatement>,
   /// `adapter.limitedBoundParameters` (D1): batch multi-row inserts.
   pub limited_bound_parameters: bool,
 }
 
 impl<'c> Executor<'c> {
-  pub fn new(conn: &'c Connection) -> Self {
+  pub fn new(conn: &'c dyn Statements) -> Self {
     Self { conn, statements: vec![], limited_bound_parameters: false }
   }
 
-  fn db_error(&self, e: rusqlite::Error, q: &SqlFragment) -> ExecError {
-    let (code, raw_code, msg) = match &e {
-      rusqlite::Error::SqliteFailure(f, m) => {
-        let base = rusqlite::ffi::code_to_str(f.extended_code).to_string();
-        (sqlite_code_name(f.extended_code), Some(f.extended_code), m.clone().unwrap_or(base))
-      }
-      other => ("SQLITE_ERROR".to_string(), None, other.to_string()),
-    };
-    ExecError::Db(DbError {
-      message: format!("{code}: {msg}"),
-      code,
-      raw_code,
-      query: q.sql.clone(),
-      params: q.params.clone(),
-    })
-  }
-
   /// Runs a statement and returns raw rows as `(columnName, value)` lists.
-  pub fn query_raw(&mut self, q: &SqlFragment) -> ExecResult<Vec<Vec<(String, JsVal)>>> {
+  pub fn query_raw(&mut self, q: &SqlFragment) -> ExecResult<RawRows> {
     self.statements.push(ExecutedStatement { sql: q.sql.clone(), params: q.params.clone() });
-    let params = q.params.iter().map(bind_value).collect::<Result<Vec<_>>>()?;
-    let mut stmt = self.conn.prepare(&q.sql).map_err(|e| self.db_error(e, q))?;
-    let names = stmt.column_names().iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let mut rows = stmt.query(rusqlite::params_from_iter(params.iter())).map_err(|e| self.db_error(e, q))?;
-    let mut out = vec![];
-    loop {
-      match rows.next() {
-        Ok(Some(row)) => {
-          let mut cells = Vec::with_capacity(names.len());
-          for (i, name) in names.iter().enumerate() {
-            let v = row.get_ref(i).map_err(|e| self.db_error(e, q))?;
-            cells.push((name.clone(), value_from_sql(v)?));
-          }
-          out.push(cells);
-        }
-        Ok(None) => break,
-        Err(e) => return Err(self.db_error(e, q)),
-      }
-    }
-    Ok(out)
+    self.conn.run(q)
   }
 
   /// Runs a statement whose result rows map onto `keys` of `t` (drizzle maps
@@ -532,7 +562,7 @@ impl<'c> Executor<'c> {
   }
 
   /// `adapter.execute({ sql | raw })` (packages/drizzle/src/sqlite/execute.ts).
-  pub fn execute(&mut self, q: &SqlFragment) -> ExecResult<Vec<Vec<(String, JsVal)>>> {
+  pub fn execute(&mut self, q: &SqlFragment) -> ExecResult<RawRows> {
     self.query_raw(q)
   }
 }

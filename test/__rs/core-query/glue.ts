@@ -215,6 +215,11 @@ export const getCoreQueryBinding = (): CoreQueryBinding => {
         yield collectionSlug
       }
     },
+    // `const { joinPath } = join` (sanitizeJoinQuery.ts, sanitizeJoinFieldQuery)
+    joinPathOf: (join: any) => {
+      const { joinPath } = join
+      return joinPath
+    },
     joinSort: (joinQuery: any, join: any, joinCollectionConfig: any) =>
       joinQuery.sort || join.field.defaultSort || joinCollectionConfig.defaultSort,
     *joinsOf(collectionConfig: any, collectionSlug: string) {
@@ -278,6 +283,8 @@ export const getCoreQueryBinding = (): CoreQueryBinding => {
       type: 'select',
       options: Object.keys(payload.collections),
     }),
+    // `incomingPath.replace(/__/g, '.')` (validateSearchParams.ts) for a non-string path
+    replaceDunder: (incomingPath: any) => incomingPath.replace(/__/g, '.'),
     sanitizeJoinQueryArgs: ({ collectionConfig, joins: joinsQuery, overrideAccess, req }: any) => [
       collectionConfig,
       joinsQuery,

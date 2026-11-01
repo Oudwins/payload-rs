@@ -1066,7 +1066,17 @@ if (SHIM) {
 
 /** Shim mode: upstream vs Rust-backed module on every case (see the header). */
 async function runShimDifferential() {
+  // The reference must be the TS module: with the dispatch flags set, payload's validations.ts
+  // would export the Rust validators too and the comparison would be Rust against Rust.
+  if (process.env.PAYLOAD_ENGINE || process.env.PAYLOAD_CORE_ENGINE) {
+    console.error('generate.ts: unset PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE (the reference must be TS)')
+    process.exit(1)
+  }
   const rs = await import('../../../packages/engine-rs/src/validate/validations.js')
+  if (Object.keys(validatorFns).some((name) => validatorFns[name] === (rs as any)[name])) {
+    console.error('generate.ts: both sides are the same validators')
+    process.exit(1)
+  }
   const implementations: Record<string, Function>[] = [
     validatorFns,
     { ...rs.validations, username: rs.username },

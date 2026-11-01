@@ -21,9 +21,13 @@ import {
   beforeValidate as beforeValidateRS,
   traverseFields as traverseFieldsRS,
 } from '../../../packages/engine-rs/src/runtime/beforeValidate/index.js'
-import { beforeValidate as beforeValidateTS } from '../../../packages/payload/src/fields/hooks/beforeValidate/index.js'
+import { upstreamBeforeValidate as beforeValidateTS } from '../../../packages/payload/src/fields/hooks/beforeValidate/index.js'
 import { traverseFields as traverseFieldsTS } from '../../../packages/payload/src/fields/hooks/beforeValidate/traverseFields.js'
 import { createPayloadRequest } from '../../../packages/payload/src/utilities/createPayloadRequest.js'
+import { assertDistinctEngines, startEngineRun } from '../dispatch/engineGuard.js'
+
+assertDistinctEngines('beforeValidate', beforeValidateTS, beforeValidateRS)
+assertDistinctEngines('beforeValidate traverseFields', traverseFieldsTS, traverseFieldsRS)
 
 export type Engine = 'rs' | 'ts'
 
@@ -152,6 +156,18 @@ const snapArg = (arg: unknown): unknown => {
 
 export const record = (event: Record<string, unknown>) => {
   recorder.current?.events.push(event)
+}
+
+/**
+ * Records when the promise of run input `index` settles: the microtask at which a traversal's own
+ * promise settles (its trailing ticks) is compared, not only the callbacks inside it.
+ */
+const recordSettle = <P extends Promise<unknown>>(index: number, promise: P): P => {
+  promise.then(
+    () => record({ inputSettled: index, ok: true }),
+    () => record({ inputSettled: index, ok: false }),
+  )
+  return promise
 }
 
 /** Wraps a user callback so each call (and the settling of its result) is recorded. */
@@ -347,6 +363,7 @@ export const runBeforeValidate = async ({
   variant: Variant
 }): Promise<RunOutcome> => {
   const beforeValidate = engine === 'ts' ? beforeValidateTS : beforeValidateRS
+  const engineRun = startEngineRun(engine, 'beforeValidate')
   const req = await createPayloadRequest({
     context: { rsDifferential: true, ...variant.context },
     locale: variant.locale,
@@ -421,11 +438,11 @@ export const runBeforeValidate = async ({
   try {
     let results: unknown[]
     if (concurrent) {
-      results = await Promise.all(runInputs.map(run))
+      results = await Promise.all(runInputs.map((input, i) => recordSettle(i, run(input, i))))
     } else {
       results = []
       for (const [i, input] of runInputs.entries()) {
-        results.push(await run(input, i))
+        results.push(await recordSettle(i, run(input, i)))
       }
     }
     outcome.identity = results.map((result, i) => result === runInputs[i]!.data)
@@ -448,5 +465,6 @@ export const runBeforeValidate = async ({
   outcome.contextAfter = Object.entries(req.context).map(([key, value]) => [key, snap(value, 8)])
   outcome.events = recorder.current.events
   recorder.current = undefined
+  engineRun.finish(runInputs.length)
   return outcome
 }

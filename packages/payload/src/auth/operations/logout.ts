@@ -15,7 +15,7 @@ export type Arguments = {
   req: PayloadRequest
 }
 
-export const logoutOperation = async (incomingArgs: Arguments): Promise<boolean> => {
+export const logoutOperationTS = async (incomingArgs: Arguments): Promise<boolean> => {
   let args = incomingArgs
   const {
     allSessions,
@@ -103,3 +103,36 @@ export const logoutOperation = async (incomingArgs: Arguments): Promise<boolean>
     throw error
   }
 }
+
+type RustOperations = {
+  logoutOperation: (args: any) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-global`), selected once at module load:
+ * `PAYLOAD_OPS_GLOBAL_ENGINE=rs|ts`, else `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`.
+ * See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations =
+  (process.env.PAYLOAD_OPS_GLOBAL_ENGINE ||
+    process.env.PAYLOAD_CORE_ENGINE ||
+    process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops-global/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const logoutOperation: typeof logoutOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.logoutOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.logoutOperation(args)
+          })
+  : logoutOperationTS

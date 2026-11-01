@@ -5,7 +5,10 @@
  */
 import { createRequire } from 'node:module'
 
-import { fieldAffectsData, fieldShouldBeLocalized } from '../../../../payload/src/fields/config/types.js'
+import {
+  fieldAffectsData,
+  fieldShouldBeLocalized,
+} from '../../../../payload/src/fields/config/types.js'
 import { getFieldPaths } from '../../../../payload/src/fields/getFieldPaths.js'
 import { getCoreRuntime } from '../index.js'
 
@@ -27,7 +30,11 @@ const AC_OPERATION = 5
 const AC_PREVIOUS_DOC = 6
 const AC_REQ = 7
 
-/** `afterChange/promise.ts` for a leaf field (`siblingFields` is never passed by upstream). */
+/**
+ * `afterChange/promise.ts` for a leaf field. `siblingFields` is `traverseFields`' own argument:
+ * upstream's nested calls never pass it, only an external caller of the exported
+ * `afterChangeTraverseFields` can.
+ */
 const afterChangeLeaf = async (
   c: any[],
   field: any,
@@ -39,6 +46,7 @@ const afterChangeLeaf = async (
   previousSiblingDoc: any,
   siblingData: unknown,
   siblingDoc: any,
+  siblingFields: unknown,
 ): Promise<void> => {
   const { indexPath, path, schemaPath } = getFieldPaths({
     field,
@@ -81,7 +89,7 @@ const afterChangeLeaf = async (
           req: c[AC_REQ],
           schemaPath: schemaPathSegments,
           siblingData,
-          siblingFields: undefined,
+          siblingFields: siblingFields!,
           value: getNestedValue(siblingDoc, pathSegments) ?? siblingDoc?.[field.name],
         })
 
@@ -229,8 +237,87 @@ const beforeDuplicateLeaf = async (
   }
 }
 
+/**
+ * `afterChange/traverseFields.ts` for a fields array made only of leaf fields (the crate's
+ * `traverse_fields`): upstream's body, with `promise()` being the leaf body above.
+ */
+const afterChangeLeafTraversal = async (
+  c: any[],
+  fields: any[],
+  blockData: unknown,
+  parentIndexPath: string,
+  parentPath: string,
+  parentSchemaPath: string,
+  previousSiblingDoc: unknown,
+  siblingData: unknown,
+  siblingDoc: unknown,
+  siblingFields: unknown,
+): Promise<void> => {
+  const promises: Promise<void>[] = []
+
+  fields.forEach((field, fieldIndex) => {
+    promises.push(
+      afterChangeLeaf(
+        c,
+        field,
+        fieldIndex,
+        blockData,
+        parentIndexPath,
+        parentPath,
+        parentSchemaPath,
+        previousSiblingDoc,
+        siblingData,
+        siblingDoc,
+        siblingFields,
+      ),
+    )
+  })
+
+  await Promise.all(promises)
+}
+
+/**
+ * `beforeDuplicate/traverseFields.ts` for a fields array made only of leaf fields (the crate's
+ * `traverse_fields`): upstream's body, with `promise()` being the leaf body above.
+ */
+const beforeDuplicateLeafTraversal = async (
+  c: any[],
+  fields: any[],
+  blockData: unknown,
+  parentIndexPath: string,
+  parentIsLocalized: boolean,
+  parentPath: string,
+  parentSchemaPath: string,
+  siblingDoc: unknown,
+): Promise<void> => {
+  const promises: Promise<void>[] = []
+
+  fields.forEach((field, fieldIndex) => {
+    promises.push(
+      beforeDuplicateLeaf(
+        c,
+        field,
+        fieldIndex,
+        blockData,
+        parentIndexPath,
+        parentIsLocalized,
+        parentPath,
+        parentSchemaPath,
+        siblingDoc,
+        fields,
+      ),
+    )
+  })
+  await Promise.all(promises)
+}
+
 export type CoreHooksAfterBinding = {
   afterChange: (args: unknown) => Promise<unknown>
+  /**
+   * `traverseFields` of afterChange with its parameter already destructured (array in the
+   * pattern's order, string paths): see crates/payload-core-hooks-after after_change.rs.
+   */
+  afterChangeTraverseFields: (destructured: unknown[]) => Promise<void>
   beforeDuplicate: (args: unknown) => Promise<unknown>
   init: (host: Record<string, unknown>) => void
 }
@@ -255,6 +342,7 @@ export const getCoreHooksAfter = (): CoreHooksAfterBinding => {
   const created = addon.coreHooksAfterBinding()
 
   created.init({
+    afterChangeLeafTraversal,
     /** `promises.push(promise({...}))` of afterChange `traverseFields` for the leaves `start..end`. */
     afterChangeLeaves: (
       c: any[],
@@ -269,6 +357,7 @@ export const getCoreHooksAfter = (): CoreHooksAfterBinding => {
       previousSiblingDoc: unknown,
       siblingData: unknown,
       siblingDoc: unknown,
+      siblingFields: unknown,
     ) => {
       for (let fieldIndex = start; fieldIndex < end; fieldIndex++) {
         promises.push(
@@ -283,10 +372,12 @@ export const getCoreHooksAfter = (): CoreHooksAfterBinding => {
             previousSiblingDoc,
             siblingData,
             siblingDoc,
+            siblingFields,
           ),
         )
       }
     },
+    beforeDuplicateLeafTraversal,
     /** `promises.push(promise({...}))` of beforeDuplicate `traverseFields` for the leaves `start..end`. */
     beforeDuplicateLeaves: (
       c: any[],

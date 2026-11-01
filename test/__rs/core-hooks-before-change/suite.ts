@@ -474,7 +474,12 @@ export const registerBeforeChangeSuite = ({
             }
             for (const set of sets) {
               const inputJSON = JSON.stringify(set.factory())
-              for (const concurrent of [false, true]) {
+              // beforeChange (sequential, concurrent), then the exported traverseFields
+              for (const [concurrent, traverse] of [
+                [false, false],
+                [true, false],
+                [false, true],
+              ]) {
                 const run = (engine: 'rs' | 'ts'): Promise<RunOutcome> =>
                   runBeforeChange({
                     collection: target.collection,
@@ -483,6 +488,7 @@ export const registerBeforeChangeSuite = ({
                     global: target.global,
                     inputs: set.factory(),
                     payload,
+                    traverse,
                     variant,
                   })
                 const ts = await withTimeout(run('ts'))
@@ -512,7 +518,7 @@ export const registerBeforeChangeSuite = ({
                 )
                 if (diff) {
                   stats.diffs.push(
-                    `${target.slug} [${variant.name}, ${set.label}${concurrent ? ', concurrent' : ''}] ${diff}`,
+                    `${target.slug} [${variant.name}, ${set.label}${concurrent ? ', concurrent' : ''}${traverse ? ', traverseFields' : ''}] ${diff}`,
                   )
                 }
               }

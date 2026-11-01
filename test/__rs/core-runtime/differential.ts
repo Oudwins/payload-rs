@@ -16,9 +16,18 @@ import type {
   SanitizedGlobalConfig,
 } from 'payload'
 
-import { afterRead as afterReadRS } from '../../../packages/engine-rs/src/runtime/index.js'
-import { afterRead as afterReadTS } from '../../../packages/payload/src/fields/hooks/afterRead/index.js'
+import {
+  afterRead as afterReadRS,
+  traverseFields as afterReadTraverseFieldsRS,
+} from '../../../packages/engine-rs/src/runtime/index.js'
+import { upstreamAfterRead as afterReadTS } from '../../../packages/payload/src/fields/hooks/afterRead/index.js'
+import { traverseFields as afterReadTraverseFieldsTS } from '../../../packages/payload/src/fields/hooks/afterRead/traverseFields.js'
+import { getSelectMode } from '../../../packages/payload/src/utilities/getSelectMode.js'
 import { createPayloadRequest } from '../../../packages/payload/src/utilities/createPayloadRequest.js'
+import { assertDistinctEngines, startEngineRun } from '../dispatch/engineGuard.js'
+
+assertDistinctEngines('afterRead', afterReadTS, afterReadRS)
+assertDistinctEngines('afterRead traverseFields', afterReadTraverseFieldsTS, afterReadTraverseFieldsRS)
 
 export type Engine = 'rs' | 'ts'
 
@@ -401,6 +410,7 @@ export const runAfterRead = async ({
   rawDocs,
   rawDocsFactory,
   trace = false,
+  traverse = false,
   variant,
 }: {
   collection?: SanitizedCollectionConfig
@@ -413,9 +423,17 @@ export const runAfterRead = async ({
   rawDocsFactory?: () => Record<string, unknown>[]
   /** Wrap the input docs in recording proxies (see `traceDocs`). */
   trace?: boolean
+  /**
+   * Call the exported (synchronous) `traverseFields`, what rich text editor hooks call, with the
+   * arguments `afterRead` passes it, then await the promise arrays the way `afterRead` does (the
+   * same harness code for both engines), instead of `afterRead`.
+   */
+  traverse?: boolean
   variant: Variant
 }): Promise<RunOutcome> => {
   const afterRead = engine === 'ts' ? afterReadTS : afterReadRS
+  const traverseFields = engine === 'ts' ? afterReadTraverseFieldsTS : afterReadTraverseFieldsRS
+  const engineRun = startEngineRun(engine, 'afterRead')
   const req = await createPayloadRequest({
     context: { rsDifferential: true },
     fallbackLocale: variant.fallbackLocale as any,
@@ -438,8 +456,49 @@ export const runAfterRead = async ({
     )
     return promise
   }
+  const runTraverseFields = async (doc: Record<string, unknown>) => {
+    const fieldPromises: Promise<void>[] = []
+    const populationPromises: Promise<void>[] = []
+    const select = variant.select as any
+    traverseFields({
+      collection: collection ?? null,
+      context: req.context,
+      currentDepth: 1,
+      depth: variant.depth ?? payload.config.defaultDepth,
+      doc,
+      draft: variant.draft ?? false,
+      fallbackLocale: (variant.fallbackLocale ?? req.fallbackLocale) as any,
+      fieldDepth: 0,
+      fieldPromises,
+      fields: (collection ?? global)!.fields,
+      findMany: variant.findMany!,
+      flattenLocales: variant.flattenLocales ?? true,
+      global: global ?? null,
+      locale: variant.locale ?? req.locale!,
+      overrideAccess: variant.overrideAccess,
+      parentIndexPath: '',
+      parentIsLocalized: false,
+      parentPath: '',
+      parentSchemaPath: '',
+      populationPromises,
+      req,
+      select,
+      selectMode: select ? getSelectMode(select) : undefined,
+      showHiddenFields: variant.showHiddenFields,
+      siblingDoc: doc,
+    })
+    while (fieldPromises.length > 0 || populationPromises.length > 0) {
+      const currentFieldPromises = fieldPromises.splice(0, fieldPromises.length)
+      const currentPopulationPromises = populationPromises.splice(0, populationPromises.length)
+      await Promise.all(currentFieldPromises)
+      await Promise.all(currentPopulationPromises)
+    }
+    return doc
+  }
   const runOne = (doc: Record<string, unknown>) =>
-    afterRead({
+    traverse
+      ? runTraverseFields(doc)
+      : afterRead({
       collection: collection ?? null,
       context: req.context,
       depth: variant.depth,
@@ -478,6 +537,7 @@ export const runAfterRead = async ({
   outcome.contextAfter = Object.entries(req.context).map(([key, value]) => [key, snap(value, 8)])
   outcome.events = recorder.current.events
   recorder.current = undefined
+  engineRun.finish(docs.length)
   return outcome
 }
 

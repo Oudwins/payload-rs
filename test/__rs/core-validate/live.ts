@@ -18,12 +18,23 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// The reference must be the TS module: with the dispatch flags set, payload's validations.ts
+// would export the Rust validators too and the comparison would be Rust against Rust.
+if (process.env.PAYLOAD_ENGINE || process.env.PAYLOAD_CORE_ENGINE) {
+  console.error('live.ts: unset PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE (the reference must be TS)')
+  process.exit(1)
+}
+
 import * as upstream from '../../../packages/payload/src/fields/validations.js'
 import { translations as languages } from '../../../packages/translations/src/exports/all.js'
 import { initI18n } from '../../../packages/translations/src/utilities/init.js'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const rs = await import('../../../packages/engine-rs/src/validate/validations.js')
+if ((upstream.text as unknown) === rs.text || upstream.select === rs.validationsModule.select) {
+  console.error('live.ts: both sides are the same validators')
+  process.exit(1)
+}
 
 const ObjectIdImport = createRequire(
   path.resolve(dirname, '../../../packages/payload/package.json'),
@@ -542,6 +553,161 @@ const scenarios: Scenario[] = [
           }
         }
         return out
+      },
+    }),
+  },
+  {
+    // phase-d review: `siblingData?.[`${name}_tz`]` must not evaluate the template (ToString of
+    // `name`) when siblingData is nullish.
+    name: 'date: nullish siblingData short-circuits the `${name}_tz` template',
+    run: (fns, { log, req }) => ({
+      call: () =>
+        [
+          [Symbol('d'), undefined],
+          [Symbol('d'), null],
+          [{ toString: () => (log('name.toString'), 'd') }, undefined],
+          [{ toString: () => (log('name.toString'), 'd') }, { d_tz: 'UTC' }],
+          [Symbol('d'), {}],
+        ].map(([name, siblingData]) => {
+          try {
+            return fns.date(new Date(0) as any, {
+              name,
+              req: req(),
+              required: true,
+              siblingData,
+              timezone: true,
+            } as any)
+          } catch (err) {
+            return `!${(err as Error).name}:${(err as Error).message}`
+          }
+        }),
+    }),
+  },
+  {
+    // Object / array literals are CreateDataProperty (no setter runs); `.push` is [[Set]].
+    name: 'literals with setters on Object.prototype / Array.prototype',
+    run: (fns, { log, req }) => ({
+      call: async () => {
+        const keys = ['label', 'maxLength', 'stringValue', 'count', 'min', 'and', 'in', 'id']
+        const keys2 = ['where', 'collection', 'allBlockSlugs', 'invalidBlockSlugs', 'value']
+        const installed: [object, string][] = []
+        let isLogging = false
+        // Null-prototype descriptors: a `value` accessor on Object.prototype would leak into them.
+        const install = (target: object, key: string) => {
+          Object.defineProperty(target, key, {
+            __proto__: null,
+            configurable: true,
+            set(this: object, v: unknown) {
+              // `log` itself pushes onto arrays: record only writes made outside it.
+              if (!isLogging) {
+                isLogging = true
+                log('setter', key, typeof v)
+                isLogging = false
+              }
+              Object.defineProperty(this, key, {
+                __proto__: null,
+                configurable: true,
+                enumerable: true,
+                value: v,
+                writable: true,
+              } as PropertyDescriptor)
+            },
+          } as PropertyDescriptor)
+          installed.push([target, key])
+        }
+        try {
+          for (const key of [...keys, ...keys2]) {
+            install(Object.prototype, key)
+          }
+          install(Array.prototype, '0')
+          install(Array.prototype, '1')
+          return [
+            fns.text('hello', { maxLength: 2, req: req() } as any),
+            fns.array([1], { minRows: 3, req: req() } as any),
+            fns.number(5, { max: 1, req: req() } as any),
+            await fns.relationship([1, 2] as any, {
+              filterOptions: () => ({ title: { equals: 'x' } }),
+              relationTo: 'posts',
+              req: req(),
+              siblingData: {},
+            } as any),
+            await fns.validateBlocksFilterOptions({
+              filterOptions: ['a'],
+              req: req(),
+              value: [{ blockType: 'a' }, { blockType: 'b' }],
+            } as any),
+            await fns.select(['a', 'a'] as any, { hasMany: true, options: ['a'], req: req() } as any),
+          ]
+        } finally {
+          for (const [target, key] of installed) {
+            delete (target as any)[key]
+          }
+        }
+      },
+    }),
+  },
+  {
+    // Patched iteration builtins are called exactly like the TS calls them.
+    name: 'patched Array.prototype iterator / methods and %ArrayIteratorPrototype%.return',
+    run: (fns, { log, req }) => ({
+      call: async () => {
+        const proto = Array.prototype as any
+        const iteratorProto = Object.getPrototypeOf([][Symbol.iterator]())
+        const names = ['some', 'filter', 'map', 'push', 'includes', 'indexOf', 'find', 'forEach']
+        let isLogging = false
+        const originals = new Map<PropertyKey, unknown>(
+          [...names, Symbol.iterator].map((key) => [key, proto[key]]),
+        )
+        const run = async () => [
+          fns.text(['a', 'bbb'] as any, { hasMany: true, maxLength: 2, req: req() } as any),
+          fns.text('abc', { maxLength: 2, req: req() } as any),
+          fns.text('ab', { maxLength: 2, req: req() } as any),
+          fns.number([1, 'x'] as any, { hasMany: true, req: req() } as any),
+          fns.radio('b', { options: ['a', { value: 'b' }], req: req() } as any),
+          await fns.select(['a', 'a', 'b'] as any, {
+            hasMany: true,
+            options: ['a', 'b'],
+            req: req(),
+          } as any),
+          await fns.relationship([1, 9] as any, {
+            filterOptions: () => true,
+            relationTo: ['posts'],
+            req: req(),
+            siblingData: {},
+          } as any),
+          await fns.validateBlocksFilterOptions({
+            filterOptions: ['a'],
+            req: req(),
+            value: [{ blockType: 'a' }, { blockType: 'b' }, {}],
+          } as any),
+        ]
+        try {
+          for (const [key, original] of originals) {
+            proto[key] = function (this: unknown, ...args: unknown[]) {
+              // `log` itself uses array methods: record only calls made outside it.
+              if (!isLogging) {
+                isLogging = true
+                log('Array.prototype', String(key), Array.isArray(this))
+                isLogging = false
+              }
+              return Reflect.apply(original as Function, this, args)
+            }
+          }
+          const withMethods = await run()
+          for (const [key, original] of originals) {
+            proto[key] = original
+          }
+          iteratorProto.return = function () {
+            log('ArrayIterator return')
+            return {}
+          }
+          return [withMethods, await run()]
+        } finally {
+          for (const [key, original] of originals) {
+            proto[key] = original
+          }
+          delete iteratorProto.return
+        }
       },
     }),
   },

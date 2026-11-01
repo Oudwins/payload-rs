@@ -1,0 +1,14 @@
+[package]
+name = "payload-core-ops-global"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Ports of the global operations (packages/payload/src/globals/operations) and the auth
+# operations (packages/payload/src/auth/operations) on the payload-core-runtime (strategy B: Rust
+# drives the user's JS objects through Node-API on the JS thread). See RUST_OPS_DESIGN.md.
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-ops = { path = "../payload-core-ops" }
+payload-core-runtime = { path = "../payload-core-runtime" }

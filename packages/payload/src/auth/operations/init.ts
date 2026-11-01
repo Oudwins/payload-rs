@@ -2,7 +2,7 @@ import type { PayloadRequest, Where } from '../../types/index.js'
 
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
 
-export const initOperation = async (args: {
+export const initOperationTS = async (args: {
   collection: string
   req: PayloadRequest
 }): Promise<boolean> => {
@@ -25,3 +25,36 @@ export const initOperation = async (args: {
 
   return !!doc
 }
+
+type RustOperations = {
+  initOperation: (args: any) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-global`), selected once at module load:
+ * `PAYLOAD_OPS_GLOBAL_ENGINE=rs|ts`, else `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`.
+ * See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations =
+  (process.env.PAYLOAD_OPS_GLOBAL_ENGINE ||
+    process.env.PAYLOAD_CORE_ENGINE ||
+    process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops-global/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const initOperation: typeof initOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.initOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.initOperation(args)
+          })
+  : initOperationTS

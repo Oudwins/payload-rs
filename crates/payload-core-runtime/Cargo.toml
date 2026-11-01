@@ -15,6 +15,12 @@ serde_json.workspace = true
 [dev-dependencies]
 napi-derive = "3"
 
+[features]
+# Deliberately wrong builds for mutation testing of the differential suites. Never enable them
+# otherwise. `mutant-tail-skip-tick`: a tail `await promise` ending a task that never suspended
+# returns `promise` itself (one microtask less than the async function).
+mutant-tail-skip-tick = []
+
 [[example]]
 name = "dev_addon"
 crate-type = ["cdylib"]

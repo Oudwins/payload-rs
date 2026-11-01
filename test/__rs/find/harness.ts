@@ -197,8 +197,16 @@ export const callHostFunction: CallFunction = (json) => {
   }
 }
 
-/** Describes the live drizzle relational schema (`db._.schema`) for `DrizzleSchema::from_json`. */
-export const describeDrizzleSchema = (tablesConfig: any, tableNamesMap: Record<string, string>) => {
+/**
+ * Describes the live drizzle relational schema (`db._.schema`) for `DrizzleSchema::from_json`.
+ * `register` assigns the `callFunction` ids of custom columns' `mapFrom` / `mapTo` (default: this
+ * harness's host function registry).
+ */
+export const describeDrizzleSchema = (
+  tablesConfig: any,
+  tableNamesMap: Record<string, string>,
+  register: (fn: unknown) => null | number = registerHostFunction,
+) => {
   const out: Record<string, unknown> = {}
   for (const [tsName, tableConfig] of Object.entries<any>(tablesConfig)) {
     const columns: Record<string, unknown> = {}
@@ -207,9 +215,13 @@ export const describeDrizzleSchema = (tablesConfig: any, tableNamesMap: Record<s
         name: column.name,
         columnType: column.columnType,
         sqlType: column.getSQLType(),
+        primary: column.primary,
         ...(column.config?.mode !== undefined ? { mode: column.config.mode } : {}),
         ...(column.columnType === 'SQLiteCustomColumn'
-          ? { fromDriver: registerHostFunction(column.mapFrom) }
+          ? {
+              fromDriver: register(column.mapFrom),
+              toDriver: register(column.mapTo),
+            }
           : {}),
       }
     }
@@ -497,13 +509,16 @@ const schemaHandles = new WeakMap<object, number>()
 const getSchemaHandleFor = (schema: any, tableNamesMap: Record<string, string>): number => {
   let handle = schemaHandles.get(schema)
   if (handle === undefined) {
-    handle = getNative().registerSchema(JSON.stringify(describeDrizzleSchema(schema, tableNamesMap)))
+    handle = getNative().registerSchema(
+      JSON.stringify(describeDrizzleSchema(schema, tableNamesMap)),
+    )
     schemaHandles.set(schema, handle)
   }
   return handle
 }
 
-const getSchemaHandle = (query: any): number => getSchemaHandleFor(query.schema, query.tableNamesMap)
+const getSchemaHandle = (query: any): number =>
+  getSchemaHandleFor(query.schema, query.tableNamesMap)
 
 /** Raw drizzle results of relational queries, keyed by their config object. */
 export const rawResultsByConfig = new WeakMap<
@@ -576,7 +591,10 @@ export const installRelationalQueryHarness = () => {
       await compare(this, tsResult, tsError, rust, serialized, async () => {
         const retry = Promise.resolve(execute.call(this))
         const rustRetry = runRust(this, serialized, false)
-        return { rust: rustRetry, ts: await retry.catch((err: unknown) => ({ $tsError: errorInfo(err) })) }
+        return {
+          rust: rustRetry,
+          ts: await retry.catch((err: unknown) => ({ $tsError: errorInfo(err) })),
+        }
       })
     } catch (err) {
       recordMismatch({ kind: 'harness-error', message: String((err as Error)?.stack ?? err) })

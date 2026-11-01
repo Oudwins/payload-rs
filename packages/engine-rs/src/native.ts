@@ -4,12 +4,15 @@ import { createRequire } from 'node:module'
 export type NativeSqliteEngine = {
   attachClient: (clientId: number) => void
   /**
-   * `contextJson` = `{ now, allowIDOnCreate, blocksAsJSON, limitedBoundParameters }`: the JS clock
-   * (`Date.now()`) at the call, for the "now" stamps upstream takes from `new Date()` (so faked
-   * clocks apply), and the adapter properties drizzle reads at call time (changed after init).
+   * `contextJson` = `{ now, allowIDOnCreate, blocksAsJSON, limitedBoundParameters, withMutations }`:
+   * the JS clock (`Date.now()`) at the call, for the "now" stamps upstream takes from `new Date()`
+   * (so faked clocks apply), and the adapter properties drizzle reads at call time (changed after
+   * init). With `withMutations: true` the result is `{ result, mutations: [path, tree][] }`.
    */
   call: (method: string, argsJson: string, connId: number, contextJson: string) => Promise<string>
   rawSchema: () => string
+  /** `{ drizzle, rawTables? }`: the schema after the schema hooks, before the first `call`. */
+  setLiveSchema: (descriptionJson: string) => void
 }
 
 export type NativeSqliteEngineClass = {

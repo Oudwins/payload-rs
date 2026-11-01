@@ -14,6 +14,8 @@ payload-core-hooks-validate = { path = "../payload-core-hooks-validate" }
 payload-core-hooks-after = { path = "../payload-core-hooks-after" }
 payload-core-hooks-change = { path = "../payload-core-hooks-change" }
 payload-core-ops = { path = "../payload-core-ops" }
+payload-core-ops-global = { path = "../payload-core-ops-global" }
+payload-core-ops-write = { path = "../payload-core-ops-write" }
 payload-core-query = { path = "../payload-core-query" }
 payload-core-runtime = { path = "../payload-core-runtime" }
 payload-core-validate = { path = "../payload-core-validate" }

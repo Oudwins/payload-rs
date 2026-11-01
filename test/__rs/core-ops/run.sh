@@ -8,9 +8,16 @@
 #     test/__rs/core-ops/run.sh sort fields relationships
 #
 # OUT (default /tmp/rs-ops), DB (default /tmp/rs-operations.db), MODES, TZ (default UTC).
+# The reference never runs the Rust engine: PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE are unset (the
+# Rust operations come only from the harness' `rs` side). RS_OPS_SQL_ENGINE=rs runs every mode on
+# the Rust SQL adapter with TS field hooks (PAYLOAD_ENGINE=rs PAYLOAD_CORE_ENGINE=ts).
 set -u
 source /tmp/penv.sh
 cd "$(dirname "$0")/../../.."
+unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE
+if [ "${RS_OPS_SQL_ENGINE:-}" = rs ]; then
+  export PAYLOAD_ENGINE=rs PAYLOAD_CORE_ENGINE=ts
+fi
 export PAYLOAD_DATABASE=sqlite NODE_NO_WARNINGS=1 DISABLE_LOGGING=true \
   NODE_OPTIONS="--no-deprecation --no-experimental-strip-types" TZ=${TZ:-UTC}
 OUT=${OUT:-/tmp/rs-ops}
@@ -31,4 +38,4 @@ for suite in "$@"; do
   done
 done
 rm -f "$DB" "$DB-shm" "$DB-wal" "$DB-journal"
-node test/__rs/core-ops/summarize.mjs "$OUT" "$@"
+MODES="${MODES:-ts rs shadow}" node test/__rs/core-ops/summarize.mjs "$OUT" "$@"

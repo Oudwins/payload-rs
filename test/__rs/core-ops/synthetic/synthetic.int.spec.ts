@@ -2,12 +2,17 @@
  * Drives every ported read operation through a matrix of request contexts on the adversarial
  * config (./config.ts). Under `PAYLOAD_OPS=shadow` (test/__rs/core-ops/vitest.config.ts) every
  * call is compared TS vs Rust by ../shadow.ts, and the last test asserts that cases were compared
- * and none differed. Under `ts` / `rs` it only runs the calls (outcome parity via run.sh).
+ * and none differed. Under `ts` / `rs` every call's outcome (result or error, with dates and
+ * `req.context` steps normalized) is recorded and written to `RS_OPS_OUT/synthetic.outcomes`;
+ * summarize.mjs fails when the `rs` outcomes differ from the `ts` ones or none were recorded.
  */
 import type { Payload } from 'payload'
 
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { createPayloadRequest } from 'payload'
-import { expect } from 'vitest'
 
 import { docAccessOperation } from '../../../../packages/payload/src/collections/operations/docAccess.js'
 import { test } from '../../../__helpers/int/vitest.js'
@@ -40,6 +45,8 @@ const contexts: Record<string, unknown>[] = [
 ]
 
 const seed = async (payload: Payload) => {
+  // upload file names must not depend on files left by earlier tests or runs
+  fs.rmSync(path.join(os.tmpdir(), 'rs-core-ops-media'), { force: true, recursive: true })
   const user = await payload.create({
     collection: 'users',
     overrideAccess: true,
@@ -105,10 +112,70 @@ const seed = async (payload: Payload) => {
       user: { relationTo: 'users', value: user.id },
     } as any,
   })
-  return { media, posts, targets, user }
+  const custom = await payload.create({
+    collection: 'custom-ids',
+    overrideAccess: true,
+    data: { id: 'custom-1', title: 'custom' } as any,
+  })
+  await payload.create({
+    collection: 'payload-locked-documents',
+    overrideAccess: true,
+    data: {
+      document: { relationTo: 'custom-ids', value: custom.id },
+      globalSlug: undefined,
+      user: { relationTo: 'users', value: user.id },
+    } as any,
+  })
+  return { custom, media, posts, targets, user }
 }
 
-/** Runs `fn` for every context and access mode; failures are expected and swallowed. */
+const isoDate = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+const objectID = /^[0-9a-f]{24}$/
+
+/** JSON of an outcome with run-dependent values (timestamps, upload paths) normalized. */
+const normalize = (value: unknown): string =>
+  JSON.stringify(value, function (key, v) {
+    const raw = (this as Record<string, unknown>)[key]
+    if (raw instanceof Date || (typeof v === 'string' && isoDate.test(v))) {
+      return '<date>'
+    }
+    // array / block row ids are generated from the clock
+    if (typeof v === 'string' && objectID.test(v)) {
+      return '<objectid>'
+    }
+    if (typeof v === 'bigint') {
+      return `${v}n`
+    }
+    if (v === undefined) {
+      return '<undefined>'
+    }
+    return v
+  }) ?? '<undefined>'
+
+const outcomes: string[] = []
+
+/** Records the outcome of one operation call (errors are expected). */
+const record = async (label: string, call: () => Promise<unknown>): Promise<void> => {
+  try {
+    const result = await call()
+    outcomes.push(`${label} ok ${normalize(result)}`)
+  } catch (error) {
+    const e = error as Record<string, unknown>
+    outcomes.push(
+      `${label} error ${String(e?.constructor && (e.constructor as { name: string }).name)} ${normalize(
+        {
+          data: e?.data,
+          message: e?.message,
+          status: e?.status,
+        },
+      )}`,
+    )
+  }
+}
+
+let matrixIndex = 0
+
+/** Runs `fn` for every context and access mode, recording each outcome. */
 const matrix = async (
   user: unknown,
   fn: (options: {
@@ -118,10 +185,13 @@ const matrix = async (
   }) => Promise<unknown>,
 ) => {
   let calls = 0
+  const index = matrixIndex++
   for (const overrideAccess of [false, true]) {
     for (const context of contexts) {
       calls++
-      await fn({ context: structuredClone(context), overrideAccess, user }).catch(() => undefined)
+      const options = { context: structuredClone(context), overrideAccess, user }
+      await record(`m${index}:${calls}`, () => fn(options))
+      outcomes.push(`m${index}:${calls} context ${normalize(options.context)}`)
     }
   }
   return calls
@@ -161,11 +231,19 @@ test.suite('core ops differential (synthetic)', { config: './config.ts' }, () =>
     )
     await matrix(user, (o) => payload.find({ collection: 'media', ...o } as any))
     await matrix(user, (o) => payload.find({ collection: 'users', ...o } as any))
-    expect(true).toBe(true)
+    await matrix(user, (o) =>
+      payload.find({ collection: 'custom-ids', includeLockStatus: true, ...o } as any),
+    )
+    // GraphQL requests get `joins: false` in the db call
+    await matrix(user, async (o) => {
+      const req = await createPayloadRequest({ context: o.context, payload, user: o.user })
+      req.payloadAPI = 'GraphQL'
+      return payload.find({ collection: 'posts', overrideAccess: o.overrideAccess, req } as any)
+    })
   })
 
   test('should run findByID variants', async ({ payload }) => {
-    const { media, posts, user } = await seed(payload)
+    const { custom, media, posts, user } = await seed(payload)
     const variants: Record<string, unknown>[] = [
       { id: posts[0]!.id },
       { id: posts[1]!.id, draft: true },
@@ -184,7 +262,22 @@ test.suite('core ops differential (synthetic)', { config: './config.ts' }, () =>
     }
     await matrix(user, (o) => payload.findByID({ collection: 'media', id: media.id, ...o } as any))
     await matrix(user, (o) => payload.findByID({ collection: 'users', id: user.id, ...o } as any))
-    expect(true).toBe(true)
+    for (const id of [custom.id, 'missing']) {
+      await matrix(user, (o) =>
+        payload.findByID({ collection: 'custom-ids', id, includeLockStatus: true, ...o } as any),
+      )
+    }
+    await matrix(user, async (o) => {
+      const req = await createPayloadRequest({ context: o.context, payload, user: o.user })
+      req.payloadAPI = 'GraphQL'
+      return payload.findByID({
+        collection: 'posts',
+        id: posts[1]!.id,
+        draft: true,
+        overrideAccess: o.overrideAccess,
+        req,
+      } as any)
+    })
   })
 
   test('should run count, countVersions and findDistinct variants', async ({ payload }) => {
@@ -211,7 +304,6 @@ test.suite('core ops differential (synthetic)', { config: './config.ts' }, () =>
         payload.findDistinct({ collection: 'posts', ...o, ...variant } as any),
       )
     }
-    expect(true).toBe(true)
   })
 
   test('should run findVersions, findVersionByID and docAccess variants', async ({ payload }) => {
@@ -264,34 +356,74 @@ test.suite('core ops differential (synthetic)', { config: './config.ts' }, () =>
     )
     for (const id of [posts[0]!.id, undefined]) {
       for (const context of contexts) {
-        await docAccessOperation({
-          id,
-          collection: payload.collections.posts,
-          req: await createPayloadRequest({
-            context: structuredClone(context),
-            payload,
-            user: user as any,
-          }),
-        } as any).catch(() => undefined)
+        await record(`docAccess:posts:${String(id)}:${JSON.stringify(context)}`, async () =>
+          docAccessOperation({
+            id,
+            collection: payload.collections.posts,
+            req: await createPayloadRequest({
+              context: structuredClone(context),
+              payload,
+              user: user as any,
+            }),
+          } as any),
+        )
       }
     }
-    await docAccessOperation({
-      id: media.id,
-      collection: payload.collections.media,
-      req: await createPayloadRequest({ payload, user: user as any }),
-    } as any).catch(() => undefined)
-    expect(true).toBe(true)
+    const docAccessTargets = [
+      { collection: 'media', id: media.id },
+      { collection: 'users', id: (user as { id: number }).id },
+      { collection: 'users', id: undefined },
+    ] as const
+    for (const target of docAccessTargets) {
+      await record(`docAccess:${target.collection}:${String(target.id)}`, async () =>
+        docAccessOperation({
+          id: target.id,
+          collection: payload.collections[target.collection],
+          req: await createPayloadRequest({ payload, user: user as any }),
+        } as any),
+      )
+    }
+  })
+
+  test('should run with proxies of arrays (sort, hook lists)', async ({ payload }) => {
+    const { posts, user } = await seed(payload)
+    const hooks = payload.collections.posts.config.hooks as Record<string, unknown[]>
+    const original = { ...hooks }
+    for (const name of ['beforeOperation', 'beforeRead', 'afterRead', 'afterOperation']) {
+      hooks[name] = new Proxy(hooks[name]!, {})
+    }
+    try {
+      await matrix(user, (o) =>
+        payload.find({
+          collection: 'posts',
+          sort: new Proxy(['title', '-relTitle'], {}),
+          ...o,
+        } as any),
+      )
+      await matrix(user, (o) => payload.findByID({ collection: 'posts', id: posts[0]!.id, ...o }))
+      await matrix(user, (o) => payload.findVersions({ collection: 'posts', ...o } as any))
+    } finally {
+      Object.assign(hooks, original)
+    }
   })
 
   test('should have compared operations without diffs (shadow mode)', () => {
     const { diffs, mode, stats } = getStats()
+    if (process.env.RS_OPS_OUT) {
+      fs.mkdirSync(process.env.RS_OPS_OUT, { recursive: true })
+      fs.writeFileSync(
+        path.join(process.env.RS_OPS_OUT, 'synthetic.outcomes'),
+        JSON.stringify(outcomes),
+      )
+    }
+    assert.ok(outcomes.length > 0, 'no outcomes recorded')
     if (mode !== 'shadow') {
       return
     }
     const compared = Object.values(stats).reduce((n, s) => n + s.compared, 0)
     const diffCount = Object.values(stats).reduce((n, s) => n + s.diffs, 0)
-    expect(compared).toBeGreaterThan(0)
-    expect(diffs.slice(0, 3)).toEqual([])
-    expect(diffCount).toBe(0)
+    assert.ok(compared > 0, 'no operation compared')
+    assert.deepEqual(diffs.slice(0, 3), [])
+    assert.equal(diffCount, 0)
   })
 })

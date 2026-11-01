@@ -90,7 +90,7 @@ export type Arguments<TSlug extends CollectionSlug> = {
   where: Where
 } & Pick<FindOptions<TSlug, SelectType>, 'select'>
 
-export const updateOperation = async <
+export const updateOperationTS = async <
   TSlug extends CollectionSlug,
   TSelect extends SelectFromCollectionSlug<TSlug>,
 >(
@@ -557,3 +557,33 @@ export const updateOperation = async <
     throw error
   }
 }
+
+type RustWriteOperations = {
+  updateOperation: (args: Parameters<typeof updateOperationTS>[0]) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-write`), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ */
+const isRustWriteOperations =
+  (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustWriteOperationsSpecifier = '../../../../engine-rs/src/ops-write/index.js'
+let rustWriteOperations: RustWriteOperations | undefined
+const rustWriteOperationsLoad: Promise<RustWriteOperations> | undefined = isRustWriteOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustWriteOperationsSpecifier).then(
+      (loaded: RustWriteOperations) => (rustWriteOperations = loaded),
+    )
+  : undefined
+void rustWriteOperationsLoad?.catch(() => {})
+
+export const updateOperation: typeof updateOperationTS = isRustWriteOperations
+  ? (args) =>
+      rustWriteOperations
+        ? rustWriteOperations.updateOperation(args)
+        : rustWriteOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.updateOperation(args)
+          })
+  : updateOperationTS

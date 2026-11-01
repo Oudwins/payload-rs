@@ -73,6 +73,48 @@ fn initialize_sqlite() {
   });
 }
 
+/// Statements started on connections opened while `PAYLOAD_SQLITE_TRACE=true`
+/// was set: `(sql, bound parameter count)` in run order, recorded between
+/// [`start_statement_trace`] and [`take_statement_trace`]. A diagnostic for
+/// differential tests (`test/__rs/adapter`): it shows the SQL the engine runs
+/// on the client's connections, which bypasses `client.execute`.
+static STATEMENT_TRACE: std::sync::Mutex<Option<Vec<(String, i32)>>> = std::sync::Mutex::new(None);
+
+/// Starts (or restarts) recording [`STATEMENT_TRACE`].
+pub fn start_statement_trace() {
+  *STATEMENT_TRACE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Vec::new());
+}
+
+/// Stops recording and returns the statements recorded since
+/// [`start_statement_trace`] (empty when it was not started).
+pub fn take_statement_trace() -> Vec<(String, i32)> {
+  STATEMENT_TRACE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take().unwrap_or_default()
+}
+
+/// `sqlite3_trace_v2` callback (`SQLITE_TRACE_STMT`: `p` is the statement,
+/// `x` its unexpanded SQL; trigger sub-statements start with `--`).
+unsafe extern "C" fn record_statement(
+  mask: std::ffi::c_uint,
+  _context: *mut std::ffi::c_void,
+  p: *mut std::ffi::c_void,
+  x: *mut std::ffi::c_void,
+) -> c_int {
+  if mask != ffi::SQLITE_TRACE_STMT as std::ffi::c_uint {
+    return 0;
+  }
+  let Some(sql) = cstr_lossy(x as *const c_char) else { return 0 };
+  if sql.starts_with("--") {
+    return 0;
+  }
+  let mut trace = STATEMENT_TRACE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+  if let Some(statements) = trace.as_mut() {
+    // SAFETY: SQLite passes the running statement.
+    let count = unsafe { ffi::sqlite3_bind_parameter_count(p as *mut ffi::sqlite3_stmt) };
+    statements.push((sql, count));
+  }
+  0
+}
+
 /// Finalizes a prepared statement on drop.
 struct StmtGuard(*mut ffi::sqlite3_stmt);
 
@@ -112,6 +154,13 @@ impl Conn {
       _ => open_failed(ffi::SQLITE_CANTOPEN),
     })?;
     conn.busy_timeout(std::time::Duration::ZERO).map_err(|_| open_failed(ffi::SQLITE_ERROR))?;
+    if std::env::var("PAYLOAD_SQLITE_TRACE").is_ok_and(|v| v == "true") {
+      // SAFETY: live connection handle; the callback only reads its arguments.
+      unsafe {
+        let mask = ffi::SQLITE_TRACE_STMT as std::ffi::c_uint;
+        ffi::sqlite3_trace_v2(conn.handle(), mask, Some(record_statement), ptr::null_mut());
+      }
+    }
     // `Builder::new_local(":memory:")` builds a memory database, which never
     // applies the encryption config.
     if !options.encryption_key.is_empty() && path != ":memory:" {
@@ -409,6 +458,25 @@ mod tests {
 
   fn mem() -> Conn {
     Conn::open("file::memory:").unwrap()
+  }
+
+  #[test]
+  fn statement_trace_records_traced_connections() {
+    // SAFETY: tests only read this variable while opening, and a stray traced connection of
+    // another test only adds entries the filter below drops.
+    unsafe { std::env::set_var("PAYLOAD_SQLITE_TRACE", "true") };
+    let traced = mem();
+    unsafe { std::env::remove_var("PAYLOAD_SQLITE_TRACE") };
+    let untraced = mem();
+    start_statement_trace();
+    traced
+      .execute(&Statement::with_args("select ?, ? -- trace-test", vec![BindValue::Integer(1), BindValue::Null]), IntMode::Number)
+      .unwrap();
+    untraced.execute_sql("select 1 -- trace-test untraced", IntMode::Number).unwrap();
+    let recorded: Vec<_> = take_statement_trace().into_iter().filter(|(sql, _)| sql.contains("trace-test")).collect();
+    assert_eq!(recorded, vec![("select ?, ? -- trace-test".to_string(), 2)]);
+    traced.execute_sql("select 2 -- trace-test after", IntMode::Number).unwrap();
+    assert!(take_statement_trace().is_empty());
   }
 
   #[test]

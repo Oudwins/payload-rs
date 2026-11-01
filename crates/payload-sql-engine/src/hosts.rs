@@ -12,16 +12,16 @@ use payload_sql_find::find_many::{FindManyArgs, FindManyResult, find_many_js};
 use payload_sql_find::query::map_columns_to_alias;
 use payload_sql_find::relational::{Mode, build_relational_query};
 use payload_sql_query::build_query::{BuildQueryArgs, BuildQueryResult, build_query};
-use payload_sql_query::sql::{Chunk, Select, Sql, check_join_aliases, expr_sql};
+use payload_sql_query::drizzle::Decoder;
+use payload_sql_query::sql::{Chunk, Select, Sql, check_join_aliases, selection_sql};
 use payload_sql_query::{QueryAdapter, WhereVal};
 use payload_sql_read::{ReadAdapter, TransformArgs, Val, transform};
 use payload_sql_upsert::ops::{BuiltQuery, OpsHost};
 use payload_sql_upsert::sql::{eq, require_table};
+use payload_sql_upsert::sql::Statements;
 use payload_sql_upsert::{Executor, FindArgsShape, SqlFragment, UpsertHost};
 use payload_sql_write::SchemaWriteAdapter;
-use payload_sqlite::rusqlite::Connection;
 
-use crate::stepped::Steps;
 use crate::{EngineOptions, SqliteEngine};
 use crate::convert::{fragment_to_find_sql, render_find_sql, render_fragment, val_to_js};
 
@@ -39,11 +39,9 @@ pub(crate) struct Call<'a> {
   /// The call's connection as libsql (`client.execute` / `tx.execute`): find statements.
   pub conn: &'a dyn FindExecutor,
   /// The same connection for the write path's executor.
-  pub raw: &'a Connection,
+  pub statements: &'a dyn Statements,
   /// JS functions (custom column `fromDriver`).
   pub host: &'a dyn Host,
-  /// Statement scheduling of the write path.
-  pub steps: &'a dyn Steps,
   /// Caller-visible mutations of the arguments to report (`CallOutput::mutations`).
   pub mutations: std::cell::RefCell<Vec<(Vec<String>, JsVal)>>,
 }
@@ -72,7 +70,7 @@ impl<'a> Call<'a> {
   }
 
   pub fn executor(&self) -> Executor<'a> {
-    let mut exec = Executor::new(self.raw);
+    let mut exec = Executor::new(self.statements);
     exec.limited_bound_parameters = self.options.upsert.limited_bound_parameters;
     exec
   }
@@ -160,12 +158,20 @@ impl<'a> Call<'a> {
     Ok(if row.is_undefined() { None } else { Some(row) })
   }
 
+  /// A selected driver value decoded like drizzle's `mapResultRow`: `null` stays `null`, a column
+  /// field goes through its column's `mapFromDriverValue`, other fields are kept.
+  pub fn decode(&self, decoder: Option<Decoder>, value: JsVal) -> Result<JsVal> {
+    match (decoder, value) {
+      (_, JsVal::Null) => Ok(JsVal::Null),
+      (Some(decoder), value) => payload_sql_find::exec::decode_js(decoder, payload_sql_find::exec::Driver::Js(value), self.host),
+      (None, value) => Ok(value),
+    }
+  }
+
   /// Runs a query-crate select on the executor (statements fail like drizzle's `DrizzleQueryError`).
   pub fn select_rows(&self, exec: &mut Executor<'_>, select: &Select) -> Result<Vec<Vec<(String, JsVal)>>> {
     let q = crate::convert::query_to_fragment(select.render()?);
-    let rows = exec.query_raw(&q).map_err(|e| e.into_engine_error());
-    self.steps.after_write_statement(exec.statements.len());
-    rows
+    exec.query_raw(&q).map_err(|e| e.into_engine_error())
   }
 }
 
@@ -233,8 +239,7 @@ impl UpsertHost for ReadBack<'_> {
     })
   }
 
-  fn find_first(&mut self, exec: &mut Executor<'_>, where_: &SqlFragment) -> Result<Option<JsVal>> {
-    self.call.steps.before_read(exec.statements.len());
+  fn find_first(&mut self, _exec: &mut Executor<'_>, where_: &SqlFragment) -> Result<Option<JsVal>> {
     let mut config = self.call.read_back_args(self.fields, &self.select, &self.table_name)?;
     config.where_ = Some(fragment_to_find_sql(where_)?);
     // the executor's statements and this read run on the same connection, in order
@@ -263,12 +268,11 @@ impl OpsHost for Ops<'_> {
   /// `selectDistinct({ joins, selectFields, tableName, where, query })`: `query.limit(1)` for
   /// updateOne / deleteOne, `query.orderBy(orderBy)` for updateMany.
   fn select_distinct_ids(&mut self, exec: &mut Executor<'_>, _query: &BuiltQuery, limit: Option<i64>) -> Result<Vec<JsVal>> {
-    self.call.steps.before_read(exec.statements.len());
     let built = self.built.as_ref().ok_or_else(|| EngineError::internal("selectDistinct without buildQuery"))?;
     let main = self.call.qa.table_req(Some(&self.table_name), "id")?;
     check_join_aliases(&built.joins)?;
     let mut fields = Vec::new();
-    let mut id_column = None;
+    let mut decoders = Vec::new();
     let mut id_index = None;
     for (i, (key, field)) in built.select_fields.iter().enumerate() {
       let Some(expr) = field else {
@@ -276,9 +280,9 @@ impl OpsHost for Ops<'_> {
       };
       if key == "id" {
         id_index = Some(i);
-        id_column = expr.as_col().cloned();
       }
-      fields.push(expr_sql(expr));
+      decoders.push(expr.as_col().map(|c| c.decoder));
+      fields.push(selection_sql(expr));
     }
     let select = Select {
       distinct: true,
@@ -291,32 +295,33 @@ impl OpsHost for Ops<'_> {
       ..Select::default()
     };
     let rows = self.call.select_rows(exec, &select)?;
-    rows
-      .into_iter()
-      .map(|row| {
-        let value = id_index.and_then(|i| row.into_iter().nth(i)).map(|(_, v)| v).unwrap_or_default();
-        match (&id_column, value) {
-          (_, JsVal::Null) => Ok(JsVal::Null),
-          (Some(column), value) => column.map_from_driver_value(value),
-          (None, value) => Ok(value),
+    // `mapResultRow`: every selected column is decoded in selection order (`mapFromDriverValue`,
+    // which can throw); only `id` is read afterwards
+    let mut ids = Vec::with_capacity(rows.len());
+    for row in rows {
+      let mut id = JsVal::Undefined;
+      for (i, (_, value)) in row.into_iter().enumerate() {
+        let value = self.call.decode(decoders.get(i).copied().flatten(), value)?;
+        if Some(i) == id_index {
+          id = value;
         }
-      })
-      .collect()
+      }
+      ids.push(id);
+    }
+    Ok(ids)
   }
 
-  fn find_many(&mut self, exec: &mut Executor<'_>) -> Result<Vec<JsVal>> {
-    self.call.steps.before_read(exec.statements.len());
+  fn find_many(&mut self, _exec: &mut Executor<'_>) -> Result<Vec<JsVal>> {
     let spec = self.find_spec.as_ref().ok_or_else(|| EngineError::internal("findMany without arguments"))?;
     Ok(self.call.find_many(spec)?.docs)
   }
 
   fn find_first_to_delete(
     &mut self,
-    exec: &mut Executor<'_>,
+    _exec: &mut Executor<'_>,
     distinct_id: Option<&JsVal>,
     _where: Option<&SqlFragment>,
   ) -> Result<Option<JsVal>> {
-    self.call.steps.before_read(exec.statements.len());
     let config = match distinct_id {
       // `findFirst({ where: eq(this.tables[tableName].id, selectDistinctResult[0].id) })`
       Some(id) => {

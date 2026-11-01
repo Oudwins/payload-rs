@@ -71,21 +71,11 @@ impl<'q, 'a> SqlQueryBuilder<'q, 'a> {
   /// The drizzle column a [`ColumnRef`] points at (`adapter.tables[table]`
   /// column with that database name).
   fn column(&self, column: &ColumnRef) -> Result<Column> {
-    let table = self
+    let key = self
       .adapter
-      .schema
-      .raw_tables
-      .values()
-      .flatten()
-      .find(|t| t.name == column.table)
+      .column_key_by_db_name(&column.table, &column.name)
       .ok_or_else(|| EngineError::new("TypeError", "Cannot read properties of undefined (reading 'name')"))?;
-    let key = table
-      .columns
-      .iter()
-      .find(|(key, c)| c.get("name").and_then(|n| n.as_str()).unwrap_or(key) == column.name)
-      .map(|(key, _)| key.clone())
-      .ok_or_else(|| EngineError::new("TypeError", "Cannot read properties of undefined (reading 'name')"))?;
-    let table_ref = TableRef { name: table.name.clone(), alias: None };
+    let table_ref = TableRef { name: column.table.clone(), alias: None };
     self
       .adapter
       .column(&table_ref, &key)

@@ -19,7 +19,7 @@ use std::process::Command;
 
 use payload_engine::error::EngineError;
 use payload_engine::host::Host;
-use payload_engine::js::{JsVal, decode_graph, decode_graph_typed};
+use payload_engine::js::{JsVal, decode_graph_typed};
 use payload_engine::sql::schema::{SchemaInput, SchemaOptions, build_raw_schema};
 use payload_engine::strings::to_snake_case;
 use payload_sql_query::paths::get_field_by_path;
@@ -82,6 +82,7 @@ fn to_db(v: &SqlValue) -> DbValue {
   match v {
     SqlValue::Null => DbValue::Null,
     SqlValue::Real(n) => DbValue::Real(*n),
+    SqlValue::Integer(n) => DbValue::Integer(*n),
     SqlValue::Text(s) => DbValue::Text(s.clone()),
   }
 }
@@ -375,7 +376,7 @@ fn differential_against_ts_adapter() {
     std::fs::File::create(&db_file.0).and_then(|mut f| f.write_all(&gunzip(&db_gz))).expect("write database copy");
     let conn = rusqlite::Connection::open_with_flags(&db_file.0, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("open database");
 
-    let root = decode_graph(&fixture["graph"]).expect("decode graph");
+    let root = decode_graph_typed(&fixture["graph"]).expect("decode graph");
     let (config, collections, blocks) = (root.get("config"), root.get("collections"), root.get("blocks"));
     let version_fields = root.get("versionFields");
     let schema = build_raw_schema(
@@ -515,7 +516,7 @@ fn differential_against_ts_adapter() {
             // drizzle decodes `_selected` with its column's `mapFromDriverValue`.
             if let Some(payload_sql_query::Expr::Col(col)) = &plan_selected {
               for v in &mut values {
-                *v = col.map_from_driver_value(JsVal::from_json(v)).map_err(engine_err)?.to_json();
+                *v = map_from_driver(col, JsVal::from_json(v)).map_err(engine_err)?.to_json();
               }
             }
             if is_polymorphic {
@@ -561,4 +562,27 @@ fn differential_against_ts_adapter() {
   println!("== TOTAL: {grand_matched}/{grand_total} matched");
   assert!(grand_total > 0, "compared zero cases");
   assert_eq!(grand_matched, grand_total, "differential mismatches (see output above)");
+}
+
+/// drizzle `mapFromDriverValue` of the column classes Payload's raw columns build (`boolean`,
+/// `jsonb` / `geometry`, `numeric`); `null` is not mapped.
+fn map_from_driver(col: &payload_sql_query::Column, v: JsVal) -> payload_engine::error::Result<JsVal> {
+  use payload_sql_query::drizzle::Decoder;
+  use payload_sql_query::js_ops::{js_number, js_string};
+  if v.is_null() {
+    return Ok(v);
+  }
+  Ok(match col.decoder {
+    Decoder::Boolean => JsVal::Bool(js_number(&v) == 1.0),
+    Decoder::Json => {
+      let json: Json = serde_json::from_str(&js_string(&v))
+        .map_err(|e| payload_engine::error::EngineError::new("SyntaxError", e.to_string()))?;
+      JsVal::from_json(&json)
+    }
+    Decoder::Number => match v {
+      JsVal::Num(_) => v,
+      other => JsVal::Num(js_number(&other)),
+    },
+    _ => v,
+  })
 }

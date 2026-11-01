@@ -12,6 +12,8 @@ use crate::common::{
   has_hooks, has_versions_enabled,
 };
 use crate::host::{self, call, call_val, get, get_val, is_false, is_typeof_object, opt, val};
+use crate::query;
+use crate::utilities::append_non_trashed_filter;
 
 /// `findVersionByIDOperation(args)`: returns its promise.
 pub fn find_version_by_id(args: Local) -> JsResult<Local> {
@@ -55,7 +57,7 @@ async fn run(args: Val) -> JsResult<Val> {
   args = await_js(p).await?;
 
   let where_ = call_val("idWhere", &[id.get()])?;
-  let version_fields = call_val("versionFields", &[payload.get(), collection_config.get()])?;
+  let version_fields = call_val("buildVersionFields", &[get(payload.get(), "config")?, collection_config.get()])?;
   let select =
     call_val("selectVersions", &[version_fields.get(), collection_config.get(), req.get(), incoming_select.get()])?;
 
@@ -94,12 +96,12 @@ async fn run(args: Val) -> JsResult<Val> {
 
   let has_where_access = is_typeof_object(access_results.get());
 
-  let mut full_where = call_val("combineQueries", &[where_.get(), access_results.get()])?;
+  let mut full_where = query::combine_queries(where_.get(), access_results.get())?;
 
   let enable_trash = get(collection_config.get(), "trash")?;
-  full_where = call_val("appendNonTrashedVersionFilter", &[enable_trash, trash.get(), full_where.get()])?;
+  full_where = val(append_non_trashed_filter("version.deletedAt", enable_trash, trash.get(), full_where.get())?)?;
 
-  call("sanitizeWhereQuery", &[version_fields.get(), payload.get(), full_where.get()])?;
+  query::sanitize_where_query(version_fields.get(), payload.get(), full_where.get())?;
 
   // Find by ID
   let mut result = val(opt(prefetched.get(), "version")?)?;

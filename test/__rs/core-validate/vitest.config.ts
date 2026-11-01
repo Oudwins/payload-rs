@@ -4,6 +4,8 @@
  * (`packages/engine-rs/src/validate/validations.ts`) for every importer: `sanitizeFields`, the auth
  * base fields, `generatePasswordSaltHash`, and the `payload` / `payload/shared` re-exports.
  * `PAYLOAD_VALIDATIONS=ts` keeps the upstream module (reference run with the same config).
+ * Only the validators change (TS SQL engine and hooks); `run-upstream.sh` instead runs the real
+ * `PAYLOAD_ENGINE=rs` dispatch of payload's `fields/validations.ts`.
  *
  *   SQLITE_URL=file:/tmp/rs-validate.db PAYLOAD_DATABASE=sqlite \
  *     pnpm vitest run --config test/__rs/core-validate/vitest.config.ts test/validate/int.spec.ts

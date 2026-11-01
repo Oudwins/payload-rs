@@ -17,7 +17,12 @@ import { createFunctionRegistry, deserializeFromEngine, serializeForEngine } fro
 import { getSqliteConnId, Sqlite3Client, Sqlite3Transaction } from '../sqlite/client.js'
 import { rebuildError } from './errors.js'
 import { createLoopbackEngine } from './loopback.js'
-import { buildEngineInput, decodeRawSchema, initWithEngineSchema } from './schema.js'
+import {
+  buildEngineInput,
+  decodeRawSchema,
+  describeLiveSchema,
+  initWithEngineSchema,
+} from './schema.js'
 
 type AnyObject = Record<PropertyKey, any>
 
@@ -54,6 +59,17 @@ type UpstreamMethod = (this: unknown, args: unknown) => Promise<unknown>
 type EngineState = {
   attachedClientId?: number
   engine: LoopbackEngine | NativeSqliteEngine
+  /**
+   * Errors thrown by JS functions the engine called during `call`, per registry function id in
+   * throw order; the engine fails the call with `HostError` `JS function <id> threw`, and the
+   * caller gets the function's own error (first one of that id).
+   */
+  hostErrors: [id: number, error: unknown][]
+  /**
+   * The drizzle instance whose schema `setLiveSchema` was given (`connect` after a re-init builds
+   * a new one).
+   */
+  liveSchemaDrizzle?: unknown
   registry: FunctionRegistry
 }
 
@@ -230,19 +246,25 @@ const createEngineState = ({
   upstream: Record<string, (this: unknown, args: unknown) => Promise<unknown>>
 }): { root: AnyObject } & EngineState => {
   const registry = createFunctionRegistry()
-  // `create` is synchronous and the only place the engine calls JS (`call` has no host), so every
-  // error collected here belongs to it
-  const hostErrors: unknown[] = []
+  // errors of the synchronous `create`: all belong to it
+  const createErrors: unknown[] = []
+  const hostErrors: EngineState['hostErrors'] = []
+  let isCreated = false
   const { graphJson, optionsJson, root } = buildEngineInput({ adapter: adapter as never, registry })
 
   // ENGINE_CONTRACT.md: a callback that throws answers `{"$hostError":true}`; the engine then
-  // fails the operation and TS rethrows the callback's own error.
+  // fails the operation and TS rethrows the callback's own error. After `create`, the engine only
+  // calls JS from a statement of `call` (custom column `fromDriver`).
   const callFunction = (id: number, argJSON: string): string => {
     try {
       const fn = registry.functions[id]!
       return serializeForEngine(fn(JSON.parse(argJSON)), registry)
     } catch (error) {
-      hostErrors.push(error)
+      if (isCreated) {
+        hostErrors.push([id, error])
+      } else {
+        createErrors.push(error)
+      }
       return '{"$hostError":true}'
     }
   }
@@ -269,10 +291,11 @@ const createEngineState = ({
       engine = SqliteEngine.create(graphJson, optionsJson, callFunction)
     }
   } catch (error) {
-    throw toInitError({ error, hostErrors })
+    throw toInitError({ error, hostErrors: createErrors })
   }
+  isCreated = true
 
-  return { engine, registry, root }
+  return { engine, hostErrors, registry, root }
 }
 
 const toInitError = ({ error, hostErrors }: { error: unknown; hostErrors: unknown[] }): unknown => {
@@ -316,19 +339,23 @@ const callEngine = async ({
     return callUpstream({ adapter, args, glue, method, reason: adapterReason })
   }
   const req = args?.req
-  let db: AnyObject
-  if (req?.transactionID) {
-    // the transaction's connection is only known after awaiting `transactionID`, which upstream
-    // does itself (`getTransaction`): decide on it before any of upstream's mutations of `data`
-    db = await getTransactionDB({ adapter, req })
+  const transactionID = req?.transactionID
+  if (transactionID && !isThenable(transactionID)) {
+    // the session is known without awaiting: decide before upstream's synchronous mutations
+    const txReason = findConnectionReason(adapter.sessions[transactionID]?.db || adapter.drizzle)
+    if (txReason) {
+      return callUpstream({ adapter, args, glue, method, reason: txReason })
+    }
+  }
+  mutateArgsBeforeTransaction({ adapter, args, method })
+  const db = await getTransactionDB({ adapter, req })
+  if (transactionID) {
+    // a pending `transactionID` (or a session that changed meanwhile): the upstream method repeats
+    // the mutations above, idempotent except `createGlobal`'s `data.createdAt` stamp
     const txReason = findConnectionReason(db)
     if (txReason) {
       return callUpstream({ adapter, args, glue, method, reason: txReason })
     }
-    mutateDataBeforeTransaction({ adapter, args, method })
-  } else {
-    mutateDataBeforeTransaction({ adapter, args, method })
-    db = await getTransactionDB({ adapter, req })
   }
   mutateDataAfterTransaction({ adapter, args, method })
   const connId = getSqliteConnId(db.session.tx ?? db.session.client)
@@ -342,33 +369,87 @@ const callEngine = async ({
     state.engine.registerConnection(connId, db)
   }
 
-  const argsJson = serializeForEngine(reduceArgs(args), state.registry)
+  // upstream `deleteOne` marks a write whenever a document matched, also with `returning: false`
+  // (which only skips `transform`): ask for the document to know, return upstream's `null`
+  const isDeleteWithoutResult = method === 'deleteOne' && args?.returning === false
+  const argsJson = serializeForEngine(
+    reduceArgs(isDeleteWithoutResult ? { ...args, returning: true } : args),
+    state.registry,
+  )
   recordStats(() => (stats.calls[method] = (stats.calls[method] ?? 0) + 1))
   let resultJson: string
   try {
+    if (state.liveSchemaDrizzle !== adapter.drizzle) {
+      state.engine.setLiveSchema(
+        describeLiveSchema({
+          db: adapter.drizzle,
+          rawTables: adapter.rawTables,
+          registry: state.registry,
+        }),
+      )
+      state.liveSchemaDrizzle = adapter.drizzle
+    }
     resultJson = await state.engine.call(method, argsJson, connId, callContextJson(adapter))
   } catch (error) {
     const parsed = parseEngineError(error)
     if (!parsed) {
       throw error
     }
-    const rebuilt = rebuildError({
+    if (isMarkedWriteError({ args, error: parsed, method })) {
+      markWrite(adapter)
+    }
+    const hostError = takeHostError({ error: parsed, state })
+    if (hostError.isFound) {
+      throw hostError.error
+    }
+    throw rebuildError({
       decode: (value) => deserializeFromEngine(value, state.registry),
       DrizzleQueryErrorClass: glue.DrizzleQueryErrorClass,
       error: parsed as never,
       req,
     })
-    if (rebuilt.name === 'ValidationError' && writesBeforeUniqueCheck.has(method)) {
-      // unique violations are raised by `upsertRow`, after its `markWrite`
-      markWrite(adapter)
-    }
-    throw rebuilt
   }
-  const result = deserializeFromEngine(JSON.parse(resultJson), state.registry)
+  const { mutations, result: resultTree } = JSON.parse(resultJson) as {
+    mutations: [string[], unknown][]
+    result: unknown
+  }
+  for (const [path, value] of mutations) {
+    resolvePath(args, path.slice(0, -1))[path.at(-1)!] = deserializeFromEngine(
+      value,
+      state.registry,
+    )
+  }
+  const result = deserializeFromEngine(resultTree, state.registry)
   if (isMarkedWrite({ args, method, result })) {
     markWrite(adapter)
   }
-  return result
+  return isDeleteWithoutResult ? null : result
+}
+
+const isThenable = (value: unknown) =>
+  (typeof value === 'object' || typeof value === 'function') &&
+  value !== null &&
+  typeof (value as { then?: unknown }).then === 'function'
+
+const resolvePath = (root: unknown, path: string[]): any =>
+  path.reduce<any>((value, key) => value[key], root)
+
+/** The error a JS function threw when the engine reports `JS function <id> threw`. */
+const takeHostError = ({
+  error,
+  state,
+}: {
+  error: { name: string } & AnyObject
+  state: EngineState
+}): { error?: unknown; isFound: boolean } => {
+  const id =
+    error.name === 'HostError' ? /^JS function (\d+) threw$/.exec(error.message)?.[1] : undefined
+  const index = id === undefined ? -1 : state.hostErrors.findIndex(([fnId]) => fnId === Number(id))
+  if (index === -1) {
+    return { isFound: false }
+  }
+  const [found] = state.hostErrors.splice(index, 1)
+  return { error: found?.[1], isFound: true }
 }
 
 /** Runs the upstream TS method (statements through drizzle and the JS client, like upstream). */
@@ -416,6 +497,15 @@ const findUpstreamReason = ({
     glue.operatorEntries.some(([key, value]) => operators[key] !== value)
   ) {
     return 'adapter.operators'
+  }
+  // read at call time by `buildOperatorConstraint`; the engine has none (sqlite's default `[]`)
+  const { operatorHandlers } = adapter
+  if (
+    operatorHandlers !== undefined &&
+    operatorHandlers !== null &&
+    !(Array.isArray(operatorHandlers) && operatorHandlers.length === 0)
+  ) {
+    return 'adapter.operatorHandlers'
   }
   // upstream `upsert` is `this.updateOne(...)`
   if (method === 'upsert' && adapter.updateOne !== glue.wrappers.updateOne) {
@@ -491,20 +581,82 @@ const markWrite = (adapter: AnyObject) => {
   adapter.lastWriteTimestamp = Date.now()
 }
 
-/** Methods whose unique-violation ValidationError comes from `upsertRow` (after `markWrite`). */
-const writesBeforeUniqueCheck = new Set<string>([
+/**
+ * Methods whose first statement is `upsertRow`'s, after its `markWrite` (so is `updateOne` with an
+ * `id`): every statement error is marked.
+ */
+const upsertRowFirst = new Set<string>([
   'create',
   'createGlobal',
   'createGlobalVersion',
   'createVersion',
-  'updateGlobal',
   'updateGlobalVersion',
+  'updateVersion',
+])
+
+/** Methods that read before `upsertRow`: its errors (unique violations, writes) are marked. */
+const upsertRowLater = new Set<string>([
+  'updateGlobal',
   'updateJobs',
   'updateMany',
   'updateOne',
-  'updateVersion',
   'upsert',
 ])
+
+const writeStatement = /^\s*(?:insert|update|delete)\b/i
+
+/**
+ * Whether upstream had called `markWrite` when the call failed with `error`: unique violations and
+ * failed writes come from `upsertRow` (marked at its start) or the atomic `updateOne` (marked before
+ * its statement); deletes are marked after the statement. A failed select inside `upsertRow`
+ * (read-back) of a method that also selects before it is not distinguishable: not marked.
+ */
+const isMarkedWriteError = ({
+  args,
+  error,
+  method,
+}: {
+  args: AnyObject
+  error: { name: string } & AnyObject
+  method: string
+}) => {
+  const isStatementError = error.name === 'DrizzleQueryError' || error.name === 'LibsqlError'
+  if (upsertRowFirst.has(method) || ((method === 'updateOne' || method === 'upsert') && args?.id)) {
+    // a JS function (custom column `fromDriver`) runs while `upsertRow` reads back
+    return isStatementError || error.name === 'ValidationError' || error.name === 'HostError'
+  }
+  if (!upsertRowLater.has(method)) {
+    return false
+  }
+  if (error.name === 'ValidationError') {
+    return true
+  }
+  if (error.name !== 'DrizzleQueryError') {
+    return false
+  }
+  if (method === 'updateOne' && args?.options?.atomic === true) {
+    return true
+  }
+  const query = typeof error.query === 'string' ? error.query : ''
+  if (!writeStatement.test(query)) {
+    return false
+  }
+  // `updateJobs`' initial claim (no id) marks only after its update returned claimed rows
+  return !(
+    method === 'updateJobs' &&
+    !args?.id &&
+    /^\s*update\b/i.test(query) &&
+    isInitialJobClaim(args?.data)
+  )
+}
+
+/** Upstream `updateJobs`' `isInitialJobClaim` (on the data after `delete data.log`). */
+const isInitialJobClaim = (data: AnyObject | undefined) =>
+  typeof data === 'object' &&
+  data !== null &&
+  Object.keys(data).every(
+    (field) => field === 'processingToken' || field === 'processingUntil' || field === 'updatedAt',
+  )
 
 /** Methods that always reach upstream's `markWrite` when they succeed. */
 const alwaysMarkWrite = new Set<string>([
@@ -522,8 +674,9 @@ const alwaysMarkWrite = new Set<string>([
 /**
  * Whether upstream called `markWrite` in a call that returned `result`. Upstream marks when a row
  * is written (`upsertRow`, the atomic `updateOne`, a non-empty `updateJobs` claim) or deleted
- * (`deleteOne` with a match, `deleteVersions` with matches, `deleteMany` always). With
- * `returning: false` a write without an id gives no evidence in the result: not marked.
+ * (`deleteOne` with a match, `deleteVersions` with matches, `deleteMany` always). `deleteOne` is
+ * always called with a result (see `callEngine`); with `returning: false`, `updateMany`,
+ * `updateJobs` and `updateOne` without an id give no evidence in the result: not marked.
  */
 const isMarkedWrite = ({
   args,
@@ -557,14 +710,18 @@ const isMarkedWrite = ({
 }
 
 /**
- * Mutations upstream makes to the caller's `data` object, which the caller can observe; done here
- * on the caller's object (at the same point relative to `getTransaction`), so the engine receives
- * the mutated data and must not repeat them:
+ * Mutations upstream makes to the caller's arguments, which the caller can observe; done here on
+ * the caller's objects (at the same point relative to `getTransaction`), so the engine receives
+ * the mutated arguments and must not repeat them:
  * - `createGlobal`: `data.createdAt = new Date().toISOString()` (before `getTransaction`)
+ * - `createVersion`: `select.updatedAt = true` when the collection has drafts and `select` is an
+ *   object (`null` throws upstream's TypeError) (before `getTransaction`)
  * - `updateJobs`: `delete data.log` unless it is a non-empty array or a `$push` (first statement)
  * - `create`: `upsertRow` sets `data.createdAt` when it is falsy (after `getTransaction`)
+ * The engine reports the ones that depend on the database (`withMutations`, applied in
+ * `callEngine`): `updateGlobal` without a global row sets `data.createdAt` when it is falsy.
  */
-const mutateDataBeforeTransaction = ({
+const mutateArgsBeforeTransaction = ({
   adapter,
   args,
   method,
@@ -586,6 +743,13 @@ const mutateDataBeforeTransaction = ({
       adapter.payload.globals.config.find((config: { slug: string }) => config.slug === args.slug)
     ) {
       args.data.createdAt = new Date().toISOString()
+    }
+  } else if (method === 'createVersion') {
+    const collection = adapter.payload.collections[args.collectionSlug]
+    if (collection?.config.versions.drafts) {
+      if (typeof args.select === 'object') {
+        args.select.updatedAt = true
+      }
     }
   }
 }
@@ -615,6 +779,7 @@ const callContextJson = (adapter: AnyObject) =>
     blocksAsJSON: adapter.blocksAsJSON,
     limitedBoundParameters: adapter.limitedBoundParameters,
     now: Date.now(),
+    withMutations: true,
   })
 
 /** Upstream `getTransaction` (sqlite has no read replicas, so `primaryDrizzle` is never set). */

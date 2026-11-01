@@ -83,3 +83,47 @@ pnpm build:engine-rs                           # build the native addon
 PAYLOAD_ENGINE=rs pnpm test:int:sqlite <suite>
 PAYLOAD_ENGINE=shadow pnpm test:int:sqlite <suite>
 ```
+
+## SQLite build: the `libsqlite3-sys` patch
+
+Every SQLite connection of the port (`crates/payload-sqlite` and the engine crates'
+`rusqlite` code, which run on the same handles) must behave like the reference runtime,
+`@libsql/client@0.14.0` -> `libsql@0.4.7` -> libsql rev `20147731` (feature `encryption`), i.e.
+the libSQL 3.45.1 amalgamation compiled through SQLite3 Multiple Ciphers 1.8.1. The root
+`Cargo.toml` therefore has
+
+```toml
+[patch.crates-io]
+libsqlite3-sys = { path = "crates/payload-sqlite/libsqlite3-sys" }
+```
+
+`crates/payload-sqlite/libsqlite3-sys` is a stand-in that keeps libsqlite3-sys 0.35's API
+(`src/error.rs` copied verbatim, `SQLITE_STATIC` / `SQLITE_TRANSIENT`, two redeclared
+auto-extension functions) on top of `libsql-ffi = "=0.4.1"` with `multiple-ciphers`, which
+builds exactly that amalgamation.
+
+What this means for maintenance:
+
+- **It applies to the whole workspace, silently.** Every `rusqlite = { features = ["bundled"] }`
+  (payload-sqlite, payload-sql-find, payload-sql-query, payload-sql-upsert) links libsql-ffi, not
+  the SQLite that `bundled` normally builds. A new crate that depends on `rusqlite` or
+  `libsqlite3-sys` gets it too. Do not add another SQLite (a second `links = "sqlite3"` crate
+  fails to resolve).
+- **Build requirements.** Every build, including the napi release builds for every target
+  platform, needs `cmake` and libclang (bindgen 0.66, run by libsql-ffi's build script), plus a
+  crates.io download of libsql-ffi 0.4.1 and bindgen. So far it has only been built and tested
+  on macOS (arm64). Linux and Windows release targets, cross-compilation and CI images must be
+  verified before shipping the addon.
+- **Pinned versions.** The shim claims version `0.35.0` and mirrors 0.35's feature list with
+  no-op features, because `rusqlite` 0.37 requires exactly that. Upgrading `rusqlite` (which
+  moves to another libsqlite3-sys) will fail resolution or bind against mismatched declarations
+  until the shim is updated: bump its version, re-copy `error.rs` from the new libsqlite3-sys,
+  and add any API the new rusqlite uses. Changing the reference (`@libsql/client` / `libsql`
+  version) means moving `libsql-ffi` to the version that libsql revision uses, and checking its
+  cmake options against the reference build.
+- **Verification after any change.** `cargo test -p payload-sqlite` (includes a test that the
+  reference build is linked: `sqlite_version()`, the libSQL source id and
+  `sqlite3mc_version()`), and the differential suite against `@libsql/client`
+  (`test/__rs/sqlite/client.int.spec.ts`: compile options, function and module lists, extension
+  functions, encryption). `PRAGMA compile_options` differs from the reference only in its
+  `COMPILER=` entry.

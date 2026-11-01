@@ -41,46 +41,64 @@ const rustCoreHooksLoad: Promise<RustCoreHooks> | undefined = isRustCoreEngine
   : undefined
 void rustCoreHooksLoad?.catch(() => {})
 
-/**
- * This function is responsible for the following actions, in order:
- * - Execute field hooks
- */
-export const afterChange: <T extends JsonObject>(args: Args<T>) => Promise<T> = isRustCoreEngine
-  ? (args) =>
-      rustCoreHooks
-        ? rustCoreHooks.afterChange(args)
-        : rustCoreHooksLoad!.then((loaded) => {
-            loaded.recordDeferredCall()
-            return loaded.afterChange(args)
-          })
-  : async <T extends JsonObject>({
+const upstream = {
+  afterChange: async <T extends JsonObject>({
+    collection,
+    context,
+    data,
+    doc: incomingDoc,
+    global,
+    operation,
+    previousDoc,
+    req,
+  }: Args<T>): Promise<T> => {
+    await traverseFields({
       collection,
       context,
       data,
       doc: incomingDoc,
+      fields: (collection?.fields || global?.fields)!,
       global,
       operation,
+      parentIndexPath: '',
+      parentIsLocalized: false,
+      parentPath: '',
+      parentSchemaPath: '',
       previousDoc,
+      previousSiblingDoc: previousDoc,
       req,
-    }: Args<T>): Promise<T> => {
-      await traverseFields({
-        collection,
-        context,
-        data,
-        doc: incomingDoc,
-        fields: (collection?.fields || global?.fields)!,
-        global,
-        operation,
-        parentIndexPath: '',
-        parentIsLocalized: false,
-        parentPath: '',
-        parentSchemaPath: '',
-        previousDoc,
-        previousSiblingDoc: previousDoc,
-        req,
-        siblingData: data,
-        siblingDoc: incomingDoc,
-      })
+      siblingData: data,
+      siblingDoc: incomingDoc,
+    })
 
-      return incomingDoc
+    return incomingDoc
+  },
+}
+
+/**
+ * Upstream's `afterChange`, whichever engine is selected: the export when the Rust core engine is
+ * not selected, and the TS reference of the Rust port's differential harnesses (test/__rs).
+ */
+export const upstreamAfterChange = upstream.afterChange
+
+/**
+ * This function is responsible for the following actions, in order:
+ * - Execute field hooks
+ */
+export const afterChange: typeof upstreamAfterChange = isRustCoreEngine
+  ? (args) => {
+      // A synchronous throw (e.g. the addon failing to load) is a rejection, as from upstream's
+      // async function.
+      try {
+        return rustCoreHooks
+          ? rustCoreHooks.afterChange(args)
+          : rustCoreHooksLoad!.then((loaded) => {
+              loaded.recordDeferredCall()
+              return loaded.afterChange(args)
+            })
+      } catch (error) {
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- rejects with the thrown value as is
+      return Promise.reject(error)
+      }
     }
+  : upstreamAfterChange

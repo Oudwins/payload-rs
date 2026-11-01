@@ -1,59 +1,33 @@
 import { createRequire } from 'node:module'
 
-import { getCoreRuntime } from '../runtime/index.js'
+// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
+import type * as Upstream from '../../../payload/src/fields/validations.js'
 
-/** Returns what the validator returns (`true`, the `t` result, or a promise of it). */
-type Validator = (value: unknown, options: unknown) => any
-
-/** `crates/payload-core-validate/live` through `validateBinding()` of `crates/payload-node`. */
-export type ValidateBinding = {
-  array: Validator
-  blocks: Validator
-  checkbox: Validator
-  code: Validator
-  confirmPassword: Validator
-  date: Validator
-  email: Validator
-  init: (host: Record<string, unknown>) => void
-  json: Validator
-  number: Validator
-  password: Validator
-  point: Validator
-  radio: Validator
-  relationship: Validator
-  richText: Validator
-  select: Validator
-  slug: () => true
-  text: Validator
-  textarea: Validator
-  upload: Validator
-  username: Validator
-  validateBlocksFilterOptions: (args: unknown) => Promise<any>
-}
-
-let binding: undefined | ValidateBinding
+/** Every validator export of `validations.ts` (the `validations` object aside). */
+export type RustValidations = Omit<typeof Upstream, 'validations'>
 
 /**
- * The validate binding of the addon the core runtime uses (`PAYLOAD_CORE_RUNTIME_ADDON`, else
- * `PAYLOAD_ENGINE_ADDON`, else the shared `payload-engine.node`): both must be the same Rust
- * instance (shared executor), so the core runtime is initialized first.
+ * `validateBinding(deps)` of the addon (`PAYLOAD_CORE_RUNTIME_ADDON`, else `PAYLOAD_ENGINE_ADDON`,
+ * else the shared `payload-engine.node`): a fresh set of Rust-backed validators
+ * (crates/payload-core-validate/live) using this `ObjectId` and `validateJSONSchema`. Payload's
+ * own `fields/validations.ts` does the same when `PAYLOAD_ENGINE=rs`.
  */
-export const getValidateBinding = (host: () => Record<string, unknown>): ValidateBinding => {
-  if (binding) {
-    return binding
-  }
-  getCoreRuntime()
+export const loadValidateBinding = (deps: {
+  ObjectId: unknown
+  validateJSONSchema: unknown
+}): RustValidations => {
   const require = createRequire(import.meta.url)
   const addonPath =
     process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
     process.env.PAYLOAD_ENGINE_ADDON ??
     '../../payload-engine.node'
-  const addon = require(addonPath) as { validateBinding?: () => ValidateBinding }
+  const addon = require(addonPath) as { validateBinding?: (deps: object) => RustValidations }
   if (typeof addon.validateBinding !== 'function') {
     throw new Error(`The engine addon at ${addonPath} does not export validateBinding`)
   }
-  const created = addon.validateBinding()
-  created.init(host())
-  binding = created
-  return binding
+  const validators = addon.validateBinding(deps)
+  if ('init' in validators) {
+    throw new Error(`The engine addon at ${addonPath} is outdated (validateBinding); rebuild it`)
+  }
+  return validators
 }

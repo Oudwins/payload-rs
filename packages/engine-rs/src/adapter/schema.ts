@@ -90,6 +90,11 @@ export const decodeRawSchema = ({
 }): RawSchemaResult => {
   const result = JSON.parse(json)
 
+  // own properties upstream holds `undefined` in (dropped by JSON), appended last as upstream has them
+  for (const path of (result.undefinedProperties ?? []) as string[][]) {
+    resolvePath(result.rawTables, path.slice(0, -1))[path.at(-1)!] = undefined
+  }
+
   const rawTables: Record<string, any> = {}
   for (const key of result.rawTableKeys as string[]) {
     rawTables[key] = result.rawTables[key]
@@ -192,5 +197,129 @@ const findSymbolPaths = (root: unknown, symbol: symbol): [string[], number][] =>
   return out
 }
 
-const resolvePath = (root: unknown, path: string[]): unknown =>
+const resolvePath = (root: unknown, path: string[]): any =>
   path.reduce<unknown>((v, key) => (v as AnyObject | undefined)?.[key], root)
+
+/**
+ * `setLiveSchema`'s description (ENGINE_CONTRACT.md) of the schema the adapter's drizzle instance
+ * was given, after `beforeSchemaInit` / `afterSchemaInit`: `drizzle` from `db._.schema` /
+ * `db._.tableNamesMap`, `rawTables` as JSON. A custom column's `fromDriver` / `toDriver` are
+ * registered as host functions that decode their tree-encoded argument and call
+ * `column.mapFromDriverValue` / `column.mapToDriverValue`.
+ */
+export const describeLiveSchema = ({
+  db,
+  rawTables,
+  registry,
+}: {
+  db: AnyObject
+  rawTables: unknown
+  registry: FunctionRegistry
+}): string => {
+  const drizzle = describeDrizzleSchema({
+    registry,
+    tableNamesMap: db._.tableNamesMap,
+    tablesConfig: db._.schema ?? {},
+  })
+  try {
+    return JSON.stringify({ drizzle, rawTables })
+  } catch {
+    // a value JSON cannot hold (a bigint column default): the engine keeps its own raw tables
+    return JSON.stringify({ drizzle })
+  }
+}
+
+const drizzleEntityKind = Symbol.for('drizzle:entityKind')
+const drizzleTableSchema = Symbol.for('drizzle:Schema')
+const drizzleTableName = Symbol.for('drizzle:Name')
+
+/** drizzle's `is(value, Class)` by entity kind, without importing a drizzle-orm copy. */
+const isDrizzleEntity = (value: unknown, kind: string) => {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  for (let cls = Object.getPrototypeOf(value).constructor; cls; cls = Object.getPrototypeOf(cls)) {
+    if (drizzleEntityKind in cls && cls[drizzleEntityKind] === kind) {
+      return true
+    }
+  }
+  return false
+}
+
+/** drizzle's `getTableUniqueName`. */
+const getTableUniqueName = (table: AnyObject) =>
+  `${table[drizzleTableSchema] ?? 'public'}.${table[drizzleTableName]}`
+
+/** A host function taking the tree-encoded value the engine passes (`callFunction`). */
+const registerColumnFunction = ({
+  fn,
+  registry,
+}: {
+  fn: (value: unknown) => unknown
+  registry: FunctionRegistry
+}) => registry.functions.push((tree: unknown) => fn(deserializeFromEngine(tree, registry))) - 1
+
+const describeDrizzleSchema = ({
+  registry,
+  tableNamesMap,
+  tablesConfig,
+}: {
+  registry: FunctionRegistry
+  tableNamesMap: Record<string, string>
+  tablesConfig: Record<string, AnyObject>
+}) => {
+  const out: Record<string, unknown> = {}
+  for (const [tsName, tableConfig] of Object.entries(tablesConfig)) {
+    const columns: Record<string, unknown> = {}
+    for (const [key, column] of Object.entries<AnyObject>(tableConfig.columns)) {
+      const isCustom = column.columnType === 'SQLiteCustomColumn'
+      columns[key] = {
+        name: column.name,
+        columnType: column.columnType,
+        primary: column.primary,
+        sqlType: column.getSQLType(),
+        ...(column.config?.mode !== undefined ? { mode: column.config.mode } : {}),
+        ...(isCustom && typeof column.mapFrom === 'function'
+          ? {
+              fromDriver: registerColumnFunction({
+                fn: (value) => column.mapFromDriverValue(value),
+                registry,
+              }),
+            }
+          : {}),
+        ...(isCustom && typeof column.mapTo === 'function'
+          ? {
+              toDriver: registerColumnFunction({
+                fn: (value) => column.mapToDriverValue(value),
+                registry,
+              }),
+            }
+          : {}),
+      }
+    }
+    const relations: Record<string, unknown> = {}
+    for (const [key, relation] of Object.entries<AnyObject>(tableConfig.relations)) {
+      const sourceTable = tableNamesMap[getTableUniqueName(relation.sourceTable)]
+      const referencedTable = tableNamesMap[getTableUniqueName(relation.referencedTable)]
+      if (isDrizzleEntity(relation, 'One') && relation.config) {
+        relations[key] = {
+          type: 'one',
+          fields: relation.config.fields.map((column: AnyObject) => column.name),
+          referencedTable,
+          references: relation.config.references.map((column: AnyObject) => column.name),
+          relationName: relation.relationName,
+          sourceTable,
+        }
+      } else {
+        relations[key] = {
+          type: isDrizzleEntity(relation, 'Many') ? 'many' : 'one-no-config',
+          referencedTable,
+          relationName: relation.relationName,
+          sourceTable,
+        }
+      }
+    }
+    out[tsName] = { columns, dbName: tableConfig.dbName, relations }
+  }
+  return out
+}

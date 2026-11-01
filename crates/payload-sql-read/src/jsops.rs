@@ -179,6 +179,8 @@ pub fn to_number(v: &Val) -> Result<f64> {
     // Lone surrogates are never white space or digits, so U+FFFD gives the same result.
     Val::Str(s) => string_to_number(&s.to_lossy()),
     Val::Date(t) => *t,
+    // `Number(10n)` is `10` (rounded to the nearest double)
+    Val::BigInt(d) => d.parse::<f64>().unwrap_or(f64::NAN),
     Val::Arr(_) | Val::Obj(_) => to_number(&ordinary_to_primitive(v, false, &mut Vec::new())?)?,
     // `Object.prototype` and built-in functions print `[object Object]` / their source.
     Val::Builtin(_) => f64::NAN,

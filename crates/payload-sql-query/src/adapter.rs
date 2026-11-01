@@ -9,6 +9,7 @@ use payload_engine::js::JsVal;
 use payload_engine::sql::schema::{RawSchema, RawTable};
 use serde_json::Value as Json;
 
+use crate::drizzle::{Decoder, DrizzleSchema};
 use crate::operators::OperatorHandler;
 use crate::sql::{Column, Expr, TableRef};
 
@@ -69,6 +70,10 @@ impl AdapterOptions {
 /// `RawSchema::block_table_name_index`.
 pub struct QueryAdapter<'a> {
   pub schema: &'a RawSchema,
+  /// `adapter.tables`: the live drizzle tables (after `afterSchemaInit`), whose columns resolve
+  /// `where` / `sort` paths and encode / decode their values. `None` reads them from
+  /// `schema.raw_tables` (identical when no schema hook changed them).
+  pub drizzle: Option<&'a DrizzleSchema>,
   /// `payload.config` (sanitized)
   pub config: &'a JsVal,
   /// `payload.collections`: `{ [slug]: { config, customIDType } }`
@@ -132,7 +137,13 @@ pub(crate) fn read_undefined(prop: &str) -> EngineError {
 
 impl<'a> QueryAdapter<'a> {
   pub fn new(schema: &'a RawSchema, config: &'a JsVal, collections: &'a JsVal, blocks: &'a JsVal, opts: AdapterOptions) -> Self {
-    Self { schema, config, collections, blocks, opts, alias_counter: Cell::new(0) }
+    Self { schema, config, collections, blocks, drizzle: None, opts, alias_counter: Cell::new(0) }
+  }
+
+  /// This adapter with `adapter.tables` read from the live drizzle schema.
+  pub fn with_drizzle(mut self, drizzle: &'a DrizzleSchema) -> Self {
+    self.drizzle = Some(drizzle);
+    self
   }
 
   fn raw_table(&self, name: &str) -> Option<&RawTable> {
@@ -141,7 +152,12 @@ impl<'a> QueryAdapter<'a> {
 
   /// `adapter.tables[name]`
   pub fn table(&self, name: Option<&str>) -> Option<TableRef> {
-    let t = self.raw_table(name?)?;
+    let name = name?;
+    if let Some(drizzle) = self.drizzle {
+      let t = drizzle.tables.get(name)?;
+      return Some(TableRef { name: t.db_name.clone(), alias: None });
+    }
+    let t = self.raw_table(name)?;
     Some(TableRef { name: t.name.clone(), alias: None })
   }
 
@@ -152,16 +168,41 @@ impl<'a> QueryAdapter<'a> {
 
   /// `table[key]`
   pub fn column(&self, table: &TableRef, key: &str) -> Option<Column> {
+    let access_id = if table.alias.is_some() { Column::next_access_id() } else { 0 };
+    if let Some(drizzle) = self.drizzle {
+      let col = drizzle.table_by_db_name(&table.name)?.columns.get(key)?;
+      return Some(Column {
+        table: table.clone(),
+        key: key.to_string(),
+        name: col.name.clone(),
+        decoder: col.decoder,
+        to_driver: col.to_driver,
+        primary: col.primary,
+        access_id,
+      });
+    }
     let raw = self.raw_table(&table.name)?;
     let col = raw.columns.get(key)?;
     Some(Column {
       table: table.clone(),
       key: key.to_string(),
       name: col.get("name").and_then(|v| v.as_str()).unwrap_or(key).to_string(),
-      col_type: col.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+      decoder: Decoder::from_raw_type(col.get("type").and_then(|v| v.as_str()).unwrap_or("")),
+      to_driver: None,
       primary: col.get("primaryKey").is_some_and(|v| v.as_bool() == Some(true)),
-      access_id: if table.alias.is_some() { Column::next_access_id() } else { 0 },
+      access_id,
     })
+  }
+
+  /// The key of the column named `column` (database name) of the table whose database name is
+  /// `table`.
+  pub fn column_key_by_db_name(&self, table: &str, column: &str) -> Option<String> {
+    if let Some(drizzle) = self.drizzle {
+      let t = drizzle.table_by_db_name(table)?;
+      return t.columns.iter().find(|(_, c)| c.name == column).map(|(key, _)| key.clone());
+    }
+    let t = self.schema.raw_tables.values().flatten().find(|t| t.name == table)?;
+    t.columns.iter().find(|(key, c)| c.get("name").and_then(|n| n.as_str()).unwrap_or(key) == column).map(|(key, _)| key.clone())
   }
 
   /// `table[key]` as an expression (`undefined` when the column does not exist).

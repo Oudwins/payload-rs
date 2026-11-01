@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use napi::sys;
 use payload_core_runtime::config::{self, BlockCandidate, BlockDesc, FieldDesc, FieldsDesc, Kind, format_number};
-use payload_core_runtime::executor::{await_js, spawn};
+use payload_core_runtime::executor::{Tail, await_js, spawn, spawn_tail};
 use payload_core_runtime::host::{self, call_host, host};
 use payload_core_runtime::js::{self, JsResult, Local, Thrown, Type, Val};
 
@@ -123,7 +123,7 @@ fn is_leaf(kind: Kind) -> bool {
 /// `beforeValidate(args)` (index.ts): returns the promise of `args.data` (same identity).
 pub fn before_validate(args: Local) -> JsResult<Local> {
   let args = Val::from_local(args)?;
-  spawn(async move {
+  spawn_tail(async move {
     // Destructuring of the async function's parameter (a throw here is a rejection).
     let a = args.get();
     let g = |name: &str| -> JsResult<Val> { Val::from_local(host::get_named(a, name)?) };
@@ -170,16 +170,15 @@ pub fn before_validate(args: Local) -> JsResult<Local> {
       sibling_data: data.clone(),
       sibling_doc: doc,
     });
-    let p = spawn(traverse_fields(ctx, trav))?;
-    await_js(p).await?;
-    Ok(data)
+    let p = traverse(ctx, trav)?;
+    Ok(Tail::Await(p, data))
   })
 }
 
 /// `traverseFields(args)` (traverseFields.ts, exported by payload as `beforeValidateTraverseFields`).
 pub fn traverse_fields_entry(args: Local) -> JsResult<Local> {
   let args = Val::from_local(args)?;
-  spawn(async move {
+  spawn_tail(async move {
     let a = args.get();
     let g = |name: &str| -> JsResult<Val> { Val::from_local(host::get_named(a, name)?) };
     let s = |name: &str| -> JsResult<Rc<str>> { Ok(js_string_arg(host::get_named(a, name)?).into()) };
@@ -243,15 +242,66 @@ fn js_string_arg(v: Local) -> String {
   }
 }
 
+/// Calls `traverseFields` (an async function) and returns its promise. A fields array made only of
+/// leaf fields ([`is_leaf`]) runs upstream's `traverseFields.ts` body in JS
+/// (`beforeValidateLeafTraversal`: `unflattenData`, `fields.forEach` pushing the leaf `promise()`,
+/// `await Promise.all`), so the whole traversal is upstream code; other arrays run the port.
+fn traverse(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Local> {
+  let all_leaves = t.tab_fields.is_none() && t.fields.items.as_ref().is_some_and(|items| items.iter().all(|f| is_leaf(f.kind)));
+  if all_leaves && mutant("M13") {
+    // Mutant: the leaf `promise()`s are pushed and `Promise.all` is returned directly, without
+    // `traverseFields`' own async function (one microtask less).
+    let bh = bv_host()?;
+    call_host(&bh.unflatten_data, &[t.sibling_data.get()])?;
+    let promises = js::array();
+    let len = t.fields.items.as_ref().map_or(0, |items| items.len());
+    call_host(
+      &bh.before_validate_leaves,
+      &[
+        ctx.arr.get(),
+        t.fields.node.get(),
+        js::number(0.0),
+        js::number(len as f64),
+        promises,
+        t.block_data.get(),
+        t.doc_for_hooks.get(),
+        js::string(&t.parent_index_path),
+        js::string(&t.parent_path),
+        js::string(&t.parent_schema_path),
+        t.sibling_data.get(),
+        t.sibling_doc.get(),
+      ],
+    )?;
+    return call_host(&host()?.promise_all, &[promises]);
+  }
+  if all_leaves && !mutant("M3") {
+    return call_host(
+      &bv_host()?.before_validate_leaf_traversal,
+      &[
+        ctx.arr.get(),
+        t.fields.node.get(),
+        t.block_data.get(),
+        t.doc_for_hooks.get(),
+        js::string(&t.parent_index_path),
+        js::string(&t.parent_path),
+        js::string(&t.parent_schema_path),
+        t.sibling_data.get(),
+        t.sibling_doc.get(),
+      ],
+    );
+  }
+  spawn_tail(traverse_fields(ctx, t))
+}
+
 /// Port of `traverseFields.ts` (an async function).
-async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
+async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Tail> {
   let h = host()?;
   let bh = bv_host()?;
   call_host(&bh.unflatten_data, &[t.sibling_data.get()])?;
 
   let Some(items) = &t.fields.items else {
     config::throw_not_array(&t.fields)?;
-    return Ok(Val::Undefined);
+    return Ok(Tail::Return(Val::Undefined));
   };
   let promises = js::array();
   let mut order: Vec<(usize, &Rc<FieldDesc>)> = items.iter().enumerate().collect();
@@ -264,7 +314,7 @@ async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
     while index < items.len() {
       if !is_leaf(items[index].kind) {
         let desc = &items[index];
-        let promise = spawn(field_promise(ctx.clone(), t.clone(), desc.clone(), Val::Ref(desc.node.clone()), index))?;
+        let promise = spawn_tail(field_promise(ctx.clone(), t.clone(), desc.clone(), Val::Ref(desc.node.clone()), index))?;
         js::push(promises, promise)?;
         index += 1;
         continue;
@@ -298,12 +348,11 @@ async fn traverse_fields(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Val> {
       Some(arr) => Val::from_local(js::get_element(arr.get(), index as u32)?)?,
       None => Val::Ref(desc.node.clone()),
     };
-    let promise = spawn(field_promise(ctx.clone(), t.clone(), desc.clone(), field_js, index))?;
+    let promise = spawn_tail(field_promise(ctx.clone(), t.clone(), desc.clone(), field_js, index))?;
     js::push(promises, promise)?;
   }
   let all = call_host(&h.promise_all, &[promises])?;
-  await_js(all).await?;
-  Ok(Val::Undefined)
+  Ok(Tail::Await(all, Val::Undefined))
 }
 
 struct Paths {
@@ -427,7 +476,7 @@ fn is_restoring_version(req: &Val) -> JsResult<bool> {
 }
 
 /// Port of `promise.ts`.
-async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Val, field_index: usize) -> JsResult<Val> {
+async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Val, field_index: usize) -> JsResult<Tail> {
   let h = host()?;
   let bh = bv_host()?;
   let Paths { index_path, path, schema_path } =
@@ -664,7 +713,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
         for_each(filtered_rows, |row, row_index| {
           let fields = f.children()?;
           let sibling_doc = call_host(&bh.get_existing_row_doc, &[row, host::get(t.sibling_doc.get(), name())?])?;
-          let promise = spawn(traverse_fields(
+          let promise = traverse(
             ctx.clone(),
             Rc::new(Trav {
               block_data: t.block_data.clone(),
@@ -678,11 +727,11 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
               sibling_data: Val::from_local(row)?,
               sibling_doc: Val::from_local(sibling_doc)?,
             }),
-          ))?;
+          )?;
           js::push(promises, promise)
         })?;
         let all = call_host(&h.promise_all, &[promises])?;
-        await_js(all).await?;
+        return Ok(Tail::Await(all, Val::Undefined));
       }
     }
 
@@ -706,7 +755,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
             if !mutant("M10") {
               host::set(row, js::key("blockType"), block_type_to_match)?;
             }
-            let promise = spawn(traverse_fields(
+            let promise = traverse(
               ctx.clone(),
               Rc::new(Trav {
                 block_data: Val::from_local(row)?,
@@ -720,18 +769,18 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
                 sibling_data: Val::from_local(row)?,
                 sibling_doc: Val::from_local(row_sibling_doc)?,
               }),
-            ))?;
+            )?;
             js::push(promises, promise)?;
           }
           Ok(())
         })?;
         let all = call_host(&h.promise_all, &[promises])?;
-        await_js(all).await?;
+        return Ok(Tail::Await(all, Val::Undefined));
       }
     }
 
     "collapsible" | "row" => {
-      let promise = spawn(traverse_fields(
+      let promise = traverse(
         ctx.clone(),
         Rc::new(Trav {
           block_data: t.block_data.clone(),
@@ -745,8 +794,8 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
           sibling_data: t.sibling_data.clone(),
           sibling_doc: t.sibling_doc.clone(),
         }),
-      ))?;
-      await_js(promise).await?;
+      )?;
+      return Ok(Tail::Await(promise, Val::Undefined));
     }
 
     // `group` is named when it affects data; a `tab` is named when `'name' in field`.
@@ -758,7 +807,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
         }
         if !js::type_of(host::get(t.sibling_doc.get(), name())?).is_typeof_object() {
           if mutant("M8") {
-            return finish_group_mutant(ctx.clone(), t.clone(), f.clone(), &path, &schema_path).await;
+            return finish_group_mutant(ctx.clone(), t.clone(), f.clone(), &path, &schema_path).await.map(Tail::Return);
           }
           host::set(t.sibling_doc.get(), name(), js::object())?;
         }
@@ -766,7 +815,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
       } else {
         (t.sibling_data.clone(), t.sibling_doc.clone())
       };
-      let promise = spawn(traverse_fields(
+      let promise = traverse(
         ctx.clone(),
         Rc::new(Trav {
           block_data: t.block_data.clone(),
@@ -780,8 +829,8 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
           sibling_data,
           sibling_doc,
         }),
-      ))?;
-      await_js(promise).await?;
+      )?;
+      return Ok(Tail::Await(promise, Val::Undefined));
     }
 
     "richText" => {
@@ -832,7 +881,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
     "tabs" => {
       let tabs = host::get_named(field_js.get(), "tabs")?;
       let tab_fields = call_host(&h.tabs_as_fields, &[tabs])?;
-      let promise = spawn(traverse_fields(
+      let promise = traverse(
         ctx.clone(),
         Rc::new(Trav {
           block_data: t.block_data.clone(),
@@ -846,14 +895,14 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
           sibling_data: t.sibling_data.clone(),
           sibling_doc: t.sibling_doc.clone(),
         }),
-      ))?;
-      await_js(promise).await?;
+      )?;
+      return Ok(Tail::Await(promise, Val::Undefined));
     }
 
     _ => {}
   }
 
-  Ok(Val::Undefined)
+  Ok(Tail::Return(Val::Undefined))
 }
 
 /// The `relationship` / `upload` case of the sanitize switch.
@@ -1095,7 +1144,7 @@ async fn get_default_value(default_value: Val, locale: Val, req: Val, user: Val)
 /// the original doc.
 async fn finish_group_mutant(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, path: &str, schema_path: &str) -> JsResult<Val> {
   let sibling_data = Val::from_local(host::get(t.sibling_data.get(), f.name.get())?)?;
-  let promise = spawn(traverse_fields(
+  let promise = traverse(
     ctx.clone(),
     Rc::new(Trav {
       block_data: t.block_data.clone(),
@@ -1109,7 +1158,7 @@ async fn finish_group_mutant(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, path: 
       sibling_data,
       sibling_doc: Val::from_local(js::object())?,
     }),
-  ))?;
+  )?;
   await_js(promise).await?;
   Ok(Val::Undefined)
 }

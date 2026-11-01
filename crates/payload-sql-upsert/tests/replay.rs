@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 use payload_engine::error::{EngineError, Result};
-use payload_engine::js::{JsVal, Obj, decode_graph};
+use payload_engine::js::{JsVal, Obj, decode_graph_typed};
 use payload_engine::sql::schema::{RawSchema, RawTable};
 use payload_sql_upsert::ops::{self, BuiltQuery, CreateVersionArgs, Env, OpsHost, UpdateOneArgs, WriteArgs};
 use payload_sql_upsert::sql::{Executor, SqlFragment};
@@ -37,7 +37,7 @@ use serde_json::{Map, Value as Json, json};
 type Dump = Map<String, Json>;
 
 fn decode(v: &Json) -> JsVal {
-  decode_graph(&json!({ "objects": [], "root": v })).expect("decodable fixture value")
+  decode_graph_typed(&json!({ "objects": [], "root": v })).expect("decodable fixture value")
 }
 
 struct Schema {
@@ -334,18 +334,15 @@ impl<'a> State<'a> {
 
 /// Looks up `select "id" from "<table>" where <where> limit 1` in the Rust database.
 fn lookup_id(exec: &Executor<'_>, table: &str, where_: Option<&SqlFragment>) -> Result<Option<JsVal>> {
-  let mut sql = format!("select \"id\" from \"{table}\"");
-  let mut params = vec![];
+  let mut q = SqlFragment::raw(format!("select \"id\" from \"{table}\""));
   if let Some(w) = where_ {
-    sql.push_str(" where ");
-    sql.push_str(&w.sql);
-    params = w.params.iter().map(payload_sql_upsert::value::bind_value).collect::<Result<Vec<_>>>()?;
+    q.sql.push_str(" where ");
+    q.sql.push_str(&w.sql);
+    q.params = w.params.clone();
   }
-  sql.push_str(" limit 1");
-  let mut stmt = exec.conn.prepare(&sql).map_err(|e| EngineError::internal(e.to_string()))?;
-  let mut rows = stmt.query(rusqlite::params_from_iter(params.iter())).map_err(|e| EngineError::internal(e.to_string()))?;
-  let Some(row) = rows.next().map_err(|e| EngineError::internal(e.to_string()))? else { return Ok(None) };
-  Ok(Some(payload_sql_upsert::value::value_from_sql(row.get_ref(0).map_err(|e| EngineError::internal(e.to_string()))?)?))
+  q.sql.push_str(" limit 1");
+  let rows = exec.conn.run(&q).map_err(|e| EngineError::internal(e.into_engine_error().message))?;
+  Ok(rows.into_iter().next().and_then(|row| row.into_iter().next()).map(|(_, v)| v))
 }
 
 fn result_json<T>(r: std::result::Result<T, &EngineError>, ok: impl FnOnce(T) -> Json) -> Json {

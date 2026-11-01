@@ -22,7 +22,7 @@ export type Arguments = {
   select?: SelectType
 }
 
-export const meOperation = async (args: Arguments): Promise<MeOperationResult> => {
+export const meOperationTS = async (args: Arguments): Promise<MeOperationResult> => {
   const { collection, currentToken, depth, draft, joins, populate, req, select } = args
 
   let result: MeOperationResult = {
@@ -107,3 +107,36 @@ export const meOperation = async (args: Arguments): Promise<MeOperationResult> =
 
   return result
 }
+
+type RustOperations = {
+  meOperation: (args: any) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-global`), selected once at module load:
+ * `PAYLOAD_OPS_GLOBAL_ENGINE=rs|ts`, else `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`.
+ * See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations =
+  (process.env.PAYLOAD_OPS_GLOBAL_ENGINE ||
+    process.env.PAYLOAD_CORE_ENGINE ||
+    process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops-global/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const meOperation: typeof meOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.meOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.meOperation(args)
+          })
+  : meOperationTS

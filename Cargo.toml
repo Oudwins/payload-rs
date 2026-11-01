@@ -17,6 +17,8 @@ members = [
   "crates/payload-core-hooks-after",
   "crates/payload-core-hooks-validate",
   "crates/payload-core-ops",
+  "crates/payload-core-ops-global",
+  "crates/payload-core-ops-write",
   "crates/payload-sql-engine",
 ]
 

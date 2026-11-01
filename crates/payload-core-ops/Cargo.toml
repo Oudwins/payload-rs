@@ -10,4 +10,10 @@ version.workspace = true
 
 [dependencies]
 napi = { version = "3", features = ["napi10"] }
+payload-core-query = { path = "../payload-core-query" }
 payload-core-runtime = { path = "../payload-core-runtime" }
+
+[features]
+# Deliberate deviations selectable through `init({ mutant })` for harness sensitivity checks
+# (RUST_OPS_DESIGN.md section 5). Never enabled in the shipped addon.
+mutants = []

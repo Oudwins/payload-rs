@@ -57,7 +57,7 @@ export type Arguments = {
 
 const lockDurationDefault = 300 // Default 5 minutes in seconds
 
-export const findOperation = async <
+export const findOperationTS = async <
   TSlug extends CollectionSlug,
   TSelect extends SelectFromCollectionSlug<TSlug>,
 >(
@@ -396,3 +396,32 @@ export const findOperation = async <
 
   return result as PaginatedDocs<TransformCollectionWithSelect<TSlug, TSelect>>
 }
+
+type RustOperations = {
+  findOperation: (args: Arguments) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops`), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ */
+const isRustOperations = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustOperationsSpecifier = '../../../../engine-rs/src/ops/index.js'
+let rustOperations: RustOperations | undefined
+const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
+      (loaded: RustOperations) => (rustOperations = loaded),
+    )
+  : undefined
+void rustOperationsLoad?.catch(() => {})
+
+export const findOperation: typeof findOperationTS = isRustOperations
+  ? (args) =>
+      rustOperations
+        ? rustOperations.findOperation(args)
+        : rustOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.findOperation(args)
+          })
+  : findOperationTS

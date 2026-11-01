@@ -15,6 +15,9 @@ use crate::{count, doc_access, find, find_by_id, find_distinct, find_version_by_
 
 type Body<const N: usize> = fn([Local; N]) -> JsResult<Local>;
 
+/// Version of the binding / host-helper contract with `packages/engine-rs/src/ops`.
+pub const API_VERSION: u32 = 2;
+
 /// Runs an exported function body: sets the env, converts `Err(Thrown)` into a JS throw and
 /// never lets a panic cross the FFI boundary.
 fn run<const N: usize>(env: sys::napi_env, info: sys::napi_callback_info, body: Body<N>) -> sys::napi_value {
@@ -42,22 +45,43 @@ macro_rules! export {
   };
 }
 
+/// An export of an upstream `async` function: anything thrown before its task starts rejects the
+/// returned promise instead of throwing at the call site.
+macro_rules! export_async {
+  ($name:ident, $n:literal, $body:expr) => {
+    export!($name, $n, |args: [Local; $n]| {
+      let body: Body<$n> = $body;
+      match body(args) {
+        Ok(p) => Ok(p),
+        Err(Thrown(e)) => rejected(e.get()),
+      }
+    });
+  };
+}
+
+/// `Promise.reject(error)` (native promise).
+fn rejected(error: Local) -> JsResult<Local> {
+  let (deferred, promise) = js::create_promise()?;
+  js::reject_deferred(deferred, error);
+  Ok(promise)
+}
+
 export!(init, 1, |[host_obj]| {
   host::install(host_obj)?;
   Ok(js::undefined())
 });
 
-export!(find_export, 1, |[args]| find::find(args));
-export!(find_by_id_export, 1, |[args]| find_by_id::find_by_id(args));
-export!(count_export, 1, |[args]| count::count(args));
-export!(count_versions_export, 1, |[args]| count::count_versions(args));
-export!(find_distinct_export, 1, |[args]| find_distinct::find_distinct(args));
-export!(find_versions_export, 1, |[args]| find_versions::find_versions(args));
-export!(find_version_by_id_export, 1, |[args]| find_version_by_id::find_version_by_id(args));
-export!(doc_access_export, 1, |[args]| doc_access::doc_access(args));
+export_async!(find_export, 1, |[args]| find::find(args));
+export_async!(find_by_id_export, 1, |[args]| find_by_id::find_by_id(args));
+export_async!(count_export, 1, |[args]| count::count(args));
+export_async!(count_versions_export, 1, |[args]| count::count_versions(args));
+export_async!(find_distinct_export, 1, |[args]| find_distinct::find_distinct(args));
+export_async!(find_versions_export, 1, |[args]| find_versions::find_versions(args));
+export_async!(find_version_by_id_export, 1, |[args]| find_version_by_id::find_version_by_id(args));
+export_async!(doc_access_export, 1, |[args]| doc_access::doc_access(args));
 
 // executeAccess({ id, slug, data, disableErrors, isReadingStaticFile = false, req }, access)
-export!(execute_access_export, 2, |[args, access]| {
+export_async!(execute_access_export, 2, |[args, access]| {
   let args = js::Val::from_local(args)?;
   let access = js::Val::from_local(access)?;
   spawn(async move {
@@ -75,10 +99,10 @@ export!(execute_access_export, 2, |[args, access]| {
   })
 });
 
+// sanitizeSortQuery({ fields, sort })
 export!(sanitize_sort_query_export, 1, |[args]| {
-  let fields = host::get(args, "fields")?;
-  let sort = host::get(args, "sort")?;
-  common::sanitize_sort_query(fields, sort)
+  let d = host::call("sanitizeSortQueryArgs", &[args])?;
+  common::sanitize_sort_query(js::get_element(d, 0)?, js::get_element(d, 1)?)
 });
 
 /// Builds the binding object.
@@ -100,6 +124,8 @@ pub fn create() -> JsResult<Local> {
   add!("docAccess", doc_access_export);
   add!("executeAccess", execute_access_export);
   add!("sanitizeSortQuery", sanitize_sort_query_export);
+  // The host helper set this build expects (packages/engine-rs/src/ops/host.ts checks it).
+  js::set_named(o, "apiVersion", js::number(f64::from(API_VERSION)))?;
   Ok(o)
 }
 

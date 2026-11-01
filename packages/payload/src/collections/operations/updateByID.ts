@@ -74,7 +74,7 @@ export type Arguments<TSlug extends CollectionSlug> = {
   unpublishAllLocales?: boolean
 } & Pick<FindOptions<TSlug, SelectType>, 'select'>
 
-export const updateByIDOperation = async <
+export const updateByIDOperationTS = async <
   TSlug extends CollectionSlug,
   TSelect extends SelectFromCollectionSlug<TSlug> = SelectType,
 >(
@@ -415,3 +415,33 @@ export const updateByIDOperation = async <
     throw error
   }
 }
+
+type RustWriteOperations = {
+  updateByIDOperation: (args: Parameters<typeof updateByIDOperationTS>[0]) => Promise<any>
+  recordDeferredCall: () => void
+}
+
+/**
+ * Rust engine (`packages/engine-rs/src/ops-write`), selected once at module load:
+ * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ */
+const isRustWriteOperations =
+  (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const rustWriteOperationsSpecifier = '../../../../engine-rs/src/ops-write/index.js'
+let rustWriteOperations: RustWriteOperations | undefined
+const rustWriteOperationsLoad: Promise<RustWriteOperations> | undefined = isRustWriteOperations
+  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustWriteOperationsSpecifier).then(
+      (loaded: RustWriteOperations) => (rustWriteOperations = loaded),
+    )
+  : undefined
+void rustWriteOperationsLoad?.catch(() => {})
+
+export const updateByIDOperation: typeof updateByIDOperationTS = isRustWriteOperations
+  ? (args) =>
+      rustWriteOperations
+        ? rustWriteOperations.updateByIDOperation(args)
+        : rustWriteOperationsLoad!.then((loaded) => {
+            loaded.recordDeferredCall()
+            return loaded.updateByIDOperation(args)
+          })
+  : updateByIDOperationTS

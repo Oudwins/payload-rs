@@ -6,6 +6,8 @@
  * - typed values: `Date` instances (date fields `toISOString()`, text fields `JSON.stringify`,
  *   json values), invalid dates, `bigint`s
  * - user objects shaped like engine markers (`{"$bigint": "0"}`, `{"$date": ...}`, `{"$sql": ...}`)
+ * - cyclic objects: kept as they are in json values, V8's "Converting circular structure to JSON"
+ *   `TypeError` for text fields (`JSON.stringify`)
  *
  *   pnpm tsx test/__rs/write/identityTypes.ts   # writes fixtures/manual__identity-types.json.gz
  */
@@ -165,6 +167,38 @@ const cases: (() => Record<string, unknown>)[] = [
     },
   }),
   () => ({ title: { $date: null } }),
+  // cycles
+  () => {
+    const self: Record<string, unknown> = { a: 1 }
+    self.self = self
+    return { data: self }
+  },
+  () => {
+    const list: unknown[] = [1]
+    list.push(list)
+    return { data: { list } }
+  },
+  () => {
+    const self: Record<string, unknown> = { a: 1 }
+    self.self = self
+    return { title: self }
+  },
+  () => {
+    const inner: Record<string, unknown> = { n: 1 }
+    const outer = { 'a b': inner, list: [inner] }
+    inner['back "q"'] = outer
+    return { subtitle: { en: outer } }
+  },
+  () => {
+    const list: unknown[] = []
+    list.push({ list })
+    return { title: list }
+  },
+  () => {
+    const shared: Record<string, unknown> = { at: date('2020-01-01T00:00:00.000Z') }
+    shared.again = shared
+    return { data: shared, meta: { description: shared } }
+  },
 ]
 
 let errors = 0

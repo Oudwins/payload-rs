@@ -68,6 +68,14 @@ export const implementations = {
   },
 }
 
+// Both sides running the Rust port (e.g. under vitest.upstream.config.ts, whose aliases redirect
+// payload's modules to the glue) would make every comparison pass.
+for (const fn of Object.keys(implementations.ts) as (keyof typeof implementations.ts)[]) {
+  if (implementations.ts[fn] === (implementations.rs[fn] as unknown)) {
+    throw new Error(`core-query live: the TS reference of ${fn} is the Rust port`)
+  }
+}
+
 type Impl = typeof implementations.ts
 export type FnName = keyof Impl
 
@@ -511,6 +519,28 @@ export const wheresOf = (paths: string[]): (() => Record<string, unknown>)[] => 
   return wheres
 }
 
+/** `localizedPath` arguments of getFieldByPath (fresh values per run). */
+const localizedPathArgs: (() => unknown)[] = [
+  () => undefined,
+  () => '',
+  () => null,
+  () => 0,
+  () => false,
+  () => NaN,
+  () => 'pre',
+  () => 'a.<locale>',
+  () => 1,
+  () => true,
+  () => ({ toString: () => 'obj' }),
+  () => ['x', 'y'],
+  () => Symbol('localizedPath'),
+  () => ({
+    toString() {
+      throw new Error('localizedPath toString')
+    },
+  }),
+]
+
 /**
  * Cases for every entity of the config: validateQueryPaths (plain, versions, polymorphicJoin,
  * showHiddenFields, caller policies/errors), validateSortQuery, sanitizeJoinQuery,
@@ -723,7 +753,76 @@ export const generateCorpus = (
         name: `gfbp ${slug} ${path}`,
         req,
       })
+      // `localizedPath` of any type: truthiness, then ToString, in the first iteration
+      const localizedPath = localizedPathArgs[p % localizedPathArgs.length]!
+      cases.push({
+        fn: 'getFieldByPath',
+        make: ({ payload: pl }) => ({
+          args: [
+            {
+              config: p % 2 === 1 ? pl.config : undefined,
+              fields: entity.config.flattenedFields,
+              includeRelationships: p % 3 === 2,
+              localizedPath: localizedPath(),
+              path,
+            },
+          ],
+          inputs: {},
+        }),
+        name: `gfbp ${slug} ${path} localizedPath#${p % localizedPathArgs.length}`,
+        req,
+      })
     })
+    // malformed arguments: non-string paths
+    for (const [i, path] of (
+      [undefined, null, 7, ['a', 'b'], { split: undefined }] as unknown[]
+    ).entries()) {
+      cases.push({
+        fn: 'getFieldByPath',
+        make: () => ({
+          args: [{ fields: entity.config.flattenedFields, localizedPath: 'x', path }],
+          inputs: {},
+        }),
+        name: `gfbp ${slug} non-string path#${i}`,
+        req,
+      })
+    }
+    if (isCollection) {
+      // nullish / primitive / getter join entries (`const { joinPath } = join` and the reads after it)
+      const joinEntries: (() => unknown)[] = [
+        () => null,
+        () => undefined,
+        () => 5,
+        () => ({
+          get joinPath() {
+            throw new Error('joinPath getter')
+          },
+        }),
+      ]
+      joinEntries.forEach((join, j) => {
+        for (const polymorphic of [false, true]) {
+          cases.push({
+            fn: 'sanitizeJoinQuery',
+            make: ({ req: r }) => {
+              const inputs = { joins: {} }
+              const collectionConfig = {
+                ...entity.config,
+                joins: polymorphic ? {} : { [slug]: [join()] },
+                polymorphicJoins: polymorphic ? [join()] : [],
+              }
+              return {
+                args: [
+                  { collectionConfig, joins: inputs.joins, overrideAccess: j % 2 === 0, req: r },
+                ],
+                inputs,
+              }
+            },
+            name: `joins ${slug} malformed join#${j}${polymorphic ? ' polymorphic' : ''}`,
+            req,
+          })
+        }
+      })
+    }
     wheres.forEach((where, w) => {
       if (!isCollection) {
         return

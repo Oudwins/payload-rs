@@ -8,7 +8,7 @@ import {
   afterRead as afterReadRS,
   getCoreRuntime,
 } from '../../../packages/engine-rs/src/runtime/index.js'
-import { afterRead as afterReadTS } from '../../../packages/payload/src/fields/hooks/afterRead/index.js'
+import { upstreamAfterRead as afterReadTS } from '../../../packages/payload/src/fields/hooks/afterRead/index.js'
 
 const b = getCoreRuntime()
 const results: Record<string, string> = {}

@@ -14,6 +14,7 @@ import type { Payload, PayloadRequest, SanitizedConfig } from 'payload'
 
 import { sqliteAdapter } from '@payloadcms/db-sqlite'
 import { DrizzleQueryError, sql } from '@payloadcms/db-sqlite/drizzle'
+import { customType, text } from '@payloadcms/db-sqlite/drizzle/sqlite-core'
 import { rmSync } from 'node:fs'
 import {
   buildConfig,
@@ -24,12 +25,18 @@ import {
 } from 'payload'
 import { afterAll, beforeAll, expect, vi } from 'vitest'
 
+import { buildEngineInput } from '../../../packages/engine-rs/src/adapter/schema.js'
 import {
+  createFunctionRegistry,
+  getNativeEngine,
   getRustEngineStats,
   isRustEngineAdapter,
+  serializeForEngine,
   withRustEngine,
 } from '../../../packages/engine-rs/src/index.js'
+import { createClient, getSqliteConnId } from '../../../packages/engine-rs/src/sqlite/client.js'
 import { Sqlite3Client } from '../../../packages/engine-rs/src/sqlite/index.js'
+import { getNativeSqlite } from '../../../packages/engine-rs/src/sqlite/native.js'
 import { test } from '../../__helpers/int/vitest.js'
 
 const base = (process.env.SQLITE_URL || 'file:/tmp/rs-adapter.db')
@@ -37,8 +44,11 @@ const base = (process.env.SQLITE_URL || 'file:/tmp/rs-adapter.db')
   .replace(/\.db$/, '')
 const files = {
   candidate: `${base}.adapter-candidate.db`,
+  other: `${base}.adapter-other.db`,
   reference: `${base}.adapter-reference.db`,
 }
+
+const isLoopback = process.env.PAYLOAD_RS_ENGINE_LOOPBACK === 'true'
 
 const removeDatabases = () => {
   for (const file of Object.values(files)) {
@@ -88,6 +98,8 @@ const makeConfig = (db: ReturnType<typeof sqliteAdapter> | SanitizedConfig['db']
           { name: 'posts', type: 'join', collection: 'posts', on: 'related' },
         ],
       },
+      // changed by the adapter's schema hooks (see `schemaHooks`)
+      { slug: 'hooked', access, fields: [{ name: 'name', type: 'text' }] },
     ],
     db: db as SanitizedConfig['db'],
     globals: [
@@ -97,10 +109,53 @@ const makeConfig = (db: ReturnType<typeof sqliteAdapter> | SanitizedConfig['db']
         fields: [{ name: 'siteName', type: 'text', localized: true }],
         versions: true,
       },
+      {
+        slug: 'fresh',
+        access: { read: () => true, update: () => true },
+        fields: [{ name: 'siteName', type: 'text' }],
+      },
     ],
     localization: { defaultLocale: 'en', fallback: true, locales: ['en', 'de'] },
     secret: 'rs-adapter',
   })
+
+/**
+ * `beforeSchemaInit` adds a raw column (with a default drizzle binds on insert) to `hooked`,
+ * `afterSchemaInit` a drizzle-only custom column whose `fromDriver` throws for `'boom'`: the engine
+ * must run on this live schema (`setLiveSchema`), and rethrow the function's own error.
+ */
+const fromDriverError = new Error('fromDriver boom')
+const schemaHooks = {
+  afterSchemaInit: [
+    ({ extendTable, schema }: { extendTable: any; schema: any }) => {
+      extendTable({
+        columns: {
+          custom: customType<{ data: string; driverData: string }>({
+            dataType: () => 'text',
+            fromDriver: (value) => {
+              if (value === 'boom') {
+                throw fromDriverError
+              }
+              return `decoded:${value}`
+            },
+          })('custom'),
+        },
+        table: schema.tables.hooked,
+      })
+      return schema
+    },
+  ],
+  beforeSchemaInit: [
+    ({ adapter, schema }: { adapter: any; schema: any }) => {
+      adapter.rawTables.hooked.columns.rawExtra = {
+        name: 'raw_extra',
+        type: 'text',
+        default: 'dflt',
+      }
+      return schema
+    },
+  ],
+}
 
 type Side = 'candidate' | 'reference'
 
@@ -170,6 +225,44 @@ const expectSame = async (operation: (payload: Payload) => Promise<unknown>) => 
   return reference as { error?: unknown; ok?: unknown }
 }
 
+/**
+ * `both`, plus the `[sql, bound parameter count]` of every statement each side ran: the
+ * reference's through its client's `execute`, the candidate's from the SQLite statement trace of
+ * its connections (the engine does not go through `execute`). Fails when nothing ran.
+ */
+const expectSameStatements = async (operation: (payload: Payload) => Promise<unknown>) => {
+  const statements = {} as Record<Side, [string, number][]>
+  const out = await both(async (payload) => {
+    if (payload === instances.candidate) {
+      getNativeSqlite().sqliteStartStatementTrace()
+      try {
+        return await operation(payload)
+      } finally {
+        statements.candidate = getNativeSqlite().sqliteTakeStatementTrace()
+      }
+    }
+    const client = (payload.db as unknown as { drizzle: { $client: Record<string, any> } }).drizzle
+      .$client
+    const execute = client.execute
+    statements.reference = []
+    client.execute = function (this: unknown, ...args: [{ args?: unknown[]; sql: string }]) {
+      statements.reference.push([args[0].sql, args[0].args?.length ?? 0])
+      return execute.apply(this, args)
+    }
+    try {
+      return await operation(payload)
+    } finally {
+      delete client.execute
+    }
+  })
+  expect(statements.reference.length).toBeGreaterThan(0)
+  expect({ ...out.candidate!, statements: statements.candidate }).toEqual({
+    ...out.reference!,
+    statements: statements.reference,
+  })
+  return { ...out, statements }
+}
+
 test.suite('withRustEngine', {}, () => {
   beforeAll(async () => {
     removeDatabases()
@@ -178,11 +271,17 @@ test.suite('withRustEngine', {}, () => {
     // each instance has its own database file: never skip the push via drizzle's process cache
     process.env.PAYLOAD_FORCE_DRIZZLE_PUSH = 'true'
     try {
-      const args = (file: string) => ({ client: { url: `file:${file}` }, transactionOptions: {} })
+      const args = (file: string) => ({
+        ...schemaHooks,
+        client: { url: `file:${file}` },
+        transactionOptions: {},
+      })
       instances.reference = await getPayload({
         config: makeConfig(sqliteAdapter(args(files.reference))),
         key: 'rs-adapter-reference',
       })
+      // record the candidate's statements (`expectSameStatements`)
+      process.env.PAYLOAD_SQLITE_TRACE = 'true'
       instances.candidate = await getPayload({
         // as db-sqlite's PAYLOAD_ENGINE=rs path: errors use its drizzle-orm copy's class
         config: makeConfig(
@@ -200,6 +299,7 @@ test.suite('withRustEngine', {}, () => {
   })
 
   afterAll(async () => {
+    delete process.env.PAYLOAD_SQLITE_TRACE
     vi.useRealTimers()
     await instances.reference?.destroy()
     await instances.candidate?.destroy()
@@ -241,9 +341,9 @@ test.suite('withRustEngine', {}, () => {
     )
   })
 
-  // Engine gap (ENGINE_STATUS.md): `rawSchema()` JSON drops own properties holding `undefined`
-  // (e.g. `rawTables[t].indexes[i].unique`), which upstream keeps. Flips to failing once fixed.
-  test.fails('should keep own undefined properties of the raw schema', () => {
+  // `rawSchema()` JSON drops own properties holding `undefined` (e.g.
+  // `rawTables[t].indexes[i].unique`); the glue restores them from `undefinedProperties`
+  test('should keep own undefined properties of the raw schema', () => {
     expect(pickSchema(instances.candidate)).toEqual(pickSchema(instances.reference))
   })
 
@@ -500,6 +600,40 @@ test.suite('withRustEngine', {}, () => {
         payload.db.create({ collection: 'posts', data: { title: 'mw' } } as never),
       deleteOneMatch: (payload) =>
         payload.db.deleteOne({ collection: 'posts', where: { title: { equals: 'mw' } } } as never),
+      deleteOneReturningFalse: async (payload) => {
+        await payload.db.create({ collection: 'posts', data: { title: 'mw-rf' } } as never)
+        ;(payload.db as unknown as { lastWriteTimestamp?: number }).lastWriteTimestamp = undefined
+        return payload.db.deleteOne({
+          collection: 'posts',
+          returning: false,
+          where: { title: { equals: 'mw-rf' } },
+        } as never)
+      },
+      deleteOneReturningFalseMissing: (payload) =>
+        payload.db.deleteOne({
+          collection: 'posts',
+          returning: false,
+          where: { title: { equals: 'missing' } },
+        } as never),
+      notNullCreate: (payload) => payload.db.create({ collection: 'strict', data: {} } as never),
+      notNullUpdateById: async (payload) => {
+        const doc = (await payload.db.create({
+          collection: 'strict',
+          data: { code: 'c' },
+        } as never)) as { id: number }
+        ;(payload.db as unknown as { lastWriteTimestamp?: number }).lastWriteTimestamp = undefined
+        return payload.db.updateOne({
+          id: doc.id,
+          collection: 'strict',
+          data: { code: null },
+        } as never)
+      },
+      notNullUpdateManyNone: (payload) =>
+        payload.db.updateMany({
+          collection: 'strict',
+          data: { code: null },
+          where: { code: { equals: 'missing' } },
+        } as never),
       deleteOneMissing: (payload) =>
         payload.db.deleteOne({
           collection: 'posts',
@@ -530,14 +664,15 @@ test.suite('withRustEngine', {}, () => {
       const { candidate, reference } = await both(async (payload) => {
         const db = payload.db as unknown as { lastWriteTimestamp?: number }
         db.lastWriteTimestamp = undefined
+        let outcome: unknown
         try {
-          await operation(payload)
-        } catch {
-          // the timestamp is compared either way
+          outcome = { result: describe(await operation(payload)) }
+        } catch (error) {
+          outcome = { error: (error as Error).name }
         }
-        return db.lastWriteTimestamp
+        return { outcome, timestamp: db.lastWriteTimestamp }
       })
-      expect({ name, timestamp: candidate }).toEqual({ name, timestamp: reference })
+      expect({ name, ...(candidate as object) }).toEqual({ name, ...(reference as object) })
     }
   })
 
@@ -579,6 +714,191 @@ test.suite('withRustEngine', {}, () => {
       )
       return rows
     })
+  })
+
+  test('should apply the caller-visible argument mutations of upstream', async () => {
+    const updatedGlobal = await expectSame(async (payload) => {
+      const data: Record<string, unknown> = { siteName: 'first' }
+      const created = await payload.db.updateGlobal({ slug: 'fresh', data } as never)
+      const again: Record<string, unknown> = { siteName: 'second' }
+      await payload.db.updateGlobal({ slug: 'fresh', data: again } as never)
+      return { again, created, data }
+    })
+    expect(updatedGlobal.ok).toMatchObject({
+      again: { siteName: 'second' },
+      data: { createdAt: '2026-01-02T03:04:05.678Z', siteName: 'first' },
+    })
+    const version = await expectSame(async (payload) => {
+      const doc = (await payload.db.create({
+        collection: 'posts',
+        data: { title: 'versioned' },
+      } as never)) as { id: number }
+      const select: Record<string, unknown> = { title: true }
+      await payload.db.createVersion({
+        autosave: false,
+        collectionSlug: 'posts',
+        createdAt: '2026-01-02T03:04:05.678Z',
+        parent: doc.id,
+        select,
+        updatedAt: '2026-01-02T03:04:05.678Z',
+        versionData: { title: 'versioned' },
+      } as never)
+      return select
+    })
+    expect(version.ok).toEqual({ title: true, updatedAt: true })
+    const nullSelect = await expectSame((payload) =>
+      payload.db.createVersion({
+        autosave: false,
+        collectionSlug: 'posts',
+        parent: 1,
+        select: null,
+        versionData: { title: 'versioned' },
+      } as never),
+    )
+    expect(nullSelect.error).toMatchObject({ $error: 'TypeError' })
+  })
+
+  test('should run limitedBoundParameters statements like upstream', async () => {
+    for (const side of ['reference', 'candidate'] as const) {
+      ;(
+        instances[side].db as unknown as { limitedBoundParameters?: boolean }
+      ).limitedBoundParameters = true
+    }
+    try {
+      const created = await expectSameStatements(async (payload) => {
+        const ids: number[] = []
+        for (let i = 0; i < 120; i++) {
+          ids.push(
+            (
+              (await payload.db.create({
+                collection: 'strict',
+                data: { code: `bound-${i}` },
+              } as never)) as { id: number }
+            ).id,
+          )
+        }
+        return ids
+      })
+      const ids = created.reference.ok as number[]
+      const many = Array.from({ length: 300 }, (_, i) => ids[0]! + i)
+      await expectSameStatements((payload) =>
+        payload.find({ collection: 'strict', pagination: false, where: { id: { in: many } } }),
+      )
+      await expectSameStatements((payload) =>
+        payload.find({ collection: 'strict', pagination: false, where: { id: { not_in: many } } }),
+      )
+      const wide = await expectSameStatements((payload) =>
+        payload.db.create({
+          collection: 'posts',
+          data: {
+            layout: Array.from({ length: 30 }, (_, i) => ({ blockType: 'hero', heading: `h${i}` })),
+            related: Array.from({ length: 60 }, () => 1),
+            select: ['a', 'b', 'c'],
+            tags: Array.from({ length: 40 }, (_, i) => ({ tag: `t${i}` })),
+            title: 'wide',
+          },
+        } as never),
+      )
+      expect(Math.max(...wide.statements.candidate.map(([, count]) => count))).toBeLessThanOrEqual(
+        100,
+      )
+      expect(wide.statements.candidate.length).toBeGreaterThan(5)
+    } finally {
+      for (const side of ['reference', 'candidate'] as const) {
+        ;(
+          instances[side].db as unknown as { limitedBoundParameters?: boolean }
+        ).limitedBoundParameters = undefined
+      }
+    }
+  })
+
+  test('should run on the live schema of the schema hooks', async () => {
+    const traced = (payload: Payload) => {
+      getNativeSqlite().sqliteStartStatementTrace()
+      return payload.db.create({ collection: 'hooked', data: { name: 'one' } } as never)
+    }
+    await expectSame(async (payload) => {
+      const doc = await traced(payload)
+      const statements = getNativeSqlite().sqliteTakeStatementTrace()
+      // `beforeSchemaInit`'s raw column (with its default) is written by both
+      return payload === instances.candidate
+        ? { doc, hasRawExtra: statements.some(([text]) => text.includes('"raw_extra", ')) }
+        : { doc, hasRawExtra: true }
+    })
+    await expectSameStatements(async (payload) => {
+      const raw = await (payload.db as unknown as { drizzle: any }).drizzle.all(
+        sql`select raw_extra, custom from hooked`,
+      )
+      await (payload.db as unknown as { drizzle: any }).drizzle.run(
+        sql`update hooked set custom = 'fine'`,
+      )
+      return { found: await payload.find({ collection: 'hooked' }), raw }
+    })
+    if (isLoopback) {
+      // the loopback runs drizzle, which calls `fromDriver` itself, not through the engine host
+      return
+    }
+    const thrown = await expectSame(async (payload) => {
+      await (payload.db as unknown as { drizzle: any }).drizzle.run(
+        sql`update hooked set custom = 'boom'`,
+      )
+      try {
+        return await payload.find({ collection: 'hooked' })
+      } catch (error) {
+        return { isOwnError: error === fromDriverError }
+      }
+    })
+    expect(thrown.ok).toEqual({ isOwnError: true })
+    await expectSame((payload) =>
+      (payload.db as unknown as { drizzle: any }).drizzle.run(sql`update hooked set custom = null`),
+    )
+  })
+
+  // Engine gap (ENGINE_CONTRACT.md "Columns added to drizzle tables only"): the write path builds
+  // `insert` / `update` from raw tables, so `afterSchemaInit`'s drizzle-only column is not listed.
+  // Flips to failing once fixed. (The loopback runs upstream's write path.)
+  ;(isLoopback ? test : test.fails)(
+    'should write the drizzle-only columns of afterSchemaInit like upstream',
+    async () => {
+      await expectSameStatements((payload) =>
+        payload.db.create({ collection: 'hooked', data: { name: 'two' } } as never),
+      )
+    },
+  )
+
+  test.skipIf(isLoopback)('should reject connections of another database', async () => {
+    const registry = createFunctionRegistry()
+    const { graphJson, optionsJson } = buildEngineInput({
+      adapter: instances.candidate.db as never,
+      registry,
+    })
+    const engine = getNativeEngine().SqliteEngine!.create(graphJson, optionsJson, () => '{}')
+    const client = (instances.candidate.db as unknown as { drizzle: { $client: Sqlite3Client } })
+      .drizzle.$client
+    engine.attachClient(getSqliteConnId(client))
+    const args = serializeForEngine({ collection: 'posts' }, registry)
+    const context = JSON.stringify({ now: Date.now() })
+    const others = [createClient({ url: `file:${files.other}` }), createClient({ url: ':memory:' })]
+    for (const other of others) {
+      await expect(engine.call('count', args, getSqliteConnId(other), context)).rejects.toThrow(
+        /does not belong to the adapter's client/,
+      )
+    }
+    const sameFile = createClient({ url: `file:${files.candidate}` })
+    const transaction = await client.transaction('deferred')
+    try {
+      for (const target of [client, sameFile, transaction]) {
+        const counted = JSON.parse(
+          await engine.call('count', args, getSqliteConnId(target), context),
+        )
+        expect(counted.totalDocs).toBeGreaterThan(0)
+      }
+    } finally {
+      await transaction.rollback()
+      for (const other of [...others, sameFile]) {
+        other.close()
+      }
+    }
   })
 
   test('should keep raw schema state across re-init like upstream', async () => {

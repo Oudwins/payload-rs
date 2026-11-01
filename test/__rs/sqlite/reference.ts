@@ -131,6 +131,70 @@ export const referenceScenarios: Scenario[] = [
     },
   },
   {
+    // upstream reads the statement after `#checkNotClosed()` / `#getDb()`: getters, proxies and
+    // accessor elements must not run when the transaction is closed
+    name: 'statement reads after the closed check',
+    run: async ({ createClient, step, url }) => {
+      const c = createClient({ url })
+      const seen: string[] = []
+      const withGetters = (args: unknown) => ({
+        get args() {
+          seen.push('args')
+          return args
+        },
+        get sql() {
+          seen.push('sql')
+          return 'select ?'
+        },
+      })
+      const proxied = () =>
+        new Proxy(
+          { args: [1], sql: 'select ?' },
+          {
+            get: (target, key, receiver) => {
+              seen.push(`get ${String(key)}`)
+              return Reflect.get(target, key, receiver)
+            },
+            getOwnPropertyDescriptor: (target, key) => {
+              seen.push(`descriptor ${String(key)}`)
+              return Reflect.getOwnPropertyDescriptor(target, key)
+            },
+          },
+        )
+      const accessorArgs = () => {
+        const args: unknown[] = []
+        Object.defineProperty(args, 0, {
+          enumerable: true,
+          get: () => {
+            seen.push('element')
+            return 1
+          },
+        })
+        return { args, sql: 'select ?' }
+      }
+      const run = async (label: string, fn: () => unknown) => {
+        seen.length = 0
+        await step(label, fn)
+        await step(`${label}: reads`, () => [...seen])
+      }
+      await run('client getters', () => c.execute(withGetters([1]) as never))
+      await run('client proxy', () => c.execute(proxied() as never))
+      await run('client accessor element', () => c.execute(accessorArgs() as never))
+      await run('client NaN', () => c.execute({ args: [NaN], sql: 'select ?' }))
+      const t = await c.transaction()
+      await run('tx getters', () => t.execute(withGetters([1]) as never))
+      await run('tx proxy', () => t.execute(proxied() as never))
+      await t.commit()
+      await run('closed tx getters', () => t.execute(withGetters([1]) as never))
+      await run('closed tx named getters', () => t.execute(withGetters({ a: 1 }) as never))
+      await run('closed tx proxy', () => t.execute(proxied() as never))
+      await run('closed tx accessor element', () => t.execute(accessorArgs() as never))
+      await run('closed tx NaN', () => t.execute({ args: [NaN], sql: 'select ?' }))
+      c.close()
+      await run('closed client getters', () => c.execute(withGetters([1]) as never))
+    },
+  },
+  {
     name: 'typed array binding',
     run: async ({ createClient, step, url }) => {
       const c = createClient({ url })

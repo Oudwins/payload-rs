@@ -240,13 +240,17 @@ export const registerDifferentialSuite = ({
                 })),
               ]
             for (const docSet of docSets) {
-              for (const [concurrent, trace] of (target.collection
-                ? [false, true]
-                : [false]
-              ).flatMap((c) => [
-                [c, false],
-                [c, true],
-              ])) {
+              // afterRead (sequential/concurrent, plain/traced), then the exported traverseFields
+              // (sequential plain, concurrent traced)
+              const modes = [
+                ...(target.collection ? [false, true] : [false]).flatMap((c) => [
+                  [c, false, false],
+                  [c, true, false],
+                ]),
+                [false, false, true],
+                ...(target.collection ? [[true, true, true]] : []),
+              ]
+              for (const [concurrent, trace, traverse] of modes) {
                 const run = (engine: 'rs' | 'ts'): Promise<RunOutcome> =>
                   runAfterRead({
                     collection: target.collection,
@@ -257,6 +261,7 @@ export const registerDifferentialSuite = ({
                     rawDocs: docSet.rawDocs,
                     rawDocsFactory: docSet.factory,
                     trace,
+                    traverse,
                     variant: { ...variant, findMany: concurrent || undefined },
                   })
                 const ts = await withTimeout(run('ts'))
@@ -282,7 +287,7 @@ export const registerDifferentialSuite = ({
                 )
                 if (diff) {
                   stats.diffs.push(
-                    `${config.slug} [${variant.name}, ${docSet.label}${concurrent ? ', concurrent' : ''}${trace ? ', traced' : ''}] ${diff}`,
+                    `${config.slug} [${variant.name}, ${docSet.label}${concurrent ? ', concurrent' : ''}${trace ? ', traced' : ''}${traverse ? ', traverseFields' : ''}] ${diff}`,
                   )
                 }
               }
