@@ -1,0 +1,10 @@
+[package]
+name = "payload-core-validate"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+payload-engine = { path = "../payload-engine" }
+serde_json.workspace = true

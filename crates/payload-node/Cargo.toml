@@ -1,0 +1,24 @@
+[package]
+name = "payload-node"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "3", features = ["serde-json", "napi9"] }
+napi-derive = "3"
+payload-core-hooks-validate = { path = "../payload-core-hooks-validate" }
+payload-core-hooks-after = { path = "../payload-core-hooks-after" }
+payload-core-hooks-change = { path = "../payload-core-hooks-change" }
+payload-core-runtime = { path = "../payload-core-runtime" }
+payload-core-validate = { path = "../payload-core-validate" }
+payload-engine = { path = "../payload-engine" }
+payload-sql-engine = { path = "../payload-sql-engine" }
+payload-sqlite = { path = "../payload-sqlite" }
+serde_json.workspace = true
+
+[build-dependencies]
+napi-build = "2"

@@ -1,0 +1,11 @@
+[package]
+name = "payload-core-query"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+payload-engine = { path = "../payload-engine" }
+payload-sql-read = { path = "../payload-sql-read" }
+serde_json.workspace = true

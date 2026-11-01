@@ -1,0 +1,67 @@
+{
+  "connections": {
+    "ownClient": 0,
+    "shared": 70,
+    "transaction": 40
+  },
+  "drizzleQueryErrors": 3,
+  "hostCalls": 6,
+  "mismatches": [],
+  "rqb": {
+    "errorsBoth": 3,
+    "errorsBothMessageMismatch": 0,
+    "nonEmptyResults": 24,
+    "resultMatch": 38,
+    "resultMatchOnRetry": 0,
+    "resultMismatch": 0,
+    "rustRan": 41,
+    "sqlMatch": 41,
+    "sqlMismatch": 0,
+    "total": 41
+  },
+  "buildFindManyArgs": {
+    "bothError": 7,
+    "bothErrorMessageMismatch": 0,
+    "error": 0,
+    "match": 34,
+    "mismatch": 0,
+    "rustRan": 41,
+    "total": 41
+  },
+  "findMany": {
+    "bothError": 8,
+    "bothErrorMessageMismatch": 0,
+    "error": 0,
+    "match": 21,
+    "matchOnRetry": 0,
+    "mismatch": 0,
+    "nonEmpty": 8,
+    "rustRan": 29,
+    "total": 29
+  },
+  "bridgeMismatches": [],
+  "adapter": {
+    "blocksAsJSON": false,
+    "idType": "number"
+  },
+  "schemaFromRaw": {
+    "diff": "table posts: Table { ts_name: \"posts\", db_name: \"posts\", columns: {\"id\": Column { name: \"id\", decoder: Identity, sql_type: \"integer\" }, \"title\": Column { name: \"title\", decoder: Identity, sql_type: \"text\" }, \"category\": Column { name: \"category_id\", decoder: Identity, sql_type: \"integer\" }, \"updatedAt\": Column { name: \"updated_at\", decoder: Identity, sql_type: \"text\" }, \"createdAt\": Column { name: \"created_at\", decoder: Identity, sql_type: \"text\" }, \"blobBig\": Column { name: \"blob_big\", decoder: BlobBigInt, sql_type: \"blob\" }, \"blobBuf\": Column { name: \"blob_buf\", decoder: BlobBuffer, sql_type: \"blob\" }, \"blobJson\": Column { name: \"blob_json\", decoder: BlobJson, sql_type: \"blob\" }, \"custom\": Column { name: \"custom_val\", decoder: Custom(Some(0)), sql_type: \"text\" }, \"customPlain\": Column { name: \"custom_plain\", decoder: Custom(None), sql_type: \"integer\" }, \"isOn\": Column { name: \"is_on\", decoder: Boolean, sql_type: \"integer\" }, \"numBig\": Column { name: \"num_big\", decoder: NumericBigInt, sql_type: \"numeric\" }, \"numStr\": Column { name: \"num_str\", decoder: NumericString, sql_type: \"numeric\" }, \"realVal\": Column { name: \"real_val\", decoder: Identity, sql_type: \"real\" }, \"whenMs\": Column { name: \"when_ms\", decoder: TimestampMs, sql_type: \"integer\" }, \"whenSec\": Column { name: \"when_sec\", decoder: Timestamp, sql_type: \"integer\" }}, relations: {\"category\": Relation { kind: One { fields: [\"category_id\"], references: [\"id\"] }, source_table: \"posts\", referenced_table: \"categories\", relation_name: Some(\"category\") }, \"_rels\": Relation { kind: Many, source_table: \"posts\", referenced_table: \"posts_rels\", relation_name: Some(\"_rels\") }, \"profile\": Relation { kind: OneWithoutConfig, source_table: \"posts\", referenced_table: \"custom_profiles\", relation_name: None }} } != Table { ts_name: \"posts\", db_name: \"posts\", columns: {\"id\": Column { name: \"id\", decoder: Identity, sql_type: \"integer\" }, \"title\": Column { name: \"title\", decoder: Identity, sql_type: \"text\" }, \"category\": Column { name: \"category_id\", decoder: Identity, sql_type: \"integer\" }, \"updatedAt\": Column { name: \"updated_at\", decoder: Identity, sql_type: \"text\" }, \"createdAt\": Column { name: \"created_at\", decoder: Identity, sql_type: \"text\" }}, relations: {\"category\": Relation { kind: One { fields: [\"category_id\"], references: [\"id\"] }, source_table: \"posts\", referenced_table: \"categories\", relation_name: Some(\"category\") }, \"_rels\": Relation { kind: Many, source_table: \"posts\", referenced_table: \"posts_rels\", relation_name: Some(\"_rels\") }} }\nmissing table custom_profiles",
+    "equal": false
+  },
+  "failures": {
+    "harnessErrors": 0,
+    "mismatches": 0,
+    "rqbErrorMismatch": 0,
+    "rqbResultMismatch": 0,
+    "rqbSqlMismatch": 0,
+    "rustNotRun": 0,
+    "buildFindManyArgsMismatch": 0,
+    "buildFindManyArgsError": 0,
+    "buildFindManyArgsErrorMismatch": 0,
+    "buildFindManyArgsRustNotRun": 0,
+    "findManyMismatch": 0,
+    "findManyError": 0,
+    "findManyErrorMismatch": 0,
+    "findManyRustNotRun": 0
+  }
+}

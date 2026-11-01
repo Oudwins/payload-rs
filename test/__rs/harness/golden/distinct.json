@@ -1,0 +1,2293 @@
+{
+  "text": {
+    "hasNextPage": false,
+    "hasPrevPage": false,
+    "limit": 0,
+    "page": 1,
+    "pagingCounter": 1,
+    "totalDocs": 5,
+    "totalPages": 1,
+    "values": [
+      {
+        "text": "alpha"
+      },
+      {
+        "text": "beta"
+      },
+      {
+        "text": "delta"
+      },
+      {
+        "text": "gamma"
+      },
+      {
+        "text": "sparse"
+      }
+    ]
+  },
+  "text sorted desc": {
+    "hasNextPage": false,
+    "hasPrevPage": false,
+    "limit": 0,
+    "page": 1,
+    "pagingCounter": 1,
+    "totalDocs": 5,
+    "totalPages": 1,
+    "values": [
+      {
+        "text": "sparse"
+      },
+      {
+        "text": "gamma"
+      },
+      {
+        "text": "delta"
+      },
+      {
+        "text": "beta"
+      },
+      {
+        "text": "alpha"
+      }
+    ]
+  },
+  "number": {
+    "hasNextPage": false,
+    "hasPrevPage": false,
+    "limit": 0,
+    "page": 1,
+    "pagingCounter": 1,
+    "totalDocs": 5,
+    "totalPages": 1,
+    "values": [
+      {
+        "number": null
+      },
+      {
+        "number": 1
+      },
+      {
+        "number": 3
+      },
+      {
+        "number": 5
+      },
+      {
+        "number": 9
+      }
+    ]
+  },
+  "select where": {
+    "hasNextPage": false,
+    "hasPrevPage": false,
+    "limit": 0,
+    "page": 1,
+    "pagingCounter": 1,
+    "totalDocs": 3,
+    "totalPages": 1,
+    "values": [
+      {
+        "select": "one"
+      },
+      {
+        "select": "three"
+      },
+      {
+        "select": "two"
+      }
+    ]
+  },
+  "rel depth 0": {
+    "hasNextPage": false,
+    "hasPrevPage": false,
+    "limit": 0,
+    "page": 1,
+    "pagingCounter": 1,
+    "totalDocs": 4,
+    "totalPages": 1,
+    "values": [
+      {
+        "rel": null
+      },
+      {
+        "rel": 1
+      },
+      {
+        "rel": 2
+      },
+      {
+        "rel": 3
+      }
+    ]
+  },
+  "rel depth 1": {
+    "hasNextPage": false,
+    "hasPrevPage": false,
+    "limit": 0,
+    "page": 1,
+    "pagingCounter": 1,
+    "totalDocs": 4,
+    "totalPages": 1,
+    "values": [
+      {
+        "rel": null
+      },
+      {
+        "rel": {
+          "id": 1,
+          "title": "target-0",
+          "localizedTitle": "target-en-0",
+          "number": 0,
+          "kitchenRefs": {
+            "docs": [
+              {
+                "id": 4,
+                "text": "beta",
+                "textarea": "line one 3\nline two",
+                "email": "user3@example.com",
+                "code": "const x = 3",
+                "json": {
+                  "flag": false,
+                  "list": [3, 4],
+                  "name": "json-3",
+                  "nested": {
+                    "deep": "d3"
+                  }
+                },
+                "number": 1,
+                "checkbox": false,
+                "date": "2024-04-13T00:00:00.000Z",
+                "point": [3, -3],
+                "radio": "a",
+                "select": "one",
+                "selectMany": ["green", "blue"],
+                "textMany": ["tm-3", "shared"],
+                "numberMany": [3, 4, 42],
+                "rel": 1,
+                "relMany": [1, 2],
+                "poly": {
+                  "relationTo": "media",
+                  "value": 2
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 2
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 2
+                  }
+                ],
+                "upload": 2,
+                "uploadMany": [2, 1],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 3",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-0",
+                  "number": 97,
+                  "localizedText": "group-loc-3",
+                  "nestedGroup": {
+                    "text": "ng-3"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:28>",
+                      "text": "garr-3"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-3",
+                  "number": 6
+                },
+                "tabText": "tabText-3",
+                "rowText": "row-3",
+                "collapsibleText": "collapsible-3",
+                "array": [
+                  {
+                    "id": "<oid:29>",
+                    "text": "arr-3-0",
+                    "number": 30,
+                    "rel": 1,
+                    "nestedArray": [
+                      {
+                        "id": "<oid:30>",
+                        "text": "nested-3-a"
+                      },
+                      {
+                        "id": "<oid:31>",
+                        "text": "nested-3-b"
+                      }
+                    ],
+                    "localizedText": "arr-loc-3"
+                  },
+                  {
+                    "id": "<oid:32>",
+                    "text": "arr-3-1",
+                    "number": 31,
+                    "rel": null,
+                    "nestedArray": [],
+                    "localizedText": {
+                      "$undefined": true
+                    }
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:33>",
+                    "text": "blockA-3",
+                    "number": 3,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:34>",
+                        "text": "deep-3",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:35>",
+                    "text": "blockB-3",
+                    "select": "x",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:36>",
+                        "text": "barr-3"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:16.000Z",
+                "createdAt": "2025-01-01T00:00:16.000Z"
+              },
+              {
+                "id": 1,
+                "text": "alpha",
+                "textarea": "line one 0\nline two",
+                "email": "user0@example.com",
+                "code": "const x = 0",
+                "json": {
+                  "flag": true,
+                  "list": [0, 1],
+                  "name": "json-0",
+                  "nested": {
+                    "deep": "d0"
+                  }
+                },
+                "number": 5,
+                "checkbox": true,
+                "date": "2024-01-10T00:00:00.000Z",
+                "point": [0, 0],
+                "radio": "a",
+                "select": "one",
+                "selectMany": ["red"],
+                "textMany": ["tm-0", "shared"],
+                "numberMany": [0, 1, 42],
+                "rel": 1,
+                "relMany": [1, 2],
+                "poly": {
+                  "relationTo": "targets",
+                  "value": 1
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 2
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 1
+                  }
+                ],
+                "upload": 1,
+                "uploadMany": [1, 2],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 0",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-0",
+                  "number": 100,
+                  "localizedText": "group-loc-0",
+                  "nestedGroup": {
+                    "text": "ng-0"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:1>",
+                      "text": "garr-0"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-0",
+                  "number": 0
+                },
+                "tabText": "tabText-0",
+                "rowText": "row-0",
+                "collapsibleText": "collapsible-0",
+                "array": [
+                  {
+                    "id": "<oid:2>",
+                    "text": "arr-0-0",
+                    "number": 0,
+                    "rel": 1,
+                    "nestedArray": [
+                      {
+                        "id": "<oid:3>",
+                        "text": "nested-0-a"
+                      },
+                      {
+                        "id": "<oid:4>",
+                        "text": "nested-0-b"
+                      }
+                    ],
+                    "localizedText": "arr-loc-0"
+                  },
+                  {
+                    "id": "<oid:5>",
+                    "text": "arr-0-1",
+                    "number": 1,
+                    "rel": null,
+                    "nestedArray": [],
+                    "localizedText": {
+                      "$undefined": true
+                    }
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:6>",
+                    "text": "blockA-0",
+                    "number": 0,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:7>",
+                        "text": "deep-0",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:8>",
+                    "text": "blockB-0",
+                    "select": "x",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:9>",
+                        "text": "barr-0"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:13.000Z",
+                "createdAt": "2025-01-01T00:00:13.000Z"
+              }
+            ],
+            "hasNextPage": false
+          },
+          "kitchenArrayRefs": {
+            "docs": [
+              {
+                "id": 4,
+                "text": "beta",
+                "textarea": "line one 3\nline two",
+                "email": "user3@example.com",
+                "code": "const x = 3",
+                "json": {
+                  "flag": false,
+                  "list": [3, 4],
+                  "name": "json-3",
+                  "nested": {
+                    "deep": "d3"
+                  }
+                },
+                "number": 1,
+                "checkbox": false,
+                "date": "2024-04-13T00:00:00.000Z",
+                "point": [3, -3],
+                "radio": "a",
+                "select": "one",
+                "selectMany": ["green", "blue"],
+                "textMany": ["tm-3", "shared"],
+                "numberMany": [3, 4, 42],
+                "rel": 1,
+                "relMany": [1, 2],
+                "poly": {
+                  "relationTo": "media",
+                  "value": 2
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 2
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 2
+                  }
+                ],
+                "upload": 2,
+                "uploadMany": [2, 1],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 3",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-0",
+                  "number": 97,
+                  "localizedText": "group-loc-3",
+                  "nestedGroup": {
+                    "text": "ng-3"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:28>",
+                      "text": "garr-3"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-3",
+                  "number": 6
+                },
+                "tabText": "tabText-3",
+                "rowText": "row-3",
+                "collapsibleText": "collapsible-3",
+                "array": [
+                  {
+                    "id": "<oid:29>",
+                    "text": "arr-3-0",
+                    "number": 30,
+                    "rel": 1,
+                    "nestedArray": [
+                      {
+                        "id": "<oid:30>",
+                        "text": "nested-3-a"
+                      },
+                      {
+                        "id": "<oid:31>",
+                        "text": "nested-3-b"
+                      }
+                    ],
+                    "localizedText": "arr-loc-3"
+                  },
+                  {
+                    "id": "<oid:32>",
+                    "text": "arr-3-1",
+                    "number": 31,
+                    "rel": null,
+                    "nestedArray": [],
+                    "localizedText": {
+                      "$undefined": true
+                    }
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:33>",
+                    "text": "blockA-3",
+                    "number": 3,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:34>",
+                        "text": "deep-3",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:35>",
+                    "text": "blockB-3",
+                    "select": "x",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:36>",
+                        "text": "barr-3"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:16.000Z",
+                "createdAt": "2025-01-01T00:00:16.000Z"
+              },
+              {
+                "id": 1,
+                "text": "alpha",
+                "textarea": "line one 0\nline two",
+                "email": "user0@example.com",
+                "code": "const x = 0",
+                "json": {
+                  "flag": true,
+                  "list": [0, 1],
+                  "name": "json-0",
+                  "nested": {
+                    "deep": "d0"
+                  }
+                },
+                "number": 5,
+                "checkbox": true,
+                "date": "2024-01-10T00:00:00.000Z",
+                "point": [0, 0],
+                "radio": "a",
+                "select": "one",
+                "selectMany": ["red"],
+                "textMany": ["tm-0", "shared"],
+                "numberMany": [0, 1, 42],
+                "rel": 1,
+                "relMany": [1, 2],
+                "poly": {
+                  "relationTo": "targets",
+                  "value": 1
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 2
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 1
+                  }
+                ],
+                "upload": 1,
+                "uploadMany": [1, 2],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 0",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-0",
+                  "number": 100,
+                  "localizedText": "group-loc-0",
+                  "nestedGroup": {
+                    "text": "ng-0"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:1>",
+                      "text": "garr-0"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-0",
+                  "number": 0
+                },
+                "tabText": "tabText-0",
+                "rowText": "row-0",
+                "collapsibleText": "collapsible-0",
+                "array": [
+                  {
+                    "id": "<oid:2>",
+                    "text": "arr-0-0",
+                    "number": 0,
+                    "rel": 1,
+                    "nestedArray": [
+                      {
+                        "id": "<oid:3>",
+                        "text": "nested-0-a"
+                      },
+                      {
+                        "id": "<oid:4>",
+                        "text": "nested-0-b"
+                      }
+                    ],
+                    "localizedText": "arr-loc-0"
+                  },
+                  {
+                    "id": "<oid:5>",
+                    "text": "arr-0-1",
+                    "number": 1,
+                    "rel": null,
+                    "nestedArray": [],
+                    "localizedText": {
+                      "$undefined": true
+                    }
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:6>",
+                    "text": "blockA-0",
+                    "number": 0,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:7>",
+                        "text": "deep-0",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:8>",
+                    "text": "blockB-0",
+                    "select": "x",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:9>",
+                        "text": "barr-0"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:13.000Z",
+                "createdAt": "2025-01-01T00:00:13.000Z"
+              }
+            ],
+            "hasNextPage": false
+          },
+          "localizedRefs": {
+            "docs": [
+              {
+                "id": 1,
+                "text": "alpha",
+                "textarea": "line one 0\nline two",
+                "email": "user0@example.com",
+                "code": "const x = 0",
+                "json": {
+                  "flag": true,
+                  "list": [0, 1],
+                  "name": "json-0",
+                  "nested": {
+                    "deep": "d0"
+                  }
+                },
+                "number": 5,
+                "checkbox": true,
+                "date": "2024-01-10T00:00:00.000Z",
+                "point": [0, 0],
+                "radio": "a",
+                "select": "one",
+                "selectMany": ["red"],
+                "textMany": ["tm-0", "shared"],
+                "numberMany": [0, 1, 42],
+                "rel": 1,
+                "relMany": [1, 2],
+                "poly": {
+                  "relationTo": "targets",
+                  "value": 1
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 2
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 1
+                  }
+                ],
+                "upload": 1,
+                "uploadMany": [1, 2],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 0",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-0",
+                  "number": 100,
+                  "localizedText": "group-loc-0",
+                  "nestedGroup": {
+                    "text": "ng-0"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:46>",
+                      "text": "garr-0"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-0",
+                  "number": 0
+                },
+                "tabText": "tabText-0",
+                "rowText": "row-0",
+                "collapsibleText": "collapsible-0",
+                "array": [
+                  {
+                    "text": "arr-0-0",
+                    "number": 0,
+                    "rel": 1,
+                    "localizedText": "arr-loc-0",
+                    "nestedArray": [
+                      {
+                        "id": "<oid:47>",
+                        "text": "nested-0-a"
+                      },
+                      {
+                        "id": "<oid:48>",
+                        "text": "nested-0-b"
+                      }
+                    ],
+                    "id": "<oid:49>"
+                  },
+                  {
+                    "text": "arr-0-1",
+                    "number": 1,
+                    "rel": null,
+                    "localizedText": null,
+                    "nestedArray": [],
+                    "id": "<oid:50>"
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:51>",
+                    "text": "blockA-0",
+                    "number": 0,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:52>",
+                        "text": "deep-0",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:53>",
+                    "text": "blockB-0",
+                    "select": "x",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:54>",
+                        "text": "barr-0"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:21.000Z",
+                "createdAt": "2025-01-01T00:00:20.000Z"
+              }
+            ],
+            "hasNextPage": false
+          },
+          "updatedAt": "2025-01-01T00:00:04.000Z",
+          "createdAt": "2025-01-01T00:00:03.000Z"
+        }
+      },
+      {
+        "rel": {
+          "id": 2,
+          "title": "target-1",
+          "localizedTitle": "target-en-1",
+          "number": 3,
+          "kitchenRefs": {
+            "docs": [
+              {
+                "id": 5,
+                "text": "delta",
+                "textarea": "line one 4\nline two",
+                "email": "user4@example.com",
+                "code": "const x = 4",
+                "json": {
+                  "flag": true,
+                  "list": [4, 5],
+                  "name": "json-4",
+                  "nested": {
+                    "deep": "d4"
+                  }
+                },
+                "number": 9,
+                "checkbox": true,
+                "date": "2024-05-14T00:00:00.000Z",
+                "point": [4, -4],
+                "radio": "b",
+                "select": "two",
+                "selectMany": [],
+                "textMany": ["tm-4", "shared"],
+                "numberMany": [4, 5, 42],
+                "rel": 2,
+                "relMany": [2, 3],
+                "poly": {
+                  "relationTo": "targets",
+                  "value": 2
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 3
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 1
+                  }
+                ],
+                "upload": 1,
+                "uploadMany": [1, 2],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 4",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-1",
+                  "number": 96,
+                  "localizedText": "group-loc-4",
+                  "nestedGroup": {
+                    "text": "ng-4"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:37>",
+                      "text": "garr-4"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-4",
+                  "number": 8
+                },
+                "tabText": "tabText-4",
+                "rowText": "row-4",
+                "collapsibleText": "collapsible-4",
+                "array": [
+                  {
+                    "id": "<oid:38>",
+                    "text": "arr-4-0",
+                    "number": 40,
+                    "rel": 2,
+                    "nestedArray": [
+                      {
+                        "id": "<oid:39>",
+                        "text": "nested-4-a"
+                      },
+                      {
+                        "id": "<oid:40>",
+                        "text": "nested-4-b"
+                      }
+                    ],
+                    "localizedText": "arr-loc-4"
+                  },
+                  {
+                    "id": "<oid:41>",
+                    "text": "arr-4-1",
+                    "number": 41,
+                    "rel": null,
+                    "nestedArray": [],
+                    "localizedText": {
+                      "$undefined": true
+                    }
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:42>",
+                    "text": "blockA-4",
+                    "number": 4,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:43>",
+                        "text": "deep-4",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:44>",
+                    "text": "blockB-4",
+                    "select": "y",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:45>",
+                        "text": "barr-4"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:17.000Z",
+                "createdAt": "2025-01-01T00:00:17.000Z"
+              },
+              {
+                "id": 2,
+                "text": "beta",
+                "textarea": "line one 1\nline two",
+                "email": "user1@example.com",
+                "code": "const x = 1",
+                "json": {
+                  "flag": false,
+                  "list": [1, 2],
+                  "name": "json-1",
+                  "nested": {
+                    "deep": "d1"
+                  }
+                },
+                "number": 3,
+                "checkbox": false,
+                "date": "2024-02-11T00:00:00.000Z",
+                "point": [1, -1],
+                "radio": "b",
+                "select": "two",
+                "selectMany": ["red", "green"],
+                "textMany": ["tm-1", "shared"],
+                "numberMany": [1, 2, 42],
+                "rel": 2,
+                "relMany": [2, 3],
+                "poly": {
+                  "relationTo": "media",
+                  "value": 2
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 3
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 2
+                  }
+                ],
+                "upload": 2,
+                "uploadMany": [2, 1],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 1",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-1",
+                  "number": 99,
+                  "localizedText": "group-loc-1",
+                  "nestedGroup": {
+                    "text": "ng-1"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:10>",
+                      "text": "garr-1"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-1",
+                  "number": 2
+                },
+                "tabText": "tabText-1",
+                "rowText": "row-1",
+                "collapsibleText": "collapsible-1",
+                "array": [
+                  {
+                    "id": "<oid:11>",
+                    "text": "arr-1-0",
+                    "number": 10,
+                    "rel": 2,
+                    "nestedArray": [
+                      {
+                        "id": "<oid:12>",
+                        "text": "nested-1-a"
+                      },
+                      {
+                        "id": "<oid:13>",
+                        "text": "nested-1-b"
+                      }
+                    ],
+                    "localizedText": "arr-loc-1"
+                  },
+                  {
+                    "id": "<oid:14>",
+                    "text": "arr-1-1",
+                    "number": 11,
+                    "rel": null,
+                    "nestedArray": [],
+                    "localizedText": {
+                      "$undefined": true
+                    }
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:15>",
+                    "text": "blockA-1",
+                    "number": 1,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:16>",
+                        "text": "deep-1",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:17>",
+                    "text": "blockB-1",
+                    "select": "y",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:18>",
+                        "text": "barr-1"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:14.000Z",
+                "createdAt": "2025-01-01T00:00:14.000Z"
+              }
+            ],
+            "hasNextPage": false
+          },
+          "kitchenArrayRefs": {
+            "docs": [
+              {
+                "id": 5,
+                "text": "delta",
+                "textarea": "line one 4\nline two",
+                "email": "user4@example.com",
+                "code": "const x = 4",
+                "json": {
+                  "flag": true,
+                  "list": [4, 5],
+                  "name": "json-4",
+                  "nested": {
+                    "deep": "d4"
+                  }
+                },
+                "number": 9,
+                "checkbox": true,
+                "date": "2024-05-14T00:00:00.000Z",
+                "point": [4, -4],
+                "radio": "b",
+                "select": "two",
+                "selectMany": [],
+                "textMany": ["tm-4", "shared"],
+                "numberMany": [4, 5, 42],
+                "rel": 2,
+                "relMany": [2, 3],
+                "poly": {
+                  "relationTo": "targets",
+                  "value": 2
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 3
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 1
+                  }
+                ],
+                "upload": 1,
+                "uploadMany": [1, 2],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 4",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-1",
+                  "number": 96,
+                  "localizedText": "group-loc-4",
+                  "nestedGroup": {
+                    "text": "ng-4"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:37>",
+                      "text": "garr-4"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-4",
+                  "number": 8
+                },
+                "tabText": "tabText-4",
+                "rowText": "row-4",
+                "collapsibleText": "collapsible-4",
+                "array": [
+                  {
+                    "id": "<oid:38>",
+                    "text": "arr-4-0",
+                    "number": 40,
+                    "rel": 2,
+                    "nestedArray": [
+                      {
+                        "id": "<oid:39>",
+                        "text": "nested-4-a"
+                      },
+                      {
+                        "id": "<oid:40>",
+                        "text": "nested-4-b"
+                      }
+                    ],
+                    "localizedText": "arr-loc-4"
+                  },
+                  {
+                    "id": "<oid:41>",
+                    "text": "arr-4-1",
+                    "number": 41,
+                    "rel": null,
+                    "nestedArray": [],
+                    "localizedText": {
+                      "$undefined": true
+                    }
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:42>",
+                    "text": "blockA-4",
+                    "number": 4,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:43>",
+                        "text": "deep-4",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:44>",
+                    "text": "blockB-4",
+                    "select": "y",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:45>",
+                        "text": "barr-4"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:17.000Z",
+                "createdAt": "2025-01-01T00:00:17.000Z"
+              },
+              {
+                "id": 2,
+                "text": "beta",
+                "textarea": "line one 1\nline two",
+                "email": "user1@example.com",
+                "code": "const x = 1",
+                "json": {
+                  "flag": false,
+                  "list": [1, 2],
+                  "name": "json-1",
+                  "nested": {
+                    "deep": "d1"
+                  }
+                },
+                "number": 3,
+                "checkbox": false,
+                "date": "2024-02-11T00:00:00.000Z",
+                "point": [1, -1],
+                "radio": "b",
+                "select": "two",
+                "selectMany": ["red", "green"],
+                "textMany": ["tm-1", "shared"],
+                "numberMany": [1, 2, 42],
+                "rel": 2,
+                "relMany": [2, 3],
+                "poly": {
+                  "relationTo": "media",
+                  "value": 2
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 3
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 2
+                  }
+                ],
+                "upload": 2,
+                "uploadMany": [2, 1],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 1",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-1",
+                  "number": 99,
+                  "localizedText": "group-loc-1",
+                  "nestedGroup": {
+                    "text": "ng-1"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:10>",
+                      "text": "garr-1"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-1",
+                  "number": 2
+                },
+                "tabText": "tabText-1",
+                "rowText": "row-1",
+                "collapsibleText": "collapsible-1",
+                "array": [
+                  {
+                    "id": "<oid:11>",
+                    "text": "arr-1-0",
+                    "number": 10,
+                    "rel": 2,
+                    "nestedArray": [
+                      {
+                        "id": "<oid:12>",
+                        "text": "nested-1-a"
+                      },
+                      {
+                        "id": "<oid:13>",
+                        "text": "nested-1-b"
+                      }
+                    ],
+                    "localizedText": "arr-loc-1"
+                  },
+                  {
+                    "id": "<oid:14>",
+                    "text": "arr-1-1",
+                    "number": 11,
+                    "rel": null,
+                    "nestedArray": [],
+                    "localizedText": {
+                      "$undefined": true
+                    }
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:15>",
+                    "text": "blockA-1",
+                    "number": 1,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:16>",
+                        "text": "deep-1",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:17>",
+                    "text": "blockB-1",
+                    "select": "y",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:18>",
+                        "text": "barr-1"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:14.000Z",
+                "createdAt": "2025-01-01T00:00:14.000Z"
+              }
+            ],
+            "hasNextPage": false
+          },
+          "localizedRefs": {
+            "docs": [
+              {
+                "id": 2,
+                "text": "beta",
+                "textarea": "line one 1\nline two",
+                "email": "user1@example.com",
+                "code": "const x = 1",
+                "json": {
+                  "flag": false,
+                  "list": [1, 2],
+                  "name": "json-1",
+                  "nested": {
+                    "deep": "d1"
+                  }
+                },
+                "number": 3,
+                "checkbox": false,
+                "date": "2024-02-11T00:00:00.000Z",
+                "point": [1, -1],
+                "radio": "b",
+                "select": "two",
+                "selectMany": ["red", "green"],
+                "textMany": ["tm-1", "shared"],
+                "numberMany": [1, 2, 42],
+                "rel": 2,
+                "relMany": [2, 3],
+                "poly": {
+                  "relationTo": "media",
+                  "value": 2
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 3
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 2
+                  }
+                ],
+                "upload": 2,
+                "uploadMany": [2, 1],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 1",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-1",
+                  "number": 99,
+                  "localizedText": "group-loc-1",
+                  "nestedGroup": {
+                    "text": "ng-1"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:57>",
+                      "text": "garr-1"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-1",
+                  "number": 2
+                },
+                "tabText": "tabText-1",
+                "rowText": "row-1",
+                "collapsibleText": "collapsible-1",
+                "array": [
+                  {
+                    "text": "arr-1-0",
+                    "number": 10,
+                    "rel": 2,
+                    "localizedText": "arr-loc-1",
+                    "nestedArray": [
+                      {
+                        "id": "<oid:58>",
+                        "text": "nested-1-a"
+                      },
+                      {
+                        "id": "<oid:59>",
+                        "text": "nested-1-b"
+                      }
+                    ],
+                    "id": "<oid:60>"
+                  },
+                  {
+                    "text": "arr-1-1",
+                    "number": 11,
+                    "rel": null,
+                    "localizedText": null,
+                    "nestedArray": [],
+                    "id": "<oid:61>"
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:62>",
+                    "text": "blockA-1",
+                    "number": 1,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:63>",
+                        "text": "deep-1",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:64>",
+                    "text": "blockB-1",
+                    "select": "y",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:65>",
+                        "text": "barr-1"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:23.000Z",
+                "createdAt": "2025-01-01T00:00:22.000Z"
+              }
+            ],
+            "hasNextPage": false
+          },
+          "updatedAt": "2025-01-01T00:00:06.000Z",
+          "createdAt": "2025-01-01T00:00:05.000Z"
+        }
+      },
+      {
+        "rel": {
+          "id": 3,
+          "title": "target-2",
+          "localizedTitle": "target-en-2",
+          "number": 6,
+          "kitchenRefs": {
+            "docs": [
+              {
+                "id": 3,
+                "text": "gamma",
+                "textarea": "line one 2\nline two",
+                "email": "user2@example.com",
+                "code": "const x = 2",
+                "json": {
+                  "flag": true,
+                  "list": [2, 3],
+                  "name": "json-2",
+                  "nested": {
+                    "deep": "d2"
+                  }
+                },
+                "number": 5,
+                "checkbox": true,
+                "date": "2024-03-12T00:00:00.000Z",
+                "point": [2, -2],
+                "radio": "c",
+                "select": "three",
+                "selectMany": ["blue"],
+                "textMany": ["tm-2", "shared"],
+                "numberMany": [2, 3, 42],
+                "rel": 3,
+                "relMany": [3, 1],
+                "poly": {
+                  "relationTo": "targets",
+                  "value": 3
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 1
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 1
+                  }
+                ],
+                "upload": 1,
+                "uploadMany": [1, 2],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 2",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-2",
+                  "number": 98,
+                  "localizedText": "group-loc-2",
+                  "nestedGroup": {
+                    "text": "ng-2"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:19>",
+                      "text": "garr-2"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-2",
+                  "number": 4
+                },
+                "tabText": "tabText-2",
+                "rowText": "row-2",
+                "collapsibleText": "collapsible-2",
+                "array": [
+                  {
+                    "id": "<oid:20>",
+                    "text": "arr-2-0",
+                    "number": 20,
+                    "rel": 3,
+                    "nestedArray": [
+                      {
+                        "id": "<oid:21>",
+                        "text": "nested-2-a"
+                      },
+                      {
+                        "id": "<oid:22>",
+                        "text": "nested-2-b"
+                      }
+                    ],
+                    "localizedText": "arr-loc-2"
+                  },
+                  {
+                    "id": "<oid:23>",
+                    "text": "arr-2-1",
+                    "number": 21,
+                    "rel": null,
+                    "nestedArray": [],
+                    "localizedText": {
+                      "$undefined": true
+                    }
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:24>",
+                    "text": "blockA-2",
+                    "number": 2,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:25>",
+                        "text": "deep-2",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:26>",
+                    "text": "blockB-2",
+                    "select": "z",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:27>",
+                        "text": "barr-2"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:15.000Z",
+                "createdAt": "2025-01-01T00:00:15.000Z"
+              }
+            ],
+            "hasNextPage": false
+          },
+          "kitchenArrayRefs": {
+            "docs": [
+              {
+                "id": 3,
+                "text": "gamma",
+                "textarea": "line one 2\nline two",
+                "email": "user2@example.com",
+                "code": "const x = 2",
+                "json": {
+                  "flag": true,
+                  "list": [2, 3],
+                  "name": "json-2",
+                  "nested": {
+                    "deep": "d2"
+                  }
+                },
+                "number": 5,
+                "checkbox": true,
+                "date": "2024-03-12T00:00:00.000Z",
+                "point": [2, -2],
+                "radio": "c",
+                "select": "three",
+                "selectMany": ["blue"],
+                "textMany": ["tm-2", "shared"],
+                "numberMany": [2, 3, 42],
+                "rel": 3,
+                "relMany": [3, 1],
+                "poly": {
+                  "relationTo": "targets",
+                  "value": 3
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 1
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 1
+                  }
+                ],
+                "upload": 1,
+                "uploadMany": [1, 2],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 2",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-2",
+                  "number": 98,
+                  "localizedText": "group-loc-2",
+                  "nestedGroup": {
+                    "text": "ng-2"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:19>",
+                      "text": "garr-2"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-2",
+                  "number": 4
+                },
+                "tabText": "tabText-2",
+                "rowText": "row-2",
+                "collapsibleText": "collapsible-2",
+                "array": [
+                  {
+                    "id": "<oid:20>",
+                    "text": "arr-2-0",
+                    "number": 20,
+                    "rel": 3,
+                    "nestedArray": [
+                      {
+                        "id": "<oid:21>",
+                        "text": "nested-2-a"
+                      },
+                      {
+                        "id": "<oid:22>",
+                        "text": "nested-2-b"
+                      }
+                    ],
+                    "localizedText": "arr-loc-2"
+                  },
+                  {
+                    "id": "<oid:23>",
+                    "text": "arr-2-1",
+                    "number": 21,
+                    "rel": null,
+                    "nestedArray": [],
+                    "localizedText": {
+                      "$undefined": true
+                    }
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:24>",
+                    "text": "blockA-2",
+                    "number": 2,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:25>",
+                        "text": "deep-2",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:26>",
+                    "text": "blockB-2",
+                    "select": "z",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:27>",
+                        "text": "barr-2"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:15.000Z",
+                "createdAt": "2025-01-01T00:00:15.000Z"
+              }
+            ],
+            "hasNextPage": false
+          },
+          "localizedRefs": {
+            "docs": [
+              {
+                "id": 3,
+                "text": "gamma",
+                "textarea": "line one 2\nline two",
+                "email": "user2@example.com",
+                "code": "const x = 2",
+                "json": {
+                  "flag": true,
+                  "list": [2, 3],
+                  "name": "json-2",
+                  "nested": {
+                    "deep": "d2"
+                  }
+                },
+                "number": 5,
+                "checkbox": true,
+                "date": "2024-03-12T00:00:00.000Z",
+                "point": [2, -2],
+                "radio": "c",
+                "select": "three",
+                "selectMany": ["blue"],
+                "textMany": ["tm-2", "shared"],
+                "numberMany": [2, 3, 42],
+                "rel": 3,
+                "relMany": [3, 1],
+                "poly": {
+                  "relationTo": "targets",
+                  "value": 3
+                },
+                "polyMany": [
+                  {
+                    "relationTo": "targets",
+                    "value": 1
+                  },
+                  {
+                    "relationTo": "media",
+                    "value": 1
+                  }
+                ],
+                "upload": 1,
+                "uploadMany": [1, 2],
+                "richText": {
+                  "root": {
+                    "type": "root",
+                    "children": [
+                      {
+                        "type": "paragraph",
+                        "children": [
+                          {
+                            "type": "text",
+                            "detail": 0,
+                            "format": 0,
+                            "mode": "normal",
+                            "style": "",
+                            "text": "hello world 2",
+                            "version": 1
+                          }
+                        ],
+                        "direction": "ltr",
+                        "format": "",
+                        "indent": 0,
+                        "textFormat": 0,
+                        "version": 1
+                      }
+                    ],
+                    "direction": "ltr",
+                    "format": "",
+                    "indent": 0,
+                    "version": 1
+                  }
+                },
+                "group": {
+                  "text": "group-2",
+                  "number": 98,
+                  "localizedText": "group-loc-2",
+                  "nestedGroup": {
+                    "text": "ng-2"
+                  },
+                  "groupArray": [
+                    {
+                      "id": "<oid:68>",
+                      "text": "garr-2"
+                    }
+                  ]
+                },
+                "tabNamed": {
+                  "text": "tab-2",
+                  "number": 4
+                },
+                "tabText": "tabText-2",
+                "rowText": "row-2",
+                "collapsibleText": "collapsible-2",
+                "array": [
+                  {
+                    "text": "arr-2-0",
+                    "number": 20,
+                    "rel": 3,
+                    "localizedText": "arr-loc-2",
+                    "nestedArray": [
+                      {
+                        "id": "<oid:69>",
+                        "text": "nested-2-a"
+                      },
+                      {
+                        "id": "<oid:70>",
+                        "text": "nested-2-b"
+                      }
+                    ],
+                    "id": "<oid:71>"
+                  },
+                  {
+                    "text": "arr-2-1",
+                    "number": 21,
+                    "rel": null,
+                    "localizedText": null,
+                    "nestedArray": [],
+                    "id": "<oid:72>"
+                  }
+                ],
+                "blocks": [
+                  {
+                    "id": "<oid:73>",
+                    "text": "blockA-2",
+                    "number": 2,
+                    "blockName": null,
+                    "blockType": "blockA",
+                    "nestedBlocks": [
+                      {
+                        "id": "<oid:74>",
+                        "text": "deep-2",
+                        "blockName": null,
+                        "blockType": "blockC"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "<oid:75>",
+                    "text": "blockB-2",
+                    "select": "z",
+                    "blockName": null,
+                    "array": [
+                      {
+                        "id": "<oid:76>",
+                        "text": "barr-2"
+                      }
+                    ],
+                    "blockType": "blockB"
+                  }
+                ],
+                "updatedAt": "2025-01-01T00:00:25.000Z",
+                "createdAt": "2025-01-01T00:00:24.000Z"
+              }
+            ],
+            "hasNextPage": false
+          },
+          "updatedAt": "2025-01-01T00:00:08.000Z",
+          "createdAt": "2025-01-01T00:00:07.000Z"
+        }
+      }
+    ]
+  },
+  "group.text": {
+    "hasNextPage": false,
+    "hasPrevPage": false,
+    "limit": 0,
+    "page": 1,
+    "pagingCounter": 1,
+    "totalDocs": 4,
+    "totalPages": 1,
+    "values": [
+      {
+        "group.text": null
+      },
+      {
+        "group.text": "group-0"
+      },
+      {
+        "group.text": "group-1"
+      },
+      {
+        "group.text": "group-2"
+      }
+    ]
+  },
+  "rel.title": {
+    "hasNextPage": false,
+    "hasPrevPage": false,
+    "limit": 0,
+    "page": 1,
+    "pagingCounter": 1,
+    "totalDocs": 4,
+    "totalPages": 1,
+    "values": [
+      {
+        "rel.title": null
+      },
+      {
+        "rel.title": "target-0"
+      },
+      {
+        "rel.title": "target-1"
+      },
+      {
+        "rel.title": "target-2"
+      }
+    ]
+  },
+  "paginated": {
+    "hasNextPage": true,
+    "hasPrevPage": true,
+    "limit": 2,
+    "nextPage": 3,
+    "page": 2,
+    "pagingCounter": 3,
+    "prevPage": 1,
+    "totalDocs": 5,
+    "totalPages": 3,
+    "values": [
+      {
+        "text": "delta"
+      },
+      {
+        "text": "gamma"
+      }
+    ]
+  },
+  "localized text es": {
+    "hasNextPage": false,
+    "hasPrevPage": false,
+    "limit": 0,
+    "page": 1,
+    "pagingCounter": 1,
+    "totalDocs": 3,
+    "totalPages": 1,
+    "values": [
+      {
+        "text": "es-text-0"
+      },
+      {
+        "text": "es-text-1"
+      },
+      {
+        "text": "es-text-2"
+      }
+    ]
+  }
+}

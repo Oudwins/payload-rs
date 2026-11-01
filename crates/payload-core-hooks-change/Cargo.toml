@@ -1,0 +1,27 @@
+[package]
+name = "payload-core-hooks-change"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Port of `packages/payload/src/fields/hooks/beforeChange` on the payload-core-runtime
+# (strategy B: Rust drives the user's JS objects through Node-API on the JS thread).
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-runtime = { path = "../payload-core-runtime" }
+
+[dev-dependencies]
+napi-derive = "3"
+
+[features]
+# Deliberately wrong builds used to check that the differential suites are sensitive enough
+# (test/__rs/core-hooks-before-change/mutants.sh). Never enable them otherwise.
+mutant-skip-sync-await = []
+mutant-inline-traverse = []
+mutant-reverse-fields = []
+mutant-merge-before-errors = []
+
+[[example]]
+name = "before_change_addon"
+crate-type = ["cdylib"]

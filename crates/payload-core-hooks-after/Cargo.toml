@@ -1,0 +1,12 @@
+[package]
+name = "payload-core-hooks-after"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Ports of payload/src/fields/hooks/{afterChange,beforeDuplicate} on the payload-core-runtime
+# (strategy B: Rust drives the user's JS objects through Node-API on the JS thread).
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-runtime = { path = "../payload-core-runtime" }

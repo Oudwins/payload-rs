@@ -1,0 +1,20 @@
+[package]
+name = "payload-core-runtime"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Runtime that lets the Rust core engine drive user JS (hooks, access, defaultValue)
+# with upstream microtask semantics. Uses raw Node-API through napi-sys; the
+# `payload-node` addon (and the `dev_addon` example) expose it to JS.
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+napi-derive = "3"
+
+[[example]]
+name = "dev_addon"
+crate-type = ["cdylib"]

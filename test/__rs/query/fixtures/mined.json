@@ -1,0 +1,4074 @@
+{
+  "sorts": [
+    {
+      "file": "a11y/WCAG.audit.spec.ts",
+      "value": "title"
+    },
+    {
+      "file": "a11y/WCAG.audit.spec.ts",
+      "value": "-title"
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": "restrictedField"
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": "post.restrictedField"
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": "postLabel"
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": "rank"
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": "secret"
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": "version.secret"
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": "fake"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "-createdAt"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "-updatedAt"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "-number"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "number"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "category.title"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "categories.title"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "arrayWithIDs.text"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "postTitle"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "-postTitle"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "postCategoryCustomID"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "-postCategoryCustomID"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "-textHooked"
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": "text"
+    },
+    {
+      "file": "database/migrate-to-blocks-as-json/int.spec.ts",
+      "value": "createdAt"
+    },
+    {
+      "file": "joins/hierarchy.int.spec.ts",
+      "value": "id"
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": "name"
+    },
+    {
+      "file": "llm-instructions/int.spec.ts",
+      "value": "entitySlug"
+    },
+    {
+      "file": "localization/int.spec.ts",
+      "value": "description"
+    },
+    {
+      "file": "localization/int.spec.ts",
+      "value": "date"
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": "-director.name"
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": "director.name"
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": "director.localized"
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": "director.movie.name"
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": "-director.movie.name"
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": ["director.name", "director.createdAt"]
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": ["director.name", "-director.createdAt"]
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": "-movies.name"
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": "-text"
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": "order"
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": ["number2", "number"]
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": ["number2", "-number"]
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": ["-group.number", "-number"]
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": "version.number"
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": "-_order"
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": "_order"
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": "number2,number"
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": "number2,-number"
+    }
+  ],
+  "wheres": [
+    {
+      "file": "access-control/e2e.spec.ts",
+      "value": {
+        "id": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "access-control/e2e.spec.ts",
+      "value": {
+        "email": {
+          "equals": "test@payloadcms.com"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "post.title": {
+          "equals": "archived"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "post.title2": {
+          "equals": "archived test"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "singlePost.title": {
+          "equals": "archived"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "singlePost.title": {
+          "equals": "public"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "joinedPosts.title": {
+          "equals": "archived"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "joinedPosts.title": {
+          "equals": "public"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "joinedPostsMany.title": {
+          "equals": "archived"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "joinedPostsMany.title": {
+          "equals": "public"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "joinedPosts": {
+          "contains": {
+            "title": {
+              "equals": "archived"
+            }
+          }
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "polymorphicJoinedPosts.title": {
+          "equals": "archived"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "child.nested.isActive": {
+          "equals": true
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "parent.label": {
+          "equals": "target"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "restrictedField": [
+          {
+            "equals": "example"
+          }
+        ]
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "post.restrictedField": {
+          "equals": "restricted"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {}
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "version.name": {
+          "equals": "match"
+        }
+      }
+    },
+    {
+      "file": "access-control/int.spec.ts",
+      "value": {
+        "email": {
+          "equals": "dev@payloadcms.com"
+        }
+      }
+    },
+    {
+      "file": "access-control/postgres-logs.int.spec.ts",
+      "value": {
+        "userRole": {
+          "equals": "admin"
+        }
+      }
+    },
+    {
+      "file": "access-control/postgres-logs.int.spec.ts",
+      "value": {
+        "readRole": {
+          "equals": "admin"
+        }
+      }
+    },
+    {
+      "file": "access-control/postgres-logs.int.spec.ts",
+      "value": {
+        "updateRole": {
+          "equals": "admin"
+        }
+      }
+    },
+    {
+      "file": "access-control/postgres-logs.int.spec.ts",
+      "value": {
+        "deleteRole": {
+          "equals": "admin"
+        }
+      }
+    },
+    {
+      "file": "admin/e2e/list-view/e2e.spec.ts",
+      "value": {
+        "or": [
+          {
+            "and": [
+              {
+                "disableListFilterText": {
+                  "equals": "Disable List Filter Text"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "file": "admin/e2e/list-view/e2e.spec.ts",
+      "value": {
+        "or": [
+          {
+            "and": [
+              {
+                "defaultSelect": {
+                  "equals": ""
+                }
+              },
+              {
+                "placeholderSelect": {
+                  "equals": ""
+                }
+              },
+              {
+                "defaultRelationship": {
+                  "equals": ""
+                }
+              },
+              {
+                "placeholderRelationship": {
+                  "equals": ""
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "file": "auth/e2e.spec.ts",
+      "value": {
+        "email": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "auth/int.spec.ts",
+      "value": {
+        "user.relationTo": {
+          "equals": "users"
+        }
+      }
+    },
+    {
+      "file": "authorship/int.spec.ts",
+      "value": {
+        "email": {
+          "equals": "other@payloadcms.com"
+        }
+      }
+    },
+    {
+      "file": "cli/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "not created"
+        }
+      }
+    },
+    {
+      "file": "cli/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Seeded page"
+        }
+      }
+    },
+    {
+      "file": "cli/int.spec.ts",
+      "value": {
+        "title": {
+          "in": ["one", "two"]
+        }
+      }
+    },
+    {
+      "file": "cli/int.spec.ts",
+      "value": {
+        "title": {
+          "in": ["file one", "file two"]
+        }
+      }
+    },
+    {
+      "file": "cli/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Merged input"
+        }
+      }
+    },
+    {
+      "file": "cli/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "created"
+        }
+      }
+    },
+    {
+      "file": "cli/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Updated page"
+        }
+      }
+    },
+    {
+      "file": "cli/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Seeded media"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "title"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "missing": {
+          "equals": "title"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "relationField.missing": {
+          "equals": "title"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "relationMultiRelationTo.missing": {
+          "equals": "title"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "restrictedField": {
+          "equals": "restricted"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "text": {
+          "equals": "test"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "id": {
+          "like": "custom"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "relationField": {
+          "not_in": []
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "relationField": {
+          "in": []
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "title": {
+          "like": [
+            {
+              "pattern": "title"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "title": {
+          "like": "prefix"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "title": {
+          "like": "Тест"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "title": {
+          "like": "привет нагрузки"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "title": {
+          "like": "words partial"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "id": {
+          "like": "words partial"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "description": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "description": {
+          "exists": false
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "number": {
+          "greater_than": 1
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "number": {
+          "greater_than_equal": 1
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "number": {
+          "less_than": 2
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "number": {
+          "less_than_equal": 2
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "point": {
+          "near": "0, 0, 100000, 0"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "paginate-test"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "limit-test"
+        }
+      }
+    },
+    {
+      "file": "collections-rest/int.spec.ts",
+      "value": {
+        "D1.D2.D3.D4": {
+          "equals": "nested message"
+        }
+      }
+    },
+    {
+      "file": "database/batch-processing.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "not present"
+        }
+      }
+    },
+    {
+      "file": "database/batch-processing.int.spec.ts",
+      "value": {
+        "title": {
+          "in": ["created in batch", "updated in batch", "delete me", "never applied"]
+        }
+      }
+    },
+    {
+      "file": "database/batch-processing.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "continued batch post"
+        }
+      }
+    },
+    {
+      "file": "database/batch-processing.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "rolled back batch post"
+        }
+      }
+    },
+    {
+      "file": "database/batch-processing.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "committed batch post"
+        }
+      }
+    },
+    {
+      "file": "database/batch-processing.int.spec.ts",
+      "value": {
+        "title": {
+          "in": ["first batch", "unattempted batch"]
+        }
+      }
+    },
+    {
+      "file": "database/copy.int.spec.ts",
+      "value": {
+        "id": {
+          "equals": "missing-document"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "latest": {
+          "equals": true
+        },
+        "version.title": {
+          "equals": "hey"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "roles": {
+          "contains": "admin"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "food": {
+          "contains": "banana"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "DistinctTest-Post"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "hello"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "not_equals": "notupdated"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "updated"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "not_equals": "updated"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "not updated"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "does not exist"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "postCategoryTitle": {
+          "equals": "2-category"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "postCategoryTitle": {
+          "equals": "3-category"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "text": {
+          "equals": "asd"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "some-title-here"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "upsert-test"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "some random title"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "category.title": {
+          "equals": "new-category"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "category.title": {
+          "equals": "non-existing-category"
+        }
+      }
+    },
+    {
+      "file": "database/int.spec.ts",
+      "value": {
+        "text": {
+          "in": ["text-1", "text-3", null]
+        }
+      }
+    },
+    {
+      "file": "database/postgres-logs.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Some title 2"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-logs.int.spec.ts",
+      "value": {
+        "text": {
+          "equals": "bulk-delete"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "acido"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "title": {
+          "like": "nino"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "title": {
+          "not_like": "nino"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "ACIDO"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "title": {
+          "like": "acido apple"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "localizedTitle": {
+          "contains": "acido"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "group.note": {
+          "contains": "acido"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "tags.value": {
+          "contains": "acido"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "sections.value": {
+          "contains": "acido"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "tagsText": {
+          "contains": "acido"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "score": {
+          "equals": 42
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "score": {
+          "exists": false
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "scores": {
+          "contains": 2
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "id": {
+          "contains": "acido-slug-acido"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "hello"
+        }
+      }
+    },
+    {
+      "file": "database/postgres-operator-handlers.int.spec.ts",
+      "value": {
+        "title": {
+          "not_equals": "something-else"
+        }
+      }
+    },
+    {
+      "file": "dataloader/int.spec.ts",
+      "value": {
+        "name": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "fields/collections/Relationship/e2e.spec.ts",
+      "value": {
+        "text": {
+          "equals": "some updated text value"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "hasMany": {
+          "in": ["one"]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "hasMany": {
+          "equals": "3"
+        },
+        "hasManySecond": {
+          "equals": "4"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "hasMany": {
+          "contains": "banana"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "hasMany": {
+          "contains": ["banana", "cherry"]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "text": {
+          "like": "cat"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "text": {
+          "not_like": "cat-unique-test"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "array.texts": {
+          "equals": "text_2"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "array.texts": {
+          "equals": "text_1"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "array.texts": {
+          "contains": "text_other"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "array.texts": {
+          "in": ["text_other"]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "blocks.texts": {
+          "equals": "text_2"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "blocks.texts": {
+          "equals": "text_1"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "blocks.texts": {
+          "contains": "text_other"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "blocks.texts": {
+          "in": ["text_other"]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "relationToRow.title": {
+          "equals": "some-title"
+        },
+        "relationToRowMany.title": {
+          "equals": "some-title"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "selectHasMany": {
+          "in": ["one"]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "hasMany": {
+          "in": [5]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "number": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "number": {
+          "exists": false
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "array.numbers": {
+          "equals": 10
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "array.numbers": {
+          "equals": 30
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "array.numbers": {
+          "in": [40]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "blocks.numbers": {
+          "equals": 10
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "blocks.numbers": {
+          "equals": 30
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "blocks.numbers": {
+          "in": [40]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "checkboxNotRequired": {
+          "exists": false
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "checkboxNotRequired": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "items.localizedText": {
+              "equals": "test"
+            }
+          },
+          {
+            "items.anotherText": {
+              "equals": "another"
+            }
+          },
+          {
+            "items.text": {
+              "equals": "required"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "collapsedArray": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "collapsedArray": {
+          "exists": false
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "blocks.richText.root.children.children.text": {
+          "like": "fun"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "blocks.richText.root.children.children.text": {
+          "like": "funny"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "localizedBlocks.en.richText.root.children.children.text": {
+          "like": "fun"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "localizedBlocks.en.richText.root.children.children.text": {
+          "like": "funny"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "localizedBlocks.richText.root.children.children.text": {
+          "like": "fun"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "localizedBlocks.richText.root.children.children.text": {
+          "like": "funny"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "blocks.text": {
+              "equals": "green"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "blocks.blockType": {
+          "in": ["content"]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.foo": {
+          "like": "bar"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.baz": {
+          "not_like": "bar"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.foo": {
+          "equals": "foobar"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.foo": {
+          "equals": "bar"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.number": {
+          "equals": 5
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.foo": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json": {
+          "exists": false
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.value": {
+          "in": [1, 3]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.value": {
+          "not_in": [1, 3]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.foo": {
+          "in": ["foobar"]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.foo": {
+          "not_in": ["foobar"]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.value": {
+          "in": [null, 1, "literal-value"]
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "json.isEven": {
+              "equals": true
+            }
+          },
+          {
+            "json.value": {
+              "in": [1, 4, 2, 3]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "json.array.text": {
+              "equals": "some-text"
+            }
+          },
+          {
+            "json.array.object.text": {
+              "equals": "deep-text"
+            }
+          },
+          {
+            "json.array.object.array": {
+              "in": [10, 20]
+            }
+          },
+          {
+            "json.array.object.array": {
+              "exists": true
+            }
+          },
+          {
+            "json.array.object.notexists": {
+              "exists": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.doc.value": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.select from": {
+          "equals": 5
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.\"unsafe\"": {
+          "equals": 5
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.(unsafe\"": {
+          "equals": 5
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.unsafe=\"": {
+          "equals": 5
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.value": {
+          "equals": "select("
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.value": {
+          "equals": "\"unsafe"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.value": {
+          "equals": "'unsafe"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.value": {
+          "equals": "unsafe\\"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.value": {
+          "equals": "unsafe="
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "json.valid_key": {
+          "equals": "test"
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "relationship.value": {
+          "in": []
+        }
+      }
+    },
+    {
+      "file": "fields/int.spec.ts",
+      "value": {
+        "dateWithOffsetTimezone_tz": {
+          "equals": "+05:30"
+        }
+      }
+    },
+    {
+      "file": "file-versioning/int.spec.ts",
+      "value": {
+        "alt": {
+          "equals": "reject-after-write"
+        }
+      }
+    },
+    {
+      "file": "hierarchy/e2e.spec.ts",
+      "value": {
+        "key": {
+          "equals": "hierarchy-tree-divisions"
+        }
+      }
+    },
+    {
+      "file": "hierarchy/e2e.spec.ts",
+      "value": {
+        "key": {
+          "equals": "hierarchy-tree-folders"
+        }
+      }
+    },
+    {
+      "file": "hierarchy/e2e.spec.ts",
+      "value": {
+        "name": {
+          "equals": "Orgs and Products"
+        }
+      }
+    },
+    {
+      "file": "hierarchy/int.spec.ts",
+      "value": {
+        "parent": {
+          "equals": null
+        }
+      }
+    },
+    {
+      "file": "joins/e2e.spec.ts",
+      "value": {
+        "name": {
+          "equals": "example"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "relationTo": {
+              "in": ["folderPoly1", "folderPoly2"]
+            }
+          },
+          {
+            "folderPoly2Title": {
+              "equals": "Poly 2 Title"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "relationTo": {
+              "equals": "folders"
+            }
+          },
+          {
+            "folderType": {
+              "in": ["folderPoly1"]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "relationTo": {
+              "equals": "folders"
+            }
+          },
+          {
+            "or": [
+              {
+                "folderType": {
+                  "in": ["folderPoly1"]
+                }
+              },
+              {
+                "folderType": {
+                  "exists": false
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "test 9"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "title": {
+          "not_equals": "unfiltered post"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "name": {
+          "equals": "paginate example"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "name": {
+          "equals": "categoryJoinRestricted"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "name": {
+          "equals": "totalDocs"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "createdAt": {
+          "greater_than_equal": "2024-01-01T00:00:00.000Z",
+          "less_than": "2025-01-01T00:00:00.000Z"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "doc-1"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "relationTo": {
+          "equals": "multiple-collections-2"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "tags": {
+          "exists": "false"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "tags": {
+          "in": "available"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "details.status": {
+          "exists": "false"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "score": {
+          "greater_than": 0,
+          "less_than": 10
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "availability": {
+          "equals": null
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "availability": {
+          "not_equals": "unavailable"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "availability": {
+          "not_equals": null
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "availability": {
+          "in": ["unavailable", null]
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "availability": {
+          "in": [null]
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "tags": {
+          "equals": "available",
+          "in": ["allowed-marker"]
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "available"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "relatedPosts.title": {
+          "equals": "my-title"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "hasManyPosts.title": {
+          "equals": "my-title"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "group.relatedPosts.title": {
+          "equals": "my-category-title"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "arrayPosts.title": {
+          "equals": "array-join-where-test"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "group.relatedPosts.title": {
+              "equals": "my-category-title"
+            }
+          },
+          {
+            "group.relatedPosts.title": {
+              "exists": true
+            }
+          },
+          {
+            "group.relatedPosts.isFiltered": {
+              "equals": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "hasManyPosts.title": {
+              "equals": "my-title"
+            }
+          },
+          {
+            "hasManyPosts.title": {
+              "exists": true
+            }
+          },
+          {
+            "hasManyPosts.isFiltered": {
+              "equals": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "x": {
+          "$raw": "EXISTS(SELECT 1 FROM pg_sleep(3))"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "x": {
+          "$raw": "true"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "test"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "hiddenSecret": {
+          "equals": "secret"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "x": {
+          "$raw": ["true"]
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "title": {
+          "$raw": "true"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "title": {
+          "bogus_operator": "test"
+        }
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "title": {
+              "$raw": "true"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "joins/int.spec.ts",
+      "value": {
+        "or": [
+          {
+            "title": {
+              "$raw": "true"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "joins/queryPath.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "a"
+        }
+      }
+    },
+    {
+      "file": "lexical/collections/Lexical/e2e/blocks/e2e.spec.ts",
+      "value": {
+        "filename": {
+          "equals": "payload-original.jpg"
+        }
+      }
+    },
+    {
+      "file": "lexical/lexical.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "array doc 1"
+        }
+      }
+    },
+    {
+      "file": "lexical/lexical.int.spec.ts",
+      "value": {
+        "text": {
+          "equals": "Seeded text document"
+        }
+      }
+    },
+    {
+      "file": "lexical/lexical.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Rich Text"
+        }
+      }
+    },
+    {
+      "file": "lexical/lexical.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Localized Lexical en"
+        }
+      }
+    },
+    {
+      "file": "live-preview/int.spec.ts",
+      "value": {
+        "slug": {
+          "equals": "testPage"
+        }
+      }
+    },
+    {
+      "file": "llm-instructions/access.int.spec.ts",
+      "value": {
+        "entitySlug": {
+          "equals": "pages"
+        }
+      }
+    },
+    {
+      "file": "llm-instructions/int.spec.ts",
+      "value": {
+        "entitySlug": {
+          "equals": "removed-target"
+        }
+      }
+    },
+    {
+      "file": "llm-instructions/int.spec.ts",
+      "value": {
+        "entitySlug": {
+          "equals": "pages"
+        },
+        "entityType": {
+          "equals": "collection"
+        }
+      }
+    },
+    {
+      "file": "localization/int.spec.ts",
+      "value": {
+        "title": {
+          "like": "word"
+        }
+      }
+    },
+    {
+      "file": "localization/int.spec.ts",
+      "value": {
+        "title": {
+          "like": "accent"
+        }
+      }
+    },
+    {
+      "file": "localization/int.spec.ts",
+      "value": {
+        "group.children": {
+          "contains": "some"
+        }
+      }
+    },
+    {
+      "file": "localization/int.spec.ts",
+      "value": {
+        "group.en.text": {
+          "equals": "some text"
+        }
+      }
+    },
+    {
+      "file": "localization/int.spec.ts",
+      "value": {
+        "version.title": {
+          "equals": "Localized Drafts EN"
+        }
+      }
+    },
+    {
+      "file": "plugin-ecommerce/e2e.spec.ts",
+      "value": {
+        "priceInUSD": {
+          "equals": 1999
+        }
+      }
+    },
+    {
+      "file": "plugin-ecommerce/int.spec.ts",
+      "value": {
+        "name": {
+          "equals": "Hat"
+        }
+      }
+    },
+    {
+      "file": "plugin-form-builder/e2e.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Contact Form"
+        }
+      }
+    },
+    {
+      "file": "plugin-form-builder/e2e.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Contact"
+        }
+      }
+    },
+    {
+      "file": "plugin-form-builder/e2e.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Booking"
+        }
+      }
+    },
+    {
+      "file": "plugin-form-builder/e2e.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Upload Form"
+        }
+      }
+    },
+    {
+      "file": "plugin-form-builder/e2e.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Image Upload Form"
+        }
+      }
+    },
+    {
+      "file": "plugin-form-builder/e2e.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Multi-File Upload Form"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "input.collectionSlug": {
+          "equals": "custom-id-pages"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "collectionSlug": {
+          "equals": "custom-id-pages"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "title": {
+          "contains": "E2E Import Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "title": {
+          "contains": "E2E JSON Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "title": {
+          "contains": "E2E Published Status Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "title": {
+          "equals": "E2E Explicit Draft Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "title": {
+          "equals": "E2E Explicit Published Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "title": {
+          "contains": "S3 E2E Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "title": {
+          "equals": "E2E beforeExport Preview Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "title": {
+          "contains": "E2E Limit Test Post"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "title": {
+          "contains": "E2E Dynamic Limit Post"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/e2e.spec.ts",
+      "value": {
+        "title": {
+          "in": ["E2E Foreign A", "E2E Foreign B"]
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "customImport": {
+          "equals": "original_value_imported_csv"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "customImport": {
+          "equals": "json_value_imported_json"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Array Import CSV"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Array Import JSON"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Blocks Import CSV"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Blocks Import JSON"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Sibling Echo Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "in": ["Crash Row 1", "Crash Row 2", "Crash Row 3"]
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "in": ["JSON Crash 1", "JSON Crash 2", "JSON Crash 3"]
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Row Wrapper Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Collapsible Wrapper Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/field-hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Top Doc Access"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Original Title_imported"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "JSON Import Hook_imported"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "in": ["Imported A", "Imported B"]
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "in": ["JSON A", "JSON B"]
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Dropped Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/hooks.int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Batched Export"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Title "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "or": [
+          {
+            "title": {
+              "contains": "Title"
+            }
+          },
+          {
+            "title": {
+              "contains": "Array"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Draft "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Localized "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Array "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Virtual "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Array Subfield "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "hasMany Number "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Blocks "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Custom "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "JSON "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Jobs "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Polymorphic"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Monomorphic"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Title 0"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "nonexistent-title-xyz"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "JSON Roundtrip CSV Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "FAQ Block Roundtrip Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Nested Array Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Manual CSV Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Checkbox "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Select "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "SelectMany "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Radio "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Email "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Textarea "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Code "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Point "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "TextMany "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Upload "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "id": {
+          "in": ["export-custom-1", "export-custom-2"]
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "id": {
+          "in": ["export-json-1", "export-json-2"]
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Import Test "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "JSON Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Localized Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Multi-locale Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Locale Order Test "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Array Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Blocks Import 1"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "HasMany "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Relationship Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Polymorphic Import 1"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Virtual Import Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Draft Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Published Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Default Status Test "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Nested Group Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Tab Import Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Disabled Fields Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "taskSlug": {
+          "equals": "createCollectionImport"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Jobs Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Roundtrip Test "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Complete Roundtrip Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "hasMany Monomorphic Roundtrip"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "hasMany JSON Roundtrip"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "hasOnePolymorphic JSON Roundtrip"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "hasManyPolymorphic JSON Roundtrip"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Batch Test "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Valid Doc "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Row "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Batch Localized "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Explicit Draft Test "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Upsert New Published Test "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Manual Locale Test "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Checkbox Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Select Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Radio Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Email Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Textarea Import 1"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Code Import 1"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Point Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "SelectHasMany Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "TextHasMany Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Upload Import "
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "id": {
+          "in": ["custom-csv-1", "custom-csv-2"]
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "id": {
+          "in": ["upsert-custom-1", "upsert-custom-2"]
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Sync Import Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Restricted Import Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Default Draft Config Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Default Draft Config Override Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "or": [
+          {
+            "title": {
+              "contains": "Default Draft Config Test"
+            }
+          },
+          {
+            "title": {
+              "equals": "Default Draft Config Override Test"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Jobs Queue Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Preview Export Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "JSON Preview Export Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Preview Limit Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Preview Pagination Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Preview Boundary Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Rich Text JSON Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Rich Text CSV Block Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Error Recovery Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Partial Fail Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "FromCSV Relationship Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Deeply Nested Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "JSON Roundtrip Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Pagination Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Large Limit Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Single Limit Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Stream Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "NonExistent Document XYZ123"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Concurrent Export Source"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "or": [
+          {
+            "title": {
+              "contains": "Concurrent Export Source"
+            }
+          },
+          {
+            "title": {
+              "contains": "Concurrent Import During Export"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Exceed Limit Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Exact Limit Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Below Limit Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Predict Success"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Dynamic Import Exceed"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Dynamic Import Within"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "S3 Import Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "S3 Export Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-import-export/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "S3 JSON Import"
+        }
+      }
+    },
+    {
+      "file": "plugin-mcp/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Test Post for Finding"
+        }
+      }
+    },
+    {
+      "file": "plugin-mcp/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Select Test Post"
+        }
+      }
+    },
+    {
+      "file": "plugin-mcp/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Countable Product"
+        }
+      }
+    },
+    {
+      "file": "plugin-mcp/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Find Options Pass Through"
+        }
+      }
+    },
+    {
+      "file": "plugin-mcp/int.spec.ts",
+      "value": {
+        "and": [
+          {
+            "title": {
+              "like": "Where Object Update"
+            }
+          },
+          {
+            "title": {
+              "not_equals": "Where Object Update Excluded"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "plugin-mcp/int.spec.ts",
+      "value": {
+        "or": [
+          {
+            "title": {
+              "equals": "Where Object Delete One"
+            }
+          },
+          {
+            "title": {
+              "equals": "Where Object Delete Two"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "plugin-mcp/int.spec.ts",
+      "value": {
+        "title": {
+          "equalz": "whatever"
+        }
+      }
+    },
+    {
+      "file": "plugin-mcp/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Minified JSON Test"
+        }
+      }
+    },
+    {
+      "file": "plugin-mcp/int.spec.ts",
+      "value": {
+        "textField": {
+          "equals": "Findable doc"
+        }
+      }
+    },
+    {
+      "file": "plugin-multi-tenant/int.spec.ts",
+      "value": {
+        "tenant.name": {
+          "equals": "Anchor Bar"
+        }
+      }
+    },
+    {
+      "file": "plugin-multi-tenant/int.spec.ts",
+      "value": {
+        "tenant.name": {
+          "equals": "Blue Dog"
+        }
+      }
+    },
+    {
+      "file": "plugin-multi-tenant/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Tenant B REST document"
+        }
+      }
+    },
+    {
+      "file": "plugin-multi-tenant/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Tenant B REST draft"
+        }
+      }
+    },
+    {
+      "file": "plugin-nested-docs/int.spec.ts",
+      "value": {
+        "slug": {
+          "equals": "child-page"
+        }
+      }
+    },
+    {
+      "file": "plugin-nested-docs/int.spec.ts",
+      "value": {
+        "slug": {
+          "equals": "grandchild-page"
+        }
+      }
+    },
+    {
+      "file": "plugin-search/int.spec.ts",
+      "value": {
+        "doc.value": {
+          "equals": "custom_id"
+        }
+      }
+    },
+    {
+      "file": "query-presets/e2e.spec.ts",
+      "value": {
+        "title": {
+          "in": ["Everyone", "Only Me", "Specific Users"]
+        }
+      }
+    },
+    {
+      "file": "query-presets/int.spec.ts",
+      "value": {
+        "text": {
+          "equals": "example page"
+        }
+      }
+    },
+    {
+      "file": "queues/int.spec.ts",
+      "value": {
+        "completedAt": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "queues/int.spec.ts",
+      "value": {
+        "input.message": {
+          "equals": "from single task 2"
+        }
+      }
+    },
+    {
+      "file": "queues/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "baseline-job"
+        }
+      }
+    },
+    {
+      "file": "queues/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "after-recovery"
+        }
+      }
+    },
+    {
+      "file": "queues/schedules.int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "This task runs every second - max 2 per second"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "director.name": {
+          "equals": "Director1"
+        },
+        "director.localized": {
+          "equals": "Director1_Localized"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "director.name": {
+          "equals": "Director1_Fake"
+        },
+        "director.localized": {
+          "equals": "Director1_Localized"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "movie.select": {
+          "equals": "a"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "movie.director.movie.name": {
+          "equals": "random_movie_1"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "movie.name": {
+          "equals": "dup_test_movie"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "movies": {
+          "contains": {
+            "name": {
+              "equals": "recalls"
+            }
+          }
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "movies": {
+          "not_equals": {
+            "name": {
+              "equals": "recalls"
+            }
+          }
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "movies": {
+          "equals": {
+            "name": {
+              "equals": "electric-cars"
+            }
+          }
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "movies": {
+          "equals": {
+            "select": {
+              "equals": "a"
+            }
+          }
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "movies": {
+          "equals": {
+            "location": {
+              "near": "10,20,100000"
+            }
+          }
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "directors.movies.name": {
+          "equals": "Alpha"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "or": [
+          {
+            "movies.name": {
+              "equals": "some-name"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "directors.name": {
+          "equals": "dir"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "localizedDirectors.director.movies.name": {
+          "equals": "Jackie Brown"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "relation.name": {
+          "equals": "second"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "relation.name": {
+          "equals": "third"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "relation.relation.name": {
+          "equals": "third"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "page.menu.label": {
+          "equals": "hello"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "page.menu.label": {
+          "in": ["hello"]
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "blocks.director.name": {
+          "equals": "Test Director"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "array.director.name": {
+          "equals": "Test Director1337"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "name": {
+          "equals": "Quentin Tarantino"
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "parent": {
+          "exists": false
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "parent": {
+          "not_equals": null
+        }
+      }
+    },
+    {
+      "file": "relationships/int.spec.ts",
+      "value": {
+        "parent": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "sdk/int.spec.ts",
+      "value": {
+        "id": {
+          "in": []
+        }
+      }
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Orderable "
+        }
+      }
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": {
+        "text": {
+          "contains": "Orderable "
+        }
+      }
+    },
+    {
+      "file": "sort/int.spec.ts",
+      "value": {
+        "title": {
+          "contains": "Base62 "
+        }
+      }
+    },
+    {
+      "file": "trash/e2e.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Ready for restore"
+        }
+      }
+    },
+    {
+      "file": "trash/e2e.spec.ts",
+      "value": {
+        "and": [
+          {
+            "deletedAt": {
+              "exists": true
+            }
+          },
+          {
+            "title": {
+              "equals": "Ready for delete from delete button"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "trash/e2e.spec.ts",
+      "value": {
+        "name": {
+          "equals": "Dev"
+        }
+      }
+    },
+    {
+      "file": "trash/e2e.spec.ts",
+      "value": {
+        "and": [
+          {
+            "name": {
+              "equals": "Dev"
+            }
+          },
+          {
+            "deletedAt": {
+              "exists": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "file": "trash/int.spec.ts",
+      "value": {
+        "title": {
+          "like": "Bulk trash test"
+        }
+      }
+    },
+    {
+      "file": "trash/int.spec.ts",
+      "value": {
+        "title": {
+          "like": "Bulk perm delete test"
+        }
+      }
+    },
+    {
+      "file": "trash/int.spec.ts",
+      "value": {
+        "title": {
+          "like": "Admin bulk perm delete"
+        }
+      }
+    },
+    {
+      "file": "trash/int.spec.ts",
+      "value": {
+        "deletedAt": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "trash/int.spec.ts",
+      "value": {
+        "title": {
+          "equals": "Doc two"
+        }
+      }
+    },
+    {
+      "file": "trash/int.spec.ts",
+      "value": {
+        "version.deletedAt": {
+          "exists": true
+        }
+      }
+    },
+    {
+      "file": "trash/int.spec.ts",
+      "value": {
+        "version.deletedAt": {
+          "equals": null
+        }
+      }
+    },
+    {
+      "file": "uploads/e2e.spec.ts",
+      "value": {
+        "mimeType": {
+          "equals": "image/png"
+        }
+      }
+    },
+    {
+      "file": "uploads/e2e.spec.ts",
+      "value": {
+        "mimeType": {
+          "contains": "image/"
+        }
+      }
+    },
+    {
+      "file": "uploads/e2e.spec.ts",
+      "value": {
+        "mimeType": {
+          "equals": "audio/mpeg"
+        }
+      }
+    },
+    {
+      "file": "uploads/e2e.spec.ts",
+      "value": {
+        "mimeType": {
+          "equals": "application/pdf"
+        }
+      }
+    },
+    {
+      "file": "uploads/e2e.spec.ts",
+      "value": {
+        "mimeType": {
+          "equals": "video/mp4"
+        }
+      }
+    },
+    {
+      "file": "versions/int.spec.ts",
+      "value": {
+        "title": {
+          "like": "title"
+        }
+      }
+    },
+    {
+      "file": "versions/int.spec.ts",
+      "value": {
+        "latest": {
+          "equals": true
+        }
+      }
+    },
+    {
+      "file": "versions/int.spec.ts",
+      "value": {
+        "taskSlug": {
+          "equals": "schedulePublish"
+        }
+      }
+    },
+    {
+      "file": "versions/int.spec.ts",
+      "value": {
+        "version._status.en": {
+          "equals": "published"
+        }
+      }
+    }
+  ]
+}

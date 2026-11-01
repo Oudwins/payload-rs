@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/payload-core-validate",
+  "crates/payload-engine",
+  "crates/payload-node",
+  "crates/payload-sql-query",
+  "crates/payload-sql-read",
+  "crates/payload-sql-write",
+  "crates/payload-sql-find",
+  "crates/payload-sql-upsert",
+  "crates/payload-sqlite",
+  "crates/payload-core-query",
+  "crates/payload-core-runtime",
+  "crates/payload-core-hooks-change",
+  "crates/payload-core-hooks-after",
+  "crates/payload-core-hooks-validate",
+  "crates/payload-sql-engine",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+
+[workspace.dependencies]
+indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+
+[profile.release]
+lto = "thin"

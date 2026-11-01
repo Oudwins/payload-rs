@@ -1,0 +1,15 @@
+[package]
+name = "payload-sql-query"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+libc = "0.2"
+payload-engine = { path = "../payload-engine" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }

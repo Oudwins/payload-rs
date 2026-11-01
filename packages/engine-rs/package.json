@@ -1,0 +1,39 @@
+{
+  "name": "@payloadcms/engine-rs",
+  "version": "4.0.0-beta.6",
+  "private": true,
+  "description": "Rust implementation of the Payload engine, loaded as a Node addon",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "require": "./src/index.ts",
+      "types": "./src/index.ts"
+    },
+    "./sqlite": {
+      "import": "./src/sqlite/libsql.ts",
+      "require": "./src/sqlite/libsql.ts",
+      "types": "./src/sqlite/libsql.ts",
+      "default": "./src/sqlite/libsql.ts"
+    },
+    "./shadow": {
+      "import": "./src/shadow/index.ts",
+      "types": "./src/shadow/index.ts",
+      "default": "./src/shadow/index.ts"
+    }
+  },
+  "scripts": {
+    "build:native": "node ./scripts/buildNative.mjs",
+    "build:native:release": "node ./scripts/buildNative.mjs --release"
+  },
+  "devDependencies": {
+    "payload": "workspace:*"
+  },
+  "peerDependencies": {
+    "payload": "workspace:*"
+  }
+}

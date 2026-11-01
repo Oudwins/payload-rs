@@ -1,0 +1,5817 @@
+{
+  "deleteByID": {
+    "id": 5,
+    "text": "delta",
+    "textarea": "line one 4\nline two",
+    "email": "user4@example.com",
+    "code": "const x = 4",
+    "json": {
+      "flag": true,
+      "list": [4, 5],
+      "name": "json-4",
+      "nested": {
+        "deep": "d4"
+      }
+    },
+    "number": 9,
+    "checkbox": true,
+    "date": "2024-05-14T00:00:00.000Z",
+    "point": [4, -4],
+    "radio": "b",
+    "select": "two",
+    "selectMany": [],
+    "textMany": ["tm-4", "shared"],
+    "numberMany": [4, 5, 42],
+    "rel": 2,
+    "relMany": [2, 3],
+    "poly": {
+      "relationTo": "targets",
+      "value": 2
+    },
+    "polyMany": [
+      {
+        "relationTo": "targets",
+        "value": 3
+      },
+      {
+        "relationTo": "media",
+        "value": 1
+      }
+    ],
+    "upload": 1,
+    "uploadMany": [1, 2],
+    "richText": {
+      "root": {
+        "type": "root",
+        "children": [
+          {
+            "type": "paragraph",
+            "children": [
+              {
+                "type": "text",
+                "detail": 0,
+                "format": 0,
+                "mode": "normal",
+                "style": "",
+                "text": "hello world 4",
+                "version": 1
+              }
+            ],
+            "direction": "ltr",
+            "format": "",
+            "indent": 0,
+            "textFormat": 0,
+            "version": 1
+          }
+        ],
+        "direction": "ltr",
+        "format": "",
+        "indent": 0,
+        "version": 1
+      }
+    },
+    "group": {
+      "text": "group-1",
+      "number": 96,
+      "localizedText": "group-loc-4",
+      "nestedGroup": {
+        "text": "ng-4"
+      },
+      "groupArray": [
+        {
+          "id": "<oid:37>",
+          "text": "garr-4"
+        }
+      ]
+    },
+    "tabNamed": {
+      "text": "tab-4",
+      "number": 8
+    },
+    "tabText": "bulk",
+    "rowText": "row-4",
+    "collapsibleText": "collapsible-4",
+    "array": [
+      {
+        "id": "<oid:38>",
+        "text": "arr-4-0",
+        "number": 40,
+        "rel": 2,
+        "nestedArray": [
+          {
+            "id": "<oid:39>",
+            "text": "nested-4-a"
+          },
+          {
+            "id": "<oid:40>",
+            "text": "nested-4-b"
+          }
+        ],
+        "localizedText": "arr-loc-4"
+      },
+      {
+        "id": "<oid:41>",
+        "text": "arr-4-1",
+        "number": 41,
+        "rel": null,
+        "nestedArray": [],
+        "localizedText": {
+          "$undefined": true
+        }
+      }
+    ],
+    "blocks": [
+      {
+        "id": "<oid:42>",
+        "text": "blockA-4",
+        "number": 4,
+        "blockName": null,
+        "blockType": "blockA",
+        "nestedBlocks": [
+          {
+            "id": "<oid:43>",
+            "text": "deep-4",
+            "blockName": null,
+            "blockType": "blockC"
+          }
+        ]
+      },
+      {
+        "id": "<oid:44>",
+        "text": "blockB-4",
+        "select": "y",
+        "blockName": null,
+        "array": [
+          {
+            "id": "<oid:45>",
+            "text": "barr-4"
+          }
+        ],
+        "blockType": "blockB"
+      }
+    ],
+    "updatedAt": "2025-01-01T00:07:27.000Z",
+    "createdAt": "2025-01-01T00:00:17.000Z"
+  },
+  "deleteByID missing": {
+    "$error": {
+      "class": "NotFound",
+      "data": null,
+      "message": "Not Found",
+      "name": "NotFound",
+      "status": 404
+    }
+  },
+  "delete where": {
+    "docs": [
+      {
+        "id": 7,
+        "text": "beta",
+        "textarea": "line one 3\nline two",
+        "email": "user3@example.com",
+        "code": "const x = 3",
+        "json": {
+          "flag": false,
+          "list": [3, 4],
+          "name": "json-3",
+          "nested": {
+            "deep": "d3"
+          }
+        },
+        "number": 1,
+        "checkbox": false,
+        "date": "2024-04-13T00:00:00.000Z",
+        "point": [3, -3],
+        "radio": "a",
+        "select": "one",
+        "selectMany": ["green", "blue"],
+        "textMany": ["tm-3", "shared"],
+        "numberMany": [3, 4, 42],
+        "rel": 1,
+        "relMany": [1, 2],
+        "poly": {
+          "relationTo": "media",
+          "value": 2
+        },
+        "polyMany": [
+          {
+            "relationTo": "targets",
+            "value": 2
+          },
+          {
+            "relationTo": "media",
+            "value": 2
+          }
+        ],
+        "upload": 2,
+        "uploadMany": [2, 1],
+        "richText": {
+          "root": {
+            "type": "root",
+            "children": [
+              {
+                "type": "paragraph",
+                "children": [
+                  {
+                    "type": "text",
+                    "detail": 0,
+                    "format": 0,
+                    "mode": "normal",
+                    "style": "",
+                    "text": "hello world 3",
+                    "version": 1
+                  }
+                ],
+                "direction": "ltr",
+                "format": "",
+                "indent": 0,
+                "textFormat": 0,
+                "version": 1
+              }
+            ],
+            "direction": "ltr",
+            "format": "",
+            "indent": 0,
+            "version": 1
+          }
+        },
+        "group": {
+          "text": "group-0",
+          "number": 97,
+          "localizedText": "group-loc-3",
+          "nestedGroup": {
+            "text": "ng-3"
+          },
+          "groupArray": [
+            {
+              "id": "<oid:83>",
+              "text": "garr-3"
+            }
+          ]
+        },
+        "tabNamed": {
+          "text": "tab-3",
+          "number": 6
+        },
+        "tabText": "tabText-3",
+        "rowText": "row-3",
+        "collapsibleText": "collapsible-3",
+        "array": [
+          {
+            "id": "<oid:84>",
+            "text": "arr-3-0",
+            "number": 30,
+            "rel": 1,
+            "nestedArray": [
+              {
+                "id": "<oid:85>",
+                "text": "nested-3-a"
+              },
+              {
+                "id": "<oid:86>",
+                "text": "nested-3-b"
+              }
+            ],
+            "localizedText": "arr-loc-3"
+          },
+          {
+            "id": "<oid:87>",
+            "text": "arr-3-1",
+            "number": 31,
+            "rel": null,
+            "nestedArray": [],
+            "localizedText": {
+              "$undefined": true
+            }
+          }
+        ],
+        "blocks": [
+          {
+            "id": "<oid:88>",
+            "text": "blockA-3",
+            "number": 3,
+            "blockName": null,
+            "blockType": "blockA",
+            "nestedBlocks": [
+              {
+                "id": "<oid:89>",
+                "text": "deep-3",
+                "blockName": null,
+                "blockType": "blockC"
+              }
+            ]
+          },
+          {
+            "id": "<oid:90>",
+            "text": "blockB-3",
+            "select": "x",
+            "blockName": null,
+            "array": [
+              {
+                "id": "<oid:91>",
+                "text": "barr-3"
+              }
+            ],
+            "blockType": "blockB"
+          }
+        ],
+        "updatedAt": "2025-01-01T00:00:16.000Z",
+        "createdAt": "2025-01-01T00:07:32.000Z"
+      },
+      {
+        "id": 4,
+        "text": "beta",
+        "textarea": "line one 3\nline two",
+        "email": "user3@example.com",
+        "code": "const x = 3",
+        "json": {
+          "flag": false,
+          "list": [3, 4],
+          "name": "json-3",
+          "nested": {
+            "deep": "d3"
+          }
+        },
+        "number": 1,
+        "checkbox": false,
+        "date": "2024-04-13T00:00:00.000Z",
+        "point": [3, -3],
+        "radio": "a",
+        "select": "one",
+        "selectMany": ["green", "blue"],
+        "textMany": ["tm-3", "shared"],
+        "numberMany": [3, 4, 42],
+        "rel": 1,
+        "relMany": [1, 2],
+        "poly": {
+          "relationTo": "media",
+          "value": 2
+        },
+        "polyMany": [
+          {
+            "relationTo": "targets",
+            "value": 2
+          },
+          {
+            "relationTo": "media",
+            "value": 2
+          }
+        ],
+        "upload": 2,
+        "uploadMany": [2, 1],
+        "richText": {
+          "root": {
+            "type": "root",
+            "children": [
+              {
+                "type": "paragraph",
+                "children": [
+                  {
+                    "type": "text",
+                    "detail": 0,
+                    "format": 0,
+                    "mode": "normal",
+                    "style": "",
+                    "text": "hello world 3",
+                    "version": 1
+                  }
+                ],
+                "direction": "ltr",
+                "format": "",
+                "indent": 0,
+                "textFormat": 0,
+                "version": 1
+              }
+            ],
+            "direction": "ltr",
+            "format": "",
+            "indent": 0,
+            "version": 1
+          }
+        },
+        "group": {
+          "text": "group-0",
+          "number": 97,
+          "localizedText": "group-loc-3",
+          "nestedGroup": {
+            "text": "ng-3"
+          },
+          "groupArray": [
+            {
+              "id": "<oid:28>",
+              "text": "garr-3"
+            }
+          ]
+        },
+        "tabNamed": {
+          "text": "tab-3",
+          "number": 6
+        },
+        "tabText": "tabText-3",
+        "rowText": "row-3",
+        "collapsibleText": "collapsible-3",
+        "array": [
+          {
+            "id": "<oid:29>",
+            "text": "arr-3-0",
+            "number": 30,
+            "rel": 1,
+            "nestedArray": [
+              {
+                "id": "<oid:30>",
+                "text": "nested-3-a"
+              },
+              {
+                "id": "<oid:31>",
+                "text": "nested-3-b"
+              }
+            ],
+            "localizedText": "arr-loc-3"
+          },
+          {
+            "id": "<oid:32>",
+            "text": "arr-3-1",
+            "number": 31,
+            "rel": null,
+            "nestedArray": [],
+            "localizedText": {
+              "$undefined": true
+            }
+          }
+        ],
+        "blocks": [
+          {
+            "id": "<oid:33>",
+            "text": "blockA-3",
+            "number": 3,
+            "blockName": null,
+            "blockType": "blockA",
+            "nestedBlocks": [
+              {
+                "id": "<oid:34>",
+                "text": "deep-3",
+                "blockName": null,
+                "blockType": "blockC"
+              }
+            ]
+          },
+          {
+            "id": "<oid:35>",
+            "text": "blockB-3",
+            "select": "x",
+            "blockName": null,
+            "array": [
+              {
+                "id": "<oid:36>",
+                "text": "barr-3"
+              }
+            ],
+            "blockType": "blockB"
+          }
+        ],
+        "updatedAt": "2025-01-01T00:00:16.000Z",
+        "createdAt": "2025-01-01T00:00:16.000Z"
+      },
+      {
+        "id": 2,
+        "text": "beta",
+        "textarea": "line one 1\nline two",
+        "email": "user1@example.com",
+        "code": "const x = 1",
+        "json": {
+          "flag": false,
+          "list": [1, 2],
+          "name": "json-1",
+          "nested": {
+            "deep": "d1"
+          }
+        },
+        "number": 3,
+        "checkbox": false,
+        "date": "2024-02-11T00:00:00.000Z",
+        "point": [1, -1],
+        "radio": "b",
+        "select": "two",
+        "selectMany": ["red", "green"],
+        "textMany": ["tm-1", "shared"],
+        "numberMany": [1, 2, 42],
+        "rel": 2,
+        "relMany": [2, 3],
+        "poly": {
+          "relationTo": "media",
+          "value": 2
+        },
+        "polyMany": [
+          {
+            "relationTo": "targets",
+            "value": 3
+          },
+          {
+            "relationTo": "media",
+            "value": 2
+          }
+        ],
+        "upload": 2,
+        "uploadMany": [2, 1],
+        "richText": {
+          "root": {
+            "type": "root",
+            "children": [
+              {
+                "type": "paragraph",
+                "children": [
+                  {
+                    "type": "text",
+                    "detail": 0,
+                    "format": 0,
+                    "mode": "normal",
+                    "style": "",
+                    "text": "hello world 1",
+                    "version": 1
+                  }
+                ],
+                "direction": "ltr",
+                "format": "",
+                "indent": 0,
+                "textFormat": 0,
+                "version": 1
+              }
+            ],
+            "direction": "ltr",
+            "format": "",
+            "indent": 0,
+            "version": 1
+          }
+        },
+        "group": {
+          "text": "group-1",
+          "number": 99,
+          "localizedText": "group-loc-1",
+          "nestedGroup": {
+            "text": "ng-1"
+          },
+          "groupArray": [
+            {
+              "id": "<oid:10>",
+              "text": "garr-1"
+            }
+          ]
+        },
+        "tabNamed": {
+          "text": "tab-1",
+          "number": 2
+        },
+        "tabText": "tabText-1",
+        "rowText": "row-1",
+        "collapsibleText": "collapsible-1",
+        "array": [
+          {
+            "id": "<oid:11>",
+            "text": "arr-1-0",
+            "number": 10,
+            "rel": 2,
+            "nestedArray": [
+              {
+                "id": "<oid:12>",
+                "text": "nested-1-a"
+              },
+              {
+                "id": "<oid:13>",
+                "text": "nested-1-b"
+              }
+            ],
+            "localizedText": "arr-loc-1"
+          },
+          {
+            "id": "<oid:14>",
+            "text": "arr-1-1",
+            "number": 11,
+            "rel": null,
+            "nestedArray": [],
+            "localizedText": {
+              "$undefined": true
+            }
+          }
+        ],
+        "blocks": [
+          {
+            "id": "<oid:15>",
+            "text": "blockA-1",
+            "number": 1,
+            "blockName": null,
+            "blockType": "blockA",
+            "nestedBlocks": [
+              {
+                "id": "<oid:16>",
+                "text": "deep-1",
+                "blockName": null,
+                "blockType": "blockC"
+              }
+            ]
+          },
+          {
+            "id": "<oid:17>",
+            "text": "blockB-1",
+            "select": "y",
+            "blockName": null,
+            "array": [
+              {
+                "id": "<oid:18>",
+                "text": "barr-1"
+              }
+            ],
+            "blockType": "blockB"
+          }
+        ],
+        "updatedAt": "2025-01-01T00:00:14.000Z",
+        "createdAt": "2025-01-01T00:00:14.000Z"
+      },
+      {
+        "id": 1,
+        "text": "alpha-updated",
+        "textarea": "line one 0\nline two",
+        "email": "user0@example.com",
+        "code": "const x = 0",
+        "json": {
+          "replaced": true
+        },
+        "number": 77,
+        "checkbox": false,
+        "date": "2024-01-10T00:00:00.000Z",
+        "point": [0, 0],
+        "radio": "a",
+        "select": "one",
+        "selectMany": ["green"],
+        "textMany": [],
+        "numberMany": [1],
+        "rel": 1,
+        "relMany": [],
+        "poly": {
+          "relationTo": "targets",
+          "value": 3
+        },
+        "polyMany": [
+          {
+            "relationTo": "targets",
+            "value": 2
+          },
+          {
+            "relationTo": "media",
+            "value": 1
+          }
+        ],
+        "upload": 1,
+        "uploadMany": [1, 2],
+        "richText": {
+          "root": {
+            "type": "root",
+            "children": [
+              {
+                "type": "paragraph",
+                "children": [
+                  {
+                    "type": "text",
+                    "detail": 0,
+                    "format": 0,
+                    "mode": "normal",
+                    "style": "",
+                    "text": "hello world 0",
+                    "version": 1
+                  }
+                ],
+                "direction": "ltr",
+                "format": "",
+                "indent": 0,
+                "textFormat": 0,
+                "version": 1
+              }
+            ],
+            "direction": "ltr",
+            "format": "",
+            "indent": 0,
+            "version": 1
+          }
+        },
+        "group": {
+          "text": "group-0",
+          "number": 100,
+          "localizedText": "group-loc-0",
+          "nestedGroup": {
+            "text": "ng-updated"
+          },
+          "groupArray": [
+            {
+              "id": "<oid:1>",
+              "text": "garr-0"
+            }
+          ]
+        },
+        "tabNamed": {
+          "text": "tab-0",
+          "number": 0
+        },
+        "tabText": "bulk",
+        "rowText": "row-0",
+        "collapsibleText": "collapsible-0",
+        "array": [
+          {
+            "id": "<oid:79>",
+            "text": "only-row",
+            "number": null,
+            "rel": null,
+            "nestedArray": [
+              {
+                "id": "<oid:80>",
+                "text": "replaced"
+              }
+            ],
+            "localizedText": {
+              "$undefined": true
+            }
+          }
+        ],
+        "blocks": [
+          {
+            "id": "<oid:81>",
+            "text": "swapped",
+            "select": "z",
+            "blockName": null,
+            "array": [],
+            "blockType": "blockB"
+          }
+        ],
+        "updatedAt": "2025-01-01T00:07:27.000Z",
+        "createdAt": "2025-01-01T00:00:13.000Z"
+      }
+    ],
+    "errors": []
+  },
+  "delete target referenced by relationships": {
+    "id": 3,
+    "title": "target-2",
+    "localizedTitle": "target-en-2",
+    "number": 6,
+    "kitchenRefs": {
+      "$undefined": true
+    },
+    "kitchenArrayRefs": {
+      "$undefined": true
+    },
+    "localizedRefs": {
+      "$undefined": true
+    },
+    "updatedAt": "2025-01-01T00:00:08.000Z",
+    "createdAt": "2025-01-01T00:00:07.000Z"
+  },
+  "kitchen after deletes": {
+    "docs": [
+      {
+        "id": 6,
+        "text": "sparse",
+        "textarea": null,
+        "email": null,
+        "code": null,
+        "json": null,
+        "number": null,
+        "checkbox": null,
+        "date": null,
+        "point": {
+          "$undefined": true
+        },
+        "radio": null,
+        "select": null,
+        "selectMany": [],
+        "textMany": [],
+        "numberMany": [],
+        "rel": null,
+        "relMany": [],
+        "polyMany": [],
+        "upload": null,
+        "uploadMany": [],
+        "richText": null,
+        "group": {
+          "text": null,
+          "number": null,
+          "localizedText": {
+            "$undefined": true
+          },
+          "nestedGroup": {
+            "text": null
+          },
+          "groupArray": []
+        },
+        "tabNamed": {
+          "text": null,
+          "number": null
+        },
+        "tabText": null,
+        "rowText": null,
+        "collapsibleText": null,
+        "array": [],
+        "updatedAt": "2025-01-01T00:00:18.000Z",
+        "createdAt": "2025-01-01T00:00:18.000Z",
+        "blocks": []
+      },
+      {
+        "id": 3,
+        "text": "gamma",
+        "textarea": "line one 2\nline two",
+        "email": "user2@example.com",
+        "code": "const x = 2",
+        "json": {
+          "flag": true,
+          "list": [2, 3],
+          "name": "json-2",
+          "nested": {
+            "deep": "d2"
+          }
+        },
+        "number": 5,
+        "checkbox": true,
+        "date": "2024-03-12T00:00:00.000Z",
+        "point": [2, -2],
+        "radio": "c",
+        "select": "three",
+        "selectMany": ["blue"],
+        "textMany": ["tm-2", "shared"],
+        "numberMany": [2, 3, 42],
+        "rel": null,
+        "relMany": [
+          {
+            "id": 1,
+            "title": "target-0",
+            "localizedTitle": "target-en-0",
+            "number": 0,
+            "kitchenRefs": {
+              "docs": [],
+              "hasNextPage": false
+            },
+            "kitchenArrayRefs": {
+              "docs": [],
+              "hasNextPage": false
+            },
+            "localizedRefs": {
+              "docs": [1],
+              "hasNextPage": false
+            },
+            "updatedAt": "2025-01-01T00:00:04.000Z",
+            "createdAt": "2025-01-01T00:00:03.000Z"
+          }
+        ],
+        "polyMany": [
+          {
+            "relationTo": "targets",
+            "value": {
+              "id": 1,
+              "title": "target-0",
+              "localizedTitle": "target-en-0",
+              "number": 0,
+              "kitchenRefs": {
+                "docs": [],
+                "hasNextPage": false
+              },
+              "kitchenArrayRefs": {
+                "docs": [],
+                "hasNextPage": false
+              },
+              "localizedRefs": {
+                "docs": [1],
+                "hasNextPage": false
+              },
+              "updatedAt": "2025-01-01T00:00:04.000Z",
+              "createdAt": "2025-01-01T00:00:03.000Z"
+            }
+          },
+          {
+            "relationTo": "media",
+            "value": {
+              "id": 1,
+              "alt": "alt-0",
+              "updatedAt": "2025-01-01T00:00:10.000Z",
+              "createdAt": "2025-01-01T00:00:10.000Z",
+              "url": "/api/media/file/file-0-original.txt",
+              "thumbnailURL": null,
+              "filename": "file-0-original.txt",
+              "mimeType": "text/plain",
+              "filesize": 15,
+              "width": null,
+              "height": null,
+              "original": {
+                "filename": "file-0-original.txt",
+                "url": "/api/media/file/file-0-original.txt",
+                "mimeType": "text/plain",
+                "filesize": 15,
+                "width": null,
+                "height": null,
+                "prefix": null,
+                "_objectKey": null
+              },
+              "focalX": null,
+              "focalY": null
+            }
+          }
+        ],
+        "upload": {
+          "id": 1,
+          "alt": "alt-0",
+          "updatedAt": "2025-01-01T00:00:10.000Z",
+          "createdAt": "2025-01-01T00:00:10.000Z",
+          "url": "/api/media/file/file-0-original.txt",
+          "thumbnailURL": null,
+          "filename": "file-0-original.txt",
+          "mimeType": "text/plain",
+          "filesize": 15,
+          "width": null,
+          "height": null,
+          "original": {
+            "filename": "file-0-original.txt",
+            "url": "/api/media/file/file-0-original.txt",
+            "mimeType": "text/plain",
+            "filesize": 15,
+            "width": null,
+            "height": null,
+            "prefix": null,
+            "_objectKey": null
+          },
+          "focalX": null,
+          "focalY": null
+        },
+        "uploadMany": [
+          {
+            "id": 1,
+            "alt": "alt-0",
+            "updatedAt": "2025-01-01T00:00:10.000Z",
+            "createdAt": "2025-01-01T00:00:10.000Z",
+            "url": "/api/media/file/file-0-original.txt",
+            "thumbnailURL": null,
+            "filename": "file-0-original.txt",
+            "mimeType": "text/plain",
+            "filesize": 15,
+            "width": null,
+            "height": null,
+            "original": {
+              "filename": "file-0-original.txt",
+              "url": "/api/media/file/file-0-original.txt",
+              "mimeType": "text/plain",
+              "filesize": 15,
+              "width": null,
+              "height": null,
+              "prefix": null,
+              "_objectKey": null
+            },
+            "focalX": null,
+            "focalY": null
+          },
+          {
+            "id": 2,
+            "alt": "alt-1",
+            "updatedAt": "2025-01-01T00:00:11.000Z",
+            "createdAt": "2025-01-01T00:00:11.000Z",
+            "url": "/api/media/file/file-1-original.txt",
+            "thumbnailURL": null,
+            "filename": "file-1-original.txt",
+            "mimeType": "text/plain",
+            "filesize": 15,
+            "width": null,
+            "height": null,
+            "original": {
+              "filename": "file-1-original.txt",
+              "url": "/api/media/file/file-1-original.txt",
+              "mimeType": "text/plain",
+              "filesize": 15,
+              "width": null,
+              "height": null,
+              "prefix": null,
+              "_objectKey": null
+            },
+            "focalX": null,
+            "focalY": null
+          }
+        ],
+        "richText": {
+          "root": {
+            "type": "root",
+            "children": [
+              {
+                "type": "paragraph",
+                "children": [
+                  {
+                    "type": "text",
+                    "detail": 0,
+                    "format": 0,
+                    "mode": "normal",
+                    "style": "",
+                    "text": "hello world 2",
+                    "version": 1
+                  }
+                ],
+                "direction": "ltr",
+                "format": "",
+                "indent": 0,
+                "textFormat": 0,
+                "version": 1
+              }
+            ],
+            "direction": "ltr",
+            "format": "",
+            "indent": 0,
+            "version": 1
+          }
+        },
+        "group": {
+          "text": "group-2",
+          "number": 98,
+          "localizedText": "group-loc-2",
+          "nestedGroup": {
+            "text": "ng-2"
+          },
+          "groupArray": [
+            {
+              "id": "<oid:19>",
+              "text": "garr-2"
+            }
+          ]
+        },
+        "tabNamed": {
+          "text": "tab-2",
+          "number": 4
+        },
+        "tabText": "bulk",
+        "rowText": "row-2",
+        "collapsibleText": "collapsible-2",
+        "array": [
+          {
+            "id": "<oid:23>",
+            "text": "arr-2-1",
+            "number": 21,
+            "rel": null,
+            "nestedArray": [],
+            "localizedText": {
+              "$undefined": true
+            }
+          },
+          {
+            "id": "<oid:20>",
+            "text": "arr-2-0",
+            "number": 20,
+            "rel": null,
+            "nestedArray": [
+              {
+                "id": "<oid:21>",
+                "text": "nested-2-a"
+              },
+              {
+                "id": "<oid:22>",
+                "text": "nested-2-b"
+              }
+            ],
+            "localizedText": "arr-loc-2"
+          }
+        ],
+        "blocks": [
+          {
+            "id": "<oid:26>",
+            "text": "blockB-2",
+            "select": "z",
+            "blockName": null,
+            "array": [
+              {
+                "id": "<oid:27>",
+                "text": "barr-2"
+              }
+            ],
+            "blockType": "blockB"
+          },
+          {
+            "id": "<oid:24>",
+            "text": "blockA-2",
+            "number": 2,
+            "blockName": null,
+            "blockType": "blockA",
+            "nestedBlocks": [
+              {
+                "id": "<oid:25>",
+                "text": "deep-2",
+                "blockName": null,
+                "blockType": "blockC"
+              }
+            ]
+          }
+        ],
+        "updatedAt": "2025-01-01T00:07:27.000Z",
+        "createdAt": "2025-01-01T00:00:15.000Z"
+      }
+    ],
+    "hasNextPage": false,
+    "hasPrevPage": false,
+    "limit": 10,
+    "nextPage": null,
+    "page": 1,
+    "pagingCounter": 1,
+    "prevPage": null,
+    "totalDocs": 2,
+    "totalPages": 1
+  },
+  "delete custom id": {
+    "id": "c-key",
+    "title": "title c-key",
+    "updatedAt": "2025-01-01T00:00:29.000Z",
+    "createdAt": "2025-01-01T00:00:29.000Z"
+  },
+  "delete drafts doc": {
+    "id": 1,
+    "title": "v1",
+    "localizedTitle": "v1-en",
+    "rel": {
+      "id": 1,
+      "title": "target-0",
+      "localizedTitle": "target-en-0",
+      "number": 0,
+      "kitchenRefs": {
+        "docs": [],
+        "hasNextPage": false
+      },
+      "kitchenArrayRefs": {
+        "docs": [],
+        "hasNextPage": false
+      },
+      "localizedRefs": {
+        "docs": [1],
+        "hasNextPage": false
+      },
+      "updatedAt": "2025-01-01T00:00:04.000Z",
+      "createdAt": "2025-01-01T00:00:03.000Z"
+    },
+    "array": [
+      {
+        "id": "<oid:92>",
+        "text": "v1"
+      }
+    ],
+    "updatedAt": "2025-01-01T00:07:47.000Z",
+    "createdAt": "2025-01-01T00:07:35.000Z",
+    "_status": "draft"
+  },
+  "counts": {
+    "customIDs": {
+      "totalDocs": 2
+    },
+    "drafts": {
+      "totalDocs": 0
+    },
+    "kitchen": {
+      "totalDocs": 2
+    },
+    "targets": {
+      "totalDocs": 2
+    }
+  },
+  "rows": {
+    "_custom_ids_v": [
+      {
+        "id": 1,
+        "parent_id": "b-key",
+        "version_title": "title b-key",
+        "version_updated_at": "2025-01-01T00:00:27.000Z",
+        "version_created_at": "2025-01-01T00:00:27.000Z",
+        "created_at": "2025-01-01T00:00:27.000Z",
+        "updated_at": "2025-01-01T00:00:27.000Z"
+      },
+      {
+        "id": 2,
+        "parent_id": "a-key",
+        "version_title": "title a-key",
+        "version_updated_at": "2025-01-01T00:00:28.000Z",
+        "version_created_at": "2025-01-01T00:00:28.000Z",
+        "created_at": "2025-01-01T00:00:28.000Z",
+        "updated_at": "2025-01-01T00:00:28.000Z"
+      },
+      {
+        "id": 4,
+        "parent_id": "b-key",
+        "version_title": "updated b",
+        "version_updated_at": "2025-01-01T00:07:31.000Z",
+        "version_created_at": "2025-01-01T00:00:27.000Z",
+        "created_at": "2025-01-01T00:07:31.000Z",
+        "updated_at": "2025-01-01T00:07:31.000Z"
+      }
+    ],
+    "_kitchen_localized_v": [
+      {
+        "id": 1,
+        "parent_id": 1,
+        "version_updated_at": "2025-01-01T00:00:20.000Z",
+        "version_created_at": "2025-01-01T00:00:20.000Z",
+        "created_at": "2025-01-01T00:00:20.000Z",
+        "updated_at": "2025-01-01T00:00:20.000Z"
+      },
+      {
+        "id": 2,
+        "parent_id": 1,
+        "version_updated_at": "2025-01-01T00:00:21.000Z",
+        "version_created_at": "2025-01-01T00:00:20.000Z",
+        "created_at": "2025-01-01T00:00:21.000Z",
+        "updated_at": "2025-01-01T00:00:21.000Z"
+      },
+      {
+        "id": 3,
+        "parent_id": 2,
+        "version_updated_at": "2025-01-01T00:00:22.000Z",
+        "version_created_at": "2025-01-01T00:00:22.000Z",
+        "created_at": "2025-01-01T00:00:22.000Z",
+        "updated_at": "2025-01-01T00:00:22.000Z"
+      },
+      {
+        "id": 4,
+        "parent_id": 2,
+        "version_updated_at": "2025-01-01T00:00:23.000Z",
+        "version_created_at": "2025-01-01T00:00:22.000Z",
+        "created_at": "2025-01-01T00:00:23.000Z",
+        "updated_at": "2025-01-01T00:00:23.000Z"
+      },
+      {
+        "id": 5,
+        "parent_id": 3,
+        "version_updated_at": "2025-01-01T00:00:24.000Z",
+        "version_created_at": "2025-01-01T00:00:24.000Z",
+        "created_at": "2025-01-01T00:00:24.000Z",
+        "updated_at": "2025-01-01T00:00:24.000Z"
+      },
+      {
+        "id": 6,
+        "parent_id": 3,
+        "version_updated_at": "2025-01-01T00:00:25.000Z",
+        "version_created_at": "2025-01-01T00:00:24.000Z",
+        "created_at": "2025-01-01T00:00:25.000Z",
+        "updated_at": "2025-01-01T00:00:25.000Z"
+      },
+      {
+        "id": 7,
+        "parent_id": 2,
+        "version_updated_at": "2025-01-01T00:07:28.000Z",
+        "version_created_at": "2025-01-01T00:00:22.000Z",
+        "created_at": "2025-01-01T00:07:28.000Z",
+        "updated_at": "2025-01-01T00:07:28.000Z"
+      },
+      {
+        "id": 8,
+        "parent_id": 2,
+        "version_updated_at": "2025-01-01T00:07:29.000Z",
+        "version_created_at": "2025-01-01T00:00:22.000Z",
+        "created_at": "2025-01-01T00:07:29.000Z",
+        "updated_at": "2025-01-01T00:07:29.000Z"
+      }
+    ],
+    "_kitchen_localized_v_blocks_block_a": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 1,
+        "text": "blockA-0",
+        "number": 0,
+        "_uuid": "<oid:51>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 2,
+        "text": "blockA-0",
+        "number": 0,
+        "_uuid": "<oid:51>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_path": "version.blocks",
+        "_locale": "es",
+        "id": 3,
+        "text": "es-block-0",
+        "number": null,
+        "_uuid": "<oid:56>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 4,
+        "text": "blockA-1",
+        "number": 1,
+        "_uuid": "<oid:62>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 4,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 5,
+        "text": "blockA-1",
+        "number": 1,
+        "_uuid": "<oid:62>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 4,
+        "_path": "version.blocks",
+        "_locale": "es",
+        "id": 6,
+        "text": "es-block-1",
+        "number": null,
+        "_uuid": "<oid:67>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 5,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 7,
+        "text": "blockA-2",
+        "number": 2,
+        "_uuid": "<oid:73>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 6,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 8,
+        "text": "blockA-2",
+        "number": 2,
+        "_uuid": "<oid:73>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 6,
+        "_path": "version.blocks",
+        "_locale": "es",
+        "id": 9,
+        "text": "es-block-2",
+        "number": null,
+        "_uuid": "<oid:78>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 7,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 10,
+        "text": "blockA-1",
+        "number": 1,
+        "_uuid": "<oid:62>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 7,
+        "_path": "version.blocks",
+        "_locale": "es",
+        "id": 11,
+        "text": "es-block-1",
+        "number": null,
+        "_uuid": "<oid:67>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 12,
+        "text": "blockA-1",
+        "number": 1,
+        "_uuid": "<oid:62>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_path": "version.blocks",
+        "_locale": "es",
+        "id": 13,
+        "text": "es-block-1",
+        "number": null,
+        "_uuid": "<oid:67>",
+        "block_name": null
+      }
+    ],
+    "_kitchen_localized_v_blocks_block_b": [
+      {
+        "_order": 2,
+        "_parent_id": 1,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 1,
+        "text": "blockB-0",
+        "select": "x",
+        "_uuid": "<oid:53>",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 2,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 2,
+        "text": "blockB-0",
+        "select": "x",
+        "_uuid": "<oid:53>",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 3,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 3,
+        "text": "blockB-1",
+        "select": "y",
+        "_uuid": "<oid:64>",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 4,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 4,
+        "text": "blockB-1",
+        "select": "y",
+        "_uuid": "<oid:64>",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 5,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 5,
+        "text": "blockB-2",
+        "select": "z",
+        "_uuid": "<oid:75>",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 6,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 6,
+        "text": "blockB-2",
+        "select": "z",
+        "_uuid": "<oid:75>",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 7,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 7,
+        "text": "blockB-1",
+        "select": "y",
+        "_uuid": "<oid:64>",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 8,
+        "_path": "version.blocks",
+        "_locale": "en",
+        "id": 8,
+        "text": "blockB-1",
+        "select": "y",
+        "_uuid": "<oid:64>",
+        "block_name": null
+      }
+    ],
+    "_kitchen_localized_v_blocks_block_b_array": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": 1,
+        "text": "barr-0",
+        "_uuid": "<oid:54>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_locale": "en",
+        "id": 2,
+        "text": "barr-0",
+        "_uuid": "<oid:54>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_locale": "en",
+        "id": 3,
+        "text": "barr-1",
+        "_uuid": "<oid:65>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 4,
+        "_locale": "en",
+        "id": 4,
+        "text": "barr-1",
+        "_uuid": "<oid:65>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 5,
+        "_locale": "en",
+        "id": 5,
+        "text": "barr-2",
+        "_uuid": "<oid:76>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 6,
+        "_locale": "en",
+        "id": 6,
+        "text": "barr-2",
+        "_uuid": "<oid:76>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 7,
+        "_locale": "en",
+        "id": 7,
+        "text": "barr-1",
+        "_uuid": "<oid:65>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_locale": "en",
+        "id": 8,
+        "text": "barr-1",
+        "_uuid": "<oid:65>"
+      }
+    ],
+    "_kitchen_localized_v_blocks_block_c": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_path": "version.blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": 1,
+        "text": "deep-0",
+        "_uuid": "<oid:52>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_path": "version.blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": 2,
+        "text": "deep-0",
+        "_uuid": "<oid:52>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_path": "version.blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": 3,
+        "text": "deep-1",
+        "_uuid": "<oid:63>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 4,
+        "_path": "version.blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": 4,
+        "text": "deep-1",
+        "_uuid": "<oid:63>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 5,
+        "_path": "version.blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": 5,
+        "text": "deep-2",
+        "_uuid": "<oid:74>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 6,
+        "_path": "version.blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": 6,
+        "text": "deep-2",
+        "_uuid": "<oid:74>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 7,
+        "_path": "version.blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": 7,
+        "text": "deep-1",
+        "_uuid": "<oid:63>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_path": "version.blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": 8,
+        "text": "deep-1",
+        "_uuid": "<oid:63>",
+        "block_name": null
+      }
+    ],
+    "_kitchen_localized_v_locales": [
+      {
+        "version_text": "alpha",
+        "version_textarea": "line one 0\nline two",
+        "version_email": "user0@example.com",
+        "version_code": "const x = 0",
+        "version_json": "{\"flag\":true,\"list\":[0,1],\"name\":\"json-0\",\"nested\":{\"deep\":\"d0\"}}",
+        "version_number": 5,
+        "version_checkbox": 1,
+        "version_date": "2024-01-10T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[0,0]}",
+        "version_radio": "a",
+        "version_select": "one",
+        "version_rel_id": 1,
+        "version_upload_id": 1,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 0\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-0",
+        "version_group_number": 100,
+        "version_group_localized_text": "group-loc-0",
+        "version_group_nested_group_text": "ng-0",
+        "version_tab_named_text": "tab-0",
+        "version_tab_named_number": 0,
+        "version_tab_text": "tabText-0",
+        "version_row_text": "row-0",
+        "version_collapsible_text": "collapsible-0",
+        "id": 1,
+        "_locale": "en",
+        "_parent_id": 1
+      },
+      {
+        "version_text": "alpha",
+        "version_textarea": "line one 0\nline two",
+        "version_email": "user0@example.com",
+        "version_code": "const x = 0",
+        "version_json": "{\"flag\":true,\"list\":[0,1],\"name\":\"json-0\",\"nested\":{\"deep\":\"d0\"}}",
+        "version_number": 5,
+        "version_checkbox": 1,
+        "version_date": "2024-01-10T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[0,0]}",
+        "version_radio": "a",
+        "version_select": "one",
+        "version_rel_id": 1,
+        "version_upload_id": 1,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 0\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-0",
+        "version_group_number": 100,
+        "version_group_localized_text": "group-loc-0",
+        "version_group_nested_group_text": "ng-0",
+        "version_tab_named_text": "tab-0",
+        "version_tab_named_number": 0,
+        "version_tab_text": "tabText-0",
+        "version_row_text": "row-0",
+        "version_collapsible_text": "collapsible-0",
+        "id": 2,
+        "_locale": "en",
+        "_parent_id": 2
+      },
+      {
+        "version_text": "es-text-0",
+        "version_textarea": null,
+        "version_email": null,
+        "version_code": null,
+        "version_json": null,
+        "version_number": 10,
+        "version_checkbox": null,
+        "version_date": null,
+        "version_point": null,
+        "version_radio": null,
+        "version_select": "three",
+        "version_rel_id": null,
+        "version_upload_id": null,
+        "version_rich_text": null,
+        "version_group_text": "es-group-0",
+        "version_group_number": null,
+        "version_group_localized_text": null,
+        "version_group_nested_group_text": null,
+        "version_tab_named_text": "es-tab-0",
+        "version_tab_named_number": null,
+        "version_tab_text": null,
+        "version_row_text": null,
+        "version_collapsible_text": null,
+        "id": 3,
+        "_locale": "es",
+        "_parent_id": 2
+      },
+      {
+        "version_text": "beta",
+        "version_textarea": "line one 1\nline two",
+        "version_email": "user1@example.com",
+        "version_code": "const x = 1",
+        "version_json": "{\"flag\":false,\"list\":[1,2],\"name\":\"json-1\",\"nested\":{\"deep\":\"d1\"}}",
+        "version_number": 3,
+        "version_checkbox": 0,
+        "version_date": "2024-02-11T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[1,-1]}",
+        "version_radio": "b",
+        "version_select": "two",
+        "version_rel_id": 2,
+        "version_upload_id": 2,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 1\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-1",
+        "version_group_number": 99,
+        "version_group_localized_text": "group-loc-1",
+        "version_group_nested_group_text": "ng-1",
+        "version_tab_named_text": "tab-1",
+        "version_tab_named_number": 2,
+        "version_tab_text": "tabText-1",
+        "version_row_text": "row-1",
+        "version_collapsible_text": "collapsible-1",
+        "id": 4,
+        "_locale": "en",
+        "_parent_id": 3
+      },
+      {
+        "version_text": "beta",
+        "version_textarea": "line one 1\nline two",
+        "version_email": "user1@example.com",
+        "version_code": "const x = 1",
+        "version_json": "{\"flag\":false,\"list\":[1,2],\"name\":\"json-1\",\"nested\":{\"deep\":\"d1\"}}",
+        "version_number": 3,
+        "version_checkbox": 0,
+        "version_date": "2024-02-11T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[1,-1]}",
+        "version_radio": "b",
+        "version_select": "two",
+        "version_rel_id": 2,
+        "version_upload_id": 2,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 1\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-1",
+        "version_group_number": 99,
+        "version_group_localized_text": "group-loc-1",
+        "version_group_nested_group_text": "ng-1",
+        "version_tab_named_text": "tab-1",
+        "version_tab_named_number": 2,
+        "version_tab_text": "tabText-1",
+        "version_row_text": "row-1",
+        "version_collapsible_text": "collapsible-1",
+        "id": 5,
+        "_locale": "en",
+        "_parent_id": 4
+      },
+      {
+        "version_text": "es-text-1",
+        "version_textarea": null,
+        "version_email": null,
+        "version_code": null,
+        "version_json": null,
+        "version_number": 9,
+        "version_checkbox": null,
+        "version_date": null,
+        "version_point": null,
+        "version_radio": null,
+        "version_select": "three",
+        "version_rel_id": null,
+        "version_upload_id": null,
+        "version_rich_text": null,
+        "version_group_text": "es-group-1",
+        "version_group_number": null,
+        "version_group_localized_text": null,
+        "version_group_nested_group_text": null,
+        "version_tab_named_text": "es-tab-1",
+        "version_tab_named_number": null,
+        "version_tab_text": null,
+        "version_row_text": null,
+        "version_collapsible_text": null,
+        "id": 6,
+        "_locale": "es",
+        "_parent_id": 4
+      },
+      {
+        "version_text": "gamma",
+        "version_textarea": "line one 2\nline two",
+        "version_email": "user2@example.com",
+        "version_code": "const x = 2",
+        "version_json": "{\"flag\":true,\"list\":[2,3],\"name\":\"json-2\",\"nested\":{\"deep\":\"d2\"}}",
+        "version_number": 5,
+        "version_checkbox": 1,
+        "version_date": "2024-03-12T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[2,-2]}",
+        "version_radio": "c",
+        "version_select": "three",
+        "version_rel_id": null,
+        "version_upload_id": 1,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 2\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-2",
+        "version_group_number": 98,
+        "version_group_localized_text": "group-loc-2",
+        "version_group_nested_group_text": "ng-2",
+        "version_tab_named_text": "tab-2",
+        "version_tab_named_number": 4,
+        "version_tab_text": "tabText-2",
+        "version_row_text": "row-2",
+        "version_collapsible_text": "collapsible-2",
+        "id": 7,
+        "_locale": "en",
+        "_parent_id": 5
+      },
+      {
+        "version_text": "gamma",
+        "version_textarea": "line one 2\nline two",
+        "version_email": "user2@example.com",
+        "version_code": "const x = 2",
+        "version_json": "{\"flag\":true,\"list\":[2,3],\"name\":\"json-2\",\"nested\":{\"deep\":\"d2\"}}",
+        "version_number": 5,
+        "version_checkbox": 1,
+        "version_date": "2024-03-12T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[2,-2]}",
+        "version_radio": "c",
+        "version_select": "three",
+        "version_rel_id": null,
+        "version_upload_id": 1,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 2\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-2",
+        "version_group_number": 98,
+        "version_group_localized_text": "group-loc-2",
+        "version_group_nested_group_text": "ng-2",
+        "version_tab_named_text": "tab-2",
+        "version_tab_named_number": 4,
+        "version_tab_text": "tabText-2",
+        "version_row_text": "row-2",
+        "version_collapsible_text": "collapsible-2",
+        "id": 8,
+        "_locale": "en",
+        "_parent_id": 6
+      },
+      {
+        "version_text": "es-text-2",
+        "version_textarea": null,
+        "version_email": null,
+        "version_code": null,
+        "version_json": null,
+        "version_number": 8,
+        "version_checkbox": null,
+        "version_date": null,
+        "version_point": null,
+        "version_radio": null,
+        "version_select": "three",
+        "version_rel_id": null,
+        "version_upload_id": null,
+        "version_rich_text": null,
+        "version_group_text": "es-group-2",
+        "version_group_number": null,
+        "version_group_localized_text": null,
+        "version_group_nested_group_text": null,
+        "version_tab_named_text": "es-tab-2",
+        "version_tab_named_number": null,
+        "version_tab_text": null,
+        "version_row_text": null,
+        "version_collapsible_text": null,
+        "id": 9,
+        "_locale": "es",
+        "_parent_id": 6
+      },
+      {
+        "version_text": "beta",
+        "version_textarea": "line one 1\nline two",
+        "version_email": "user1@example.com",
+        "version_code": "const x = 1",
+        "version_json": "{\"flag\":false,\"list\":[1,2],\"name\":\"json-1\",\"nested\":{\"deep\":\"d1\"}}",
+        "version_number": 3,
+        "version_checkbox": 0,
+        "version_date": "2024-02-11T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[1,-1]}",
+        "version_radio": "b",
+        "version_select": "two",
+        "version_rel_id": 2,
+        "version_upload_id": 2,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 1\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-1",
+        "version_group_number": 99,
+        "version_group_localized_text": "group-loc-1",
+        "version_group_nested_group_text": "ng-1",
+        "version_tab_named_text": "tab-1",
+        "version_tab_named_number": 2,
+        "version_tab_text": "tabText-1",
+        "version_row_text": "row-1",
+        "version_collapsible_text": "collapsible-1",
+        "id": 10,
+        "_locale": "en",
+        "_parent_id": 7
+      },
+      {
+        "version_text": "es-updated",
+        "version_textarea": null,
+        "version_email": null,
+        "version_code": null,
+        "version_json": null,
+        "version_number": 9,
+        "version_checkbox": null,
+        "version_date": null,
+        "version_point": null,
+        "version_radio": null,
+        "version_select": "three",
+        "version_rel_id": null,
+        "version_upload_id": null,
+        "version_rich_text": null,
+        "version_group_text": "es-group-new",
+        "version_group_number": null,
+        "version_group_localized_text": null,
+        "version_group_nested_group_text": null,
+        "version_tab_named_text": "es-tab-1",
+        "version_tab_named_number": null,
+        "version_tab_text": null,
+        "version_row_text": null,
+        "version_collapsible_text": null,
+        "id": 11,
+        "_locale": "es",
+        "_parent_id": 7
+      },
+      {
+        "version_text": "de-text",
+        "version_textarea": null,
+        "version_email": null,
+        "version_code": null,
+        "version_json": null,
+        "version_number": 1,
+        "version_checkbox": null,
+        "version_date": null,
+        "version_point": null,
+        "version_radio": null,
+        "version_select": null,
+        "version_rel_id": null,
+        "version_upload_id": null,
+        "version_rich_text": null,
+        "version_group_text": null,
+        "version_group_number": null,
+        "version_group_localized_text": null,
+        "version_group_nested_group_text": null,
+        "version_tab_named_text": null,
+        "version_tab_named_number": null,
+        "version_tab_text": null,
+        "version_row_text": null,
+        "version_collapsible_text": null,
+        "id": 12,
+        "_locale": "de",
+        "_parent_id": 8
+      },
+      {
+        "version_text": "beta",
+        "version_textarea": "line one 1\nline two",
+        "version_email": "user1@example.com",
+        "version_code": "const x = 1",
+        "version_json": "{\"flag\":false,\"list\":[1,2],\"name\":\"json-1\",\"nested\":{\"deep\":\"d1\"}}",
+        "version_number": 3,
+        "version_checkbox": 0,
+        "version_date": "2024-02-11T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[1,-1]}",
+        "version_radio": "b",
+        "version_select": "two",
+        "version_rel_id": 2,
+        "version_upload_id": 2,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 1\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-1",
+        "version_group_number": 99,
+        "version_group_localized_text": "group-loc-1",
+        "version_group_nested_group_text": "ng-1",
+        "version_tab_named_text": "tab-1",
+        "version_tab_named_number": 2,
+        "version_tab_text": "tabText-1",
+        "version_row_text": "row-1",
+        "version_collapsible_text": "collapsible-1",
+        "id": 13,
+        "_locale": "en",
+        "_parent_id": 8
+      },
+      {
+        "version_text": "es-updated",
+        "version_textarea": null,
+        "version_email": null,
+        "version_code": null,
+        "version_json": null,
+        "version_number": 9,
+        "version_checkbox": null,
+        "version_date": null,
+        "version_point": null,
+        "version_radio": null,
+        "version_select": "three",
+        "version_rel_id": null,
+        "version_upload_id": null,
+        "version_rich_text": null,
+        "version_group_text": "es-group-new",
+        "version_group_number": null,
+        "version_group_localized_text": null,
+        "version_group_nested_group_text": null,
+        "version_tab_named_text": "es-tab-1",
+        "version_tab_named_number": null,
+        "version_tab_text": null,
+        "version_row_text": null,
+        "version_collapsible_text": null,
+        "id": 14,
+        "_locale": "es",
+        "_parent_id": 8
+      }
+    ],
+    "_kitchen_localized_v_numbers": [
+      {
+        "id": 1,
+        "number": 0,
+        "order": 1,
+        "parent_id": 1,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 2,
+        "number": 1,
+        "order": 2,
+        "parent_id": 1,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 3,
+        "number": 42,
+        "order": 3,
+        "parent_id": 1,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 4,
+        "number": 0,
+        "order": 1,
+        "parent_id": 2,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 5,
+        "number": 1,
+        "order": 2,
+        "parent_id": 2,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 6,
+        "number": 42,
+        "order": 3,
+        "parent_id": 2,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 7,
+        "number": 1,
+        "order": 1,
+        "parent_id": 3,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 8,
+        "number": 2,
+        "order": 2,
+        "parent_id": 3,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 9,
+        "number": 42,
+        "order": 3,
+        "parent_id": 3,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 10,
+        "number": 1,
+        "order": 1,
+        "parent_id": 4,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 11,
+        "number": 2,
+        "order": 2,
+        "parent_id": 4,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 12,
+        "number": 42,
+        "order": 3,
+        "parent_id": 4,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 13,
+        "number": 2,
+        "order": 1,
+        "parent_id": 5,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 14,
+        "number": 3,
+        "order": 2,
+        "parent_id": 5,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 15,
+        "number": 42,
+        "order": 3,
+        "parent_id": 5,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 16,
+        "number": 2,
+        "order": 1,
+        "parent_id": 6,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 17,
+        "number": 3,
+        "order": 2,
+        "parent_id": 6,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 18,
+        "number": 42,
+        "order": 3,
+        "parent_id": 6,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 19,
+        "number": 1,
+        "order": 1,
+        "parent_id": 7,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 20,
+        "number": 2,
+        "order": 2,
+        "parent_id": 7,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 21,
+        "number": 42,
+        "order": 3,
+        "parent_id": 7,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 22,
+        "number": 1,
+        "order": 1,
+        "parent_id": 8,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 23,
+        "number": 2,
+        "order": 2,
+        "parent_id": 8,
+        "path": "version.numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 24,
+        "number": 42,
+        "order": 3,
+        "parent_id": 8,
+        "path": "version.numberMany",
+        "locale": "en"
+      }
+    ],
+    "_kitchen_localized_v_rels": [
+      {
+        "id": 1,
+        "order": 1,
+        "parent_id": 1,
+        "path": "version.relMany",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 2,
+        "order": 2,
+        "parent_id": 1,
+        "path": "version.relMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 3,
+        "order": null,
+        "parent_id": 1,
+        "path": "version.poly",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 4,
+        "order": 1,
+        "parent_id": 1,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 5,
+        "order": 2,
+        "parent_id": 1,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 6,
+        "order": 1,
+        "parent_id": 1,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 7,
+        "order": 2,
+        "parent_id": 1,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 8,
+        "order": 1,
+        "parent_id": 2,
+        "path": "version.relMany",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 9,
+        "order": 2,
+        "parent_id": 2,
+        "path": "version.relMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 10,
+        "order": null,
+        "parent_id": 2,
+        "path": "version.poly",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 11,
+        "order": 1,
+        "parent_id": 2,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 12,
+        "order": 2,
+        "parent_id": 2,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 13,
+        "order": 1,
+        "parent_id": 2,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 14,
+        "order": 2,
+        "parent_id": 2,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 15,
+        "order": 1,
+        "parent_id": 3,
+        "path": "version.relMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 17,
+        "order": null,
+        "parent_id": 3,
+        "path": "version.poly",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 19,
+        "order": 2,
+        "parent_id": 3,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 20,
+        "order": 1,
+        "parent_id": 3,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 21,
+        "order": 2,
+        "parent_id": 3,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 22,
+        "order": 1,
+        "parent_id": 4,
+        "path": "version.relMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 24,
+        "order": null,
+        "parent_id": 4,
+        "path": "version.poly",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 26,
+        "order": 2,
+        "parent_id": 4,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 27,
+        "order": 1,
+        "parent_id": 4,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 28,
+        "order": 2,
+        "parent_id": 4,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 30,
+        "order": 2,
+        "parent_id": 5,
+        "path": "version.relMany",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 32,
+        "order": 1,
+        "parent_id": 5,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 33,
+        "order": 2,
+        "parent_id": 5,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 34,
+        "order": 1,
+        "parent_id": 5,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 35,
+        "order": 2,
+        "parent_id": 5,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 37,
+        "order": 2,
+        "parent_id": 6,
+        "path": "version.relMany",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 39,
+        "order": 1,
+        "parent_id": 6,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 40,
+        "order": 2,
+        "parent_id": 6,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 41,
+        "order": 1,
+        "parent_id": 6,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 42,
+        "order": 2,
+        "parent_id": 6,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 43,
+        "order": 1,
+        "parent_id": 7,
+        "path": "version.relMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 45,
+        "order": null,
+        "parent_id": 7,
+        "path": "version.poly",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 47,
+        "order": 2,
+        "parent_id": 7,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 48,
+        "order": 1,
+        "parent_id": 7,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 49,
+        "order": 2,
+        "parent_id": 7,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 50,
+        "order": 1,
+        "parent_id": 8,
+        "path": "version.relMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 52,
+        "order": null,
+        "parent_id": 8,
+        "path": "version.poly",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 54,
+        "order": 2,
+        "parent_id": 8,
+        "path": "version.polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 55,
+        "order": 1,
+        "parent_id": 8,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 56,
+        "order": 2,
+        "parent_id": 8,
+        "path": "version.uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      }
+    ],
+    "_kitchen_localized_v_texts": [
+      {
+        "id": 1,
+        "order": 1,
+        "parent_id": 1,
+        "path": "version.textMany",
+        "text": "tm-0",
+        "locale": "en"
+      },
+      {
+        "id": 2,
+        "order": 2,
+        "parent_id": 1,
+        "path": "version.textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 3,
+        "order": 1,
+        "parent_id": 2,
+        "path": "version.textMany",
+        "text": "tm-0",
+        "locale": "en"
+      },
+      {
+        "id": 4,
+        "order": 2,
+        "parent_id": 2,
+        "path": "version.textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 5,
+        "order": 1,
+        "parent_id": 2,
+        "path": "version.textMany",
+        "text": "es-0",
+        "locale": "es"
+      },
+      {
+        "id": 6,
+        "order": 1,
+        "parent_id": 3,
+        "path": "version.textMany",
+        "text": "tm-1",
+        "locale": "en"
+      },
+      {
+        "id": 7,
+        "order": 2,
+        "parent_id": 3,
+        "path": "version.textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 8,
+        "order": 1,
+        "parent_id": 4,
+        "path": "version.textMany",
+        "text": "tm-1",
+        "locale": "en"
+      },
+      {
+        "id": 9,
+        "order": 2,
+        "parent_id": 4,
+        "path": "version.textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 10,
+        "order": 1,
+        "parent_id": 4,
+        "path": "version.textMany",
+        "text": "es-1",
+        "locale": "es"
+      },
+      {
+        "id": 11,
+        "order": 1,
+        "parent_id": 5,
+        "path": "version.textMany",
+        "text": "tm-2",
+        "locale": "en"
+      },
+      {
+        "id": 12,
+        "order": 2,
+        "parent_id": 5,
+        "path": "version.textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 13,
+        "order": 1,
+        "parent_id": 6,
+        "path": "version.textMany",
+        "text": "tm-2",
+        "locale": "en"
+      },
+      {
+        "id": 14,
+        "order": 2,
+        "parent_id": 6,
+        "path": "version.textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 15,
+        "order": 1,
+        "parent_id": 6,
+        "path": "version.textMany",
+        "text": "es-2",
+        "locale": "es"
+      },
+      {
+        "id": 16,
+        "order": 1,
+        "parent_id": 7,
+        "path": "version.textMany",
+        "text": "tm-1",
+        "locale": "en"
+      },
+      {
+        "id": 17,
+        "order": 2,
+        "parent_id": 7,
+        "path": "version.textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 18,
+        "order": 1,
+        "parent_id": 7,
+        "path": "version.textMany",
+        "text": "es-1",
+        "locale": "es"
+      },
+      {
+        "id": 19,
+        "order": 1,
+        "parent_id": 8,
+        "path": "version.textMany",
+        "text": "tm-1",
+        "locale": "en"
+      },
+      {
+        "id": 20,
+        "order": 2,
+        "parent_id": 8,
+        "path": "version.textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 21,
+        "order": 1,
+        "parent_id": 8,
+        "path": "version.textMany",
+        "text": "es-1",
+        "locale": "es"
+      }
+    ],
+    "_kitchen_localized_v_version_array": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": 1,
+        "text": "arr-0-0",
+        "number": 0,
+        "rel_id": 1,
+        "localized_text": "arr-loc-0",
+        "_uuid": "<oid:49>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": 2,
+        "text": "arr-0-1",
+        "number": 1,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:50>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_locale": "en",
+        "id": 3,
+        "text": "arr-0-0",
+        "number": 0,
+        "rel_id": 1,
+        "localized_text": "arr-loc-0",
+        "_uuid": "<oid:49>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 2,
+        "_locale": "en",
+        "id": 4,
+        "text": "arr-0-1",
+        "number": 1,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:50>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_locale": "es",
+        "id": 5,
+        "text": "es-arr-0",
+        "number": 0,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:55>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_locale": "en",
+        "id": 6,
+        "text": "arr-1-0",
+        "number": 10,
+        "rel_id": 2,
+        "localized_text": "arr-loc-1",
+        "_uuid": "<oid:60>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 3,
+        "_locale": "en",
+        "id": 7,
+        "text": "arr-1-1",
+        "number": 11,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:61>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 4,
+        "_locale": "en",
+        "id": 8,
+        "text": "arr-1-0",
+        "number": 10,
+        "rel_id": 2,
+        "localized_text": "arr-loc-1",
+        "_uuid": "<oid:60>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 4,
+        "_locale": "en",
+        "id": 9,
+        "text": "arr-1-1",
+        "number": 11,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:61>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 4,
+        "_locale": "es",
+        "id": 10,
+        "text": "es-arr-1",
+        "number": 1,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:66>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 5,
+        "_locale": "en",
+        "id": 11,
+        "text": "arr-2-0",
+        "number": 20,
+        "rel_id": null,
+        "localized_text": "arr-loc-2",
+        "_uuid": "<oid:71>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 5,
+        "_locale": "en",
+        "id": 12,
+        "text": "arr-2-1",
+        "number": 21,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:72>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 6,
+        "_locale": "en",
+        "id": 13,
+        "text": "arr-2-0",
+        "number": 20,
+        "rel_id": null,
+        "localized_text": "arr-loc-2",
+        "_uuid": "<oid:71>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 6,
+        "_locale": "en",
+        "id": 14,
+        "text": "arr-2-1",
+        "number": 21,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:72>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 6,
+        "_locale": "es",
+        "id": 15,
+        "text": "es-arr-2",
+        "number": 2,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:77>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 7,
+        "_locale": "en",
+        "id": 16,
+        "text": "arr-1-0",
+        "number": 10,
+        "rel_id": 2,
+        "localized_text": "arr-loc-1",
+        "_uuid": "<oid:60>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 7,
+        "_locale": "en",
+        "id": 17,
+        "text": "arr-1-1",
+        "number": 11,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:61>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 7,
+        "_locale": "es",
+        "id": 18,
+        "text": "es-arr-1",
+        "number": 1,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:66>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_locale": "en",
+        "id": 19,
+        "text": "arr-1-0",
+        "number": 10,
+        "rel_id": 2,
+        "localized_text": "arr-loc-1",
+        "_uuid": "<oid:60>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 8,
+        "_locale": "en",
+        "id": 20,
+        "text": "arr-1-1",
+        "number": 11,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:61>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_locale": "es",
+        "id": 21,
+        "text": "es-arr-1",
+        "number": 1,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:66>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_locale": "de",
+        "id": 22,
+        "text": "de-row",
+        "number": null,
+        "rel_id": null,
+        "localized_text": null,
+        "_uuid": "<oid:82>"
+      }
+    ],
+    "_kitchen_localized_v_version_array_nested_array": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": 1,
+        "text": "nested-0-a",
+        "_uuid": "<oid:47>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": 2,
+        "text": "nested-0-b",
+        "_uuid": "<oid:48>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_locale": "en",
+        "id": 3,
+        "text": "nested-0-a",
+        "_uuid": "<oid:47>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 3,
+        "_locale": "en",
+        "id": 4,
+        "text": "nested-0-b",
+        "_uuid": "<oid:48>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 6,
+        "_locale": "en",
+        "id": 5,
+        "text": "nested-1-a",
+        "_uuid": "<oid:58>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 6,
+        "_locale": "en",
+        "id": 6,
+        "text": "nested-1-b",
+        "_uuid": "<oid:59>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_locale": "en",
+        "id": 7,
+        "text": "nested-1-a",
+        "_uuid": "<oid:58>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 8,
+        "_locale": "en",
+        "id": 8,
+        "text": "nested-1-b",
+        "_uuid": "<oid:59>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 11,
+        "_locale": "en",
+        "id": 9,
+        "text": "nested-2-a",
+        "_uuid": "<oid:69>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 11,
+        "_locale": "en",
+        "id": 10,
+        "text": "nested-2-b",
+        "_uuid": "<oid:70>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 13,
+        "_locale": "en",
+        "id": 11,
+        "text": "nested-2-a",
+        "_uuid": "<oid:69>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 13,
+        "_locale": "en",
+        "id": 12,
+        "text": "nested-2-b",
+        "_uuid": "<oid:70>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 16,
+        "_locale": "en",
+        "id": 13,
+        "text": "nested-1-a",
+        "_uuid": "<oid:58>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 16,
+        "_locale": "en",
+        "id": 14,
+        "text": "nested-1-b",
+        "_uuid": "<oid:59>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 19,
+        "_locale": "en",
+        "id": 15,
+        "text": "nested-1-a",
+        "_uuid": "<oid:58>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 19,
+        "_locale": "en",
+        "id": 16,
+        "text": "nested-1-b",
+        "_uuid": "<oid:59>"
+      }
+    ],
+    "_kitchen_localized_v_version_group_group_array": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": 1,
+        "text": "garr-0",
+        "_uuid": "<oid:46>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_locale": "en",
+        "id": 2,
+        "text": "garr-0",
+        "_uuid": "<oid:46>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_locale": "en",
+        "id": 3,
+        "text": "garr-1",
+        "_uuid": "<oid:57>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 4,
+        "_locale": "en",
+        "id": 4,
+        "text": "garr-1",
+        "_uuid": "<oid:57>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 5,
+        "_locale": "en",
+        "id": 5,
+        "text": "garr-2",
+        "_uuid": "<oid:68>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 6,
+        "_locale": "en",
+        "id": 6,
+        "text": "garr-2",
+        "_uuid": "<oid:68>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 7,
+        "_locale": "en",
+        "id": 7,
+        "text": "garr-1",
+        "_uuid": "<oid:57>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_locale": "en",
+        "id": 8,
+        "text": "garr-1",
+        "_uuid": "<oid:57>"
+      }
+    ],
+    "_kitchen_localized_v_version_select_many": [
+      {
+        "order": 1,
+        "parent_id": 1,
+        "value": "red",
+        "locale": "en",
+        "id": 1
+      },
+      {
+        "order": 1,
+        "parent_id": 2,
+        "value": "red",
+        "locale": "en",
+        "id": 2
+      },
+      {
+        "order": 1,
+        "parent_id": 2,
+        "value": "blue",
+        "locale": "es",
+        "id": 3
+      },
+      {
+        "order": 1,
+        "parent_id": 3,
+        "value": "red",
+        "locale": "en",
+        "id": 4
+      },
+      {
+        "order": 2,
+        "parent_id": 3,
+        "value": "green",
+        "locale": "en",
+        "id": 5
+      },
+      {
+        "order": 1,
+        "parent_id": 4,
+        "value": "red",
+        "locale": "en",
+        "id": 6
+      },
+      {
+        "order": 2,
+        "parent_id": 4,
+        "value": "green",
+        "locale": "en",
+        "id": 7
+      },
+      {
+        "order": 1,
+        "parent_id": 4,
+        "value": "blue",
+        "locale": "es",
+        "id": 8
+      },
+      {
+        "order": 1,
+        "parent_id": 5,
+        "value": "blue",
+        "locale": "en",
+        "id": 9
+      },
+      {
+        "order": 1,
+        "parent_id": 6,
+        "value": "blue",
+        "locale": "en",
+        "id": 10
+      },
+      {
+        "order": 1,
+        "parent_id": 6,
+        "value": "blue",
+        "locale": "es",
+        "id": 11
+      },
+      {
+        "order": 1,
+        "parent_id": 7,
+        "value": "red",
+        "locale": "en",
+        "id": 12
+      },
+      {
+        "order": 2,
+        "parent_id": 7,
+        "value": "green",
+        "locale": "en",
+        "id": 13
+      },
+      {
+        "order": 1,
+        "parent_id": 7,
+        "value": "blue",
+        "locale": "es",
+        "id": 14
+      },
+      {
+        "order": 1,
+        "parent_id": 8,
+        "value": "red",
+        "locale": "en",
+        "id": 15
+      },
+      {
+        "order": 2,
+        "parent_id": 8,
+        "value": "green",
+        "locale": "en",
+        "id": 16
+      },
+      {
+        "order": 1,
+        "parent_id": 8,
+        "value": "blue",
+        "locale": "es",
+        "id": 17
+      }
+    ],
+    "_kitchen_v": [
+      {
+        "id": 3,
+        "parent_id": 3,
+        "version_text": "gamma",
+        "version_textarea": "line one 2\nline two",
+        "version_email": "user2@example.com",
+        "version_code": "const x = 2",
+        "version_json": "{\"flag\":true,\"list\":[2,3],\"name\":\"json-2\",\"nested\":{\"deep\":\"d2\"}}",
+        "version_number": 5,
+        "version_checkbox": 1,
+        "version_date": "2024-03-12T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[2,-2]}",
+        "version_radio": "c",
+        "version_select": "three",
+        "version_rel_id": null,
+        "version_upload_id": 1,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 2\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-2",
+        "version_group_number": 98,
+        "version_group_nested_group_text": "ng-2",
+        "version_tab_named_text": "tab-2",
+        "version_tab_named_number": 4,
+        "version_tab_text": "tabText-2",
+        "version_row_text": "row-2",
+        "version_collapsible_text": "collapsible-2",
+        "version_updated_at": "2025-01-01T00:00:15.000Z",
+        "version_created_at": "2025-01-01T00:00:15.000Z",
+        "created_at": "2025-01-01T00:00:15.000Z",
+        "updated_at": "2025-01-01T00:00:15.000Z"
+      },
+      {
+        "id": 6,
+        "parent_id": 6,
+        "version_text": "sparse",
+        "version_textarea": null,
+        "version_email": null,
+        "version_code": null,
+        "version_json": null,
+        "version_number": null,
+        "version_checkbox": null,
+        "version_date": null,
+        "version_point": null,
+        "version_radio": null,
+        "version_select": null,
+        "version_rel_id": null,
+        "version_upload_id": null,
+        "version_rich_text": null,
+        "version_group_text": null,
+        "version_group_number": null,
+        "version_group_nested_group_text": null,
+        "version_tab_named_text": null,
+        "version_tab_named_number": null,
+        "version_tab_text": null,
+        "version_row_text": null,
+        "version_collapsible_text": null,
+        "version_updated_at": "2025-01-01T00:00:18.000Z",
+        "version_created_at": "2025-01-01T00:00:18.000Z",
+        "created_at": "2025-01-01T00:00:18.000Z",
+        "updated_at": "2025-01-01T00:00:18.000Z"
+      },
+      {
+        "id": 8,
+        "parent_id": 3,
+        "version_text": "gamma",
+        "version_textarea": "line one 2\nline two",
+        "version_email": "user2@example.com",
+        "version_code": "const x = 2",
+        "version_json": "{\"flag\":true,\"list\":[2,3],\"name\":\"json-2\",\"nested\":{\"deep\":\"d2\"}}",
+        "version_number": 5,
+        "version_checkbox": 1,
+        "version_date": "2024-03-12T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[2,-2]}",
+        "version_radio": "c",
+        "version_select": "three",
+        "version_rel_id": null,
+        "version_upload_id": 1,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 2\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-2",
+        "version_group_number": 98,
+        "version_group_nested_group_text": "ng-2",
+        "version_tab_named_text": "tab-2",
+        "version_tab_named_number": 4,
+        "version_tab_text": "tabText-2",
+        "version_row_text": "row-2",
+        "version_collapsible_text": "collapsible-2",
+        "version_updated_at": "2025-01-01T00:07:26.000Z",
+        "version_created_at": "2025-01-01T00:00:15.000Z",
+        "created_at": "2025-01-01T00:07:26.000Z",
+        "updated_at": "2025-01-01T00:07:26.000Z"
+      },
+      {
+        "id": 11,
+        "parent_id": 3,
+        "version_text": "gamma",
+        "version_textarea": "line one 2\nline two",
+        "version_email": "user2@example.com",
+        "version_code": "const x = 2",
+        "version_json": "{\"flag\":true,\"list\":[2,3],\"name\":\"json-2\",\"nested\":{\"deep\":\"d2\"}}",
+        "version_number": 5,
+        "version_checkbox": 1,
+        "version_date": "2024-03-12T00:00:00.000Z",
+        "version_point": "{\"type\":\"Point\",\"coordinates\":[2,-2]}",
+        "version_radio": "c",
+        "version_select": "three",
+        "version_rel_id": null,
+        "version_upload_id": 1,
+        "version_rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 2\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "version_group_text": "group-2",
+        "version_group_number": 98,
+        "version_group_nested_group_text": "ng-2",
+        "version_tab_named_text": "tab-2",
+        "version_tab_named_number": 4,
+        "version_tab_text": "bulk",
+        "version_row_text": "row-2",
+        "version_collapsible_text": "collapsible-2",
+        "version_updated_at": "2025-01-01T00:07:27.000Z",
+        "version_created_at": "2025-01-01T00:00:15.000Z",
+        "created_at": "2025-01-01T00:07:27.000Z",
+        "updated_at": "2025-01-01T00:07:27.000Z"
+      }
+    ],
+    "_kitchen_v_blocks_block_a": [
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_path": "version.blocks",
+        "id": 3,
+        "text": "blockA-2",
+        "number": 2,
+        "_uuid": "<oid:24>",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 8,
+        "_path": "version.blocks",
+        "id": 6,
+        "text": "blockA-2",
+        "number": 2,
+        "_uuid": "<oid:24>",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 11,
+        "_path": "version.blocks",
+        "id": 8,
+        "text": "blockA-2",
+        "number": 2,
+        "_uuid": "<oid:24>",
+        "block_name": null
+      }
+    ],
+    "_kitchen_v_blocks_block_b": [
+      {
+        "_order": 2,
+        "_parent_id": 3,
+        "_path": "version.blocks",
+        "id": 3,
+        "text": "blockB-2",
+        "select": "z",
+        "_uuid": "<oid:26>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_path": "version.blocks",
+        "id": 7,
+        "text": "blockB-2",
+        "select": "z",
+        "_uuid": "<oid:26>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 11,
+        "_path": "version.blocks",
+        "id": 9,
+        "text": "blockB-2",
+        "select": "z",
+        "_uuid": "<oid:26>",
+        "block_name": null
+      }
+    ],
+    "_kitchen_v_blocks_block_b_array": [
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "id": 3,
+        "text": "barr-2",
+        "_uuid": "<oid:27>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 7,
+        "id": 6,
+        "text": "barr-2",
+        "_uuid": "<oid:27>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 9,
+        "id": 7,
+        "text": "barr-2",
+        "_uuid": "<oid:27>"
+      }
+    ],
+    "_kitchen_v_blocks_block_c": [
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_path": "version.blocks.0.nestedBlocks",
+        "id": 3,
+        "text": "deep-2",
+        "_uuid": "<oid:25>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "_path": "version.blocks.1.nestedBlocks",
+        "id": 6,
+        "text": "deep-2",
+        "_uuid": "<oid:25>",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 11,
+        "_path": "version.blocks.1.nestedBlocks",
+        "id": 8,
+        "text": "deep-2",
+        "_uuid": "<oid:25>",
+        "block_name": null
+      }
+    ],
+    "_kitchen_v_locales": [
+      {
+        "version_group_localized_text": "group-loc-2",
+        "id": 3,
+        "_locale": "en",
+        "_parent_id": 3
+      },
+      {
+        "version_group_localized_text": null,
+        "id": 6,
+        "_locale": "en",
+        "_parent_id": 6
+      },
+      {
+        "version_group_localized_text": null,
+        "id": 7,
+        "_locale": "es",
+        "_parent_id": 6
+      },
+      {
+        "version_group_localized_text": null,
+        "id": 8,
+        "_locale": "de",
+        "_parent_id": 6
+      },
+      {
+        "version_group_localized_text": "group-loc-2",
+        "id": 10,
+        "_locale": "en",
+        "_parent_id": 8
+      },
+      {
+        "version_group_localized_text": "group-loc-2",
+        "id": 13,
+        "_locale": "en",
+        "_parent_id": 11
+      }
+    ],
+    "_kitchen_v_numbers": [
+      {
+        "id": 7,
+        "number": 2,
+        "order": 1,
+        "parent_id": 3,
+        "path": "version.numberMany"
+      },
+      {
+        "id": 8,
+        "number": 3,
+        "order": 2,
+        "parent_id": 3,
+        "path": "version.numberMany"
+      },
+      {
+        "id": 9,
+        "number": 42,
+        "order": 3,
+        "parent_id": 3,
+        "path": "version.numberMany"
+      },
+      {
+        "id": 17,
+        "number": 2,
+        "order": 1,
+        "parent_id": 8,
+        "path": "version.numberMany"
+      },
+      {
+        "id": 18,
+        "number": 3,
+        "order": 2,
+        "parent_id": 8,
+        "path": "version.numberMany"
+      },
+      {
+        "id": 19,
+        "number": 42,
+        "order": 3,
+        "parent_id": 8,
+        "path": "version.numberMany"
+      },
+      {
+        "id": 24,
+        "number": 2,
+        "order": 1,
+        "parent_id": 11,
+        "path": "version.numberMany"
+      },
+      {
+        "id": 25,
+        "number": 3,
+        "order": 2,
+        "parent_id": 11,
+        "path": "version.numberMany"
+      },
+      {
+        "id": 26,
+        "number": 42,
+        "order": 3,
+        "parent_id": 11,
+        "path": "version.numberMany"
+      }
+    ],
+    "_kitchen_v_rels": [
+      {
+        "id": 16,
+        "order": 2,
+        "parent_id": 3,
+        "path": "version.relMany",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 18,
+        "order": 1,
+        "parent_id": 3,
+        "path": "version.polyMany",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 19,
+        "order": 2,
+        "parent_id": 3,
+        "path": "version.polyMany",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 20,
+        "order": 1,
+        "parent_id": 3,
+        "path": "version.uploadMany",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 21,
+        "order": 2,
+        "parent_id": 3,
+        "path": "version.uploadMany",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 42,
+        "order": 2,
+        "parent_id": 8,
+        "path": "version.relMany",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 44,
+        "order": 1,
+        "parent_id": 8,
+        "path": "version.polyMany",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 45,
+        "order": 2,
+        "parent_id": 8,
+        "path": "version.polyMany",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 46,
+        "order": 1,
+        "parent_id": 8,
+        "path": "version.uploadMany",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 47,
+        "order": 2,
+        "parent_id": 8,
+        "path": "version.uploadMany",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 61,
+        "order": 2,
+        "parent_id": 11,
+        "path": "version.relMany",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 63,
+        "order": 1,
+        "parent_id": 11,
+        "path": "version.polyMany",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 64,
+        "order": 2,
+        "parent_id": 11,
+        "path": "version.polyMany",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 65,
+        "order": 1,
+        "parent_id": 11,
+        "path": "version.uploadMany",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 66,
+        "order": 2,
+        "parent_id": 11,
+        "path": "version.uploadMany",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      }
+    ],
+    "_kitchen_v_texts": [
+      {
+        "id": 5,
+        "order": 1,
+        "parent_id": 3,
+        "path": "version.textMany",
+        "text": "tm-2"
+      },
+      {
+        "id": 6,
+        "order": 2,
+        "parent_id": 3,
+        "path": "version.textMany",
+        "text": "shared"
+      },
+      {
+        "id": 11,
+        "order": 1,
+        "parent_id": 8,
+        "path": "version.textMany",
+        "text": "tm-2"
+      },
+      {
+        "id": 12,
+        "order": 2,
+        "parent_id": 8,
+        "path": "version.textMany",
+        "text": "shared"
+      },
+      {
+        "id": 15,
+        "order": 1,
+        "parent_id": 11,
+        "path": "version.textMany",
+        "text": "tm-2"
+      },
+      {
+        "id": 16,
+        "order": 2,
+        "parent_id": 11,
+        "path": "version.textMany",
+        "text": "shared"
+      }
+    ],
+    "_kitchen_v_version_array": [
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "id": 5,
+        "text": "arr-2-0",
+        "number": 20,
+        "rel_id": null,
+        "_uuid": "<oid:20>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 3,
+        "id": 6,
+        "text": "arr-2-1",
+        "number": 21,
+        "rel_id": null,
+        "_uuid": "<oid:23>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "id": 12,
+        "text": "arr-2-1",
+        "number": 21,
+        "rel_id": null,
+        "_uuid": "<oid:23>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 8,
+        "id": 13,
+        "text": "arr-2-0",
+        "number": 20,
+        "rel_id": null,
+        "_uuid": "<oid:20>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 11,
+        "id": 17,
+        "text": "arr-2-1",
+        "number": 21,
+        "rel_id": null,
+        "_uuid": "<oid:23>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 11,
+        "id": 18,
+        "text": "arr-2-0",
+        "number": 20,
+        "rel_id": null,
+        "_uuid": "<oid:20>"
+      }
+    ],
+    "_kitchen_v_version_array_locales": [
+      {
+        "localized_text": "arr-loc-2",
+        "id": 9,
+        "_locale": "en",
+        "_parent_id": 5
+      },
+      {
+        "localized_text": null,
+        "id": 10,
+        "_locale": "en",
+        "_parent_id": 6
+      },
+      {
+        "localized_text": null,
+        "id": 11,
+        "_locale": "es",
+        "_parent_id": 6
+      },
+      {
+        "localized_text": null,
+        "id": 12,
+        "_locale": "de",
+        "_parent_id": 6
+      },
+      {
+        "localized_text": null,
+        "id": 24,
+        "_locale": "en",
+        "_parent_id": 12
+      },
+      {
+        "localized_text": null,
+        "id": 25,
+        "_locale": "es",
+        "_parent_id": 12
+      },
+      {
+        "localized_text": null,
+        "id": 26,
+        "_locale": "de",
+        "_parent_id": 12
+      },
+      {
+        "localized_text": "arr-loc-2",
+        "id": 27,
+        "_locale": "en",
+        "_parent_id": 13
+      },
+      {
+        "localized_text": null,
+        "id": 35,
+        "_locale": "en",
+        "_parent_id": 17
+      },
+      {
+        "localized_text": null,
+        "id": 36,
+        "_locale": "es",
+        "_parent_id": 17
+      },
+      {
+        "localized_text": null,
+        "id": 37,
+        "_locale": "de",
+        "_parent_id": 17
+      },
+      {
+        "localized_text": "arr-loc-2",
+        "id": 38,
+        "_locale": "en",
+        "_parent_id": 18
+      }
+    ],
+    "_kitchen_v_version_array_nested_array": [
+      {
+        "_order": 1,
+        "_parent_id": 5,
+        "id": 5,
+        "text": "nested-2-a",
+        "_uuid": "<oid:21>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 5,
+        "id": 6,
+        "text": "nested-2-b",
+        "_uuid": "<oid:22>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 13,
+        "id": 12,
+        "text": "nested-2-a",
+        "_uuid": "<oid:21>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 13,
+        "id": 13,
+        "text": "nested-2-b",
+        "_uuid": "<oid:22>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 18,
+        "id": 17,
+        "text": "nested-2-a",
+        "_uuid": "<oid:21>"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 18,
+        "id": 18,
+        "text": "nested-2-b",
+        "_uuid": "<oid:22>"
+      }
+    ],
+    "_kitchen_v_version_group_group_array": [
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "id": 3,
+        "text": "garr-2",
+        "_uuid": "<oid:19>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 8,
+        "id": 7,
+        "text": "garr-2",
+        "_uuid": "<oid:19>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 11,
+        "id": 10,
+        "text": "garr-2",
+        "_uuid": "<oid:19>"
+      }
+    ],
+    "_kitchen_v_version_select_many": [
+      {
+        "order": 1,
+        "parent_id": 3,
+        "value": "blue",
+        "id": 4
+      },
+      {
+        "order": 1,
+        "parent_id": 8,
+        "value": "blue",
+        "id": 8
+      },
+      {
+        "order": 1,
+        "parent_id": 11,
+        "value": "blue",
+        "id": 10
+      }
+    ],
+    "_localized_global_v": [
+      {
+        "id": 1,
+        "version_updated_at": "2025-01-01T00:08:02.000Z",
+        "version_created_at": "2025-01-01T00:08:02.000Z",
+        "created_at": "2025-01-01T00:08:02.000Z",
+        "updated_at": "2025-01-01T00:08:02.000Z"
+      },
+      {
+        "id": 2,
+        "version_updated_at": "2025-01-01T00:08:03.000Z",
+        "version_created_at": "2025-01-01T00:08:02.000Z",
+        "created_at": "2025-01-01T00:08:03.000Z",
+        "updated_at": "2025-01-01T00:08:03.000Z"
+      }
+    ],
+    "_localized_global_v_locales": [
+      {
+        "version_title": "en",
+        "id": 1,
+        "_locale": "en",
+        "_parent_id": 1
+      },
+      {
+        "version_title": "en",
+        "id": 2,
+        "_locale": "en",
+        "_parent_id": 2
+      },
+      {
+        "version_title": "es",
+        "id": 3,
+        "_locale": "es",
+        "_parent_id": 2
+      }
+    ],
+    "_localized_global_v_version_items": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": 1,
+        "text": "en-item",
+        "_uuid": "<oid:94>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_locale": "en",
+        "id": 2,
+        "text": "en-item",
+        "_uuid": "<oid:94>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_locale": "es",
+        "id": 3,
+        "text": "es-item",
+        "_uuid": "<oid:95>"
+      }
+    ],
+    "_media_v": [
+      {
+        "id": 1,
+        "parent_id": 1,
+        "version_alt": "alt-0",
+        "version_updated_at": "2025-01-01T00:00:10.000Z",
+        "version_created_at": "2025-01-01T00:00:10.000Z",
+        "version_url": "/api/media/file/file-0-original.txt",
+        "version_thumbnail_u_r_l": null,
+        "version_filename": "file-0-original.txt",
+        "version_mime_type": "text/plain",
+        "version_filesize": 15,
+        "version_width": null,
+        "version_height": null,
+        "version_original_filename": "file-0-original.txt",
+        "version_original_url": "/api/media/file/file-0-original.txt",
+        "version_original_mime_type": "text/plain",
+        "version_original_filesize": 15,
+        "version_original_width": null,
+        "version_original_height": null,
+        "version_original_prefix": null,
+        "version_original__objectkey": null,
+        "version_focal_x": null,
+        "version_focal_y": null,
+        "created_at": "2025-01-01T00:00:10.000Z",
+        "updated_at": "2025-01-01T00:00:10.000Z"
+      },
+      {
+        "id": 2,
+        "parent_id": 2,
+        "version_alt": "alt-1",
+        "version_updated_at": "2025-01-01T00:00:11.000Z",
+        "version_created_at": "2025-01-01T00:00:11.000Z",
+        "version_url": "/api/media/file/file-1-original.txt",
+        "version_thumbnail_u_r_l": null,
+        "version_filename": "file-1-original.txt",
+        "version_mime_type": "text/plain",
+        "version_filesize": 15,
+        "version_width": null,
+        "version_height": null,
+        "version_original_filename": "file-1-original.txt",
+        "version_original_url": "/api/media/file/file-1-original.txt",
+        "version_original_mime_type": "text/plain",
+        "version_original_filesize": 15,
+        "version_original_width": null,
+        "version_original_height": null,
+        "version_original_prefix": null,
+        "version_original__objectkey": null,
+        "version_focal_x": null,
+        "version_focal_y": null,
+        "created_at": "2025-01-01T00:00:11.000Z",
+        "updated_at": "2025-01-01T00:00:11.000Z"
+      }
+    ],
+    "_site_v": [
+      {
+        "id": 1,
+        "version_title": "site-1",
+        "version_number": 1,
+        "version_rel_id": 2,
+        "version__status": "draft",
+        "version_updated_at": "2025-01-01T00:07:59.000Z",
+        "version_created_at": "2025-01-01T00:07:59.000Z",
+        "created_at": "2025-01-01T00:07:59.000Z",
+        "updated_at": "2025-01-01T00:07:59.000Z",
+        "published_locale": null,
+        "latest": 0
+      },
+      {
+        "id": 2,
+        "version_title": "site-draft",
+        "version_number": 1,
+        "version_rel_id": 2,
+        "version__status": "draft",
+        "version_updated_at": "2025-01-01T00:08:00.000Z",
+        "version_created_at": "2025-01-01T00:07:59.000Z",
+        "created_at": "2025-01-01T00:08:00.000Z",
+        "updated_at": "2025-01-01T00:08:00.000Z",
+        "published_locale": null,
+        "latest": 0
+      },
+      {
+        "id": 3,
+        "version_title": "site-1",
+        "version_number": 1,
+        "version_rel_id": 2,
+        "version__status": "draft",
+        "version_updated_at": "2025-01-01T00:08:01.000Z",
+        "version_created_at": "2025-01-01T00:07:59.000Z",
+        "created_at": "2025-01-01T00:07:59.000Z",
+        "updated_at": "2025-01-01T00:08:01.000Z",
+        "published_locale": null,
+        "latest": 1
+      }
+    ],
+    "_site_v_version_array": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "id": 1,
+        "text": "g1",
+        "_uuid": "<oid:93>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "id": 2,
+        "text": "g1",
+        "_uuid": "<oid:93>"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "id": 3,
+        "text": "g1",
+        "_uuid": "<oid:93>"
+      }
+    ],
+    "_targets_v": [
+      {
+        "id": 1,
+        "parent_id": 1,
+        "version_title": "target-0",
+        "version_number": 0,
+        "version_updated_at": "2025-01-01T00:00:03.000Z",
+        "version_created_at": "2025-01-01T00:00:03.000Z",
+        "created_at": "2025-01-01T00:00:03.000Z",
+        "updated_at": "2025-01-01T00:00:03.000Z"
+      },
+      {
+        "id": 2,
+        "parent_id": 1,
+        "version_title": "target-0",
+        "version_number": 0,
+        "version_updated_at": "2025-01-01T00:00:04.000Z",
+        "version_created_at": "2025-01-01T00:00:03.000Z",
+        "created_at": "2025-01-01T00:00:04.000Z",
+        "updated_at": "2025-01-01T00:00:04.000Z"
+      },
+      {
+        "id": 3,
+        "parent_id": 2,
+        "version_title": "target-1",
+        "version_number": 3,
+        "version_updated_at": "2025-01-01T00:00:05.000Z",
+        "version_created_at": "2025-01-01T00:00:05.000Z",
+        "created_at": "2025-01-01T00:00:05.000Z",
+        "updated_at": "2025-01-01T00:00:05.000Z"
+      },
+      {
+        "id": 4,
+        "parent_id": 2,
+        "version_title": "target-1",
+        "version_number": 3,
+        "version_updated_at": "2025-01-01T00:00:06.000Z",
+        "version_created_at": "2025-01-01T00:00:05.000Z",
+        "created_at": "2025-01-01T00:00:06.000Z",
+        "updated_at": "2025-01-01T00:00:06.000Z"
+      }
+    ],
+    "_targets_v_locales": [
+      {
+        "version_localized_title": "target-en-0",
+        "id": 1,
+        "_locale": "en",
+        "_parent_id": 1
+      },
+      {
+        "version_localized_title": null,
+        "id": 2,
+        "_locale": "de",
+        "_parent_id": 2
+      },
+      {
+        "version_localized_title": "target-en-0",
+        "id": 3,
+        "_locale": "en",
+        "_parent_id": 2
+      },
+      {
+        "version_localized_title": "target-es-0",
+        "id": 4,
+        "_locale": "es",
+        "_parent_id": 2
+      },
+      {
+        "version_localized_title": "target-en-1",
+        "id": 5,
+        "_locale": "en",
+        "_parent_id": 3
+      },
+      {
+        "version_localized_title": null,
+        "id": 6,
+        "_locale": "de",
+        "_parent_id": 4
+      },
+      {
+        "version_localized_title": "target-en-1",
+        "id": 7,
+        "_locale": "en",
+        "_parent_id": 4
+      },
+      {
+        "version_localized_title": "target-es-1",
+        "id": 8,
+        "_locale": "es",
+        "_parent_id": 4
+      }
+    ],
+    "_versioned_v": [
+      {
+        "id": 1,
+        "parent_id": 1,
+        "version_title": "v1",
+        "version_updated_at": "2025-01-01T00:07:55.000Z",
+        "version_created_at": "2025-01-01T00:07:55.000Z",
+        "created_at": "2025-01-01T00:07:55.000Z",
+        "updated_at": "2025-01-01T00:07:55.000Z"
+      },
+      {
+        "id": 2,
+        "parent_id": 1,
+        "version_title": "v2",
+        "version_updated_at": "2025-01-01T00:07:56.000Z",
+        "version_created_at": "2025-01-01T00:07:55.000Z",
+        "created_at": "2025-01-01T00:07:56.000Z",
+        "updated_at": "2025-01-01T00:07:56.000Z"
+      },
+      {
+        "id": 3,
+        "parent_id": 1,
+        "version_title": "v2",
+        "version_updated_at": "2025-01-01T00:07:57.000Z",
+        "version_created_at": "2025-01-01T00:07:55.000Z",
+        "created_at": "2025-01-01T00:07:57.000Z",
+        "updated_at": "2025-01-01T00:07:57.000Z"
+      }
+    ],
+    "_versioned_v_locales": [
+      {
+        "version_localized_title": "en",
+        "id": 1,
+        "_locale": "en",
+        "_parent_id": 1
+      },
+      {
+        "version_localized_title": "en",
+        "id": 2,
+        "_locale": "en",
+        "_parent_id": 2
+      },
+      {
+        "version_localized_title": "en",
+        "id": 3,
+        "_locale": "en",
+        "_parent_id": 3
+      },
+      {
+        "version_localized_title": "es",
+        "id": 4,
+        "_locale": "es",
+        "_parent_id": 3
+      }
+    ],
+    "custom_ids": [
+      {
+        "id": "b-key",
+        "title": "updated b",
+        "updated_at": "2025-01-01T00:07:31.000Z",
+        "created_at": "2025-01-01T00:00:27.000Z"
+      },
+      {
+        "id": "a-key",
+        "title": "title a-key",
+        "updated_at": "2025-01-01T00:00:28.000Z",
+        "created_at": "2025-01-01T00:00:28.000Z"
+      }
+    ],
+    "kitchen": [
+      {
+        "id": 3,
+        "text": "gamma",
+        "textarea": "line one 2\nline two",
+        "email": "user2@example.com",
+        "code": "const x = 2",
+        "json": "{\"flag\":true,\"list\":[2,3],\"name\":\"json-2\",\"nested\":{\"deep\":\"d2\"}}",
+        "number": 5,
+        "checkbox": 1,
+        "date": "2024-03-12T00:00:00.000Z",
+        "point": "{\"type\":\"Point\",\"coordinates\":[2,-2]}",
+        "radio": "c",
+        "select": "three",
+        "rel_id": null,
+        "upload_id": 1,
+        "rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 2\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "group_text": "group-2",
+        "group_number": 98,
+        "group_nested_group_text": "ng-2",
+        "tab_named_text": "tab-2",
+        "tab_named_number": 4,
+        "tab_text": "bulk",
+        "row_text": "row-2",
+        "collapsible_text": "collapsible-2",
+        "updated_at": "2025-01-01T00:07:27.000Z",
+        "created_at": "2025-01-01T00:00:15.000Z"
+      },
+      {
+        "id": 6,
+        "text": "sparse",
+        "textarea": null,
+        "email": null,
+        "code": null,
+        "json": null,
+        "number": null,
+        "checkbox": null,
+        "date": null,
+        "point": null,
+        "radio": null,
+        "select": null,
+        "rel_id": null,
+        "upload_id": null,
+        "rich_text": null,
+        "group_text": null,
+        "group_number": null,
+        "group_nested_group_text": null,
+        "tab_named_text": null,
+        "tab_named_number": null,
+        "tab_text": null,
+        "row_text": null,
+        "collapsible_text": null,
+        "updated_at": "2025-01-01T00:00:18.000Z",
+        "created_at": "2025-01-01T00:00:18.000Z"
+      }
+    ],
+    "kitchen_array": [
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "id": "<oid:23>",
+        "text": "arr-2-1",
+        "number": 21,
+        "rel_id": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 3,
+        "id": "<oid:20>",
+        "text": "arr-2-0",
+        "number": 20,
+        "rel_id": null
+      }
+    ],
+    "kitchen_array_locales": [
+      {
+        "localized_text": "arr-loc-2",
+        "id": 6,
+        "_locale": "en",
+        "_parent_id": "<oid:20>"
+      }
+    ],
+    "kitchen_array_nested_array": [
+      {
+        "_order": 1,
+        "_parent_id": "<oid:20>",
+        "id": "<oid:21>",
+        "text": "nested-2-a"
+      },
+      {
+        "_order": 2,
+        "_parent_id": "<oid:20>",
+        "id": "<oid:22>",
+        "text": "nested-2-b"
+      }
+    ],
+    "kitchen_blocks_block_a": [
+      {
+        "_order": 2,
+        "_parent_id": 3,
+        "_path": "blocks",
+        "id": "<oid:24>",
+        "text": "blockA-2",
+        "number": 2,
+        "block_name": null
+      }
+    ],
+    "kitchen_blocks_block_b": [
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_path": "blocks",
+        "id": "<oid:26>",
+        "text": "blockB-2",
+        "select": "z",
+        "block_name": null
+      }
+    ],
+    "kitchen_blocks_block_b_array": [
+      {
+        "_order": 1,
+        "_parent_id": "<oid:26>",
+        "id": "<oid:27>",
+        "text": "barr-2"
+      }
+    ],
+    "kitchen_blocks_block_c": [
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_path": "blocks.1.nestedBlocks",
+        "id": "<oid:25>",
+        "text": "deep-2",
+        "block_name": null
+      }
+    ],
+    "kitchen_group_group_array": [
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "id": "<oid:19>",
+        "text": "garr-2"
+      }
+    ],
+    "kitchen_locales": [
+      {
+        "group_localized_text": "group-loc-2",
+        "id": 7,
+        "_locale": "en",
+        "_parent_id": 3
+      }
+    ],
+    "kitchen_localized": [
+      {
+        "id": 1,
+        "updated_at": "2025-01-01T00:00:21.000Z",
+        "created_at": "2025-01-01T00:00:20.000Z"
+      },
+      {
+        "id": 2,
+        "updated_at": "2025-01-01T00:07:29.000Z",
+        "created_at": "2025-01-01T00:00:22.000Z"
+      },
+      {
+        "id": 3,
+        "updated_at": "2025-01-01T00:00:25.000Z",
+        "created_at": "2025-01-01T00:00:24.000Z"
+      }
+    ],
+    "kitchen_localized_array": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": "<oid:49>",
+        "text": "arr-0-0",
+        "number": 0,
+        "rel_id": 1,
+        "localized_text": "arr-loc-0"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": "<oid:50>",
+        "text": "arr-0-1",
+        "number": 1,
+        "rel_id": null,
+        "localized_text": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_locale": "es",
+        "id": "<oid:55>",
+        "text": "es-arr-0",
+        "number": 0,
+        "rel_id": null,
+        "localized_text": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_locale": "en",
+        "id": "<oid:71>",
+        "text": "arr-2-0",
+        "number": 20,
+        "rel_id": null,
+        "localized_text": "arr-loc-2"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 3,
+        "_locale": "en",
+        "id": "<oid:72>",
+        "text": "arr-2-1",
+        "number": 21,
+        "rel_id": null,
+        "localized_text": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_locale": "es",
+        "id": "<oid:77>",
+        "text": "es-arr-2",
+        "number": 2,
+        "rel_id": null,
+        "localized_text": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_locale": "en",
+        "id": "<oid:60>",
+        "text": "arr-1-0",
+        "number": 10,
+        "rel_id": 2,
+        "localized_text": "arr-loc-1"
+      },
+      {
+        "_order": 2,
+        "_parent_id": 2,
+        "_locale": "en",
+        "id": "<oid:61>",
+        "text": "arr-1-1",
+        "number": 11,
+        "rel_id": null,
+        "localized_text": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_locale": "es",
+        "id": "<oid:66>",
+        "text": "es-arr-1",
+        "number": 1,
+        "rel_id": null,
+        "localized_text": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_locale": "de",
+        "id": "<oid:82>",
+        "text": "de-row",
+        "number": null,
+        "rel_id": null,
+        "localized_text": null
+      }
+    ],
+    "kitchen_localized_array_nested_array": [
+      {
+        "_order": 1,
+        "_parent_id": "<oid:49>",
+        "_locale": "en",
+        "id": "<oid:47>",
+        "text": "nested-0-a"
+      },
+      {
+        "_order": 2,
+        "_parent_id": "<oid:49>",
+        "_locale": "en",
+        "id": "<oid:48>",
+        "text": "nested-0-b"
+      },
+      {
+        "_order": 1,
+        "_parent_id": "<oid:71>",
+        "_locale": "en",
+        "id": "<oid:69>",
+        "text": "nested-2-a"
+      },
+      {
+        "_order": 2,
+        "_parent_id": "<oid:71>",
+        "_locale": "en",
+        "id": "<oid:70>",
+        "text": "nested-2-b"
+      },
+      {
+        "_order": 1,
+        "_parent_id": "<oid:60>",
+        "_locale": "en",
+        "id": "<oid:58>",
+        "text": "nested-1-a"
+      },
+      {
+        "_order": 2,
+        "_parent_id": "<oid:60>",
+        "_locale": "en",
+        "id": "<oid:59>",
+        "text": "nested-1-b"
+      }
+    ],
+    "kitchen_localized_blocks_block_a": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_path": "blocks",
+        "_locale": "en",
+        "id": "<oid:51>",
+        "text": "blockA-0",
+        "number": 0,
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_path": "blocks",
+        "_locale": "es",
+        "id": "<oid:56>",
+        "text": "es-block-0",
+        "number": null,
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_path": "blocks",
+        "_locale": "en",
+        "id": "<oid:73>",
+        "text": "blockA-2",
+        "number": 2,
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_path": "blocks",
+        "_locale": "es",
+        "id": "<oid:78>",
+        "text": "es-block-2",
+        "number": null,
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_path": "blocks",
+        "_locale": "en",
+        "id": "<oid:62>",
+        "text": "blockA-1",
+        "number": 1,
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_path": "blocks",
+        "_locale": "es",
+        "id": "<oid:67>",
+        "text": "es-block-1",
+        "number": null,
+        "block_name": null
+      }
+    ],
+    "kitchen_localized_blocks_block_b": [
+      {
+        "_order": 2,
+        "_parent_id": 1,
+        "_path": "blocks",
+        "_locale": "en",
+        "id": "<oid:53>",
+        "text": "blockB-0",
+        "select": "x",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 3,
+        "_path": "blocks",
+        "_locale": "en",
+        "id": "<oid:75>",
+        "text": "blockB-2",
+        "select": "z",
+        "block_name": null
+      },
+      {
+        "_order": 2,
+        "_parent_id": 2,
+        "_path": "blocks",
+        "_locale": "en",
+        "id": "<oid:64>",
+        "text": "blockB-1",
+        "select": "y",
+        "block_name": null
+      }
+    ],
+    "kitchen_localized_blocks_block_b_array": [
+      {
+        "_order": 1,
+        "_parent_id": "<oid:53>",
+        "_locale": "en",
+        "id": "<oid:54>",
+        "text": "barr-0"
+      },
+      {
+        "_order": 1,
+        "_parent_id": "<oid:75>",
+        "_locale": "en",
+        "id": "<oid:76>",
+        "text": "barr-2"
+      },
+      {
+        "_order": 1,
+        "_parent_id": "<oid:64>",
+        "_locale": "en",
+        "id": "<oid:65>",
+        "text": "barr-1"
+      }
+    ],
+    "kitchen_localized_blocks_block_c": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_path": "blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": "<oid:52>",
+        "text": "deep-0",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_path": "blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": "<oid:74>",
+        "text": "deep-2",
+        "block_name": null
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_path": "blocks.0.nestedBlocks",
+        "_locale": "en",
+        "id": "<oid:63>",
+        "text": "deep-1",
+        "block_name": null
+      }
+    ],
+    "kitchen_localized_group_group_array": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": "<oid:46>",
+        "text": "garr-0"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 3,
+        "_locale": "en",
+        "id": "<oid:68>",
+        "text": "garr-2"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 2,
+        "_locale": "en",
+        "id": "<oid:57>",
+        "text": "garr-1"
+      }
+    ],
+    "kitchen_localized_locales": [
+      {
+        "text": "alpha",
+        "textarea": "line one 0\nline two",
+        "email": "user0@example.com",
+        "code": "const x = 0",
+        "json": "{\"flag\":true,\"list\":[0,1],\"name\":\"json-0\",\"nested\":{\"deep\":\"d0\"}}",
+        "number": 5,
+        "checkbox": 1,
+        "date": "2024-01-10T00:00:00.000Z",
+        "point": "{\"type\":\"Point\",\"coordinates\":[0,0]}",
+        "radio": "a",
+        "select": "one",
+        "rel_id": 1,
+        "upload_id": 1,
+        "rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 0\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "group_text": "group-0",
+        "group_number": 100,
+        "group_localized_text": "group-loc-0",
+        "group_nested_group_text": "ng-0",
+        "tab_named_text": "tab-0",
+        "tab_named_number": 0,
+        "tab_text": "tabText-0",
+        "row_text": "row-0",
+        "collapsible_text": "collapsible-0",
+        "id": 1,
+        "_locale": "en",
+        "_parent_id": 1
+      },
+      {
+        "text": "es-text-0",
+        "textarea": null,
+        "email": null,
+        "code": null,
+        "json": null,
+        "number": 10,
+        "checkbox": null,
+        "date": null,
+        "point": null,
+        "radio": null,
+        "select": "three",
+        "rel_id": null,
+        "upload_id": null,
+        "rich_text": null,
+        "group_text": "es-group-0",
+        "group_number": null,
+        "group_localized_text": null,
+        "group_nested_group_text": null,
+        "tab_named_text": "es-tab-0",
+        "tab_named_number": null,
+        "tab_text": null,
+        "row_text": null,
+        "collapsible_text": null,
+        "id": 2,
+        "_locale": "es",
+        "_parent_id": 1
+      },
+      {
+        "text": "gamma",
+        "textarea": "line one 2\nline two",
+        "email": "user2@example.com",
+        "code": "const x = 2",
+        "json": "{\"flag\":true,\"list\":[2,3],\"name\":\"json-2\",\"nested\":{\"deep\":\"d2\"}}",
+        "number": 5,
+        "checkbox": 1,
+        "date": "2024-03-12T00:00:00.000Z",
+        "point": "{\"type\":\"Point\",\"coordinates\":[2,-2]}",
+        "radio": "c",
+        "select": "three",
+        "rel_id": null,
+        "upload_id": 1,
+        "rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 2\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "group_text": "group-2",
+        "group_number": 98,
+        "group_localized_text": "group-loc-2",
+        "group_nested_group_text": "ng-2",
+        "tab_named_text": "tab-2",
+        "tab_named_number": 4,
+        "tab_text": "tabText-2",
+        "row_text": "row-2",
+        "collapsible_text": "collapsible-2",
+        "id": 5,
+        "_locale": "en",
+        "_parent_id": 3
+      },
+      {
+        "text": "es-text-2",
+        "textarea": null,
+        "email": null,
+        "code": null,
+        "json": null,
+        "number": 8,
+        "checkbox": null,
+        "date": null,
+        "point": null,
+        "radio": null,
+        "select": "three",
+        "rel_id": null,
+        "upload_id": null,
+        "rich_text": null,
+        "group_text": "es-group-2",
+        "group_number": null,
+        "group_localized_text": null,
+        "group_nested_group_text": null,
+        "tab_named_text": "es-tab-2",
+        "tab_named_number": null,
+        "tab_text": null,
+        "row_text": null,
+        "collapsible_text": null,
+        "id": 6,
+        "_locale": "es",
+        "_parent_id": 3
+      },
+      {
+        "text": "beta",
+        "textarea": "line one 1\nline two",
+        "email": "user1@example.com",
+        "code": "const x = 1",
+        "json": "{\"flag\":false,\"list\":[1,2],\"name\":\"json-1\",\"nested\":{\"deep\":\"d1\"}}",
+        "number": 3,
+        "checkbox": 0,
+        "date": "2024-02-11T00:00:00.000Z",
+        "point": "{\"type\":\"Point\",\"coordinates\":[1,-1]}",
+        "radio": "b",
+        "select": "two",
+        "rel_id": 2,
+        "upload_id": 2,
+        "rich_text": "{\"root\":{\"type\":\"root\",\"children\":[{\"type\":\"paragraph\",\"children\":[{\"type\":\"text\",\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"hello world 1\",\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"textFormat\":0,\"version\":1}],\"direction\":\"ltr\",\"format\":\"\",\"indent\":0,\"version\":1}}",
+        "group_text": "group-1",
+        "group_number": 99,
+        "group_localized_text": "group-loc-1",
+        "group_nested_group_text": "ng-1",
+        "tab_named_text": "tab-1",
+        "tab_named_number": 2,
+        "tab_text": "tabText-1",
+        "row_text": "row-1",
+        "collapsible_text": "collapsible-1",
+        "id": 7,
+        "_locale": "en",
+        "_parent_id": 2
+      },
+      {
+        "text": "es-updated",
+        "textarea": null,
+        "email": null,
+        "code": null,
+        "json": null,
+        "number": 9,
+        "checkbox": null,
+        "date": null,
+        "point": null,
+        "radio": null,
+        "select": "three",
+        "rel_id": null,
+        "upload_id": null,
+        "rich_text": null,
+        "group_text": "es-group-new",
+        "group_number": null,
+        "group_localized_text": null,
+        "group_nested_group_text": null,
+        "tab_named_text": "es-tab-1",
+        "tab_named_number": null,
+        "tab_text": null,
+        "row_text": null,
+        "collapsible_text": null,
+        "id": 8,
+        "_locale": "es",
+        "_parent_id": 2
+      },
+      {
+        "text": "de-text",
+        "textarea": null,
+        "email": null,
+        "code": null,
+        "json": null,
+        "number": 1,
+        "checkbox": null,
+        "date": null,
+        "point": null,
+        "radio": null,
+        "select": null,
+        "rel_id": null,
+        "upload_id": null,
+        "rich_text": null,
+        "group_text": null,
+        "group_number": null,
+        "group_localized_text": null,
+        "group_nested_group_text": null,
+        "tab_named_text": null,
+        "tab_named_number": null,
+        "tab_text": null,
+        "row_text": null,
+        "collapsible_text": null,
+        "id": 9,
+        "_locale": "de",
+        "_parent_id": 2
+      }
+    ],
+    "kitchen_localized_numbers": [
+      {
+        "id": 1,
+        "number": 0,
+        "order": 1,
+        "parent_id": 1,
+        "path": "numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 2,
+        "number": 1,
+        "order": 2,
+        "parent_id": 1,
+        "path": "numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 3,
+        "number": 42,
+        "order": 3,
+        "parent_id": 1,
+        "path": "numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 7,
+        "number": 2,
+        "order": 1,
+        "parent_id": 3,
+        "path": "numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 8,
+        "number": 3,
+        "order": 2,
+        "parent_id": 3,
+        "path": "numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 9,
+        "number": 42,
+        "order": 3,
+        "parent_id": 3,
+        "path": "numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 10,
+        "number": 1,
+        "order": 1,
+        "parent_id": 2,
+        "path": "numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 11,
+        "number": 2,
+        "order": 2,
+        "parent_id": 2,
+        "path": "numberMany",
+        "locale": "en"
+      },
+      {
+        "id": 12,
+        "number": 42,
+        "order": 3,
+        "parent_id": 2,
+        "path": "numberMany",
+        "locale": "en"
+      }
+    ],
+    "kitchen_localized_rels": [
+      {
+        "id": 1,
+        "order": 1,
+        "parent_id": 1,
+        "path": "relMany",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 2,
+        "order": 2,
+        "parent_id": 1,
+        "path": "relMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 3,
+        "order": null,
+        "parent_id": 1,
+        "path": "poly",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 4,
+        "order": 1,
+        "parent_id": 1,
+        "path": "polyMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 5,
+        "order": 2,
+        "parent_id": 1,
+        "path": "polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 6,
+        "order": 1,
+        "parent_id": 1,
+        "path": "uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 7,
+        "order": 2,
+        "parent_id": 1,
+        "path": "uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 16,
+        "order": 2,
+        "parent_id": 3,
+        "path": "relMany",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 18,
+        "order": 1,
+        "parent_id": 3,
+        "path": "polyMany",
+        "locale": "en",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 19,
+        "order": 2,
+        "parent_id": 3,
+        "path": "polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 20,
+        "order": 1,
+        "parent_id": 3,
+        "path": "uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 21,
+        "order": 2,
+        "parent_id": 3,
+        "path": "uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 22,
+        "order": 1,
+        "parent_id": 2,
+        "path": "relMany",
+        "locale": "en",
+        "targets_id": 2,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 24,
+        "order": null,
+        "parent_id": 2,
+        "path": "poly",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 26,
+        "order": 2,
+        "parent_id": 2,
+        "path": "polyMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 27,
+        "order": 1,
+        "parent_id": 2,
+        "path": "uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      },
+      {
+        "id": 28,
+        "order": 2,
+        "parent_id": 2,
+        "path": "uploadMany",
+        "locale": "en",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      }
+    ],
+    "kitchen_localized_select_many": [
+      {
+        "order": 1,
+        "parent_id": 1,
+        "value": "red",
+        "locale": "en",
+        "id": 2
+      },
+      {
+        "order": 1,
+        "parent_id": 1,
+        "value": "blue",
+        "locale": "es",
+        "id": 3
+      },
+      {
+        "order": 1,
+        "parent_id": 3,
+        "value": "blue",
+        "locale": "en",
+        "id": 10
+      },
+      {
+        "order": 1,
+        "parent_id": 3,
+        "value": "blue",
+        "locale": "es",
+        "id": 11
+      },
+      {
+        "order": 1,
+        "parent_id": 2,
+        "value": "red",
+        "locale": "en",
+        "id": 15
+      },
+      {
+        "order": 2,
+        "parent_id": 2,
+        "value": "green",
+        "locale": "en",
+        "id": 16
+      },
+      {
+        "order": 1,
+        "parent_id": 2,
+        "value": "blue",
+        "locale": "es",
+        "id": 17
+      }
+    ],
+    "kitchen_localized_texts": [
+      {
+        "id": 1,
+        "order": 1,
+        "parent_id": 1,
+        "path": "textMany",
+        "text": "tm-0",
+        "locale": "en"
+      },
+      {
+        "id": 2,
+        "order": 2,
+        "parent_id": 1,
+        "path": "textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 3,
+        "order": 1,
+        "parent_id": 1,
+        "path": "textMany",
+        "text": "es-0",
+        "locale": "es"
+      },
+      {
+        "id": 7,
+        "order": 1,
+        "parent_id": 3,
+        "path": "textMany",
+        "text": "tm-2",
+        "locale": "en"
+      },
+      {
+        "id": 8,
+        "order": 2,
+        "parent_id": 3,
+        "path": "textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 9,
+        "order": 1,
+        "parent_id": 3,
+        "path": "textMany",
+        "text": "es-2",
+        "locale": "es"
+      },
+      {
+        "id": 10,
+        "order": 1,
+        "parent_id": 2,
+        "path": "textMany",
+        "text": "tm-1",
+        "locale": "en"
+      },
+      {
+        "id": 11,
+        "order": 2,
+        "parent_id": 2,
+        "path": "textMany",
+        "text": "shared",
+        "locale": "en"
+      },
+      {
+        "id": 12,
+        "order": 1,
+        "parent_id": 2,
+        "path": "textMany",
+        "text": "es-1",
+        "locale": "es"
+      }
+    ],
+    "kitchen_numbers": [
+      {
+        "id": 24,
+        "number": 2,
+        "order": 1,
+        "parent_id": 3,
+        "path": "numberMany"
+      },
+      {
+        "id": 25,
+        "number": 3,
+        "order": 2,
+        "parent_id": 3,
+        "path": "numberMany"
+      },
+      {
+        "id": 26,
+        "number": 42,
+        "order": 3,
+        "parent_id": 3,
+        "path": "numberMany"
+      }
+    ],
+    "kitchen_rels": [
+      {
+        "id": 42,
+        "order": 2,
+        "parent_id": 3,
+        "path": "relMany",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 44,
+        "order": 1,
+        "parent_id": 3,
+        "path": "polyMany",
+        "targets_id": 1,
+        "media_id": null,
+        "users_id": null
+      },
+      {
+        "id": 45,
+        "order": 2,
+        "parent_id": 3,
+        "path": "polyMany",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 46,
+        "order": 1,
+        "parent_id": 3,
+        "path": "uploadMany",
+        "targets_id": null,
+        "media_id": 1,
+        "users_id": null
+      },
+      {
+        "id": 47,
+        "order": 2,
+        "parent_id": 3,
+        "path": "uploadMany",
+        "targets_id": null,
+        "media_id": 2,
+        "users_id": null
+      }
+    ],
+    "kitchen_select_many": [
+      {
+        "order": 1,
+        "parent_id": 3,
+        "value": "blue",
+        "id": 10
+      }
+    ],
+    "kitchen_texts": [
+      {
+        "id": 11,
+        "order": 1,
+        "parent_id": 3,
+        "path": "textMany",
+        "text": "tm-2"
+      },
+      {
+        "id": 12,
+        "order": 2,
+        "parent_id": 3,
+        "path": "textMany",
+        "text": "shared"
+      }
+    ],
+    "localized_global": [
+      {
+        "id": 1,
+        "updated_at": "2025-01-01T00:08:03.000Z",
+        "created_at": "2025-01-01T00:08:02.000Z"
+      }
+    ],
+    "localized_global_items": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_locale": "en",
+        "id": "<oid:94>",
+        "text": "en-item"
+      },
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "_locale": "es",
+        "id": "<oid:95>",
+        "text": "es-item"
+      }
+    ],
+    "localized_global_locales": [
+      {
+        "title": "en",
+        "id": 1,
+        "_locale": "en",
+        "_parent_id": 1
+      },
+      {
+        "title": "es",
+        "id": 2,
+        "_locale": "es",
+        "_parent_id": 1
+      }
+    ],
+    "media": [
+      {
+        "id": 1,
+        "alt": "alt-0",
+        "updated_at": "2025-01-01T00:00:10.000Z",
+        "created_at": "2025-01-01T00:00:10.000Z",
+        "url": "/api/media/file/file-0-original.txt",
+        "thumbnail_u_r_l": null,
+        "filename": "file-0-original.txt",
+        "mime_type": "text/plain",
+        "filesize": 15,
+        "width": null,
+        "height": null,
+        "original_filename": "file-0-original.txt",
+        "original_url": "/api/media/file/file-0-original.txt",
+        "original_mime_type": "text/plain",
+        "original_filesize": 15,
+        "original_width": null,
+        "original_height": null,
+        "original_prefix": null,
+        "original__objectkey": null,
+        "focal_x": null,
+        "focal_y": null
+      },
+      {
+        "id": 2,
+        "alt": "alt-1",
+        "updated_at": "2025-01-01T00:00:11.000Z",
+        "created_at": "2025-01-01T00:00:11.000Z",
+        "url": "/api/media/file/file-1-original.txt",
+        "thumbnail_u_r_l": null,
+        "filename": "file-1-original.txt",
+        "mime_type": "text/plain",
+        "filesize": 15,
+        "width": null,
+        "height": null,
+        "original_filename": "file-1-original.txt",
+        "original_url": "/api/media/file/file-1-original.txt",
+        "original_mime_type": "text/plain",
+        "original_filesize": 15,
+        "original_width": null,
+        "original_height": null,
+        "original_prefix": null,
+        "original__objectkey": null,
+        "focal_x": null,
+        "focal_y": null
+      }
+    ],
+    "site": [
+      {
+        "id": 1,
+        "title": "site-1",
+        "number": 1,
+        "rel_id": 2,
+        "_status": "draft",
+        "updated_at": "2025-01-01T00:08:01.000Z",
+        "created_at": "2025-01-01T00:07:59.000Z"
+      }
+    ],
+    "site_array": [
+      {
+        "_order": 1,
+        "_parent_id": 1,
+        "id": "<oid:93>",
+        "text": "g1"
+      }
+    ],
+    "targets": [
+      {
+        "id": 1,
+        "title": "target-0",
+        "number": 0,
+        "updated_at": "2025-01-01T00:00:04.000Z",
+        "created_at": "2025-01-01T00:00:03.000Z"
+      },
+      {
+        "id": 2,
+        "title": "target-1",
+        "number": 3,
+        "updated_at": "2025-01-01T00:00:06.000Z",
+        "created_at": "2025-01-01T00:00:05.000Z"
+      }
+    ],
+    "targets_locales": [
+      {
+        "localized_title": "target-en-0",
+        "id": 1,
+        "_locale": "en",
+        "_parent_id": 1
+      },
+      {
+        "localized_title": "target-es-0",
+        "id": 2,
+        "_locale": "es",
+        "_parent_id": 1
+      },
+      {
+        "localized_title": null,
+        "id": 3,
+        "_locale": "de",
+        "_parent_id": 1
+      },
+      {
+        "localized_title": "target-en-1",
+        "id": 4,
+        "_locale": "en",
+        "_parent_id": 2
+      },
+      {
+        "localized_title": "target-es-1",
+        "id": 5,
+        "_locale": "es",
+        "_parent_id": 2
+      },
+      {
+        "localized_title": null,
+        "id": 6,
+        "_locale": "de",
+        "_parent_id": 2
+      }
+    ],
+    "versioned": [
+      {
+        "id": 1,
+        "title": "v2",
+        "updated_at": "2025-01-01T00:07:57.000Z",
+        "created_at": "2025-01-01T00:07:55.000Z"
+      }
+    ],
+    "versioned_locales": [
+      {
+        "localized_title": "en",
+        "id": 1,
+        "_locale": "en",
+        "_parent_id": 1
+      },
+      {
+        "localized_title": "es",
+        "id": 2,
+        "_locale": "es",
+        "_parent_id": 1
+      }
+    ]
+  }
+}

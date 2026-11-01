@@ -1,0 +1,16 @@
+[package]
+name = "payload-sql-engine"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+payload-engine = { path = "../payload-engine" }
+payload-sql-find = { path = "../payload-sql-find" }
+payload-sql-query = { path = "../payload-sql-query" }
+payload-sql-read = { path = "../payload-sql-read" }
+payload-sql-upsert = { path = "../payload-sql-upsert" }
+payload-sql-write = { path = "../payload-sql-write" }
+payload-sqlite = { path = "../payload-sqlite" }
+serde_json.workspace = true

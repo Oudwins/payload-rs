@@ -1,0 +1,17 @@
+[package]
+name = "payload-core-hooks-validate"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Port of `packages/payload/src/fields/hooks/beforeValidate/*` on the payload-core-runtime
+# (strategy B: Rust drives the user's JS objects through Node-API on the JS thread).
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-runtime = { path = "../payload-core-runtime" }
+
+[features]
+# Deliberately wrong behaviours selected at runtime by PAYLOAD_BV_MUTANT=<id>, used only to prove
+# the differential suites are sensitive (test/__rs/core-hooks-before-validate/mutants.sh).
+mutants = []

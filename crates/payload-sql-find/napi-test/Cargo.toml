@@ -1,0 +1,27 @@
+# Test-only Node binding for the differential harness in test/__rs/find.
+# Standalone package (own [workspace]) so the main crate stays napi-free.
+# It also compiles crates/payload-node/src/sqlite.rs (see src/lib.rs) so it can
+# serve as PAYLOAD_ENGINE_ADDON for the Rust-backed libsql client.
+[package]
+name = "payload-sql-find-napi-test"
+edition = "2024"
+version = "0.1.0"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "3", features = ["serde-json", "napi9"] }
+napi-derive = "3"
+indexmap = "2"
+payload-engine = { path = "../../payload-engine" }
+payload-sql-find = { path = ".." }
+payload-sql-query = { path = "../../payload-sql-query" }
+payload-sqlite = { path = "../../payload-sqlite" }
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+
+[build-dependencies]
+napi-build = "2"

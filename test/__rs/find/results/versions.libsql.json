@@ -1,0 +1,67 @@
+{
+  "connections": {
+    "ownClient": 7798,
+    "shared": 0,
+    "transaction": 0
+  },
+  "drizzleQueryErrors": 0,
+  "hostCalls": 0,
+  "mismatches": [],
+  "rqb": {
+    "errorsBoth": 0,
+    "errorsBothMessageMismatch": 0,
+    "nonEmptyResults": 3972,
+    "resultMatch": 4609,
+    "resultMatchOnRetry": 0,
+    "resultMismatch": 0,
+    "rustRan": 4609,
+    "sqlMatch": 4609,
+    "sqlMismatch": 0,
+    "total": 4609
+  },
+  "buildFindManyArgs": {
+    "bothError": 0,
+    "bothErrorMessageMismatch": 0,
+    "error": 0,
+    "match": 4808,
+    "mismatch": 0,
+    "rustRan": 4808,
+    "total": 4808
+  },
+  "findMany": {
+    "bothError": 0,
+    "bothErrorMessageMismatch": 0,
+    "error": 0,
+    "match": 3189,
+    "matchOnRetry": 0,
+    "mismatch": 0,
+    "nonEmpty": 2026,
+    "rustRan": 3189,
+    "total": 3189
+  },
+  "bridgeMismatches": [],
+  "adapter": {
+    "blocksAsJSON": false,
+    "idType": "number"
+  },
+  "schemaFromRaw": {
+    "equal": true
+  },
+  "failures": {
+    "harnessErrors": 0,
+    "mismatches": 0,
+    "rqbErrorMismatch": 0,
+    "rqbResultMismatch": 0,
+    "rqbSqlMismatch": 0,
+    "rustNotRun": 0,
+    "buildFindManyArgsMismatch": 0,
+    "buildFindManyArgsError": 0,
+    "buildFindManyArgsErrorMismatch": 0,
+    "buildFindManyArgsRustNotRun": 0,
+    "findManyMismatch": 0,
+    "findManyError": 0,
+    "findManyErrorMismatch": 0,
+    "findManyRustNotRun": 0,
+    "schemaFromRawDiffers": 0
+  }
+}

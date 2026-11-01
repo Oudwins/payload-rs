@@ -1,0 +1,11 @@
+[package]
+name = "payload-sql-write"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+payload-engine = { path = "../payload-engine" }
+serde.workspace = true
+serde_json.workspace = true
