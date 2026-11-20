@@ -1113,12 +1113,50 @@ if (isRustCoreEngine) {
   }
   const { createRequire } = process.getBuiltinModule('node:module')
   const nodePath = process.getBuiltinModule('node:path')
+  const fs = process.getBuiltinModule('node:fs')
+  const { fileURLToPath } = process.getBuiltinModule('node:url')
   const envAddonPath = process.env.PAYLOAD_CORE_RUNTIME_ADDON ?? process.env.PAYLOAD_ENGINE_ADDON
   // A path from the environment is relative to the working directory, not to this module.
   const addonPath = envAddonPath
     ? nodePath.resolve(process.cwd(), envAddonPath)
-    : '../../../engine-rs/payload-engine.node'
-  const addon = createRequire(import.meta.url)(addonPath) as {
+    : '@payloadcms/engine-rs/payload-engine.node'
+  // The addon is resolved from where payload is installed: when this module is bundled,
+  // `import.meta.url` may be the chunk's (or a build-time path), so it is used only when the
+  // nearest package.json above it is payload's; otherwise payload is looked up in the
+  // `node_modules` directories from the working directory up (utilities/importRustEngine.ts).
+  const isPayloadManifest = (manifest: string): boolean => {
+    try {
+      return (JSON.parse(fs.readFileSync(manifest, 'utf8')) as { name?: string }).name === 'payload'
+    } catch {
+      return false
+    }
+  }
+  let payloadManifest: string | undefined
+  if (import.meta.url.startsWith('file:')) {
+    for (
+      let dir = nodePath.dirname(fileURLToPath(import.meta.url));
+      ;
+      dir = nodePath.dirname(dir)
+    ) {
+      const candidate = nodePath.join(dir, 'package.json')
+      if (fs.existsSync(candidate)) {
+        payloadManifest = isPayloadManifest(candidate) ? candidate : undefined
+        break
+      }
+      if (dir === nodePath.dirname(dir)) {
+        break
+      }
+    }
+  }
+  for (let dir = process.cwd(); !payloadManifest; dir = nodePath.dirname(dir)) {
+    const candidate = nodePath.join(dir, 'node_modules', 'payload', 'package.json')
+    if (fs.existsSync(candidate)) {
+      payloadManifest = fs.realpathSync(candidate)
+    } else if (dir === nodePath.dirname(dir)) {
+      break
+    }
+  }
+  const addon = createRequire(payloadManifest ?? import.meta.url)(addonPath) as {
     validateBinding?: (deps: object) => RustValidations
   }
   if (typeof addon.validateBinding !== 'function') {

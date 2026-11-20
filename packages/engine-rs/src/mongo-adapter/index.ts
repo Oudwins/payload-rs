@@ -1,15 +1,21 @@
 /**
  * `withRustMongoEngine(adapterObj)` (MONGO_ENGINE_CONTRACT.md): the `@payloadcms/db-mongodb`
- * adapter with every data method served by the Rust `MongoEngine`. Database I/O stays on the
- * adapter's real mongoose models: the engine builds each call and the host executor (host.ts) runs
- * it with the session upstream's `getSession` resolves. Connection, models, transactions,
- * migrations and `payload.db.collections` / `versions` / `globals` / `connection` stay the
- * upstream TS.
+ * adapter with every data method served by the Rust engine.
  *
- * `PAYLOAD_RS_MONGO_LOOPBACK=true` runs the TS loopback engine (loopback.ts) instead of the addon.
+ * Live engine (stage 1b, live.ts): right after upstream's `init` builds the adapter, its data
+ * methods are replaced by the live Rust ports, which receive the caller's real arguments and the
+ * adapter as `this` (no copy, no JSON) and call the adapter's real mongoose models, and its `init`
+ * (model building) by the live port of db-mongodb's `init`. Nothing else is wrapped. Connection
+ * use, transactions, migrations and `payload.db.collections` / `versions` / `globals` /
+ * `connection` stay the upstream TS. An addon without the complete live engine is an error.
+ *
+ * Stage 1 (JSON `MongoEngine`, host.ts / codec.ts) runs only when explicitly selected:
+ * `PAYLOAD_RS_MONGO_ENGINE=stage1`, or `PAYLOAD_RS_MONGO_LOOPBACK=true` (stage 1 on the TS
+ * loopback engine, loopback.ts).
  */
 import { AsyncResource } from 'node:async_hooks'
 import { renameSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 
 import type { FunctionRegistry } from '../serialize.js'
 import type { MongoEngineError } from './errors.js'
@@ -25,8 +31,10 @@ import {
   getBsonClasses,
 } from './codec.js'
 import { rebuildMongoError } from './errors.js'
+import { registerFlushOnFileEnd } from './flushOnFileEnd.js'
 import { createHostExecutor, hostOpStats, hostTimings } from './host.js'
 import { createLoopbackMongoEngine } from './loopback.js'
+import { createLiveInit, getLiveDepsPorted, getLiveEngineCalls, installLiveEngine } from './live.js'
 import { getNativeMongoEngineClass } from './native.js'
 
 type AnyObject = Record<PropertyKey, any>
@@ -80,45 +88,98 @@ const states = new WeakMap<object, EngineState>()
 const rustAdapters = new WeakSet<object>()
 
 const isLoopback = () => process.env.PAYLOAD_RS_MONGO_LOOPBACK === 'true'
+const isStage1Only = () => isLoopback() || process.env.PAYLOAD_RS_MONGO_ENGINE === 'stage1'
 
 /** Whether `adapter` was created through `withRustMongoEngine`. */
 export const isRustMongoEngineAdapter = (adapter: unknown): boolean =>
   typeof adapter === 'object' && adapter !== null && rustAdapters.has(adapter)
 
 const stats = {
+  /** Stage-1 `MongoEngine.call`s per method. */
   calls: {} as Record<string, number>,
-  engines: { loopback: 0, native: 0 },
+  /** Adapters served: live engine, stage-1 native `MongoEngine`, stage-1 TS loopback. */
+  engines: { live: 0, loopback: 0, native: 0 },
   hostOps: hostOpStats,
+  /** Adapters whose `init` (model building) is the live Rust port. */
+  liveInit: 0,
+  /** Live engine calls per method (reads counted by the JS installer, writes by the addon). */
+  liveCalls: {} as Record<string, number>,
+  /** Methods served by the live engine (union over adapters). */
+  liveMethods: [] as string[],
+  /** Live dependencies (buildQuery, transform, joins, ...) running their Rust port. */
+  livePorted: {} as Record<string, boolean>,
   /** Cumulative milliseconds: args encoding, result decoding, `MongoEngine.call` wall time. */
   timings: hostTimings,
 }
 
 /**
- * Engines created, `MongoEngine.call`s per method and host ops per op in this process. With
- * `PAYLOAD_RS_MONGO_ENGINE_STATS_FILE` set, also written to that file (JSON, throttled), so a run
- * can prove the engine really served the data methods.
+ * Engines created, `MongoEngine.call`s per method and host ops per op in this process, so a run
+ * can prove the engine really served the data methods. Written (JSON, throttled, and at exit) to
+ * `PAYLOAD_RS_MONGO_ENGINE_STATS_FILE` and/or to `<PAYLOAD_RS_MONGO_ENGINE_STATS_DIR>/mongo-engine-<pid>.json`
+ * (one file per process: child processes of a test write their own).
  */
 export const getRustMongoEngineStats = () => stats
 
 let lastStatsWrite = 0
 
+const statsFiles = () => {
+  const files: string[] = []
+  if (process.env.PAYLOAD_RS_MONGO_ENGINE_STATS_FILE) {
+    files.push(process.env.PAYLOAD_RS_MONGO_ENGINE_STATS_FILE)
+  }
+  if (process.env.PAYLOAD_RS_MONGO_ENGINE_STATS_DIR) {
+    files.push(
+      path.join(process.env.PAYLOAD_RS_MONGO_ENGINE_STATS_DIR, `mongo-engine-${process.pid}.json`),
+    )
+  }
+  return files
+}
+
+let isStatsWriterInstalled = false
+
 const recordStats = (update: () => void) => {
   update()
-  const file = process.env.PAYLOAD_RS_MONGO_ENGINE_STATS_FILE
-  if (!file) {
+  const files = statsFiles()
+  if (!files.length) {
     return
   }
-  if (lastStatsWrite === 0) {
-    process.once('exit', () => writeStatsFile(file))
+  if (!isStatsWriterInstalled) {
+    isStatsWriterInstalled = true
+    process.once('exit', () => files.forEach(writeStatsFile))
+    // live calls never pass through this module: refresh the file periodically, and at the end of
+    // every test file (test runners terminate workers without an `exit` event)
+    setInterval(() => files.forEach(writeStatsFile), 1000).unref()
+    registerFlushOnFileEnd(() => files.forEach(writeStatsFile))
   }
   const now = performance.now()
   if (now - lastStatsWrite > 250) {
     lastStatsWrite = now
-    writeStatsFile(file)
+    files.forEach(writeStatsFile)
+  }
+}
+
+/**
+ * Harness only (a stats file is configured): writes the stats synchronously when `destroy` is
+ * called (test runners terminate worker processes without an `exit` event), then calls the
+ * adapter's own `destroy` and returns its very promise.
+ */
+const flushStatsBeforeDestroy = (adapter: AnyObject) => {
+  const files = statsFiles()
+  const destroy = adapter.destroy
+  if (!files.length || typeof destroy !== 'function') {
+    return
+  }
+  adapter.destroy = function (this: unknown, ...args: unknown[]) {
+    files.forEach(writeStatsFile)
+    return destroy.apply(this, args)
   }
 }
 
 const writeStatsFile = (file: string) => {
+  if (stats.engines.live) {
+    stats.liveCalls = getLiveEngineCalls()
+    stats.livePorted = getLiveDepsPorted()
+  }
   const temporary = `${file}.${process.pid}.tmp`
   writeFileSync(temporary, JSON.stringify(stats))
   renameSync(temporary, file)
@@ -126,8 +187,10 @@ const writeStatsFile = (file: string) => {
 
 /**
  * Wraps the object returned by `@payloadcms/db-mongodb`'s `mongooseAdapter(args)`. Its `init`
- * builds the upstream adapter and swaps the data methods for the Rust engine; the adapter's own
- * `init` (models) runs upstream first, then the engine is created.
+ * builds the upstream adapter and swaps the data methods and model building for the live Rust
+ * engine (throws when the addon lacks any part of it). With `PAYLOAD_RS_MONGO_ENGINE=stage1` /
+ * `PAYLOAD_RS_MONGO_LOOPBACK=true` only: the stage-1 engine, created after the adapter's own `init`
+ * (models) ran upstream.
  */
 export const withRustMongoEngine = <TAdapterObj extends AdapterObj>(
   adapterObj: TAdapterObj,
@@ -143,6 +206,19 @@ export const withRustMongoEngine = <TAdapterObj extends AdapterObj>(
     const upstream: Record<string, UpstreamMethod> = {}
     for (const method of mongoEngineMethods) {
       upstream[method] = adapter[method]
+    }
+    if (!isStage1Only()) {
+      const live = installLiveEngine({ adapter, methods: mongoEngineMethods })
+      adapter.init = createLiveInit()
+      recordStats(() => {
+        stats.engines.live++
+        stats.liveMethods = [...new Set([...stats.liveMethods, ...live])].sort()
+        stats.liveInit++
+      })
+      flushStatsBeforeDestroy(adapter)
+      return adapter
+    }
+    for (const method of mongoEngineMethods) {
       adapter[method] = function (this: AnyObject, methodArgs: AnyObject) {
         return callEngine({ adapter: this, args: methodArgs, method })
       }
@@ -352,7 +428,12 @@ const callEngine = async ({
   state.inFlight++
   const callStart = performance.now()
   try {
-    resultJson = await state.engine.call(method, argsJson, callContextJson({ adapter, args, clockFunction }), host)
+    resultJson = await state.engine.call(
+      method,
+      argsJson,
+      callContextJson({ adapter, args, clockFunction }),
+      host,
+    )
   } catch (error) {
     const parsed = parseEngineError(error)
     if (!parsed) {

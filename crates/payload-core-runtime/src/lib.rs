@@ -9,5 +9,6 @@ pub mod config;
 pub mod executor;
 pub mod host;
 pub mod js;
+pub mod probes;
 
 pub use binding::create_binding;

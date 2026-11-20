@@ -22,7 +22,12 @@ payload-core-validate = { path = "../payload-core-validate" }
 payload-core-validate-live = { path = "../payload-core-validate/live" }
 payload-engine = { path = "../payload-engine" }
 payload-mongo-engine = { path = "../payload-mongo-engine" }
+payload-mongo-live = { path = "../payload-mongo-live" }
+payload-mongo-live-joins = { path = "../payload-mongo-live-joins" }
+payload-mongo-live-write = { path = "../payload-mongo-live-write" }
 payload-mongo-schema = { path = "../payload-mongo-schema" }
+payload-mongo-live-query = { path = "../payload-mongo-live-query" }
+payload-mongo-live-transform = { path = "../payload-mongo-live-transform" }
 payload-sql-engine = { path = "../payload-sql-engine" }
 payload-sqlite = { path = "../payload-sqlite" }
 serde_json.workspace = true

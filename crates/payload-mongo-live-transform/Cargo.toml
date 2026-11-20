@@ -1,0 +1,15 @@
+[package]
+name = "payload-mongo-live-transform"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Live-object ports (MONGO_ENGINE_CONTRACT.md "Stage 1b decision") of @payloadcms/db-mongodb
+# `utilities/transform.ts` (read + write, with payload's `traverseFields` as transform runs it),
+# `handleError.ts`, `getEntity.ts`, `getDBName.ts` and `isObjectID.ts`, operating in place on the
+# caller's JS objects through Node-API on the JS thread (payload-core-runtime's `js` layer).
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-runtime = { path = "../payload-core-runtime" }
+payload-mongo-live = { path = "../payload-mongo-live" }

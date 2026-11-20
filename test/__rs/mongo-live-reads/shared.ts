@@ -1,0 +1,5 @@
+export const categoriesSlug = 'categories'
+export const postsSlug = 'posts'
+export const draftsSlug = 'drafts'
+export const settingsSlug = 'settings'
+export const sortedSlug = 'sorted'

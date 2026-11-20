@@ -2,14 +2,17 @@
  * Local API scenario run inside the packed temp app by `run.mjs` (copied next to the app's
  * package.json so `payload` & co. resolve from the installed tarballs only).
  *
- *   node scenario.mjs <sqlite file> <out.json>
+ *   node scenario.mjs sqlite <sqlite file> <out.json>
+ *   node scenario.mjs mongodb <mongodb url> <out.json>     (the database is dropped at the end)
  *
  * Covers create / find / findByID / update / delete / count / duplicate with collection and field
  * hooks, localization (en/de, `locale: 'all'`, fallback), drafts and versions, relationships
- * (depth 0/1, a global pointing at a collection), lexical rich text, auth (create, login) and a
- * validation error. Every step's result or thrown error is recorded in order, plus the hook log.
- * Also records every module URL this process resolved, so `run.mjs` can prove that nothing was
- * loaded from the monorepo and which engine modules ran.
+ * (depth 0/1, a global pointing at a collection), lexical rich text, auth (create, login, `auth`
+ * with the token and its permissions), access control (`overrideAccess: false` with and without a
+ * user, query-constraint read access) and validation errors. Every step's result or thrown error
+ * is recorded in order with the step's start / finish time (`windows`), plus the hook log. Also
+ * records every module URL this process resolved, so `run.mjs` can prove that nothing was loaded
+ * from the monorepo and which engine modules ran.
  */
 import { registerHooks } from 'node:module'
 
@@ -22,18 +25,24 @@ registerHooks({
   },
 })
 
-const [dbFile, outFile] = process.argv.slice(2)
-if (!dbFile || !outFile) {
-  throw new Error('usage: node scenario.mjs <sqlite file> <out.json>')
+const [database, location, outFile] = process.argv.slice(2)
+if (!['mongodb', 'sqlite'].includes(database) || !location || !outFile) {
+  throw new Error('usage: node scenario.mjs sqlite|mongodb <sqlite file | mongodb url> <out.json>')
 }
 
 const { writeFileSync } = await import('node:fs')
 const { buildConfig, getPayload } = await import('payload')
-const { sqliteAdapter } = await import('@payloadcms/db-sqlite')
 const { lexicalEditor } = await import('@payloadcms/richtext-lexical')
+const db =
+  database === 'sqlite'
+    ? (await import('@payloadcms/db-sqlite')).sqliteAdapter({ client: { url: `file:${location}` } })
+    : (await import('@payloadcms/db-mongodb')).mongooseAdapter({
+        ensureIndexes: true,
+        url: location,
+      })
 
 const hookLog = []
-const log = (entry) => hookLog.push(entry)
+const log = (entry) => hookLog.push({ entry, step: steps.length })
 
 const richText = (text) => ({
   root: {
@@ -64,6 +73,30 @@ const config = buildConfig({
       slug: 'users',
       auth: true,
       fields: [{ name: 'name', type: 'text' }],
+    },
+    {
+      // read access is a query constraint, so access-filtered find / count / findByID run
+      slug: 'notes',
+      access: {
+        create: ({ req }) => Boolean(req.user),
+        delete: () => false,
+        read: ({ req }) => (req.user ? { owner: { equals: req.user.id } } : false),
+        update: ({ req }) => (req.user ? { owner: { equals: req.user.id } } : false),
+      },
+      fields: [
+        { name: 'body', type: 'text', required: true },
+        {
+          name: 'owner',
+          type: 'relationship',
+          relationTo: 'users',
+          hooks: { beforeChange: [({ req, value }) => value ?? req.user?.id] },
+        },
+        {
+          name: 'secret',
+          type: 'text',
+          access: { read: ({ req }) => req.user?.name === 'Grace' },
+        },
+      ],
     },
     {
       slug: 'authors',
@@ -165,7 +198,7 @@ const config = buildConfig({
       ],
     },
   ],
-  db: sqliteAdapter({ client: { url: `file:${dbFile}` } }),
+  db,
   editor: lexicalEditor(),
   localization: { defaultLocale: 'en', fallback: true, locales: ['en', 'de'] },
   secret: 'packaging-scenario-secret',
@@ -173,12 +206,15 @@ const config = buildConfig({
 })
 
 const steps = []
+const windows = []
 const step = async (name, run) => {
+  const stepStartedAt = Date.now()
   try {
     steps.push({ name, value: await run() })
   } catch (error) {
     steps.push({ name, error: describeError(error) })
   }
+  windows.push([stepStartedAt, Date.now()])
 }
 
 const startedAt = Date.now()
@@ -395,6 +431,72 @@ await step('login', () =>
     data: { email: 'grace@example.com', password: 'correct horse' },
   }),
 )
+let token
+let otherUser
+await step('auth with token (permissions)', async () => {
+  const login = await payload.login({
+    collection: 'users',
+    data: { email: 'grace@example.com', password: 'correct horse' },
+  })
+  token = login.token
+  return payload.auth({ headers: new Headers({ Authorization: `JWT ${token}` }) })
+})
+await step('create other user', async () => {
+  otherUser = await payload.create({
+    overrideAccess: true,
+    collection: 'users',
+    data: { name: 'Linus', email: 'linus@example.com', password: 'other horse' },
+  })
+  return otherUser
+})
+let note
+await step('create note as user (access)', async () => {
+  note = await payload.create({
+    overrideAccess: false,
+    collection: 'notes',
+    data: { body: 'mine', secret: 'only grace' },
+    user,
+  })
+  return note
+})
+await step('create note anonymous (access denied)', () =>
+  payload.create({ overrideAccess: false, collection: 'notes', data: { body: 'anon' } }),
+)
+await step('create note as other user', () =>
+  payload.create({
+    overrideAccess: false,
+    collection: 'notes',
+    data: { body: 'theirs', secret: 'hidden from linus' },
+    user: otherUser,
+  }),
+)
+await step('find notes as user (read constraint)', () =>
+  payload.find({ overrideAccess: false, collection: 'notes', depth: 0, user }),
+)
+await step('find notes as other user (field access)', () =>
+  payload.find({ overrideAccess: false, collection: 'notes', depth: 0, user: otherUser }),
+)
+await step('count notes as user', () =>
+  payload.count({ overrideAccess: false, collection: 'notes', user }),
+)
+await step('findByID note as other user (not found)', () =>
+  payload.findByID({ overrideAccess: false, collection: 'notes', id: note.id, user: otherUser }),
+)
+await step('find notes anonymous (access denied)', () =>
+  payload.find({ overrideAccess: false, collection: 'notes' }),
+)
+await step('update note as other user (no match)', () =>
+  payload.update({
+    overrideAccess: false,
+    collection: 'notes',
+    data: { body: 'stolen' },
+    user: otherUser,
+    where: { id: { equals: note.id } },
+  }),
+)
+await step('delete note as user (access denied)', () =>
+  payload.delete({ overrideAccess: false, collection: 'notes', id: note.id, user }),
+)
 await step('login wrong password', () =>
   payload.login({
     overrideAccess: true,
@@ -418,10 +520,25 @@ await step('find after deletes', () =>
 await step('delete author', () =>
   payload.delete({ overrideAccess: true, collection: 'authors', id: author.id }),
 )
-await step('hook log', () => hookLog)
+// MongoDB runs bulk operations' documents concurrently (`bulkOperationsSingleTransaction` is false
+// there), so the hook order within one step is not deterministic upstream either: sorted there, by
+// hook and document id (ObjectIds of one process sort in creation order).
+await step('hook log', () => {
+  const key = ({ entry }) => `${entry.hook}|${entry.operation}|${entry.id}`
+  const ordered =
+    database === 'mongodb'
+      ? hookLog.toSorted(
+          (a, b) => a.step - b.step || (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0),
+        )
+      : hookLog
+  return ordered.map(({ entry }) => entry)
+})
 
-await payload.destroy()
 const finishedAt = Date.now()
+if (database === 'mongodb') {
+  await payload.db.connection.dropDatabase()
+}
+await payload.destroy()
 
 writeFileSync(
   outFile,
@@ -430,6 +547,7 @@ writeFileSync(
     resolvedURLs: [...resolvedURLs],
     startedAt,
     steps: steps.map((entry) => encode(entry)),
+    windows,
   }),
 )
 process.exit(0)

@@ -103,7 +103,6 @@
   "dependencies": {
     "@libsql/client": "0.14.0",
     "@payloadcms/drizzle": "workspace:*",
-    "@payloadcms/engine-rs": "workspace:*",
     "console-table-printer": "2.15.0",
     "drizzle-kit": "0.31.7",
     "drizzle-orm": "0.45.2",
@@ -117,6 +116,12 @@
     "payload": "workspace:*"
   },
   "peerDependencies": {
+    "@payloadcms/engine-rs": "workspace:*",
     "payload": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@payloadcms/engine-rs": {
+      "optional": true
+    }
   }
 }

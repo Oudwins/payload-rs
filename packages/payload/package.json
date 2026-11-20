@@ -249,7 +249,13 @@
     "rollup-plugin-dts": "6.2.3"
   },
   "peerDependencies": {
+    "@payloadcms/engine-rs": "workspace:*",
     "graphql": "^16.8.1"
+  },
+  "peerDependenciesMeta": {
+    "@payloadcms/engine-rs": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=24.22.1"

@@ -54,14 +54,19 @@ import {
   init,
   insert,
 } from '@payloadcms/drizzle/sqlite'
-import { withRustEngine } from '@payloadcms/engine-rs'
 import { DrizzleQueryError, like, notLike } from 'drizzle-orm'
 import { createDatabaseAdapter, defaultBeginTransaction, findMigrationDir } from 'payload'
 import { fileURLToPath } from 'url'
 
+import type { RustEngineAdapterModule, RustEngineSqliteModule } from './connect.js'
 import type { Args, SQLiteAdapter, WalConfig } from './types.js'
 
-import { connect } from './connect.js'
+import {
+  connect,
+  createRustEngineClient,
+  importRustEngine,
+  setRustEngineClient,
+} from './connect.js'
 
 const filename = fileURLToPath(import.meta.url)
 
@@ -249,10 +254,7 @@ export function sqliteAdapter(args: Args): DatabaseAdapterObj<SQLiteAdapter> {
     init: adapter,
   }
 
-  // DrizzleQueryError: the class of the drizzle-orm copy `connect`'s drizzle session throws
-  return process.env.PAYLOAD_ENGINE === 'rs'
-    ? withRustEngine(adapterObj, { DrizzleQueryError })
-    : adapterObj
+  return process.env.PAYLOAD_ENGINE === 'rs' ? withRustEngineOnInit(adapterObj) : adapterObj
 }
 
 export type {
@@ -274,3 +276,81 @@ export type {
 } from './types.js'
 
 export { sql } from 'drizzle-orm'
+
+type RustEngine = {
+  withRustEngine: (
+    adapterObj: DatabaseAdapterObj<SQLiteAdapter>,
+    options: { DrizzleQueryError: typeof DrizzleQueryError },
+  ) => DatabaseAdapterObj<SQLiteAdapter>
+}
+
+/**
+ * `PAYLOAD_ENGINE=rs`: `withRustEngine` of `@payloadcms/engine-rs` (ENGINE_CONTRACT.md), loading
+ * from when this module is evaluated, and the Rust libsql client registered for `connect`. That package
+ * is an optional peer dependency, imported only here (and by `connect` for a harness-wrapped
+ * adapter), at runtime, from where db-sqlite is installed (`importRustEngine`); with the flag unset
+ * it is never part of the module graph. Its `/adapter` and `/sqlite` entries do not load the
+ * MongoDB engine, so an install without db-mongodb works.
+ */
+let rustEngine: RustEngine | undefined
+let rustEngineLoad: Promise<RustEngine> | undefined
+const loadRustEngine = (): Promise<RustEngine> =>
+  (rustEngineLoad ??= Promise.all([
+    importRustEngine('@payloadcms/engine-rs/adapter'),
+    importRustEngine('@payloadcms/engine-rs/sqlite'),
+  ]).then(([engineAdapter, engineSqlite]) => {
+    setRustEngineClient(
+      createRustEngineClient({
+        engineAdapter: engineAdapter as RustEngineAdapterModule,
+        engineSqlite: engineSqlite as RustEngineSqliteModule,
+      }),
+    )
+    return (rustEngine = engineAdapter as RustEngine)
+  }))
+if (process.env.PAYLOAD_ENGINE === 'rs') {
+  void loadRustEngine().catch(() => {})
+}
+
+/**
+ * The adapter object with the Rust engine. `config.db.init` is synchronous and the engine module
+ * asynchronous: once it has loaded, `init` is exactly `withRustEngine(adapterObj).init`. Before
+ * that, the built adapter's `init` installs the engine when payload awaits it (before `connect` and
+ * any data method) and then forwards to the engine's `init`, for this and every later call. A
+ * consumer that wrapped the adapter's `init` in the meantime keeps its wrapper (it reaches the
+ * engine through the function it wrapped); otherwise the engine's `init` is installed as is.
+ */
+function withRustEngineOnInit(
+  adapterObj: DatabaseAdapterObj<SQLiteAdapter>,
+): DatabaseAdapterObj<SQLiteAdapter> {
+  // DrizzleQueryError: the class of the drizzle-orm copy `connect`'s drizzle session throws
+  return {
+    ...adapterObj,
+    init: (args) => {
+      if (rustEngine) {
+        return rustEngine.withRustEngine(adapterObj, { DrizzleQueryError }).init(args)
+      }
+      const adapter = adapterObj.init(args)
+      const upstreamInit = adapter.init
+      let rustInit: typeof upstreamInit
+      const installingInit: typeof upstreamInit = function (this: SQLiteAdapter) {
+        if (rustInit) {
+          return rustInit.call(this)
+        }
+        return loadRustEngine().then((loaded) => {
+          if (!rustInit) {
+            const currentInit = adapter.init
+            adapter.init = upstreamInit
+            loaded
+              .withRustEngine({ ...adapterObj, init: () => adapter }, { DrizzleQueryError })
+              .init(args)
+            rustInit = adapter.init
+            adapter.init = currentInit === installingInit ? rustInit : currentInit
+          }
+          return rustInit?.call(this)
+        })
+      }
+      adapter.init = installingInit
+      return adapter
+    },
+  }
+}

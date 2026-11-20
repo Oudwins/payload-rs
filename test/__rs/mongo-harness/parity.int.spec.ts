@@ -26,16 +26,35 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { commitTransaction, createPayloadRequest, initTransaction, killTransaction } from 'payload'
-import { afterAll, beforeAll, vi } from 'vitest'
+import { afterAll, beforeAll, expect, vi } from 'vitest'
 
 import { test } from '../../__helpers/int/vitest.js'
 import { mediaDir } from '../harness/config.js'
 import { capture, createGoldenStore } from '../harness/golden.js'
+import { createAdapterTracer } from './adapterTrace.js'
 import { createMongoNormaliser, dumpRows, dumpSchema } from './mongoGolden.js'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const golden = createGoldenStore(path.join(dirname, 'golden'))
 const normalise = createMongoNormaliser()
+/**
+ * Per step, the trace of its adapter calls (adapterTrace.ts: argument identity, mutations before
+ * the first await, driver-operation order and arguments, clock readings relative to them).
+ */
+const traceGolden = createGoldenStore(path.join(dirname, 'golden', 'trace'))
+const normaliseTrace = createMongoNormaliser()
+const tracer = createAdapterTracer()
+/** 24-hex runs inside longer strings (e.g. `collection-kitchen-<id>` keys), numbered per run. */
+const embeddedIDs = new Map<string, number>()
+const numberEmbeddedIDs = (tree: unknown) =>
+  JSON.parse(
+    JSON.stringify(tree).replace(/[0-9a-f]{24}/g, (hex) => {
+      if (!embeddedIDs.has(hex)) {
+        embeddedIDs.set(hex, embeddedIDs.size + 1)
+      }
+      return `<hex:${embeddedIDs.get(hex)}>`
+    }),
+  )
 
 let now = Date.parse('2025-01-01T00:00:00.000Z')
 const tick = () => {
@@ -50,7 +69,13 @@ type Ctx = { payload: Payload; tick: typeof tick }
 const step = (section: string, name: string, fn: (ctx: Ctx) => Promise<unknown> | unknown) =>
   test(`${section} > ${name}`, async ({ payload }) => {
     tick()
-    golden.check(section, name, await capture(normalise, () => fn({ payload, tick })))
+    const { entries, result } = await tracer.trace(
+      payload.db as never,
+      () => capture(normalise, () => fn({ payload, tick })),
+      { idName: (hex) => normaliseTrace.idName(hex) ?? normalise.idName(hex) },
+    )
+    golden.check(section, name, result)
+    traceGolden.check(section, name, numberEmbeddedIDs(normaliseTrace(entries)))
   })
 
 const richText = (text: string) => ({
@@ -160,6 +185,7 @@ test.suite(
     afterAll(() => {
       vi.useRealTimers()
       golden.write()
+      traceGolden.write()
     })
 
     // ---------------------------------------------------------------- seed
@@ -1132,6 +1158,196 @@ test.suite(
           })
         : null
     })
+
+    // ---------------------------------------------------------------- live
+    // Fresh documents, so the version / join / near / bulk-update outputs are not empty (the
+    // sections above deleted or rewrote what they would match). Every step's golden must hold
+    // documents: `live > non-empty` asserts it.
+    const live: Record<string, Array<number | string>> = {}
+    const liveOutputs: Record<string, unknown> = {}
+    const liveStep = (name: string, fn: (ctx: Ctx) => Promise<unknown>) =>
+      step('live', name, async (ctx) => {
+        const out = await fn(ctx)
+        liveOutputs[name] = out
+        return out
+      })
+
+    liveStep('drafts with versions', async ({ payload, tick }) => {
+      const out = []
+      for (const title of ['live-a', 'live-b', 'live-c']) {
+        tick()
+        const doc = await payload.create({
+          collection: 'drafts',
+          data: { localizedTitle: `${title}-en`, rel: id('targets', 1), title },
+          depth: 0,
+        })
+        tick()
+        await payload.update({
+          id: doc.id,
+          collection: 'drafts',
+          data: { title: `${title}-draft` },
+          depth: 0,
+          draft: true,
+        })
+        out.push(doc)
+      }
+      live.drafts = out.map((doc) => doc.id)
+      return out
+    })
+    liveStep('versions where parent', ({ payload }) =>
+      payload.findVersions({
+        collection: 'drafts',
+        depth: 0,
+        sort: '-updatedAt',
+        where: { parent: { equals: live.drafts![0] } },
+      }),
+    )
+    liveStep('versions where parent in + latest', ({ payload }) =>
+      payload.findVersions({
+        collection: 'drafts',
+        depth: 0,
+        sort: 'version.title',
+        where: { and: [{ parent: { in: live.drafts } }, { latest: { equals: true } }] },
+      }),
+    )
+    liveStep('versions where parent + version.title', ({ payload }) =>
+      payload.findVersions({
+        collection: 'drafts',
+        depth: 0,
+        where: { parent: { equals: live.drafts![1] }, 'version.title': { like: 'draft' } },
+      }),
+    )
+    liveStep('countVersions where parent', ({ payload }) =>
+      payload.countVersions({
+        collection: 'drafts',
+        where: { parent: { equals: live.drafts![2] } },
+      }),
+    )
+
+    liveStep('kitchen referencing targets', async ({ payload, tick }) => {
+      const out = []
+      const points: Array<[number, number]> = [
+        [0.5, 0.5],
+        [1, 1],
+        [-0.5, 0.25],
+        [20, 20],
+      ]
+      for (let i = 0; i < points.length; i++) {
+        tick()
+        out.push(
+          await payload.create({
+            collection: 'kitchen',
+            data: {
+              array: [{ rel: id('targets', 1), text: `live-arr-${i}` }],
+              checkbox: i % 2 === 0,
+              number: 900 + i,
+              point: points[i],
+              rel: id('targets', 1),
+              relMany: [id('targets', 1), id('targets', 2)],
+              text: `live-${i}`,
+            },
+            depth: 0,
+          }),
+        )
+      }
+      live.kitchen = out.map((doc) => doc.id)
+      return out
+    })
+    liveStep('joins with docs', ({ payload }) =>
+      payload.find({
+        collection: 'targets',
+        depth: 0,
+        joins: {
+          kitchenArrayRefs: { count: true, limit: 2, sort: 'text' },
+          kitchenRefs: {
+            count: true,
+            limit: 2,
+            sort: '-text',
+            where: { checkbox: { equals: true } },
+          },
+          localizedRefs: false,
+        },
+        where: { id: { equals: id('targets', 1) } },
+      }),
+    )
+    liveStep('joins with docs (findByID, page 2)', ({ payload }) =>
+      payload.findByID({
+        id: id('targets', 1),
+        collection: 'targets',
+        depth: 1,
+        joins: {
+          kitchenArrayRefs: { limit: 1, page: 2, sort: 'number' },
+          kitchenRefs: { count: true, limit: 3, sort: 'number' },
+          localizedRefs: false,
+        },
+      }),
+    )
+    liveStep('near with matches', ({ payload }) =>
+      payload.find({
+        collection: 'kitchen',
+        depth: 0,
+        where: { point: { near: '0,0,500000,0' } },
+      }),
+    )
+    liveStep('near with matches (pagination false)', ({ payload }) =>
+      payload.find({
+        collection: 'kitchen',
+        depth: 0,
+        pagination: false,
+        where: { point: { near: '0,0,100000000,0' } },
+      }),
+    )
+    liveStep('near with matches and another condition', ({ payload }) =>
+      payload.find({
+        collection: 'kitchen',
+        depth: 0,
+        where: { and: [{ point: { near: '1,1,10000000,0' } }, { text: { like: 'live' } }] },
+      }),
+    )
+    liveStep('update many over several docs', async ({ payload }) =>
+      payload.update({
+        collection: 'kitchen',
+        data: { number: 4321, textMany: ['bulk'] },
+        depth: 0,
+        sort: 'text',
+        where: { id: { in: live.kitchen } },
+      }),
+    )
+    liveStep('update many over several drafts (versions)', async ({ payload }) =>
+      payload.update({
+        collection: 'drafts',
+        data: { localizedTitle: 'bulk' },
+        depth: 0,
+        sort: 'title',
+        where: { id: { in: live.drafts } },
+      }),
+    )
+    test('live > non-empty', () => {
+      type Output = {
+        docs?: unknown[]
+        kitchenRefs?: { docs?: unknown[] }
+        totalDocs?: number
+      } | null
+      const sizes = Object.fromEntries(
+        Object.entries(liveOutputs).map(([name, out]) => {
+          const output = out as Output
+          return [
+            name,
+            Array.isArray(out)
+              ? out.length
+              : (output?.docs?.length ??
+                output?.kitchenRefs?.docs?.length ??
+                output?.totalDocs ??
+                0),
+          ]
+        }),
+      )
+      expect(Object.keys(sizes)).toHaveLength(13)
+      for (const [name, size] of Object.entries(sizes)) {
+        expect(size, `live > ${name}`).toBeGreaterThan(name.startsWith('update many') ? 2 : 0)
+      }
+    })
+
     step('mongo', 'schema', ({ payload }) => dumpSchema(payload))
     step('mongo', 'rows', () => dumpRows())
   },

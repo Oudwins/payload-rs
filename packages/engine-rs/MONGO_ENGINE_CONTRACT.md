@@ -29,6 +29,172 @@ like upstream `getSession(adapter, req)`. Reasons:
 Stage 2 (only after stage 1 parity): evaluate porting mongoose casting and moving I/O to the
 Rust `mongodb` driver. Not part of this contract.
 
+## Stage 1b decision (2026-11-01 18:50): live-object engine
+
+The gpt-6.1-sol reviews of stage 1 (`.rs-baseline/review-mongo-*-sol.md`) found ~30
+observable differences with one root cause: the stage-1 crates work on serialized copies behind
+JSON host ops. Lost: object identity/prototypes (class-instance query values, caller-retained
+arrays, `_bsontype` forgery, `__proto__`/prototype-named fields), mutation timing (TS mutates
+`data` before its first await), await points (Rust ran through awaits TS yields at, so a session
+assigned meanwhile was missed), separate clock readings, model capture timing, getter exceptions,
+fail-fast `Promise.all`, lazy `toObject()`.
+
+So the Mongo engine is rebased on the core engine's strategy B runtime (`RUST_CORE_DESIGN.md`,
+`crates/payload-core-runtime`): Rust operates on the LIVE JS objects (where, data, req, docs,
+mongoose models/queries/sessions) through Node-API on the JS thread, awaits exactly where the TS
+awaits (`await_js`, never inlining a ready future across an upstream await), composes concurrency
+only through JS `Promise.all`, reads the clock wherever upstream does, and calls mongoose methods
+directly on the models resolved at the same points upstream resolves them. There is no JSON
+host-op protocol and no mutation log: mutations happen in place, when upstream makes them.
+
+- New crates (one owner each): `payload-mongo-live` (shared live helpers + read methods),
+  `payload-mongo-live-write`, `payload-mongo-live-query`, `payload-mongo-live-transform`,
+  `payload-mongo-live-joins`; model building moves onto the same runtime in `payload-mongo-schema`.
+- Pure computations of the stage-1 crates (regex escaping, pagination arithmetic, path parsing)
+  may be reused; once the live engine reaches parity, the stage-1 JSON engine is removed from the
+  production path (one implementation per behaviour).
+- Verification: live differentials in the style of `test/__rs/core-runtime/` (same live inputs to
+  TS and Rust, proxies recording every property read/write on args and docs, spied mongoose
+  models recording calls and their order, microtask/settle order, error identity), plus the
+  existing recorded corpora as regression, plus the full upstream suite and the shadow harness.
+
+## Live helpers (`crates/payload-mongo-live`, owner livereads)
+
+Shared by every `payload-mongo-live*` crate (depend on `payload-mongo-live = { path =
+"../payload-mongo-live" }`; all functions run on the JS thread inside the core runtime, `Local`s
+only within the current synchronous segment, `Val` across awaits). One implementation per
+behaviour: do not re-port these in another crate.
+
+- JS host: `packages/engine-rs/src/mongo-live/host.ts` `createMongoLiveHost({ mongoose })`
+  (`mongoose` = the module `@payloadcms/db-mongodb` imports; default: resolved from db-mongodb's
+  location). Installed by `mongoLiveBinding().init(host, { upstreamDeps? })` after
+  `getCoreRuntime()` and `getCoreQueryBinding()`; `getMongoLive()` in
+  `packages/engine-rs/src/mongo-live/index.ts` does all of it. Other live crates whose bindings
+  need these helpers: initialize via `getMongoLive()` first (same addon instance).
+- `host`: `call(name, args)` / `call_val` (host helper by name), `get` / `get_val` / `get_key` /
+  `get_key_optional` / `opt` (`o.k`, `o[k]`, `o?.[k]`: getters, proxies, V8 TypeErrors), `set` /
+  `set_key` (assignment into an EXISTING object: strict [[Set]], setters run, failure throws like
+  TS module code), `del` (ONE strict `delete`: one `deleteProperty` trap call, a false result
+  throws V8's TypeError, never retried), `has` / `has_key` (`k in o`, the operator's intrinsic
+  TypeError for primitives), `call_method(obj, name, args, expr)` (`obj.name(...)`, `this ===
+  obj`), `call_fn` (both throw the realm's intrinsic `TypeError: <expr> is not a function`, never
+  `globalThis.TypeError`), `promise_all(array)` (global `Promise.all` at call time, fail-fast),
+  value tests (`truthy`, `is_nullish`, `is_false`, `str_eq`, ...), JS operators with coercion
+  (`add`, `sub`, `mul`, `gt`: numbers natively, anything else through V8, so `"2" + 1` is `"21"`),
+  `nullish_or` / `or_else` / `default_of`, `throw_from(helper, args)`, `thrown(v)`.
+- Literals (syntax = intrinsic semantics): `literal(&[(key, value)])` (fresh `{ k: v, ... }`, key
+  order kept, own `undefined` kept), `array_of(&[..])` (fresh `[a, b]`), `define_key(o, k, v)`
+  (computed key of a literal / spread / `map` result) are CreateDataProperty: setters inherited
+  from `Object.prototype` / `Array.prototype` never run and cannot drop the property. Core
+  equivalents: `payload_core_runtime::js::{object_literal, array_literal, define_property,
+  define_named, define_element}`. Never fill a fresh literal with `set`.
+- Built-ins the TS calls by name (replaceable globals and prototype methods): read and call them
+  at the TS point, once per TS evaluation. `object_keys(o)` / `object_keys_length(o)` (current
+  `Object.keys`), `is_array(v)` (current `Array.isArray`), `push(arr, v, expr)` (`arr.push`
+  looked up on `arr`), `global(name)`, `global_method("Number", "isNaN") -> Method`,
+  `method(recv, "lastIndexOf") -> Method` (string primitives too), then `Method::call(args,
+  expr)`. For `G.m(<expr>)` evaluate `global_method(G, m)` BEFORE the argument expression (JS
+  evaluates the callee first). `construct_global("TypeError", args)` / `construct(ctor, args,
+  expr)` for `new X(...)` written in the TS source (constructor read at that point). Core
+  equivalents: `payload_core_runtime::host::{global, global_method, method, Method, call_fn,
+  call_method, object_keys, array_is_array, push, object_values, object_entries, has}`.
+  `is_array_intrinsic(v)` is only for engine-internal decisions the TS does not make through
+  `Array.isArray` (no observable effect). Intrinsic errors V8 itself throws:
+  `payload_core_runtime::js::{type_error, range_error, not_a_function}` (`%TypeError%` /
+  `%RangeError%` whatever the globals are).
+- Awaits (`payload_core_runtime::executor`): `await_js(v)` is V8's own Await (a compiled async
+  function whose only step is `await v` resumes the task): one `constructor` read for native
+  promises, no SpeciesConstructor / `Symbol.species`, thenable jobs and ticks as native `await`
+  (proof: test/__rs/core-runtime/semantics.mjs). `spawn_tail`'s fast tail is `async (p, v) => {
+  await p; return v }`. JS-side host helpers that await (`awaitValue(f(...), token)`) must use
+  `coreRuntimeBinding().awaitValue`, never `Promise.resolve(v).then(...)`.
+- Nested async calls: `executor::call(f(...)).await?` (or `call_with_frame(fut, bytes)`) is the TS
+  `const p = f(...)` of an async `f` inside an engine task: the callee's synchronous prefix runs
+  before the caller continues and the caller gets the callee's promise (like `spawn`), but the
+  callee is run by the task's driver loop, not on top of the caller's native frames, so nesting
+  (`and` in `and`, fields in fields) costs heap, not native stack. Each level counts `bytes`
+  (default `MIN_TS_FRAME` = 64, the smallest TS async-call frame) against V8's measured stack limit
+  and throws the intrinsic `RangeError: Maximum call stack size exceeded` beyond it: the overflow
+  depth stays comparable to TS and never below it (pass the TS frame size of one level of your
+  construct, at most). Not a JS await: no tick passes; the returned promise `Local` is valid in the
+  current synchronous segment. `executor::run_sync(fut)` runs such a traversal for a synchronous
+  export. Recursion through plain `spawn` inside a poll keeps the old native-stack cost (~0.5-1.5
+  KB per level release, ~25 KB debug vs ~80-700 B in V8): use `call` wherever the TS nests.
+- Callbacks handed to user code: `payload_core_runtime::js::closure(name, |this, args| ..)` and
+  `js::arrow(arity, |args| ..)` (a real JS arrow: no `prototype`, not constructible, `length ===
+  arity`, `name === ''`). The `'static` body is owned by the function and freed by a napi finalizer
+  when the GC collects it: user code may keep the function and call it after the creating call
+  returned, re-entrantly and recursively, exactly like the TS closure (no "expired callback"
+  errors, no pointers to stack closures). Keep mutable state in `Rc<RefCell<..>>` / `Val`; never
+  borrow a `RefCell` across a call into JS from the body (re-entrancy).
+- `bson`: `types()` (`mongoose.Types`), `bson_module()` (`mongoose.mongo.BSON`, the driver's bson;
+  `Types.ObjectId === BSON.ObjectId`), `class(BsonClass)`, `instance_of(v, BsonClass)` (real
+  `instanceof`), `bson_class_of(v) -> Option<BsonClass>` (`ObjectId`, `Decimal128`, `Binary`,
+  `Long`, `Int32`, `Double`, `Timestamp`, `BSONRegExp`, `BSONSymbol`, `Code`, `DBRef`, `MinKey`,
+  `MaxKey`, `UUID`; plain objects with a forged `_bsontype` are `None`), `is_object_id(v)` =
+  upstream's duck-typed `isObjectID` with its exact reads (use it where upstream calls
+  `isObjectID`, `instance_of` only for engine-internal decisions), `object_id_is_valid(v)`
+  (`Types.ObjectId.isValid(v)`), `new_object_id(&[v])` (`new Types.ObjectId(v)`; bson's own
+  `BSONError` propagates as the original object), `to_hex_string(v)`, `construct(ctor, args,
+  expr)`, `is_date(v)` (`v instanceof Date`, global `Date` at call time).
+- `clock`: `new_date()`, `now_iso()` (`new Date().toISOString()`), `new_date_of(v)`,
+  `date_now()`; each call is ONE evaluation through the global `Date` at call time (fake timers,
+  shadow clock tape). Call exactly where upstream evaluates the expression; never reuse a reading.
+- `session::get_session(db, req) -> JsResult<Local>`: calls the ported async `getSession(db,
+  req)` on the original `req` and returns its promise; `await_js` it where upstream awaits
+  (`req.transactionID` read twice when it is a promise, `db.sessions[id]`, `inTransaction()`,
+  orphan `delete`).
+- `entity::get_collection(adapter, slug, versions) -> Collection { collection_config,
+  custom_id_type, model }`, `entity::get_global(adapter, slug, versions) -> Global { global_config,
+  model }`: upstream getEntity.ts with live reads in its order (`adapter.payload.collections[slug]`,
+  `adapter.versions|collections[slug]`, `adapter.payload.config.globals.find(...)`,
+  `adapter.globals`) and its `APIError`s; call at the point upstream calls it and keep the model
+  for the whole method.
+- `error`: `api_error(msg)`, `api_error_of(Local)`, `bson_error(msg)`, `new_error(kind, args)`
+  (`APIError`, `BSONError`, `ValidationError`, `Error`, `TypeError`, `RangeError`, built in JS with
+  upstream's classes), `is_same`. Thrown user/mongoose/bson values are `Thrown(Val)` of the very
+  object: propagate with `?`, never copy or read them unless upstream does. `handleError` is NOT
+  here (payload-mongo-live-transform ports it).
+- `deps`: the db-mongodb entry points owned by the other live crates, called by the reads (and by
+  anyone else): `build_query(BuildQueryArgs) -> promise`, `build_sort_param(BuildSortParamArgs) ->
+  sort`, `build_projection_from_select(...) -> projection`, `transform(TransformArgs) -> value`,
+  `build_join_aggregation(...) -> promise`, `resolve_joins(...) -> promise`. Arg structs = the TS
+  args literal, one `Val` per key (`Val::Undefined` = absent). Owners register their port with
+  `deps::register_<name>(fn)`; the registration call goes into
+  `crates/payload-node/src/mongo_live.rs` (livereads adds it when you announce your fn in the
+  log). Unregistered entries call upstream's TS function through the host (`upstream.<name>`), so
+  callers are exact meanwhile. `init(host, { upstreamDeps: true })` forces the TS functions
+  (differential isolation); `mongoLiveBinding().ported()` reports which entries are Rust.
+- `reads::aggregate_paginate(AggregatePaginateArgs) -> promise` is the one port of
+  `utilities/aggregatePaginate.ts` (joins: call it, do not re-port it).
+
+Read methods (`mongoLiveBinding()`): `find`, `findOne`, `count`, `countVersions`,
+`countGlobalVersions`, `findDistinct`, `findGlobal`, `findVersions`, `findGlobalVersions`,
+`queryDrafts`, each `(adapter, args) => Promise` (the upstream async method with `this =
+adapter`); the TS glue installs them as `adapter[m] = function (args) { return binding[m](this,
+args) }` (`installLiveReads(adapter)` in `packages/engine-rs/src/mongo-live/index.ts`).
+
+Port registration: payload-node's `mongo_live.rs` registers the query ports
+(`payload_mongo_live_query::deps::*`) when `mongoLiveBinding()` is created, and `getMongoLive()`
+initializes `mongoLiveQueryBinding()` with its host (`packages/engine-rs/src/mongo-live/query.ts`);
+transform and joins register themselves from their bindings' `init` (production:
+`packages/engine-rs/src/mongo-adapter/live.ts` `initializeLiveDeps`).
+
+Verification (livereads):
+
+- `test/__rs/mongo-live-reads/reads.int.spec.ts` (mongo harness config, `PAYLOAD_ENGINE` unset,
+  `PAYLOAD_ENGINE_ADDON=<addon>`, `LIVEREADS_PORTS=upstream|registered|all`): upstream
+  `payload.db.<m>` vs `mongoLiveBinding()[m]` on the same live inputs; recording proxies on args /
+  where / req / adapter, spied models (call-time argument snapshots), real MongoDB and tape replay
+  with a microtask pump (tick-exact awaits, `Promise.all`, settle order), rejection identity, final
+  argument / config state; aggregatePaginate, getSession, getEntity, bson helper differentials;
+  negative controls; fails on zero cases, a TS run without events, a Rust run without engine entry,
+  tape mismatches, or a `LIVEREADS_PORTS` mode whose `ported()` disagrees.
+- Upstream suites with only the reads (and the ports `LIVEREADS_PORTS` selects) on Rust:
+  `node test/__rs/mongo-harness/runSuites.mjs --config test/__rs/mongo-live-reads/vitest.config.ts
+  --addon <addon> --baseline .rs-baseline/mongodb-all.json <files>`; each process writes
+  `livereads-<pid>.json` (calls per method, `ported`) into the run's stats dir.
+
 ## Selection (no user-facing API change)
 
 - `packages/engine-rs` exports `withRustMongoEngine(adapterObj)`, wrapping the object returned

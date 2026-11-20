@@ -1,0 +1,13 @@
+[package]
+name = "payload-mongo-live-joins"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Live-object port of @payloadcms/db-mongodb's buildJoinAggregation / resolveJoins /
+# aggregatePaginate on the core runtime (MONGO_ENGINE_CONTRACT.md "Stage 1b decision").
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-runtime = { path = "../payload-core-runtime" }
+payload-mongo-live = { path = "../payload-mongo-live" }

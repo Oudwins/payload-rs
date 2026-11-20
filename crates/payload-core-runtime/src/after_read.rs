@@ -2,7 +2,8 @@
 //!
 //! The code mirrors the TS line by line: every JS-observable read/write/delete/call happens in
 //! the same order, every `await` is a real JS await ([`await_js`]), every `async` function call
-//! is a spawned task with its own native promise ([`spawn`]), and `fieldPromises` /
+//! is a task with its own native promise ([`spawn`]; nested `promise()` calls of a traversal go
+//! through [`call_with_frame`], so nesting depth costs no native stack), and `fieldPromises` /
 //! `populationPromises` are the same kind of JS arrays (user hooks such as the lexical editor's
 //! push into them). Relationship and virtual-field population are delegated to the TS
 //! implementations through the host, called at the same point.
@@ -13,7 +14,7 @@ use std::cell::OnceCell;
 use std::rc::Rc;
 
 use crate::config::{self, BlockCandidate, FieldDesc, FieldsDesc, Kind, Segment, format_number};
-use crate::executor::{await_call, await_js, spawn};
+use crate::executor::{await_call, await_js, call_with_frame, run_sync, spawn};
 use crate::host::{self, call_host, host};
 use crate::js::{self, JsResult, Local, Thrown, Type, Val};
 
@@ -205,9 +206,7 @@ pub fn traverse_fields_entry(arr: Local) -> JsResult<()> {
   let el = |i: u32| js::get_element(arr, i);
   let val = |i: u32| -> JsResult<Val> { Val::from_local(el(i)?) };
   let string = |i: u32| -> JsResult<Rc<str>> { Ok(js::get_string(el(i)?).unwrap_or_default().into()) };
-  traverse_fields(
-    &ctx,
-    Rc::new(Trav {
+  let trav = Rc::new(Trav {
       block_data: val(trav_arg::BLOCK_DATA)?,
       field_depth: js::get_f64(el(trav_arg::FIELD_DEPTH)?),
       fields: config::fields_desc(el(trav_arg::FIELDS)?)?,
@@ -219,8 +218,13 @@ pub fn traverse_fields_entry(arr: Local) -> JsResult<()> {
       select: val(arg::SELECT)?,
       select_mode: val(trav_arg::SELECT_MODE)?,
       sibling_doc: val(trav_arg::SIBLING_DOC)?,
-    }),
-  )
+  });
+  // synchronous like the TS function: the traversal never reaches a JS await of its own
+  run_sync(async move {
+    traverse_fields(&ctx, trav).await?;
+    Ok(Val::Undefined)
+  })?;
+  Ok(())
 }
 
 async fn run(ctx: Rc<Ctx>, select: Val) -> JsResult<Val> {
@@ -253,7 +257,8 @@ async fn run(ctx: Rc<Ctx>, select: Val) -> JsResult<Val> {
       select_mode,
       sibling_doc: ctx.doc.clone(),
     }),
-  )?;
+  )
+  .await?;
 
   let mut iterations = 0;
   loop {
@@ -295,15 +300,33 @@ fn greater_than(a: Local, b: Local) -> JsResult<bool> {
   Ok(js::truthy(call_host(&host()?.greater_than, &[a, b])?))
 }
 
-fn traverse_fields(ctx: &Rc<Ctx>, trav: Rc<Trav>) -> JsResult<()> {
+/// Virtual native stack of one TS nesting level of the traversal (`traverseFields` + a field's
+/// `promise()`), for the emulated stack overflow of [`call_with_frame`]: measured ~690 bytes per
+/// nested group (test/__rs/core-runtime/depth.int.spec.ts: TS overflows after ~1,420 levels); a
+/// lower bound so every depth the TS accepts is accepted.
+const FIELD_FRAME: usize = 512;
+
+type TravFuture = std::pin::Pin<Box<dyn std::future::Future<Output = JsResult<()>>>>;
+
+/// `traverseFields(...)` (synchronous in the TS): an engine future that only suspends inside the
+/// nested calls of its fields' `promise()`s, which its driver runs before resuming it, so it
+/// completes within the current synchronous segment, like the TS call.
+fn traverse_fields(ctx: &Rc<Ctx>, trav: Rc<Trav>) -> TravFuture {
+  let ctx = ctx.clone();
+  Box::pin(async move { traverse_fields_body(&ctx, trav).await })
+}
+
+async fn traverse_fields_body(ctx: &Rc<Ctx>, trav: Rc<Trav>) -> JsResult<()> {
   let Some(items) = &trav.fields.items else {
     return config::throw_not_array(&trav.fields);
   };
   if let Some(arr) = &trav.tab_fields {
     for (index, desc) in items.iter().enumerate() {
       let field_js = Val::from_local(js::get_element(arr.get(), index as u32)?)?;
-      let promise = spawn(field_promise(ctx.clone(), trav.clone(), desc.clone(), field_js, index))?;
-      js::push(ctx.field_promises.get(), promise)?;
+      // `fieldPromises.push(promise({...}))`: `push` is looked up before the argument runs
+      let push = host::method(ctx.field_promises.get(), "push")?;
+      let promise = call_with_frame(field_promise(ctx.clone(), trav.clone(), desc.clone(), field_js, index), FIELD_FRAME).await?;
+      push.call(&[promise], "fieldPromises.push")?;
     }
     return Ok(());
   }
@@ -317,13 +340,14 @@ fn traverse_fields(ctx: &Rc<Ctx>, trav: Rc<Trav>) -> JsResult<()> {
         if matches!(desc.kind, Kind::Row | Kind::Collapsible | Kind::Group) && !desc.has_name {
           // An unnamed row/collapsible/group: `promise()` touches no data and only runs the
           // nested `traverseFields`, so it completes synchronously (rejected if that throws).
-          let result = unnamed_container(ctx, &trav, desc, index as usize);
+          let result = unnamed_container(ctx, &trav, desc, index as usize).await;
           push_settled(ctx, result)?;
           continue;
         }
         let field_js = Val::Ref(desc.node.clone());
-        let promise = spawn(field_promise(ctx.clone(), trav.clone(), desc.clone(), field_js, index as usize))?;
-        js::push(ctx.field_promises.get(), promise)?;
+        let push = host::method(ctx.field_promises.get(), "push")?;
+        let promise = call_with_frame(field_promise(ctx.clone(), trav.clone(), desc.clone(), field_js, index as usize), FIELD_FRAME).await?;
+        push.call(&[promise], "fieldPromises.push")?;
       }
     }
   }
@@ -331,7 +355,7 @@ fn traverse_fields(ctx: &Rc<Ctx>, trav: Rc<Trav>) -> JsResult<()> {
 }
 
 /// `promise()` of an unnamed row/collapsible/group: `traverseFields` with the passthrough args.
-fn unnamed_container(ctx: &Rc<Ctx>, t: &Trav, f: &FieldDesc, index: usize) -> JsResult<()> {
+async fn unnamed_container(ctx: &Rc<Ctx>, t: &Trav, f: &FieldDesc, index: usize) -> JsResult<()> {
   let paths = get_field_paths(f, index, &t.parent_index_path, &t.parent_path, &t.parent_schema_path);
   traverse_fields(
     ctx,
@@ -349,6 +373,7 @@ fn unnamed_container(ctx: &Rc<Ctx>, t: &Trav, f: &FieldDesc, index: usize) -> Js
       sibling_doc: t.sibling_doc.clone(),
     }),
   )
+  .await
 }
 
 /// `fieldPromises.push(<promise of a field that completed synchronously>)`
@@ -426,8 +451,9 @@ fn leaf_run(ctx: &Rc<Ctx>, t: &Rc<Trav>, start: u32, end: u32, hooked: bool) -> 
     let index = index as u32;
     let Some(items) = &t.fields.items else { break };
     let f = items[index as usize].clone();
+    let push = host::method(ctx.field_promises.get(), "push")?;
     let promise = spawn(default_value_tail(ctx.clone(), t.clone(), f))?;
-    js::push(ctx.field_promises.get(), promise)?;
+    push.call(&[promise], "fieldPromises.push")?;
     from = index + 1;
   }
   Ok(())
@@ -671,7 +697,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
     if js::truthy(fallback_locale) && !js::strict_equals(fallback_locale, ctx.locale.get()) {
       let mut fallback_value = js::undefined();
       let is_null_or_undefined = is_nullish(value);
-      if js::is_array(fallback_locale) {
+      if host::array_is_array(fallback_locale)? {
         let len = js::array_length(fallback_locale);
         for i in 0..len {
           let locale = js::get_element(fallback_locale, i)?;
@@ -711,8 +737,10 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
     }
     Kind::Point => {
       let point_doc = host::get(sib(), name())?;
+      // `Array.isArray(pointDoc?.coordinates)`: the callee is evaluated before its argument
+      let is_array = host::global_method("Array", "isArray")?;
       let coordinates = host::get_optional(point_doc, js::key("coordinates"))?;
-      let is_pair = js::is_array(coordinates) && {
+      let is_pair = js::truthy(is_array.call(&[coordinates], "Array.isArray")?) && {
         let len = host::get_named(host::get_named(point_doc, "coordinates")?, "length")?;
         js::type_of(len) == Type::Number && js::get_f64(len) == 2.0
       };
@@ -784,7 +812,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
           )
         };
         if should_run_hook_on_all_locales {
-          let entries = host::object_entries(host::get(sib(), name())?)?;
+          let entries = host::global_method("Object", "entries")?.call(&[host::get(sib(), name())?], "Object.entries")?;
           let tasks = js::array();
           for e in 0..js::array_length(entries) {
             let entry = js::get_element(entries, e)?;
@@ -915,7 +943,8 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
 
       let children = f.children()?;
       let children_localized = or(&t.parent_is_localized, &f.localized);
-      let all_plain = if js::is_array(rows) && js::array_length(rows) > 0 {
+      let rows_non_empty = is_non_empty_array(rows)?;
+      let all_plain = if rows_non_empty && js::is_array(rows) {
         children.all_plain(ctx.override_access_truthy, js::truthy(children_localized.get()))
       } else {
         None
@@ -983,15 +1012,16 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
             ..child(children.clone())
           });
           let Some(items) = &children.items else { break };
+          let push = host::method(ctx.field_promises.get(), "push")?;
           let promise = spawn(default_value_tail(ctx.clone(), row.clone(), items[field_index as usize].clone()))?;
-          js::push(ctx.field_promises.get(), promise)?;
+          push.call(&[promise], "fieldPromises.push")?;
           leaf_run(&ctx, &row, field_index + 1, end, hooked)?;
           start_row = js::number(row_index + 1.0);
           len = js::get_element(stopped, 3)?;
         }
-      } else if js::is_array(rows) && js::array_length(rows) > 0 {
-        let rows = Val::from_local(rows)?;
-        for_each(rows.get(), |row, row_index| {
+      } else if rows_non_empty {
+        let mut rows = ForEach::new(rows)?;
+        while let Some((row, row_index)) = rows.next()? {
           traverse_fields(
             &ctx,
             Rc::new(Trav {
@@ -1002,12 +1032,14 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
               ..child(f.children()?)
             }),
           )
-        })?;
+          .await?;
+        }
       } else if !should_hoist_localized_value && is_object_non_null(rows) {
-        let values = host::object_values(rows)?;
-        for_each(values, |locale_rows, _| {
-          if js::is_array(locale_rows) {
-            for_each(locale_rows, |row, row_index| {
+        let mut values = ForEach::new(host::object_values(rows)?)?;
+        while let Some((locale_rows, _)) = values.next()? {
+          if host::array_is_array(locale_rows)? {
+            let mut locale_rows = ForEach::new(locale_rows)?;
+            while let Some((row, row_index)) = locale_rows.next()? {
               traverse_fields(
                 &ctx,
                 Rc::new(Trav {
@@ -1016,10 +1048,10 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
                   ..child(f.children()?)
                 }),
               )
-            })?;
+              .await?;
+            }
           }
-          Ok(())
-        })?;
+        }
       } else if should_hoist_localized_value && (!js::truthy(rows) || is_zero_length(rows)?) {
         host::set(sib(), name(), js::null())?;
       } else if !f.hidden_is_true || is_true(&ctx.show_hidden_fields) {
@@ -1029,8 +1061,9 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
 
     Kind::Blocks => {
       let rows = host::get(sib(), name())?;
-      if js::is_array(rows) && js::array_length(rows) > 0 {
-        for_each(rows, |row, row_index| {
+      if is_non_empty_array(rows)? {
+        let mut rows = ForEach::new(rows)?;
+        while let Some((row, row_index)) = rows.next()? {
           let block_type = host::get_named(row, "blockType")?;
           let block = find_block(&ctx, &f, block_type)?;
           let field_select = host::get_optional(t.select.get(), name())?;
@@ -1056,15 +1089,16 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
                 sibling_doc: or_empty_object(row)?,
                 ..child(block.fields()?)
               }),
-            )?;
+            )
+            .await?;
           }
-          Ok(())
-        })?;
+        }
       } else if !should_hoist_localized_value && is_object_non_null(rows) {
-        let values = host::object_values(rows)?;
-        for_each(values, |locale_rows, _| {
-          if js::is_array(locale_rows) {
-            for_each(locale_rows, |row, row_index| {
+        let mut values = ForEach::new(host::object_values(rows)?)?;
+        while let Some((locale_rows, _)) = values.next()? {
+          if host::array_is_array(locale_rows)? {
+            let mut locale_rows = ForEach::new(locale_rows)?;
+            while let Some((row, row_index)) = locale_rows.next()? {
               let block_type = host::get_named(row, "blockType")?;
               if let Some(block) = find_block(&ctx, &f, block_type)? {
                 traverse_fields(
@@ -1076,13 +1110,12 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
                     sibling_doc: or_empty_object(row)?,
                     ..child(block.fields()?)
                   }),
-                )?;
+                )
+                .await?;
               }
-              Ok(())
-            })?;
+            }
           }
-          Ok(())
-        })?;
+        }
       } else if should_hoist_localized_value && (!js::truthy(rows) || is_zero_length(rows)?) {
         host::set(sib(), name(), js::null())?;
       } else if !f.hidden_is_true || is_true(&ctx.show_hidden_fields) {
@@ -1091,7 +1124,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
     }
 
     Kind::Collapsible | Kind::Row => {
-      traverse_fields(&ctx, Rc::new(passthrough(f.children()?)))?;
+      traverse_fields(&ctx, Rc::new(passthrough(f.children()?))).await?;
     }
 
     Kind::Group | Kind::Tab if f.kind == Kind::Tab || affects_data => {
@@ -1103,7 +1136,8 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
             parent_is_localized: or(&t.parent_is_localized, &f.localized),
             ..passthrough(f.children()?)
           }),
-        )?;
+        )
+        .await?;
       } else {
         let field_select = host::get_optional(t.select.get(), name())?;
         let sub_select = if js::type_of(field_select).is_typeof_object() {
@@ -1112,9 +1146,12 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
           Val::Undefined
         };
         if should_localize_field && !should_hoist_localized_value {
+          // `Object.values(siblingDoc[field.name] || {})`: callee first, then the argument
+          let object_values = host::global_method("Object", "values")?;
           let data = host::get(sib(), name())?;
-          let values = host::object_values(if js::truthy(data) { data } else { js::object() })?;
-          for_each(values, |localized_data, _| {
+          let data = if js::truthy(data) { data } else { js::object() };
+          let mut values = ForEach::new(object_values.call(&[data], "Object.values")?)?;
+          while let Some((localized_data, _)) = values.next()? {
             traverse_fields(
               &ctx,
               Rc::new(Trav {
@@ -1124,7 +1161,8 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
                 ..child(f.children()?)
               }),
             )
-          })?;
+            .await?;
+          }
         } else {
           let sibling_doc = if !js::type_of(host::get(sib(), name())?).is_typeof_object() {
             Val::from_local(js::object())?
@@ -1139,14 +1177,15 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
               sibling_doc,
               ..child(f.children()?)
             }),
-          )?;
+          )
+          .await?;
         }
       }
     }
 
     Kind::Group => {
       // unnamed group
-      traverse_fields(&ctx, Rc::new(passthrough(f.children()?)))?;
+      traverse_fields(&ctx, Rc::new(passthrough(f.children()?))).await?;
     }
 
     Kind::RichText => {
@@ -1194,7 +1233,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
             ])
           };
           if should_run_hook_on_all_locales {
-            let entries = host::object_entries(host::get(sib(), name())?)?;
+            let entries = host::global_method("Object", "entries")?.call(&[host::get(sib(), name())?], "Object.entries")?;
             let tasks = js::array();
             for e in 0..js::array_length(entries) {
               let entry = js::get_element(entries, e)?;
@@ -1247,7 +1286,8 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
           parent_path: Rc::from(path),
           ..passthrough(tabs_desc)
         }),
-      )?;
+      )
+      .await?;
     }
 
     _ => {}
@@ -1287,19 +1327,69 @@ fn find_block(ctx: &Ctx, f: &FieldDesc, block_type: Local) -> JsResult<Option<Rc
 }
 
 /// `arr.forEach((item, index) => ...)` on a JS array: length fixed up front, holes skipped.
-fn for_each(arr: Local, mut f: impl FnMut(Local, String) -> JsResult<()>) -> JsResult<()> {
-  let arr = Val::from_local(arr)?;
-  let len = js::array_length(arr.get());
-  for i in 0..len {
-    let a = arr.get();
-    let mut has = false;
-    js::check(unsafe { napi::sys::napi_has_element(js::env(), a.0, i, &mut has) })?;
-    if has {
-      let item = js::get_element(a, i)?;
-      f(item, format_number(i as f64))?;
-    }
+/// `arr.forEach((item, index) => ...)` iteration state for loops whose body awaits nested calls:
+/// `length` read once, holes skipped, each element read at its turn (after the previous body).
+struct ForEach {
+  arr: Val,
+  len: u32,
+  index: u32,
+}
+
+impl ForEach {
+  fn new(arr: Local) -> JsResult<ForEach> {
+    let len = if js::is_array(arr) {
+      js::array_length(arr)
+    } else {
+      // a proxy of an array (`Array.isArray` was true): `rows.forEach` and its `length` read
+      // (ToLength) go through the traps like upstream's call
+      let for_each = host::get_named(arr, "forEach")?;
+      if js::type_of(for_each) != Type::Function {
+        return Err(js::not_a_function("rows.forEach"));
+      }
+      to_length(host::get_named(arr, "length")?)?
+    };
+    Ok(ForEach { arr: Val::from_local(arr)?, len, index: 0 })
   }
-  Ok(())
+
+  /// The next present element and its index (as `forEach` passes it, formatted like `${i}`).
+  fn next(&mut self) -> JsResult<Option<(Local, String)>> {
+    while self.index < self.len {
+      let i = self.index;
+      self.index += 1;
+      let a = self.arr.get();
+      let mut has = false;
+      js::check(unsafe { napi::sys::napi_has_element(js::env(), a.0, i, &mut has) })?;
+      if has {
+        return Ok(Some((js::get_element(a, i)?, format_number(i as f64))));
+      }
+    }
+    Ok(None)
+  }
+}
+
+/// ToLength (clamped to the `u32` index range engine iteration uses).
+fn to_length(v: Local) -> JsResult<u32> {
+  let n = if js::type_of(v) == Type::Number {
+    js::get_f64(v)
+  } else {
+    let mut out = std::ptr::null_mut();
+    js::check(unsafe { napi::sys::napi_coerce_to_number(js::env(), v.0, &mut out) })?;
+    js::get_f64(Local(out))
+  };
+  Ok(if n.is_nan() || n <= 0.0 { 0 } else if n >= f64::from(u32::MAX) { u32::MAX } else { n.floor() as u32 })
+}
+
+/// `Array.isArray(rows) && rows.length > 0`: the current global `Array.isArray`, then (only when
+/// true) a `length` read with JS `>` semantics (a proxy of an array is an array and has a `get`).
+fn is_non_empty_array(rows: Local) -> JsResult<bool> {
+  if !host::array_is_array(rows)? {
+    return Ok(false);
+  }
+  if js::is_array(rows) {
+    // own non-configurable data property of a real array: reading it is unobservable
+    return Ok(js::array_length(rows) > 0);
+  }
+  greater_than(host::get_named(rows, "length")?, js::number(0.0))
 }
 
 /// `typeof v === 'object' && v !== null`

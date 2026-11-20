@@ -32,6 +32,11 @@ export type CoreRuntimeBinding = {
    * (crates/payload-core-runtime/src/binding.rs `API_VERSION`), checked at load.
    */
   apiVersion?: number
+  /**
+   * `await value` resuming the Rust task `token` (a compiled async function: V8's own Await).
+   * Every JS-side `await f(...)` host helper must use it.
+   */
+  awaitValue: (value: unknown, token: number) => void
   benchCallJs: (fn: () => unknown, n: number) => number
   benchGetProperty: (obj: object, key: string, n: number) => number
   benchJsonRoundTrip: (json: string) => string
@@ -48,6 +53,8 @@ export type CoreRuntimeBinding = {
   resume: (token: number, ok: boolean, value: unknown) => void
   /** Executor tasks/awaits and calls of exported core engine functions (excluding `stats`). */
   stats: () => { awaits: number; entries: number; tasks: number }
+  /** `async (promise, value) => { await promise; return value }` (executor::spawn_tail). */
+  thenReturn: (promise: unknown, value: unknown) => Promise<unknown>
 }
 
 let binding: CoreRuntimeBinding | undefined
@@ -63,11 +70,9 @@ const pathSegments = (path: string, schemaPath: string, indexPath: string): unkn
 ]
 
 const reflectApply = Reflect.apply
-// `await` uses the intrinsic PromiseResolve and PerformPromiseThen; capture them before user
-// code can patch the globals.
-const promiseResolve = Promise.resolve.bind(Promise) as (value: unknown) => Promise<unknown>
+const legacyPromiseResolve = Promise.resolve.bind(Promise) as (value: unknown) => Promise<unknown>
 // eslint-disable-next-line @typescript-eslint/unbound-method -- called through `reflectApply`
-const promiseThen = Promise.prototype.then
+const legacyPromiseThen = Promise.prototype.then
 
 // Indices of the `afterReadArgs` array (crates/payload-core-runtime after_read.rs `arg`).
 const ARG_COLLECTION = 0
@@ -387,24 +392,25 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
       `The engine addon at ${addonPath} has core runtime API version ${created.apiVersion}, expected ${CORE_RUNTIME_API_VERSION}; rebuild it`,
     )
   }
+  // `await value` resuming the Rust task: the binding's compiled async helper (V8's own Await, no
+  // species lookups; crates/payload-core-runtime executor.rs `install_native_await`).
+  // TRANSITIONAL (phase J, runtime): addons built before 2026-11-16 lack it; remove the fallback
+  // once every agent's addon is rebuilt.
   const resume = created.resume
-  // `await value`: PromiseResolve(%Promise%, value) + a reaction that resumes the Rust task.
-  const awaitValue = (value: unknown, token: number) => {
-    void reflectApply(promiseThen, promiseResolve(value), [
-      (result: unknown) => resume(token, true, result),
-      (error: unknown) => resume(token, false, error),
-    ])
-  }
+  const awaitValue =
+    created.awaitValue ??
+    ((value: unknown, token: number) => {
+      void reflectApply(legacyPromiseThen, legacyPromiseResolve(value), [
+        (result: unknown) => resume(token, true, result),
+        (error: unknown) => resume(token, false, error),
+      ])
+    })
 
   created.init({
+    // read only by addons built before 2026-11-16 (TRANSITIONAL, see above)
     awaitValue,
-    /**
-     * A tail `await promise; return value` of an engine task that never suspended
-     * (`executor::spawn_tail`): the same single reaction on `promise`, settling the result the
-     * way the async function's promise would.
-     */
     thenReturn: (promise: Promise<unknown>, value: unknown) =>
-      reflectApply(promiseThen, promise, [() => value]),
+      reflectApply(legacyPromiseThen, promise, [() => value]),
     /**
      * The `afterRead` args destructuring (same pattern, order and `flattenLocales = true`
      * default), plus the two promise arrays. Indices are `after_read.rs` `arg::*`; the engine

@@ -1,0 +1,5854 @@
+{
+ "find kitchen default": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "9349ad496fc9080b"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 10,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "9349ad496fc9080b"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "_id": {
+            "$in": [
+             {
+              "$obj": {
+               "$oid": "<oid:4>"
+              }
+             },
+             {
+              "$obj": {
+               "$oid": "<oid:7>"
+              }
+             },
+             {
+              "$obj": {
+               "$oid": "<oid:1>"
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "218ad599a3d417bf"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>",
+                    "<oid:7>",
+                    "<oid:1>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>",
+                    "<oid:7>",
+                    "<oid:1>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$in": [
+           {
+            "$obj": {
+             "$oid": "<oid:10>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:12>"
+            }
+           }
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 0,
+       "sort": {
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "media",
+     "op": "find",
+     "state": "ddc54940b1f9b795"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "media",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:10>",
+                    "<oid:12>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "media",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:10>",
+                    "<oid:12>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find kitchen depth 0": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "9349ad496fc9080b"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 10,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "9349ad496fc9080b"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find kitchen depth 2": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "c7b0565b2d147126"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 2,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "c7b0565b2d147126"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "_id": {
+            "$in": [
+             {
+              "$obj": {
+               "$oid": "<oid:4>"
+              }
+             },
+             {
+              "$obj": {
+               "$oid": "<oid:7>"
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "673eef6083df1732"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>",
+                    "<oid:7>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>",
+                    "<oid:7>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$in": [
+           {
+            "$obj": {
+             "$oid": "<oid:10>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:12>"
+            }
+           }
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 0,
+       "sort": {
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "media",
+     "op": "find",
+     "state": "ddc54940b1f9b795"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "media",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:10>",
+                    "<oid:12>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "media",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:10>",
+                    "<oid:12>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "findByID kitchen depth 0": [
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$eq": {
+           "$obj": {
+            "$oid": "<oid:14>"
+           }
+          }
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "kitchens",
+     "op": "findOne",
+     "state": "895bce99d38c42b4"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$eq": {
+           "$obj": {
+            "$oid": "<oid:14>"
+           }
+          }
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "895bce99d38c42b4"
+    }
+   ],
+   "method": "findOne",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "<oid:14>"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "<oid:14>"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "findByID kitchen depth 1": [
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$eq": {
+           "$obj": {
+            "$oid": "<oid:25>"
+           }
+          }
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "kitchens",
+     "op": "findOne",
+     "state": "895bce99d38c42b4"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$eq": {
+           "$obj": {
+            "$oid": "<oid:25>"
+           }
+          }
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "895bce99d38c42b4"
+    }
+   ],
+   "method": "findOne",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "<oid:25>"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "<oid:25>"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "_id": {
+            "$in": [
+             {
+              "$obj": {
+               "$oid": "<oid:4>"
+              }
+             },
+             {
+              "$obj": {
+               "$oid": "<oid:7>"
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "673eef6083df1732"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>",
+                    "<oid:7>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>",
+                    "<oid:7>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$in": [
+           {
+            "$obj": {
+             "$oid": "<oid:12>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:10>"
+            }
+           }
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 0,
+       "sort": {
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "media",
+     "op": "find",
+     "state": "ddc54940b1f9b795"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "media",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:12>",
+                    "<oid:10>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "media",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:12>",
+                    "<oid:10>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "findByID kitchen sparse": [
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$eq": {
+           "$obj": {
+            "$oid": "<oid:69>"
+           }
+          }
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "kitchens",
+     "op": "findOne",
+     "state": "895bce99d38c42b4"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$eq": {
+           "$obj": {
+            "$oid": "<oid:69>"
+           }
+          }
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "895bce99d38c42b4"
+    }
+   ],
+   "method": "findOne",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "<oid:69>"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "<oid:69>"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "findByID missing": [
+  {
+   "events": [],
+   "method": "findOne",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": 999999
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": 999999
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "thrownArgs": []
+  }
+ ],
+ "findByID missing disableErrors": [
+  {
+   "events": [],
+   "method": "findOne",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": 999999
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": 999999
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "thrownArgs": []
+  }
+ ],
+ "find localized en": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "estimatedDocumentCount",
+     "state": "49e9dce497e4bea6"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 10,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "find",
+     "state": "49e9dce497e4bea6"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find localized es": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "estimatedDocumentCount",
+     "state": "3bf6f4f2f45394e2"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 10,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "find",
+     "state": "3bf6f4f2f45394e2"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "es",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "es",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find localized de fallback": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "estimatedDocumentCount",
+     "state": "95b2ee29451ed595"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 10,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "find",
+     "state": "95b2ee29451ed595"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "de",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "de",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find localized de no fallback": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "estimatedDocumentCount",
+     "state": "95b2ee29451ed595"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 10,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "find",
+     "state": "95b2ee29451ed595"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "de",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "de",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find localized all": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "estimatedDocumentCount",
+     "state": "a55af3b1be452fbb"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 10,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "find",
+     "state": "a55af3b1be452fbb"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "all",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "all",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find kitchen locale all (nested localized)": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "a84d07e35418dbf2"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 2,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "a84d07e35418dbf2"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "all",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "all",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find targets with joins": [
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {}
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$limit": 10
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "f7915453219bf49d"
+    },
+    {
+     "args": [
+      {}
+     ],
+     "collection": "targets",
+     "op": "estimatedDocumentCount",
+     "state": "f7915453219bf49d"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$in": [
+           {
+            "$obj": {
+             "$oid": "<oid:36>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:58>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:25>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:47>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:14>"
+            }
+           }
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 0,
+       "sort": {
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "9effb3290cf3a894"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:36>",
+                    "<oid:58>",
+                    "<oid:25>",
+                    "<oid:47>",
+                    "<oid:14>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:36>",
+                    "<oid:58>",
+                    "<oid:25>",
+                    "<oid:47>",
+                    "<oid:14>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$in": [
+           {
+            "$obj": {
+             "$oid": "<oid:99>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:85>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:71>"
+            }
+           }
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 0,
+       "sort": {
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "kitchen-localizeds",
+     "op": "find",
+     "state": "a88469afc4a5dd71"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:99>",
+                    "<oid:85>",
+                    "<oid:71>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen-localized",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:99>",
+                    "<oid:85>",
+                    "<oid:71>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find targets joins options": [
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {}
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$limit": 10
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {
+            "checkbox": {
+             "$eq": true
+            }
+           }
+          },
+          {
+           "$sort": {
+            "number": -1
+           }
+          },
+          {
+           "$limit": 2
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           1
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           1
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.totalDocs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$count": "result"
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.totalDocs": {
+          "$ifNull": [
+           {
+            "$first": "$localizedRefs.en.totalDocs.result"
+           },
+           0
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "6184cc8baef8123a"
+    },
+    {
+     "args": [
+      {}
+     ],
+     "collection": "targets",
+     "op": "estimatedDocumentCount",
+     "state": "6184cc8baef8123a"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenArrayRefs": false,
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "limit": 1,
+           "sort": "-number",
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {
+              "checkbox": {
+               "$obj": {
+                "$arg": "0.joins.kitchenRefs.where.checkbox",
+                "value": {
+                 "equals": true
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "count": true,
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenArrayRefs": false,
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "limit": 1,
+           "sort": "-number",
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {
+              "checkbox": {
+               "$obj": {
+                "$arg": "0.joins.kitchenRefs.where.checkbox",
+                "value": {
+                 "equals": true
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "count": true,
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find targets joins false": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "targets",
+     "op": "estimatedDocumentCount",
+     "state": "726513fc9f5d2726"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 10,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "targets",
+     "op": "find",
+     "state": "726513fc9f5d2726"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": false,
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": false,
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find targets locale es": [
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {}
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$limit": 10
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.es.docs",
+         "foreignField": "rel.es",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.es.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.es.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.es.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.es.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.es.docs": {
+          "$slice": [
+           "$localizedRefs.es.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "69c41b8bf7c1892c"
+    },
+    {
+     "args": [
+      {}
+     ],
+     "collection": "targets",
+     "op": "estimatedDocumentCount",
+     "state": "69c41b8bf7c1892c"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 10,
+     "locale": "es",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 10,
+     "locale": "es",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find media": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "media",
+     "op": "estimatedDocumentCount",
+     "state": "25970a5e8db0b845"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 10,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "media",
+     "op": "find",
+     "state": "25970a5e8db0b845"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "media",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "media",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "find custom ids": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "custom-ids",
+     "op": "estimatedDocumentCount",
+     "state": "9d9ca84cc97b8dd0"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 10,
+       "sort": {
+        "_id": 1,
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "custom-ids",
+     "op": "find",
+     "state": "9d9ca84cc97b8dd0"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "custom-ids",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": "id",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "custom-ids",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": "id",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "findByID custom id": [
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$eq": "a-key"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "custom-ids",
+     "op": "findOne",
+     "state": "72fee158fe119b4a"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$eq": "a-key"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "custom-ids",
+     "op": "find",
+     "state": "72fee158fe119b4a"
+    }
+   ],
+   "method": "findOne",
+   "firstAwait": [
+    {
+     "collection": "custom-ids",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "a-key"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "custom-ids",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "a-key"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "count kitchen": [
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "5f5f0eb6e32bfd27"
+    }
+   ],
+   "method": "count",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "locale": "en",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "locale": "en",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "count kitchen where": [
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "number": {
+          "$eq": 5
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "kitchens",
+     "op": "countDocuments",
+     "state": "67fe0a89143e6fc0"
+    },
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "number": {
+            "$eq": 5
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$group": {
+         "_id": 1,
+         "n": {
+          "$sum": 1
+         }
+        }
+       }
+      ],
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "kitchens",
+     "op": "aggregate",
+     "state": "67fe0a89143e6fc0"
+    }
+   ],
+   "method": "count",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "locale": "en",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "number": {
+               "$obj": {
+                "$arg": "0.where.and.0.number",
+                "value": {
+                 "equals": 5
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "locale": "en",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "number": {
+               "$obj": {
+                "$arg": "0.where.and.0.number",
+                "value": {
+                 "equals": 5
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "populate targets title": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "c7b0565b2d147126"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 2,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "c7b0565b2d147126"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$in": [
+           {
+            "$obj": {
+             "$oid": "<oid:4>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:7>"
+            }
+           }
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 0,
+       "sort": {
+        "createdAt": -1
+       },
+       "projection": {
+        "_id": true,
+        "title": true
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "find",
+     "state": "ce697fb0e25262c9"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": {
+      "$obj": {
+       "$arg": "0.select",
+       "value": {
+        "title": true
+       }
+      }
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>",
+                    "<oid:7>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": {
+      "$obj": {
+       "$arg": "0.select",
+       "value": {
+        "title": true
+       }
+      }
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>",
+                    "<oid:7>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$in": [
+           {
+            "$obj": {
+             "$oid": "<oid:10>"
+            }
+           },
+           {
+            "$obj": {
+             "$oid": "<oid:12>"
+            }
+           }
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 0,
+       "sort": {
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "media",
+     "op": "find",
+     "state": "ddc54940b1f9b795"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "media",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:10>",
+                    "<oid:12>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "media",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:10>",
+                    "<oid:12>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ]
+}

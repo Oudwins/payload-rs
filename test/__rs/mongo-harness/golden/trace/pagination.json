@@ -1,0 +1,709 @@
+{
+ "limit 2 page 1": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "c7b0565b2d147126"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 2,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 0
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "c7b0565b2d147126"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "limit 2 page 2": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "460c312dc7480b8e"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 2,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 2
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "460c312dc7480b8e"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 2,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 2,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "limit 2 page 3": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "0af761281dcef9c6"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 2,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 4
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "0af761281dcef9c6"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 3,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 3,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "limit 2 page 9": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "34380eb2a028c4f6"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 2,
+       "sort": {
+        "createdAt": -1
+       },
+       "skip": 16
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "34380eb2a028c4f6"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 9,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 9,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "limit 0": [
+  {
+   "events": [
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 0,
+       "sort": {
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "07bfd662177a538e"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "pagination false": [
+  {
+   "events": [
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 2,
+       "sort": {
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "0cc3576cd77c69b9"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 2,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": {
+      "$undefined": true
+     },
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "limit 4 sorted": [
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "kitchens",
+     "op": "estimatedDocumentCount",
+     "state": "8d5b417fbc9b12a9"
+    },
+    {
+     "args": [
+      {},
+      {
+       "session": {
+        "$undefined": true
+       },
+       "limit": 4,
+       "sort": {
+        "number": -1,
+        "createdAt": -1
+       },
+       "skip": 4
+      }
+     ],
+     "collection": "kitchens",
+     "op": "find",
+     "state": "8d5b417fbc9b12a9"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 4,
+     "locale": "en",
+     "page": 2,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": "-number",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "kitchen",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {}
+      }
+     },
+     "limit": 4,
+     "locale": "en",
+     "page": 2,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": "-number",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ]
+}

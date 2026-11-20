@@ -230,12 +230,12 @@ type RustWriteOperations = {
  */
 const isRustWriteOperations =
   (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
-const rustWriteOperationsSpecifier = '../../../../engine-rs/src/ops-write/index.js'
+const rustWriteOperationsSpecifier = '@payloadcms/engine-rs/ops-write'
 let rustWriteOperations: RustWriteOperations | undefined
 const rustWriteOperationsLoad: Promise<RustWriteOperations> | undefined = isRustWriteOperations
-  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustWriteOperationsSpecifier).then(
-      (loaded: RustWriteOperations) => (rustWriteOperations = loaded),
-    )
+  ? import('../../utilities/importRustEngine.js')
+      .then(({ importRustEngine }) => importRustEngine(rustWriteOperationsSpecifier))
+      .then((loaded: RustWriteOperations) => (rustWriteOperations = loaded))
   : undefined
 void rustWriteOperationsLoad?.catch(() => {})
 

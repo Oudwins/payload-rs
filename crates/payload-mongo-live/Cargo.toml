@@ -1,0 +1,25 @@
+[package]
+name = "payload-mongo-live"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Live-object MongoDB engine (MONGO_ENGINE_CONTRACT.md "Stage 1b decision" and "Live helpers"):
+# shared helpers every `payload-mongo-live*` crate uses (bson instance checks, ObjectId
+# construction, clock reads, getSession, model resolution, error helpers) and the READ data
+# methods of @payloadcms/db-mongodb, run on the core runtime (payload-core-runtime) against the
+# caller's live JS objects and the adapter's real mongoose models.
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-query = { path = "../payload-core-query" }
+payload-core-runtime = { path = "../payload-core-runtime" }
+
+[dev-dependencies]
+napi-derive = "3"
+
+# standalone addon (core runtime + core query + mongo live bindings) for the differentials, so they
+# do not depend on the rest of payload-node building
+[[example]]
+name = "live_reads_addon"
+crate-type = ["cdylib"]

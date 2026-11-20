@@ -29,7 +29,8 @@ if (!intProject) {
 const baseAlias = intProject.resolve?.alias ?? []
 
 /**
- * Shadow runs execute every database call twice, one pair at a time (packages/engine-rs/src/shadow-mongo):
+ * Shadow runs execute every database call twice (packages/engine-rs/src/shadow-mongo; serial mode:
+ * one pair at a time):
  * timeouts are multiplied by PAYLOAD_RS_TIMEOUT_FACTOR (default 3 with PAYLOAD_RS_MONGO_SHADOW=true,
  * otherwise 1, i.e. upstream's values).
  */
@@ -61,6 +62,10 @@ export default defineConfig({
         },
         test: {
           ...intProject.test,
+          setupFiles: [
+            ...(intProject.test?.setupFiles ?? []),
+            path.resolve(dirname, 'flushOnFileEnd.ts'),
+          ],
           ...(timeoutFactor === 1
             ? {}
             : {

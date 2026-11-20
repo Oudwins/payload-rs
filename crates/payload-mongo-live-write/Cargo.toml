@@ -1,0 +1,18 @@
+[package]
+name = "payload-mongo-live-write"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Live-object MongoDB engine (MONGO_ENGINE_CONTRACT.md "Stage 1b decision"): the WRITE data methods
+# of @payloadcms/db-mongodb (create, createGlobal, createVersion, createGlobalVersion, updateOne,
+# updateMany, upsert, updateGlobal, updateVersion, updateGlobalVersion, updateJobs, deleteOne,
+# deleteMany, deleteVersions), run on the core runtime against the caller's live
+# JS objects and the adapter's real mongoose models. Shared helpers: payload-mongo-live;
+# handleError: payload-mongo-live-transform.
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-runtime = { path = "../payload-core-runtime" }
+payload-mongo-live = { path = "../payload-mongo-live" }
+payload-mongo-live-transform = { path = "../payload-mongo-live-transform" }

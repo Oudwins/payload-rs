@@ -26,11 +26,11 @@ type RustCoreTraverseFields = {
  * else `PAYLOAD_ENGINE=rs`. Unset, these are payload's exports. See RUST_PORT.md.
  */
 const isRustCoreEngine = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
-const rustCoreHooksSpecifier = '../../engine-rs/src/runtime/hooks.js'
+const rustCoreHooksSpecifier = '@payloadcms/engine-rs/runtime/hooks'
 let rustCoreHooks: RustCoreTraverseFields | undefined
 const rustCoreHooksLoad: Promise<RustCoreTraverseFields> | undefined = isRustCoreEngine
-  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustCoreHooksSpecifier).then(
-      (loaded: RustCoreTraverseFields) => (rustCoreHooks = loaded),
+  ? importRustEngine(rustCoreHooksSpecifier).then(
+      (loaded) => (rustCoreHooks = loaded as RustCoreTraverseFields),
     )
   : undefined
 void rustCoreHooksLoad?.catch(() => {})
@@ -700,4 +700,58 @@ export const getLexicalHooks: (args: {
       },
     ],
   }
+}
+
+/**
+ * Imports `specifier` (an `@payloadcms/engine-rs` subpath, an optional peer dependency) the way
+ * this package resolves it where it is installed. richtext-lexical is bundled by Next.js, where a
+ * runtime `import()` would resolve from the emitted chunk instead (engine-rs is usually not
+ * installed there), and `import.meta.url` may be the chunk's or a build-time path: it is used only
+ * when the nearest package.json above it is this package's; otherwise richtext-lexical is looked up
+ * in the `node_modules` directories from the working directory up. Called only when the Rust core
+ * engine is selected; the specifier is computed, so bundlers neither trace nor bundle engine-rs.
+ */
+function importRustEngine(specifier: string): Promise<unknown> {
+  const fs = process.getBuiltinModule('node:fs')
+  const path = process.getBuiltinModule('node:path')
+  const { createRequire } = process.getBuiltinModule('node:module')
+  const { fileURLToPath, pathToFileURL } = process.getBuiltinModule('node:url')
+  const packageName = '@payloadcms/richtext-lexical'
+  const readName = (manifest: string): string | undefined => {
+    try {
+      return (JSON.parse(fs.readFileSync(manifest, 'utf8')) as { name?: string }).name
+    } catch {
+      return undefined
+    }
+  }
+  let manifest: string | undefined
+  if (import.meta.url.startsWith('file:')) {
+    for (let dir = path.dirname(fileURLToPath(import.meta.url)); ; dir = path.dirname(dir)) {
+      const candidate = path.join(dir, 'package.json')
+      if (fs.existsSync(candidate)) {
+        manifest = readName(candidate) === packageName ? candidate : undefined
+        break
+      }
+      if (dir === path.dirname(dir)) {
+        break
+      }
+    }
+  }
+  for (let dir = process.cwd(); !manifest; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, 'node_modules', packageName, 'package.json')
+    if (fs.existsSync(candidate)) {
+      manifest = fs.realpathSync(candidate)
+    } else if (dir === path.dirname(dir)) {
+      break
+    }
+  }
+  let resolved = specifier
+  if (manifest) {
+    try {
+      resolved = pathToFileURL(createRequire(manifest).resolve(specifier)).href
+    } catch {
+      // not installed next to richtext-lexical: Node's own resolution reports it
+    }
+  }
+  return import(/* @vite-ignore */ /* webpackIgnore: true */ resolved)
 }

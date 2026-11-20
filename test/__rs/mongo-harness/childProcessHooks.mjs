@@ -34,13 +34,14 @@ export const createResolveHook = (paths) =>
     if (isFromTestModule && paths.dbMongodbTarget && specifier === '@payloadcms/db-mongodb') {
       return { shortCircuit: true, url: paths.dbMongodbTarget }
     }
-    const resolved = nextResolve(specifier, context)
+    // decided before `nextResolve`: on a clean checkout test/databaseAdapter.js (generated,
+    // git-ignored) does not exist and the default resolver throws ERR_MODULE_NOT_FOUND
     if (
       isFromTestModule &&
       DATABASE_ADAPTER_SPECIFIER.test(specifier) &&
-      resolved.url === new URL('databaseAdapter.js', paths.testDir).href
+      new URL(specifier, parent).href === new URL('databaseAdapter.js', paths.testDir).href
     ) {
       return { shortCircuit: true, url: paths.target }
     }
-    return resolved
+    return nextResolve(specifier, context)
   }

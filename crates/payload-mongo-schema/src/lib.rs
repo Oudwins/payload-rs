@@ -9,6 +9,7 @@
 
 mod build;
 mod description;
+pub mod live;
 
 pub use build::{Input, Options, build_mongo_models};
 pub use description::{

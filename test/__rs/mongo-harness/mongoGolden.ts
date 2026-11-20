@@ -1,21 +1,91 @@
-import { withMongoClient } from '../../../packages/engine-rs/scripts/mongo/mongoDatabases.mjs'
 /**
  * MongoDB side of the golden helpers (../harness/golden.ts) for parity.int.spec.ts.
  *
- * - `createMongoNormaliser`: the golden normaliser applied after `toComparable`, so bson values
- *   keep their type (`{"$oid": "<oid:N>"}`, `{"$regex": …}`, `{"$decimal": …}`) instead of being
- *   flattened, and generated ObjectIds still become `<oid:N>` in order of first appearance.
+ * - `createMongoNormaliser`: values go through `toComparable` first, so bson values keep their
+ *   type (`{"$oid": "<oid:N>"}`, `{"$regex": …}`, `{"$decimal": …}`) and user objects carrying a
+ *   marker key are wrapped (`{"$obj": …}`: never equal to a typed value). Then the golden JSON
+ *   spelling of ../harness/golden.ts (`$undefined`, `$date`, `$error`, `$bytes`, ...) with
+ *   24-hex strings numbered `<oid:N>` in order of first appearance. Unlike the SQLite normaliser
+ *   no string is rewritten otherwise (no drizzle table-alias rule).
  * - `dumpRows` / `dumpSchema`: read the database of MONGODB_URL through a separate MongoClient
  *   (independent of the adapter under test): every non-system collection sorted by name, its
  *   documents sorted by content then `_id` (see `contentKey`), its indexes (without `ns`) sorted by name and its options.
  */
+import { withMongoClient } from '../../../packages/engine-rs/scripts/mongo/mongoDatabases.mjs'
 import { toComparable } from '../../../packages/engine-rs/src/shadow-mongo/comparable.js'
 import { withoutRacedGlobalType } from '../../../packages/engine-rs/src/shadow-mongo/index.js'
-import { createNormaliser } from '../harness/golden.js'
+
+const OBJECT_ID_HEX = /^[0-9a-f]{24}$/
 
 export const createMongoNormaliser = () => {
-  const normalise = createNormaliser()
-  return (value: unknown) => normalise(toComparable(value))
+  const ids = new Map<string, string>()
+  const normalise = (value: unknown, seen: WeakSet<object>): unknown => {
+    if (value === undefined) {
+      return { $undefined: true }
+    }
+    if (typeof value === 'string') {
+      if (!OBJECT_ID_HEX.test(value)) {
+        return value
+      }
+      if (!ids.has(value)) {
+        ids.set(value, `<oid:${ids.size + 1}>`)
+      }
+      return ids.get(value)
+    }
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : { $number: String(value) }
+    }
+    if (typeof value === 'bigint') {
+      return { $bigint: value.toString() }
+    }
+    if (typeof value === 'function') {
+      return { $function: true }
+    }
+    if (value === null || typeof value !== 'object') {
+      return value
+    }
+    if (seen.has(value)) {
+      return { $circular: true }
+    }
+    seen.add(value)
+    try {
+      if (value instanceof Date) {
+        return { $date: value.toISOString() }
+      }
+      if (value instanceof Error) {
+        const e = value as { data?: unknown; status?: unknown } & Error
+        return {
+          $error: normalise(
+            toComparable({
+              class: e.constructor?.name,
+              data: e.data,
+              message: e.message,
+              name: e.name,
+              status: e.status,
+            }),
+            seen,
+          ),
+        }
+      }
+      if (value instanceof Uint8Array) {
+        return { $bytes: Buffer.from(value).toString('base64') }
+      }
+      if (Array.isArray(value)) {
+        return value.map((item) => normalise(item, seen))
+      }
+      const out: Record<string, unknown> = {}
+      for (const key of Object.keys(value)) {
+        out[key] = normalise((value as Record<string, unknown>)[key], seen)
+      }
+      return out
+    } finally {
+      seen.delete(value)
+    }
+  }
+  return Object.assign((value: unknown) => normalise(toComparable(value), new WeakSet()), {
+    /** `<oid:N>` of a 24-hex value seen so far (undefined when not seen yet). */
+    idName: (hex: string) => ids.get(hex),
+  })
 }
 
 const databaseName = () => new URL(process.env.MONGODB_URL!).pathname.replace(/^\//, '')
@@ -27,8 +97,6 @@ const listCollections = async (db: any) =>
   ((await db.listCollections().toArray()) as { name: string; options?: unknown; type?: string }[])
     .filter((info) => !info.name.startsWith('system.'))
     .sort(byName)
-
-const OBJECT_ID_HEX = /^[0-9a-f]{24}$/
 
 /**
  * Sort key of a document: its content without `_id` and with every ObjectId (generated array row

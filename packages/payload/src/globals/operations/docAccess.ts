@@ -58,12 +58,12 @@ const isRustOperations =
   (process.env.PAYLOAD_OPS_GLOBAL_ENGINE ||
     process.env.PAYLOAD_CORE_ENGINE ||
     process.env.PAYLOAD_ENGINE) === 'rs'
-const rustOperationsSpecifier = '../../../../engine-rs/src/ops-global/index.js'
+const rustOperationsSpecifier = '@payloadcms/engine-rs/ops-global'
 let rustOperations: RustOperations | undefined
 const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
-  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustOperationsSpecifier).then(
-      (loaded: RustOperations) => (rustOperations = loaded),
-    )
+  ? import('../../utilities/importRustEngine.js')
+      .then(({ importRustEngine }) => importRustEngine(rustOperationsSpecifier))
+      .then((loaded: RustOperations) => (rustOperations = loaded))
   : undefined
 void rustOperationsLoad?.catch(() => {})
 

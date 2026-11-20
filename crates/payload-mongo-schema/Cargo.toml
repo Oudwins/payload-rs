@@ -12,5 +12,7 @@ version.workspace = true
 
 [dependencies]
 indexmap.workspace = true
+napi = { version = "3", features = ["napi10"] }
+payload-core-runtime = { path = "../payload-core-runtime" }
 payload-engine = { path = "../payload-engine" }
 serde_json.workspace = true

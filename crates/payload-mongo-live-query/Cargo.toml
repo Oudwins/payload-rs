@@ -1,0 +1,27 @@
+[package]
+name = "payload-mongo-live-query"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# Live-object port of `@payloadcms/db-mongodb`'s `queries/*` (buildQuery, parseParams,
+# buildAndOrConditions, buildSearchParam, sanitizeQueryValue, buildSortParam,
+# getLocalizedSortProperty, the `Model.buildQuery` static of getBuildQueryPlugin) and
+# `utilities/buildProjectionFromSelect.ts` on the payload-core-runtime (strategy B of
+# RUST_CORE_DESIGN.md): the caller's where / sort / select / config / mongoose models are used
+# in place through Node-API on the JS thread.
+
+[dependencies]
+napi = { version = "3", features = ["napi10"] }
+payload-core-runtime = { path = "../payload-core-runtime" }
+payload-mongo-live = { path = "../payload-mongo-live" }
+
+[dev-dependencies]
+napi-derive = "3"
+payload-core-query = { path = "../payload-core-query" }
+
+# standalone addon (core runtime + core query + mongo live + this binding) for the differentials,
+# so they do not depend on the rest of payload-node building
+[[example]]
+name = "live_query_addon"
+crate-type = ["cdylib"]

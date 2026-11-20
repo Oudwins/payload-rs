@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/payload-mongo-live-joins",
   "crates/payload-core-validate",
   "crates/payload-core-validate/live",
   "crates/payload-engine",
@@ -25,6 +26,10 @@ members = [
   "crates/payload-mongo-joins",
   "crates/payload-mongo-schema",
   "crates/payload-mongo-transform",
+  "crates/payload-mongo-live-query",
+  "crates/payload-mongo-live",
+  "crates/payload-mongo-live-write",
+  "crates/payload-mongo-live-transform",
 ]
 
 [workspace.package]

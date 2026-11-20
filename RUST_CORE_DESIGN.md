@@ -102,11 +102,17 @@ reactions:
 - `spawn(fut)` = calling a JS async function. The future is polled synchronously until it first
   suspends, and a native promise (`napi_create_promise`) is returned. It is resolved/rejected
   when the body returns/throws.
-- `await_js(v)` = the JS `await` operator. It calls a host helper doing
-  `Promise.resolve(v).then(r => resume(token, true, r), e => resume(token, false, e))`, which is
-  tick-for-tick what `await` does (PromiseResolve + PerformPromiseThen; a native promise is not
-  re-wrapped, and thenables get the same NewPromiseResolveThenableJob). `resume` re-polls the
-  task synchronously inside that reaction job, which is where an `await` continuation would run.
+- `await_js(v)` = the JS `await` operator. It calls a JS async function compiled by the binding,
+  `async (v, token) => { let r; try { r = await v } catch (e) { resume(token, false, e); return }
+  resume(token, true, r) }`: V8's own Await (PromiseResolve with one `constructor` read, then
+  PerformPromiseThen without SpeciesConstructor; thenables get the NewPromiseResolveThenableJob).
+  `resume` re-polls the task synchronously inside that reaction job, which is where the TS `await`
+  continuation runs. (Phase J; it was `Promise.resolve(v).then(...)`, whose `.then` read
+  `constructor` a second time and `Symbol.species`.) Proof: test/__rs/core-runtime/semantics.mjs.
+- `call(fut).await` = calling a nested async function from inside an engine task without native
+  recursion (the task's driver runs the callee's synchronous prefix, then resumes the caller with
+  the callee's promise); nesting costs heap, and an emulated stack limit (per-level frame bytes vs
+  V8's measured limit) throws V8's RangeError at a depth no shallower than TS.
 - Concurrency is only composed in JS (`Promise.all` over spawned task promises), never with Rust
   combinators. The resulting microtask graph is therefore isomorphic to the TS one.
 
@@ -287,8 +293,8 @@ Most engine `async` functions end with `await x; return v` where `x` is a native
 `await Promise.all(rows)` at the end of every container `promise()`; `await traverseFields(...);
 return data` in the `beforeValidate`/`afterChange`/`beforeDuplicate` entries). For such a body that
 reaches its tail in the first, synchronous poll (it never suspended), the function's promise is
-`%Promise.prototype.then%.call(x, () => v)` (host `thenReturn`) instead of a task promise plus an
-await/resume round trip:
+`(async (p, v) => { await p; return v })(x, v)` (the binding's compiled `thenReturn`) instead of a
+task promise plus an await/resume round trip:
 
 - `await x` of a native promise is one `PerformPromiseThen(x, resume)` (PromiseResolve returns `x`
   itself), so the function resumes in the reaction job of `x` and resolves its promise with `v`
@@ -714,21 +720,19 @@ reference function is the Rust port (e.g. under `vitest.upstream.config.ts`).
   key/flag arrays are derived from the same snapshot. Hook arrays, access functions and default
   values _are_ read live when used. Config reads themselves are not replayed one for one (a
   getter on a field config object would see fewer reads).
-- `Array.isArray` on a Proxy of an array differs from `napi_is_array`; this is used for row and
-  fallback-locale checks.
+- (fixed in phase J) row / locale-row / fallback-locale / point checks call the current
+  `Array.isArray`; proxies of arrays are iterated through their traps.
 - Engine-created errors have Rust-side stacks (class and message identical).
 - `for...of` over hook arrays and `fallbackLocale` arrays is done by index with a live length.
   This matches arrays with the default iterator, not a patched `Symbol.iterator`.
-- `await` is emulated with `Promise.resolve(v).then(...)` (`%Promise.resolve%` and
-  `%Promise.prototype.then%` captured when the module loads), the same PromiseResolve + reaction
-  as `await`. A user patching `Promise.prototype.then` _before_ the engine module loads would be
-  called by the engine where `await` would not call it.
+- (fixed in phase J) `await` is V8's own Await (see section 2B).
 - Promises the engine pushes for fields that complete synchronously come from host
   `async` functions (`fulfilled`/`rejected`); `async_hooks`/`PromiseHook` observers would see a
   different creation context than upstream's `promise()` (same count, same states).
-- The engine pushes onto `fieldPromises` for task fields with `napi_set_element` (upstream calls
-  `fieldPromises.push`); the host helpers (`leafRun`, `pushSettled`, population) call the real
-  `push`. Only a patched `Array.prototype.push` could tell.
+- (fixed in phase J) task fields are pushed with the real `fieldPromises.push`, looked up before
+  `promise()` runs like the TS member call. Row iteration still runs natively (a patched
+  `Array.prototype.forEach` on real arrays is not called; proxies of arrays go through their
+  traps).
 - `req.payload.blocks[blockType] ?? ...` returning a falsy non-nullish value is treated as "no
   block". The TS passes that falsy value to `getBlockSelect`.
 - `oxlint` flags the relative `packages/*/src` imports in `packages/engine-rs/src/runtime` and
@@ -751,9 +755,12 @@ reference function is the Rust port (e.g. under `vitest.upstream.config.ts`).
   TypeError is upstream's.
 - Leaf-only traversals iterate the live fields array (`fields.forEach`, like upstream); the
   ported traversals iterate the decoded descriptors (see the first item).
-- Tail awaits (`spawn_tail`) call `%Promise.prototype.then%` where `await` performs the same
-  reaction internally: it reads `x.constructor` / `@@species` like `then` does (`await` reads
-  `constructor` only), observable only with a patched `Promise[Symbol.species]`.
+- (fixed in phase J) tail awaits are a real async-function tail (no species reads).
+- Nesting depth: nested fields run through `executor::call` (no native recursion). The emulated
+  overflow charges 512 bytes per field level (TS: ~690): afterRead nested groups overflow at 1,870
+  levels vs TS 1,423 (test/__rs/core-runtime/depth.int.spec.ts). User JS called at depth sees the
+  real (shallow) native stack, so a hook recursing near V8's limit at a deep level gets more room
+  than in TS.
 - The dispatch (payload's hook modules and richtext-lexical's hooks) loads `hooks.ts` with a
   dynamic `import()` of a relative source path: it works where payload runs from source (vitest,
   `pnpm dev`), not from a published `dist` build (engine-rs is private). A call before that import

@@ -1,0 +1,7010 @@
+{
+ "site lifecycle": [
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "3022f1793d63b9d0"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "3022f1793d63b9d0"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "latest": {
+          "$eq": true
+         }
+        }
+       ]
+      },
+      {
+       "limit": 1,
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "skip": {
+        "$undefined": true
+       },
+       "sort": {
+        "updatedAt": -1,
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "find",
+     "state": "6684892e70045ddf"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "site",
+     "limit": 1,
+     "locale": "all",
+     "pagination": false,
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {}
+            }
+           },
+           {
+            "$obj": {
+             "$arg": "0.where.and.1",
+             "value": {
+              "latest": {
+               "$obj": {
+                "$arg": "0.where.and.1.latest",
+                "value": {
+                 "equals": true
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "site",
+     "limit": 1,
+     "locale": "all",
+     "pagination": false,
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {}
+            }
+           },
+           {
+            "$obj": {
+             "$arg": "0.where.and.1",
+             "value": {
+              "latest": {
+               "$obj": {
+                "$arg": "0.where.and.1.latest",
+                "value": {
+                 "equals": true
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "593e8e8e7e3c428f"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "593e8e8e7e3c428f"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "site",
+     "locale": "all",
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site",
+     "locale": "all",
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "globalSlug": {
+        "$eq": "site"
+       }
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "payload-locked-documents",
+     "op": "deleteMany",
+     "state": "481e6a06a8d51655"
+    }
+   ],
+   "method": "deleteMany",
+   "firstAwait": [
+    {
+     "collection": "payload-locked-documents",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "globalSlug": {
+         "$obj": {
+          "$arg": "0.where.globalSlug",
+          "value": {
+           "equals": "site"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "payload-locked-documents",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "globalSlug": {
+         "$obj": {
+          "$arg": "0.where.globalSlug",
+          "value": {
+           "equals": "site"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "read": "clock"
+    },
+    {
+     "args": [
+      {
+       "_id": {
+        "$obj": {
+         "$oid": "<oid:157>"
+        }
+       },
+       "createdAt": {
+        "$date": "2025-01-01T00:07:59.000Z"
+       },
+       "updatedAt": {
+        "$date": "2025-01-01T00:07:59.000Z"
+       },
+       "globalType": "site",
+       "title": "site-1",
+       "number": 1,
+       "rel": {
+        "$obj": {
+         "$oid": "<oid:4>"
+        }
+       },
+       "array": [
+        {
+         "text": "g1",
+         "id": "<oid:158>"
+        }
+       ],
+       "_status": "draft",
+       "__v": 0
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "insertOne",
+     "state": "1efe9bcdbd8e5979"
+    }
+   ],
+   "method": "createGlobal",
+   "firstAwait": [
+    {
+     "slug": "site",
+     "data": {
+      "$obj": {
+       "$arg": "0.data",
+       "value": {
+        "array": {
+         "$obj": {
+          "$arg": "0.data.array",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.data.array.0",
+             "value": {
+              "text": "g1",
+              "id": "<oid:158>"
+             }
+            }
+           }
+          ]
+         }
+        },
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "title": "site-1",
+        "_status": "draft",
+        "updatedAt": "2025-01-01T00:07:59.000Z",
+        "createdAt": "2025-01-01T00:07:59.000Z",
+        "createdBy": {
+         "$undefined": true
+        },
+        "updatedBy": {
+         "$undefined": true
+        },
+        "globalType": "site"
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site",
+     "data": {
+      "$obj": {
+       "$arg": "0.data",
+       "value": {
+        "array": {
+         "$obj": {
+          "$arg": "0.data.array",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.data.array.0",
+             "value": {
+              "text": "g1",
+              "id": "<oid:158>"
+             }
+            }
+           }
+          ]
+         }
+        },
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "title": "site-1",
+        "_status": "draft",
+        "updatedAt": "2025-01-01T00:07:59.000Z",
+        "createdAt": "2025-01-01T00:07:59.000Z",
+        "createdBy": {
+         "$undefined": true
+        },
+        "updatedBy": {
+         "$undefined": true
+        },
+        "globalType": "site"
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "read": "clock"
+    },
+    {
+     "args": [
+      {
+       "_id": {
+        "$obj": {
+         "$oid": "<oid:159>"
+        }
+       },
+       "version": {
+        "title": "site-1",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": [
+         {
+          "text": "g1",
+          "id": "<oid:158>"
+         }
+        ],
+        "_status": "draft",
+        "updatedAt": {
+         "$date": "2025-01-01T00:07:59.000Z"
+        },
+        "createdAt": {
+         "$date": "2025-01-01T00:07:59.000Z"
+        }
+       },
+       "createdAt": {
+        "$date": "2025-01-01T00:07:59.000Z"
+       },
+       "updatedAt": {
+        "$date": "2025-01-01T00:07:59.000Z"
+       },
+       "latest": true,
+       "__v": 0
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "insertOne",
+     "state": "3411554600678fcf"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$ne": {
+           "$obj": {
+            "$oid": "<oid:159>"
+           }
+          }
+         }
+        },
+        {
+         "latest": {
+          "$eq": true
+         }
+        }
+       ]
+      },
+      {
+       "$unset": {
+        "latest": 1
+       }
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "updateMany",
+     "state": "3411554600678fcf"
+    }
+   ],
+   "method": "createGlobalVersion",
+   "firstAwait": [
+    {
+     "autosave": false,
+     "collectionSlug": {
+      "$undefined": true
+     },
+     "createdAt": "2025-01-01T00:07:59.000Z",
+     "globalSlug": "site",
+     "parent": {
+      "$undefined": true
+     },
+     "returning": {
+      "$undefined": true
+     },
+     "select": {
+      "$undefined": true
+     },
+     "updatedAt": "2025-01-01T00:07:59.000Z",
+     "versionData": {
+      "$obj": {
+       "$arg": "0.versionData",
+       "value": {
+        "createdAt": "2025-01-01T00:07:59.000Z",
+        "updatedAt": "2025-01-01T00:07:59.000Z",
+        "globalType": "site",
+        "title": "site-1",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": {
+         "$obj": {
+          "$arg": "0.versionData.array",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.versionData.array.0",
+             "value": {
+              "text": "g1",
+              "id": "<oid:158>"
+             }
+            }
+           }
+          ]
+         }
+        },
+        "_status": "draft",
+        "id": "<oid:157>"
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "autosave": false,
+     "collectionSlug": {
+      "$undefined": true
+     },
+     "createdAt": "2025-01-01T00:07:59.000Z",
+     "globalSlug": "site",
+     "parent": {
+      "$undefined": true
+     },
+     "returning": {
+      "$undefined": true
+     },
+     "select": {
+      "$undefined": true
+     },
+     "updatedAt": "2025-01-01T00:07:59.000Z",
+     "versionData": {
+      "$obj": {
+       "$arg": "0.versionData",
+       "value": {
+        "createdAt": "2025-01-01T00:07:59.000Z",
+        "updatedAt": "2025-01-01T00:07:59.000Z",
+        "globalType": "site",
+        "title": "site-1",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": {
+         "$obj": {
+          "$arg": "0.versionData.array",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.versionData.array.0",
+             "value": {
+              "text": "g1",
+              "id": "<oid:158>"
+             }
+            }
+           }
+          ]
+         }
+        },
+        "_status": "draft",
+        "id": "<oid:157>"
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {},
+      {
+       "limit": 1,
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "skip": 100,
+       "sort": {
+        "updatedAt": -1,
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "find",
+     "state": "d35b1949aa6e82a3"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "site",
+     "limit": 1,
+     "page": 101,
+     "pagination": false,
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {}
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "site",
+     "limit": 1,
+     "page": 101,
+     "pagination": false,
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {}
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "_id": {
+            "$in": [
+             {
+              "$obj": {
+               "$oid": "<oid:4>"
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "2368e340dacb3c58"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": null,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": null,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "latest": {
+          "$eq": true
+         }
+        }
+       ]
+      },
+      {
+       "limit": 1,
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "skip": {
+        "$undefined": true
+       },
+       "sort": {
+        "updatedAt": -1,
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "find",
+     "state": "d4e35f02cbb59306"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "site",
+     "limit": 1,
+     "locale": "en",
+     "pagination": false,
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {}
+            }
+           },
+           {
+            "$obj": {
+             "$arg": "0.where.and.1",
+             "value": {
+              "latest": {
+               "$obj": {
+                "$arg": "0.where.and.1.latest",
+                "value": {
+                 "equals": true
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "site",
+     "limit": 1,
+     "locale": "en",
+     "pagination": false,
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {}
+            }
+           },
+           {
+            "$obj": {
+             "$arg": "0.where.and.1",
+             "value": {
+              "latest": {
+               "$obj": {
+                "$arg": "0.where.and.1.latest",
+                "value": {
+                 "equals": true
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "11442d1d8693b860"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "11442d1d8693b860"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "globalSlug": {
+        "$eq": "site"
+       }
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "payload-locked-documents",
+     "op": "deleteMany",
+     "state": "481e6a06a8d51655"
+    }
+   ],
+   "method": "deleteMany",
+   "firstAwait": [
+    {
+     "collection": "payload-locked-documents",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "globalSlug": {
+         "$obj": {
+          "$arg": "0.where.globalSlug",
+          "value": {
+           "equals": "site"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "payload-locked-documents",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "globalSlug": {
+         "$obj": {
+          "$arg": "0.where.globalSlug",
+          "value": {
+           "equals": "site"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "read": "clock"
+    },
+    {
+     "args": [
+      {
+       "_id": {
+        "$obj": {
+         "$oid": "<oid:160>"
+        }
+       },
+       "version": {
+        "title": "site-draft",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": [
+         {
+          "text": "g1",
+          "id": "<oid:158>"
+         }
+        ],
+        "_status": "draft",
+        "updatedAt": {
+         "$date": "2025-01-01T00:08:00.000Z"
+        },
+        "createdAt": {
+         "$date": "2025-01-01T00:07:59.000Z"
+        }
+       },
+       "createdAt": {
+        "$date": "2025-01-01T00:08:00.000Z"
+       },
+       "updatedAt": {
+        "$date": "2025-01-01T00:08:00.000Z"
+       },
+       "latest": true,
+       "__v": 0
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "insertOne",
+     "state": "a7aacb075851edcf"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$ne": {
+           "$obj": {
+            "$oid": "<oid:160>"
+           }
+          }
+         }
+        },
+        {
+         "latest": {
+          "$eq": true
+         }
+        }
+       ]
+      },
+      {
+       "$unset": {
+        "latest": 1
+       }
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "updateMany",
+     "state": "a7aacb075851edcf"
+    }
+   ],
+   "method": "createGlobalVersion",
+   "firstAwait": [
+    {
+     "autosave": false,
+     "collectionSlug": {
+      "$undefined": true
+     },
+     "createdAt": "2025-01-01T00:08:00.000Z",
+     "globalSlug": "site",
+     "parent": {
+      "$undefined": true
+     },
+     "returning": {
+      "$undefined": true
+     },
+     "select": {
+      "$undefined": true
+     },
+     "updatedAt": "2025-01-01T00:08:00.000Z",
+     "versionData": {
+      "$obj": {
+       "$arg": "0.versionData",
+       "value": {
+        "title": "site-draft",
+        "_status": "draft",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": {
+         "$obj": {
+          "$arg": "0.versionData.array",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.versionData.array.0",
+             "value": {
+              "text": "g1",
+              "id": "<oid:158>"
+             }
+            }
+           }
+          ]
+         }
+        },
+        "updatedAt": "2025-01-01T00:08:00.000Z",
+        "createdAt": "2025-01-01T00:07:59.000Z",
+        "createdBy": {
+         "$undefined": true
+        },
+        "updatedBy": {
+         "$undefined": true
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "autosave": false,
+     "collectionSlug": {
+      "$undefined": true
+     },
+     "createdAt": "2025-01-01T00:08:00.000Z",
+     "globalSlug": "site",
+     "parent": {
+      "$undefined": true
+     },
+     "returning": {
+      "$undefined": true
+     },
+     "select": {
+      "$undefined": true
+     },
+     "updatedAt": "2025-01-01T00:08:00.000Z",
+     "versionData": {
+      "$obj": {
+       "$arg": "0.versionData",
+       "value": {
+        "title": "site-draft",
+        "_status": "draft",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": {
+         "$obj": {
+          "$arg": "0.versionData.array",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.versionData.array.0",
+             "value": {
+              "text": "g1",
+              "id": "<oid:158>"
+             }
+            }
+           }
+          ]
+         }
+        },
+        "updatedAt": "2025-01-01T00:08:00.000Z",
+        "createdAt": "2025-01-01T00:07:59.000Z",
+        "createdBy": {
+         "$undefined": true
+        },
+        "updatedBy": {
+         "$undefined": true
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {},
+      {
+       "limit": 1,
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "skip": 100,
+       "sort": {
+        "updatedAt": -1,
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "find",
+     "state": "d35b1949aa6e82a3"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "site",
+     "limit": 1,
+     "page": 101,
+     "pagination": false,
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {}
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "site",
+     "limit": 1,
+     "page": 101,
+     "pagination": false,
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {}
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "_id": {
+            "$in": [
+             {
+              "$obj": {
+               "$oid": "<oid:4>"
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "8284aba20d45be2b"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": true,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": true,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "3022f1793d63b9d0"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "3022f1793d63b9d0"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "3022f1793d63b9d0"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "3022f1793d63b9d0"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "$and": [
+          {
+           "version._status": {
+            "$eq": "draft"
+           }
+          },
+          {
+           "$or": [
+            {
+             "updatedAt": {
+              "$gt": {
+               "$date": "2025-01-01T00:07:59.000Z"
+              }
+             }
+            },
+            {
+             "latest": {
+              "$eq": true
+             }
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "limit": 1,
+       "session": {
+        "$undefined": true
+       },
+       "skip": {
+        "$undefined": true
+       },
+       "sort": {
+        "updatedAt": -1,
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "find",
+     "state": "97d4d899cae752ac"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "collection": "site",
+     "global": "site",
+     "limit": 1,
+     "locale": "en",
+     "pagination": false,
+     "select": {
+      "$undefined": true
+     },
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "and": {
+               "$obj": {
+                "$arg": "0.where.and.0.and",
+                "value": [
+                 {
+                  "$obj": {
+                   "$arg": "0.where.and.0.and.0",
+                   "value": {
+                    "version._status": {
+                     "$obj": {
+                      "$arg": "0.where.and.0.and.0.version._status",
+                      "value": {
+                       "equals": "draft"
+                      }
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "$obj": {
+                   "$arg": "0.where.and.0.and.1",
+                   "value": {
+                    "or": {
+                     "$obj": {
+                      "$arg": "0.where.and.0.and.1.or",
+                      "value": [
+                       {
+                        "$obj": {
+                         "$arg": "0.where.and.0.and.1.or.0",
+                         "value": {
+                          "updatedAt": {
+                           "$obj": {
+                            "$arg": "0.where.and.0.and.1.or.0.updatedAt",
+                            "value": {
+                             "greater_than": "2025-01-01T00:07:59.000Z"
+                            }
+                           }
+                          }
+                         }
+                        }
+                       },
+                       {
+                        "$obj": {
+                         "$arg": "0.where.and.0.and.1.or.1",
+                         "value": {
+                          "latest": {
+                           "$obj": {
+                            "$arg": "0.where.and.0.and.1.or.1.latest",
+                            "value": {
+                             "equals": true
+                            }
+                           }
+                          }
+                         }
+                        }
+                       }
+                      ]
+                     }
+                    }
+                   }
+                  }
+                 }
+                ]
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "site",
+     "global": "site",
+     "limit": 1,
+     "locale": "en",
+     "pagination": false,
+     "select": {
+      "$undefined": true
+     },
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "and": {
+               "$obj": {
+                "$arg": "0.where.and.0.and",
+                "value": [
+                 {
+                  "$obj": {
+                   "$arg": "0.where.and.0.and.0",
+                   "value": {
+                    "version._status": {
+                     "$obj": {
+                      "$arg": "0.where.and.0.and.0.version._status",
+                      "value": {
+                       "equals": "draft"
+                      }
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "$obj": {
+                   "$arg": "0.where.and.0.and.1",
+                   "value": {
+                    "or": {
+                     "$obj": {
+                      "$arg": "0.where.and.0.and.1.or",
+                      "value": [
+                       {
+                        "$obj": {
+                         "$arg": "0.where.and.0.and.1.or.0",
+                         "value": {
+                          "updatedAt": {
+                           "$obj": {
+                            "$arg": "0.where.and.0.and.1.or.0.updatedAt",
+                            "value": {
+                             "greater_than": "2025-01-01T00:07:59.000Z"
+                            }
+                           }
+                          }
+                         }
+                        }
+                       },
+                       {
+                        "$obj": {
+                         "$arg": "0.where.and.0.and.1.or.1",
+                         "value": {
+                          "latest": {
+                           "$obj": {
+                            "$arg": "0.where.and.0.and.1.or.1.latest",
+                            "value": {
+                             "equals": true
+                            }
+                           }
+                          }
+                         }
+                        }
+                       }
+                      ]
+                     }
+                    }
+                   }
+                  }
+                 }
+                ]
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "_site_versions",
+     "op": "estimatedDocumentCount",
+     "state": "fb382683110f7a2f"
+    },
+    {
+     "args": [
+      {},
+      {
+       "limit": 10,
+       "session": {
+        "$undefined": true
+       },
+       "skip": 0,
+       "sort": {
+        "createdAt": 1
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "find",
+     "state": "fb382683110f7a2f"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "site",
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": "createdAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "site",
+     "limit": 10,
+     "locale": "en",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": "createdAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "_id": {
+            "$in": [
+             {
+              "$obj": {
+               "$oid": "<oid:4>"
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "2368e340dacb3c58"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": null,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": null,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "estimatedDocumentCount",
+     "state": "8aa8cc053bae1de6"
+    }
+   ],
+   "method": "countGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "site",
+     "locale": "en",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "site",
+     "locale": "en",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$eq": {
+           "$obj": {
+            "$oid": "<oid:159>"
+           }
+          }
+         }
+        }
+       ]
+      },
+      {
+       "limit": 1,
+       "session": {
+        "$undefined": true
+       },
+       "skip": {
+        "$undefined": true
+       },
+       "sort": {
+        "updatedAt": -1,
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "find",
+     "state": "cefd17e528fa07f2"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "site",
+     "limit": 1,
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "<oid:159>"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "site",
+     "limit": 1,
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "<oid:159>"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "_id": {
+            "$in": [
+             {
+              "$obj": {
+               "$oid": "<oid:4>"
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "2368e340dacb3c58"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": null,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": null,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$eq": {
+           "$obj": {
+            "$oid": "<oid:159>"
+           }
+          }
+         }
+        }
+       ]
+      },
+      {
+       "limit": 1,
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "skip": {
+        "$undefined": true
+       },
+       "sort": {
+        "updatedAt": -1,
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "find",
+     "state": "f9a78ed6a5e5bb45"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "site",
+     "limit": 1,
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "<oid:159>"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "site",
+     "limit": 1,
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "equals": "<oid:159>"
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "dc1e8e914368c0ea"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "dc1e8e914368c0ea"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$undefined": true
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": {
+      "$undefined": true
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "_id": {
+            "$in": [
+             {
+              "$obj": {
+               "$oid": "<oid:4>"
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "0296e668ae26197a"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "2f7e2d715fd972ce"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "2f7e2d715fd972ce"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "site"
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site"
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "read": "clock"
+    },
+    {
+     "args": [
+      {
+       "globalType": "site"
+      },
+      {
+       "$set": {
+        "globalType": "site",
+        "createdAt": {
+         "$date": "2025-01-01T00:07:59.000Z"
+        },
+        "updatedAt": {
+         "$date": "2025-01-01T00:08:01.000Z"
+        },
+        "_status": "draft",
+        "array": [
+         {
+          "$obj": {
+           "$mongooseDocument": {
+            "text": "g1",
+            "id": "<oid:158>"
+           }
+          }
+         }
+        ],
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "number": 1,
+        "title": "site-1"
+       }
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "returnDocument": "after",
+       "returnOriginal": false
+      }
+     ],
+     "collection": "globals",
+     "op": "findOneAndUpdate",
+     "state": "91f1e786792c79e5"
+    }
+   ],
+   "method": "updateGlobal",
+   "firstAwait": [
+    {
+     "slug": "site",
+     "data": {
+      "$obj": {
+       "$arg": "0.data",
+       "value": {
+        "title": "site-1",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": {
+         "$obj": {
+          "$arg": "0.data.array",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.data.array.0",
+             "value": {
+              "text": "g1",
+              "id": "<oid:158>"
+             }
+            }
+           }
+          ]
+         }
+        },
+        "_status": "draft",
+        "updatedAt": "2025-01-01T00:08:01.000Z",
+        "createdAt": "2025-01-01T00:07:59.000Z",
+        "globalType": "site"
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site",
+     "data": {
+      "$obj": {
+       "$arg": "0.data",
+       "value": {
+        "title": "site-1",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": {
+         "$obj": {
+          "$arg": "0.data.array",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.data.array.0",
+             "value": {
+              "text": "g1",
+              "id": "<oid:158>"
+             }
+            }
+           }
+          ]
+         }
+        },
+        "_status": "draft",
+        "updatedAt": "2025-01-01T00:08:01.000Z",
+        "createdAt": "2025-01-01T00:07:59.000Z",
+        "globalType": "site"
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "read": "clock"
+    },
+    {
+     "args": [
+      {
+       "_id": {
+        "$obj": {
+         "$oid": "<oid:161>"
+        }
+       },
+       "version": {
+        "title": "site-1",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": [
+         {
+          "text": "g1",
+          "id": "<oid:158>"
+         }
+        ],
+        "_status": "draft",
+        "updatedAt": {
+         "$date": "2025-01-01T00:08:01.000Z"
+        },
+        "createdAt": {
+         "$date": "2025-01-01T00:07:59.000Z"
+        }
+       },
+       "createdAt": {
+        "$date": "2025-01-01T00:07:59.000Z"
+       },
+       "updatedAt": {
+        "$date": "2025-01-01T00:08:01.000Z"
+       },
+       "latest": true,
+       "__v": 0
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "insertOne",
+     "state": "e7a6a6146af61a94"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "_id": {
+          "$ne": {
+           "$obj": {
+            "$oid": "<oid:161>"
+           }
+          }
+         }
+        },
+        {
+         "latest": {
+          "$eq": true
+         }
+        }
+       ]
+      },
+      {
+       "$unset": {
+        "latest": 1
+       }
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "updateMany",
+     "state": "e7a6a6146af61a94"
+    }
+   ],
+   "method": "createGlobalVersion",
+   "firstAwait": [
+    {
+     "autosave": false,
+     "collectionSlug": {
+      "$undefined": true
+     },
+     "createdAt": "2025-01-01T00:07:59.000Z",
+     "globalSlug": "site",
+     "parent": {
+      "$undefined": true
+     },
+     "returning": {
+      "$undefined": true
+     },
+     "select": {
+      "$undefined": true
+     },
+     "updatedAt": "2025-01-01T00:08:01.000Z",
+     "versionData": {
+      "$obj": {
+       "$arg": "0.versionData",
+       "value": {
+        "createdAt": "2025-01-01T00:07:59.000Z",
+        "updatedAt": "2025-01-01T00:08:01.000Z",
+        "globalType": "site",
+        "title": "site-1",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": {
+         "$obj": {
+          "$arg": "0.versionData.array",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.versionData.array.0",
+             "value": {
+              "text": "g1",
+              "id": "<oid:158>"
+             }
+            }
+           }
+          ]
+         }
+        },
+        "_status": "draft",
+        "id": "<oid:157>"
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "autosave": false,
+     "collectionSlug": {
+      "$undefined": true
+     },
+     "createdAt": "2025-01-01T00:07:59.000Z",
+     "globalSlug": "site",
+     "parent": {
+      "$undefined": true
+     },
+     "returning": {
+      "$undefined": true
+     },
+     "select": {
+      "$undefined": true
+     },
+     "updatedAt": "2025-01-01T00:08:01.000Z",
+     "versionData": {
+      "$obj": {
+       "$arg": "0.versionData",
+       "value": {
+        "createdAt": "2025-01-01T00:07:59.000Z",
+        "updatedAt": "2025-01-01T00:08:01.000Z",
+        "globalType": "site",
+        "title": "site-1",
+        "number": 1,
+        "rel": {
+         "$obj": {
+          "$oid": "<oid:4>"
+         }
+        },
+        "array": {
+         "$obj": {
+          "$arg": "0.versionData.array",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.versionData.array.0",
+             "value": {
+              "text": "g1",
+              "id": "<oid:158>"
+             }
+            }
+           }
+          ]
+         }
+        },
+        "_status": "draft",
+        "id": "<oid:157>"
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {},
+      {
+       "limit": 1,
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "skip": 100,
+       "sort": {
+        "updatedAt": -1,
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "_site_versions",
+     "op": "find",
+     "state": "d35b1949aa6e82a3"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "site",
+     "limit": 1,
+     "page": 101,
+     "pagination": false,
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {}
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "site",
+     "limit": 1,
+     "page": 101,
+     "pagination": false,
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {}
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "_id": {
+            "$in": [
+             {
+              "$obj": {
+               "$oid": "<oid:4>"
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "2368e340dacb3c58"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": null,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": null,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "3022f1793d63b9d0"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "3022f1793d63b9d0"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      [
+       {
+        "$match": {
+         "$and": [
+          {
+           "_id": {
+            "$in": [
+             {
+              "$obj": {
+               "$oid": "<oid:4>"
+              }
+             }
+            ]
+           }
+          }
+         ]
+        }
+       },
+       {
+        "$sort": {
+         "createdAt": -1
+        }
+       },
+       {
+        "$skip": 0
+       },
+       {
+        "$lookup": {
+         "as": "kitchenRefs.docs",
+         "foreignField": "rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenRefs.docs": {
+          "$slice": [
+           "$kitchenRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "kitchenArrayRefs.docs",
+         "foreignField": "array.rel",
+         "from": "kitchens",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$kitchenArrayRefs.docs"
+             }
+            }
+           }
+          }
+         },
+         "kitchenArrayRefs.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$kitchenArrayRefs.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "kitchenArrayRefs.docs": {
+          "$slice": [
+           "$kitchenArrayRefs.docs",
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$lookup": {
+         "as": "localizedRefs.en.docs",
+         "foreignField": "rel.en",
+         "from": "kitchen-localizeds",
+         "localField": "_id",
+         "pipeline": [
+          {
+           "$match": {}
+          },
+          {
+           "$sort": {
+            "createdAt": -1
+           }
+          },
+          {
+           "$limit": 11
+          }
+         ]
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$obj": {
+           "$obj": {
+            "$obj": {
+             "$map": {
+              "as": "doc",
+              "in": "$$doc._id",
+              "input": "$localizedRefs.en.docs"
+             }
+            }
+           }
+          }
+         },
+         "localizedRefs.en.hasNextPage": {
+          "$gt": [
+           {
+            "$size": "$localizedRefs.en.docs"
+           },
+           10
+          ]
+         }
+        }
+       },
+       {
+        "$addFields": {
+         "localizedRefs.en.docs": {
+          "$slice": [
+           "$localizedRefs.en.docs",
+           10
+          ]
+         }
+        }
+       }
+      ],
+      {
+       "collation": {
+        "$undefined": true
+       },
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "targets",
+     "op": "aggregate",
+     "state": "0296e668ae26197a"
+    }
+   ],
+   "method": "find",
+   "firstAwait": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "targets",
+     "draftsEnabled": false,
+     "joins": {
+      "$obj": {
+       "$arg": "0.joins",
+       "value": {
+        "kitchenRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "kitchenArrayRefs": {
+         "$obj": {
+          "$arg": "0.joins.kitchenArrayRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.kitchenArrayRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        },
+        "localizedRefs": {
+         "$obj": {
+          "$arg": "0.joins.localizedRefs",
+          "value": {
+           "where": {
+            "$obj": {
+             "$arg": "0.joins.localizedRefs.where",
+             "value": {}
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     },
+     "limit": 0,
+     "locale": "en",
+     "page": 1,
+     "pagination": false,
+     "select": null,
+     "sort": {
+      "$undefined": true
+     },
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": [
+           {
+            "$obj": {
+             "$arg": "0.where.and.0",
+             "value": {
+              "id": {
+               "$obj": {
+                "$arg": "0.where.and.0.id",
+                "value": {
+                 "in": {
+                  "$obj": {
+                   "$arg": "0.where.and.0.id.in",
+                   "value": [
+                    "<oid:4>"
+                   ]
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "projection": {
+        "_id": true,
+        "title": true,
+        "globalType": 1
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "6001e11dbef52700"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "site"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "projection": {
+        "_id": true,
+        "title": true,
+        "globalType": 1
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "6001e11dbef52700"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$obj": {
+       "$arg": "0.select",
+       "value": {
+        "title": true
+       }
+      }
+     },
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "site",
+     "locale": "en",
+     "select": {
+      "$obj": {
+       "$arg": "0.select",
+       "value": {
+        "title": true
+       }
+      }
+     },
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "localized global": [
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "localized-global"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "412e7f6205ab5513"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "localized-global"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "412e7f6205ab5513"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "localized-global",
+     "locale": "all",
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "localized-global",
+     "locale": "all",
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "globalSlug": {
+        "$eq": "localized-global"
+       }
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "payload-locked-documents",
+     "op": "deleteMany",
+     "state": "ffc25b7dfe63f07c"
+    }
+   ],
+   "method": "deleteMany",
+   "firstAwait": [
+    {
+     "collection": "payload-locked-documents",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "globalSlug": {
+         "$obj": {
+          "$arg": "0.where.globalSlug",
+          "value": {
+           "equals": "localized-global"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "payload-locked-documents",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "globalSlug": {
+         "$obj": {
+          "$arg": "0.where.globalSlug",
+          "value": {
+           "equals": "localized-global"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "read": "clock"
+    },
+    {
+     "args": [
+      {
+       "_id": {
+        "$obj": {
+         "$oid": "<oid:162>"
+        }
+       },
+       "createdAt": {
+        "$date": "2025-01-01T00:08:02.000Z"
+       },
+       "updatedAt": {
+        "$date": "2025-01-01T00:08:02.000Z"
+       },
+       "globalType": "localized-global",
+       "title": {
+        "en": "en"
+       },
+       "items": {
+        "en": [
+         {
+          "text": "en-item",
+          "id": "<oid:163>"
+         }
+        ]
+       },
+       "__v": 0
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "insertOne",
+     "state": "44fce98940a3e613"
+    }
+   ],
+   "method": "createGlobal",
+   "firstAwait": [
+    {
+     "slug": "localized-global",
+     "data": {
+      "$obj": {
+       "$arg": "0.data",
+       "value": {
+        "items": {
+         "$obj": {
+          "$arg": "0.data.items",
+          "value": {
+           "en": {
+            "$obj": {
+             "$arg": "0.data.items.en",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.data.items.en.0",
+                "value": {
+                 "text": "en-item",
+                 "id": "<oid:163>"
+                }
+               }
+              }
+             ]
+            }
+           }
+          }
+         }
+        },
+        "title": {
+         "$obj": {
+          "$arg": "0.data.title",
+          "value": {
+           "en": "en"
+          }
+         }
+        },
+        "updatedAt": "2025-01-01T00:08:02.000Z",
+        "createdAt": "2025-01-01T00:08:02.000Z",
+        "createdBy": {
+         "$undefined": true
+        },
+        "updatedBy": {
+         "$undefined": true
+        },
+        "globalType": "localized-global"
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "localized-global",
+     "data": {
+      "$obj": {
+       "$arg": "0.data",
+       "value": {
+        "items": {
+         "$obj": {
+          "$arg": "0.data.items",
+          "value": {
+           "en": {
+            "$obj": {
+             "$arg": "0.data.items.en",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.data.items.en.0",
+                "value": {
+                 "text": "en-item",
+                 "id": "<oid:163>"
+                }
+               }
+              }
+             ]
+            }
+           }
+          }
+         }
+        },
+        "title": {
+         "$obj": {
+          "$arg": "0.data.title",
+          "value": {
+           "en": "en"
+          }
+         }
+        },
+        "updatedAt": "2025-01-01T00:08:02.000Z",
+        "createdAt": "2025-01-01T00:08:02.000Z",
+        "createdBy": {
+         "$undefined": true
+        },
+        "updatedBy": {
+         "$undefined": true
+        },
+        "globalType": "localized-global"
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "read": "clock"
+    },
+    {
+     "args": [
+      {
+       "_id": {
+        "$obj": {
+         "$oid": "<oid:164>"
+        }
+       },
+       "version": {
+        "title": {
+         "en": "en"
+        },
+        "items": {
+         "en": [
+          {
+           "text": "en-item",
+           "id": "<oid:163>"
+          }
+         ]
+        },
+        "updatedAt": {
+         "$date": "2025-01-01T00:08:02.000Z"
+        },
+        "createdAt": {
+         "$date": "2025-01-01T00:08:02.000Z"
+        }
+       },
+       "createdAt": {
+        "$date": "2025-01-01T00:08:02.000Z"
+       },
+       "updatedAt": {
+        "$date": "2025-01-01T00:08:02.000Z"
+       },
+       "__v": 0
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "_localized-global_versions",
+     "op": "insertOne",
+     "state": "57bedc2e75724e15"
+    }
+   ],
+   "method": "createGlobalVersion",
+   "firstAwait": [
+    {
+     "autosave": false,
+     "collectionSlug": {
+      "$undefined": true
+     },
+     "createdAt": "2025-01-01T00:08:02.000Z",
+     "globalSlug": "localized-global",
+     "parent": {
+      "$undefined": true
+     },
+     "returning": {
+      "$undefined": true
+     },
+     "select": {
+      "$undefined": true
+     },
+     "updatedAt": "2025-01-01T00:08:02.000Z",
+     "versionData": {
+      "$obj": {
+       "$arg": "0.versionData",
+       "value": {
+        "createdAt": "2025-01-01T00:08:02.000Z",
+        "updatedAt": "2025-01-01T00:08:02.000Z",
+        "globalType": "localized-global",
+        "title": {
+         "$obj": {
+          "$arg": "0.versionData.title",
+          "value": {
+           "en": "en"
+          }
+         }
+        },
+        "items": {
+         "$obj": {
+          "$arg": "0.versionData.items",
+          "value": {
+           "en": {
+            "$obj": {
+             "$arg": "0.versionData.items.en",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.versionData.items.en.0",
+                "value": {
+                 "text": "en-item",
+                 "id": "<oid:163>"
+                }
+               }
+              }
+             ]
+            }
+           }
+          }
+         }
+        },
+        "id": "<oid:162>"
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "autosave": false,
+     "collectionSlug": {
+      "$undefined": true
+     },
+     "createdAt": "2025-01-01T00:08:02.000Z",
+     "globalSlug": "localized-global",
+     "parent": {
+      "$undefined": true
+     },
+     "returning": {
+      "$undefined": true
+     },
+     "select": {
+      "$undefined": true
+     },
+     "updatedAt": "2025-01-01T00:08:02.000Z",
+     "versionData": {
+      "$obj": {
+       "$arg": "0.versionData",
+       "value": {
+        "createdAt": "2025-01-01T00:08:02.000Z",
+        "updatedAt": "2025-01-01T00:08:02.000Z",
+        "globalType": "localized-global",
+        "title": {
+         "$obj": {
+          "$arg": "0.versionData.title",
+          "value": {
+           "en": "en"
+          }
+         }
+        },
+        "items": {
+         "$obj": {
+          "$arg": "0.versionData.items",
+          "value": {
+           "en": {
+            "$obj": {
+             "$arg": "0.versionData.items.en",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.versionData.items.en.0",
+                "value": {
+                 "text": "en-item",
+                 "id": "<oid:163>"
+                }
+               }
+              }
+             ]
+            }
+           }
+          }
+         }
+        },
+        "id": "<oid:162>"
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {},
+      {
+       "limit": 1,
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "skip": 100,
+       "sort": {
+        "updatedAt": -1,
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "_localized-global_versions",
+     "op": "find",
+     "state": "0676de8a68555463"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "localized-global",
+     "limit": 1,
+     "page": 101,
+     "pagination": false,
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {}
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "localized-global",
+     "limit": 1,
+     "page": 101,
+     "pagination": false,
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {}
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "localized-global"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "412e7f6205ab5513"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "localized-global"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "412e7f6205ab5513"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "localized-global",
+     "locale": "all",
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "localized-global",
+     "locale": "all",
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "globalSlug": {
+        "$eq": "localized-global"
+       }
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "payload-locked-documents",
+     "op": "deleteMany",
+     "state": "ffc25b7dfe63f07c"
+    }
+   ],
+   "method": "deleteMany",
+   "firstAwait": [
+    {
+     "collection": "payload-locked-documents",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "globalSlug": {
+         "$obj": {
+          "$arg": "0.where.globalSlug",
+          "value": {
+           "equals": "localized-global"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "collection": "payload-locked-documents",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "globalSlug": {
+         "$obj": {
+          "$arg": "0.where.globalSlug",
+          "value": {
+           "equals": "localized-global"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "read": "clock"
+    },
+    {
+     "args": [
+      {
+       "globalType": "localized-global"
+      },
+      {
+       "$set": {
+        "globalType": "localized-global",
+        "createdAt": {
+         "$date": "2025-01-01T00:08:02.000Z"
+        },
+        "updatedAt": {
+         "$date": "2025-01-01T00:08:03.000Z"
+        },
+        "title": {
+         "$obj": {
+          "$mongooseDocument": {
+           "en": "en",
+           "es": "es"
+          }
+         }
+        },
+        "items": {
+         "$obj": {
+          "$mongooseDocument": {
+           "en": [
+            {
+             "text": "en-item",
+             "id": "<oid:163>"
+            }
+           ],
+           "es": [
+            {
+             "text": "es-item",
+             "id": "<oid:165>"
+            }
+           ]
+          }
+         }
+        }
+       }
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "returnDocument": "after",
+       "returnOriginal": false
+      }
+     ],
+     "collection": "globals",
+     "op": "findOneAndUpdate",
+     "state": "8fdc5e79491cd814"
+    }
+   ],
+   "method": "updateGlobal",
+   "firstAwait": [
+    {
+     "slug": "localized-global",
+     "data": {
+      "$obj": {
+       "$arg": "0.data",
+       "value": {
+        "items": {
+         "$obj": {
+          "$arg": "0.data.items",
+          "value": {
+           "en": {
+            "$obj": {
+             "$arg": "0.data.items.en",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.data.items.en.0",
+                "value": {
+                 "text": "en-item",
+                 "id": "<oid:163>"
+                }
+               }
+              }
+             ]
+            }
+           },
+           "es": {
+            "$obj": {
+             "$arg": "0.data.items.es",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.data.items.es.0",
+                "value": {
+                 "text": "es-item",
+                 "id": "<oid:165>"
+                }
+               }
+              }
+             ]
+            }
+           }
+          }
+         }
+        },
+        "title": {
+         "$obj": {
+          "$arg": "0.data.title",
+          "value": {
+           "en": "en",
+           "es": "es"
+          }
+         }
+        },
+        "updatedAt": "2025-01-01T00:08:03.000Z",
+        "createdAt": "2025-01-01T00:08:02.000Z",
+        "createdBy": {
+         "$undefined": true
+        },
+        "updatedBy": {
+         "$undefined": true
+        },
+        "globalType": "localized-global"
+       }
+      }
+     },
+     "select": {
+      "$undefined": true
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "localized-global",
+     "data": {
+      "$obj": {
+       "$arg": "0.data",
+       "value": {
+        "items": {
+         "$obj": {
+          "$arg": "0.data.items",
+          "value": {
+           "en": {
+            "$obj": {
+             "$arg": "0.data.items.en",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.data.items.en.0",
+                "value": {
+                 "text": "en-item",
+                 "id": "<oid:163>"
+                }
+               }
+              }
+             ]
+            }
+           },
+           "es": {
+            "$obj": {
+             "$arg": "0.data.items.es",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.data.items.es.0",
+                "value": {
+                 "text": "es-item",
+                 "id": "<oid:165>"
+                }
+               }
+              }
+             ]
+            }
+           }
+          }
+         }
+        },
+        "title": {
+         "$obj": {
+          "$arg": "0.data.title",
+          "value": {
+           "en": "en",
+           "es": "es"
+          }
+         }
+        },
+        "updatedAt": "2025-01-01T00:08:03.000Z",
+        "createdAt": "2025-01-01T00:08:02.000Z",
+        "createdBy": {
+         "$undefined": true
+        },
+        "updatedBy": {
+         "$undefined": true
+        },
+        "globalType": "localized-global"
+       }
+      }
+     },
+     "select": {
+      "$undefined": true
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "read": "clock"
+    },
+    {
+     "args": [
+      {
+       "_id": {
+        "$obj": {
+         "$oid": "<oid:166>"
+        }
+       },
+       "version": {
+        "title": {
+         "en": "en",
+         "es": "es"
+        },
+        "items": {
+         "en": [
+          {
+           "text": "en-item",
+           "id": "<oid:163>"
+          }
+         ],
+         "es": [
+          {
+           "text": "es-item",
+           "id": "<oid:165>"
+          }
+         ]
+        },
+        "updatedAt": {
+         "$date": "2025-01-01T00:08:03.000Z"
+        },
+        "createdAt": {
+         "$date": "2025-01-01T00:08:02.000Z"
+        }
+       },
+       "createdAt": {
+        "$date": "2025-01-01T00:08:03.000Z"
+       },
+       "updatedAt": {
+        "$date": "2025-01-01T00:08:03.000Z"
+       },
+       "__v": 0
+      },
+      {
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       }
+      }
+     ],
+     "collection": "_localized-global_versions",
+     "op": "insertOne",
+     "state": "7af76b9e7683b21c"
+    }
+   ],
+   "method": "createGlobalVersion",
+   "firstAwait": [
+    {
+     "autosave": false,
+     "collectionSlug": {
+      "$undefined": true
+     },
+     "createdAt": "2025-01-01T00:08:03.000Z",
+     "globalSlug": "localized-global",
+     "parent": {
+      "$undefined": true
+     },
+     "returning": {
+      "$undefined": true
+     },
+     "select": {
+      "$undefined": true
+     },
+     "updatedAt": "2025-01-01T00:08:03.000Z",
+     "versionData": {
+      "$obj": {
+       "$arg": "0.versionData",
+       "value": {
+        "createdAt": "2025-01-01T00:08:02.000Z",
+        "updatedAt": "2025-01-01T00:08:03.000Z",
+        "globalType": "localized-global",
+        "title": {
+         "$obj": {
+          "$arg": "0.versionData.title",
+          "value": {
+           "en": "en",
+           "es": "es"
+          }
+         }
+        },
+        "items": {
+         "$obj": {
+          "$arg": "0.versionData.items",
+          "value": {
+           "en": {
+            "$obj": {
+             "$arg": "0.versionData.items.en",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.versionData.items.en.0",
+                "value": {
+                 "text": "en-item",
+                 "id": "<oid:163>"
+                }
+               }
+              }
+             ]
+            }
+           },
+           "es": {
+            "$obj": {
+             "$arg": "0.versionData.items.es",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.versionData.items.es.0",
+                "value": {
+                 "text": "es-item",
+                 "id": "<oid:165>"
+                }
+               }
+              }
+             ]
+            }
+           }
+          }
+         }
+        },
+        "id": "<oid:162>"
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "autosave": false,
+     "collectionSlug": {
+      "$undefined": true
+     },
+     "createdAt": "2025-01-01T00:08:03.000Z",
+     "globalSlug": "localized-global",
+     "parent": {
+      "$undefined": true
+     },
+     "returning": {
+      "$undefined": true
+     },
+     "select": {
+      "$undefined": true
+     },
+     "updatedAt": "2025-01-01T00:08:03.000Z",
+     "versionData": {
+      "$obj": {
+       "$arg": "0.versionData",
+       "value": {
+        "createdAt": "2025-01-01T00:08:02.000Z",
+        "updatedAt": "2025-01-01T00:08:03.000Z",
+        "globalType": "localized-global",
+        "title": {
+         "$obj": {
+          "$arg": "0.versionData.title",
+          "value": {
+           "en": "en",
+           "es": "es"
+          }
+         }
+        },
+        "items": {
+         "$obj": {
+          "$arg": "0.versionData.items",
+          "value": {
+           "en": {
+            "$obj": {
+             "$arg": "0.versionData.items.en",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.versionData.items.en.0",
+                "value": {
+                 "text": "en-item",
+                 "id": "<oid:163>"
+                }
+               }
+              }
+             ]
+            }
+           },
+           "es": {
+            "$obj": {
+             "$arg": "0.versionData.items.es",
+             "value": [
+              {
+               "$obj": {
+                "$arg": "0.versionData.items.es.0",
+                "value": {
+                 "text": "es-item",
+                 "id": "<oid:165>"
+                }
+               }
+              }
+             ]
+            }
+           }
+          }
+         }
+        },
+        "id": "<oid:162>"
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {},
+      {
+       "limit": 1,
+       "session": {
+        "$obj": {
+         "$opaque": "session"
+        }
+       },
+       "skip": 100,
+       "sort": {
+        "updatedAt": -1,
+        "createdAt": -1
+       }
+      }
+     ],
+     "collection": "_localized-global_versions",
+     "op": "find",
+     "state": "0676de8a68555463"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "localized-global",
+     "limit": 1,
+     "page": 101,
+     "pagination": false,
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {}
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "localized-global",
+     "limit": 1,
+     "page": 101,
+     "pagination": false,
+     "sort": "-updatedAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {}
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "localized-global"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "ae783db3d7a2f20b"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "localized-global"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "ae783db3d7a2f20b"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "localized-global",
+     "locale": "all",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "localized-global",
+     "locale": "all",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "localized-global"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "4ea2e2c35214da44"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "localized-global"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "4ea2e2c35214da44"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "localized-global",
+     "locale": "de",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "localized-global",
+     "locale": "de",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "localized-global"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       }
+      }
+     ],
+     "collection": "globals",
+     "op": "findOne",
+     "state": "95a5c63538e33ec8"
+    },
+    {
+     "args": [
+      {
+       "$and": [
+        {
+         "globalType": {
+          "$eq": "localized-global"
+         }
+        }
+       ]
+      },
+      {
+       "session": {
+        "$undefined": true
+       },
+       "singleBatch": true
+      }
+     ],
+     "collection": "globals",
+     "op": "find",
+     "state": "95a5c63538e33ec8"
+    }
+   ],
+   "method": "findGlobal",
+   "firstAwait": [
+    {
+     "slug": "localized-global",
+     "locale": "es",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "argsAfter": [
+    {
+     "slug": "localized-global",
+     "locale": "es",
+     "select": {
+      "$undefined": true
+     },
+     "where": true
+    }
+   ],
+   "resultArgs": []
+  },
+  {
+   "events": [
+    {
+     "args": [
+      {}
+     ],
+     "collection": "_localized-global_versions",
+     "op": "estimatedDocumentCount",
+     "state": "c2d6b50bebb603ff"
+    },
+    {
+     "args": [
+      {},
+      {
+       "limit": 10,
+       "session": {
+        "$undefined": true
+       },
+       "skip": 0,
+       "sort": {
+        "createdAt": 1
+       }
+      }
+     ],
+     "collection": "_localized-global_versions",
+     "op": "find",
+     "state": "c2d6b50bebb603ff"
+    }
+   ],
+   "method": "findGlobalVersions",
+   "firstAwait": [
+    {
+     "global": "localized-global",
+     "limit": 10,
+     "locale": "all",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": "createdAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "argsAfter": [
+    {
+     "global": "localized-global",
+     "limit": 10,
+     "locale": "all",
+     "page": 1,
+     "pagination": true,
+     "select": {
+      "$undefined": true
+     },
+     "sort": "createdAt",
+     "where": {
+      "$obj": {
+       "$arg": "0.where",
+       "value": {
+        "and": {
+         "$obj": {
+          "$arg": "0.where.and",
+          "value": []
+         }
+        }
+       }
+      }
+     }
+    }
+   ],
+   "resultArgs": []
+  }
+ ],
+ "rows": []
+}

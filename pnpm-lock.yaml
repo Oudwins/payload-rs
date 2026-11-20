@@ -398,6 +398,9 @@ importers:
 
   packages/db-mongodb:
     dependencies:
+      '@payloadcms/engine-rs':
+        specifier: workspace:*
+        version: link:../engine-rs
       mongoose:
         specifier: 9.9.2
         version: 9.9.2(@aws-sdk/credential-providers@3.1158.0)
@@ -478,6 +481,9 @@ importers:
       '@payloadcms/drizzle':
         specifier: workspace:*
         version: link:../drizzle
+      '@payloadcms/engine-rs':
+        specifier: workspace:*
+        version: link:../engine-rs
       console-table-printer:
         specifier: 2.15.0
         version: 2.15.0
@@ -602,6 +608,24 @@ importers:
 
   packages/email-resend:
     devDependencies:
+      payload:
+        specifier: workspace:*
+        version: link:../payload
+
+  packages/engine-rs:
+    dependencies:
+      '@libsql/client':
+        specifier: 0.14.0
+        version: 0.14.0(bufferutil@4.1.0)
+      '@payloadcms/db-mongodb':
+        specifier: workspace:*
+        version: link:../db-mongodb
+      '@payloadcms/drizzle':
+        specifier: workspace:*
+        version: link:../drizzle
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
       payload:
         specifier: workspace:*
         version: link:../payload
@@ -823,6 +847,9 @@ importers:
       '@next/env':
         specifier: 16.4.2
         version: 16.4.2
+      '@payloadcms/engine-rs':
+        specifier: workspace:*
+        version: link:../engine-rs
       '@payloadcms/translations':
         specifier: workspace:*
         version: link:../translations
@@ -1329,6 +1356,9 @@ importers:
       '@lexical/utils':
         specifier: 0.53.0
         version: 0.53.0
+      '@payloadcms/engine-rs':
+        specifier: workspace:*
+        version: link:../engine-rs
       '@payloadcms/translations':
         specifier: workspace:*
         version: link:../translations

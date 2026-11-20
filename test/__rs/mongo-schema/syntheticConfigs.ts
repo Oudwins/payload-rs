@@ -3,6 +3,14 @@
  * `dbName` functions (also a throwing one, after which upstream has registered some models),
  * localized unique points, localized polymorphic hasMany relationships, an `id` field nested in a
  * row, custom number IDs referenced by relationships, filename compound indexes, shared blocks.
+ *
+ * Review items of the live port (.rs-baseline/review-mongo-schema-sol.md):
+ * - `interleaving`: a later collection's `dbName` function reads the models registered so far
+ *   (`buildState.adapter.collections.first`), so it sees upstream's interleaving (item 1);
+ * - `getters`: a `defaultValue` getter counting its reads (upstream reads it three times per
+ *   `formatDefaultValue`) and a non-enumerable, an inherited `indexSortableFields` (items 3, 4);
+ * - `throwingGetter`: an `index` getter that throws mid-build (the same error object must reject
+ *   both builds, after the same partial registration; item 3).
  */
 import type { Config } from 'payload'
 
@@ -12,6 +20,11 @@ import { buildConfig } from 'payload'
 const db = mongooseAdapter({ url: process.env.MONGODB_URL! })
 
 const sharedDefault = ['a', 'b']
+
+/** Per-build state the synthetic configs' callbacks read (reset by the spec before each build). */
+export const buildState: { adapter: any; reads: number } = { adapter: undefined, reads: 0 }
+
+export const getterError = new Error('index getter threw')
 
 const base = (overrides: Partial<Config>): Promise<any> =>
   buildConfig({
@@ -116,6 +129,87 @@ export const syntheticConfigs = async (): Promise<Record<string, any>> => ({
     ],
     localization: { defaultLocale: 'en', locales: ['en', 'de'] },
   }),
+  interleaving: await base({
+    collections: [
+      { slug: 'first', fields: [{ name: 'title', type: 'text' }] },
+      {
+        slug: 'later',
+        dbName: () => (buildState.adapter?.collections?.first ? 'later_after_first' : 'later_before_first'),
+        fields: [{ name: 'title', type: 'text' }],
+        versions: true,
+      },
+    ],
+    globals: [
+      {
+        slug: 'globalAfter',
+        dbName: () => (buildState.adapter?.globals ? 'global_after_globals' : 'global_before_globals'),
+        fields: [{ name: 'flag', type: 'checkbox' }],
+        versions: true,
+      },
+    ],
+  }),
+  getters: await (async () => {
+    const config = await base({
+      collections: [
+        {
+          slug: 'counted',
+          fields: [
+            { name: 'counter', type: 'text' },
+            { name: 'sortable', type: 'number' },
+          ],
+          versions: { drafts: true },
+        },
+      ],
+    })
+    const field = config.collections[0].fields.find((f: any) => f.name === 'counter')
+    Object.defineProperty(field, 'defaultValue', {
+      configurable: true,
+      enumerable: true,
+      get: () => `read ${++buildState.reads}`,
+    })
+    // non-enumerable own indexSortableFields (still read by `payload.config.indexSortableFields`)
+    Object.defineProperty(config, 'indexSortableFields', {
+      configurable: true,
+      enumerable: false,
+      value: true,
+      writable: true,
+    })
+    return config
+  })(),
+  inheritedIndexSortable: await (async () => {
+    const config = await base({
+      collections: [{ slug: 'plain', fields: [{ name: 'n', type: 'number' }], versions: true }],
+    })
+    delete config.indexSortableFields
+    Object.setPrototypeOf(config, Object.create(Object.getPrototypeOf(config), {
+      indexSortableFields: { configurable: true, enumerable: true, value: 1, writable: true },
+    }))
+    return config
+  })(),
+  throwingGetter: await (async () => {
+    const config = await base({
+      collections: [
+        { slug: 'before', fields: [{ name: 'title', type: 'text' }], versions: true },
+        {
+          slug: 'throws',
+          fields: [
+            { name: 'ok', type: 'text' },
+            { name: 'bad', type: 'text' },
+          ],
+        },
+        { slug: 'after', fields: [{ name: 'title', type: 'text' }] },
+      ],
+    })
+    const field = config.collections[1].fields.find((f: any) => f.name === 'bad')
+    Object.defineProperty(field, 'index', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        throw getterError
+      },
+    })
+    return config
+  })(),
   throwingDbName: await base({
     collections: [
       { slug: 'first', fields: [{ name: 'title', type: 'text' }], versions: true },

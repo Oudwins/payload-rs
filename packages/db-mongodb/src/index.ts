@@ -20,7 +20,6 @@ import type {
   UpdateVersionArgs,
 } from 'payload'
 
-import { withRustMongoEngine } from '@payloadcms/engine-rs'
 import mongoose from 'mongoose'
 import { createDatabaseAdapter, defaultBeginTransaction, findMigrationDir } from 'payload'
 
@@ -349,7 +348,120 @@ export function mongooseAdapter({
     init: adapter,
   }
 
-  return process.env.PAYLOAD_ENGINE === 'rs' ? withRustMongoEngine(adapterObj) : adapterObj
+  return process.env.PAYLOAD_ENGINE === 'rs' ? withRustMongoEngineOnInit(adapterObj) : adapterObj
 }
 
 export { compatibilityOptions } from './utilities/compatibilityOptions.js'
+
+type RustMongoEngine = {
+  withRustMongoEngine: (adapterObj: DatabaseAdapterObj) => DatabaseAdapterObj
+}
+
+/**
+ * `PAYLOAD_ENGINE=rs`: `withRustMongoEngine` of `@payloadcms/engine-rs/mongodb`
+ * (MONGO_ENGINE_CONTRACT.md), loading from when this module is evaluated. That package is an
+ * optional peer dependency, imported only here, at runtime, from where db-mongodb is installed
+ * (`importRustEngine`); with the flag unset it is never part of the module graph.
+ */
+let rustEngine: RustMongoEngine | undefined
+let rustEngineLoad: Promise<RustMongoEngine> | undefined
+const loadRustEngine = (): Promise<RustMongoEngine> =>
+  (rustEngineLoad ??= importRustEngine('@payloadcms/engine-rs/mongodb').then(
+    (loaded) => (rustEngine = loaded as RustMongoEngine),
+  ))
+if (process.env.PAYLOAD_ENGINE === 'rs') {
+  void loadRustEngine().catch(() => {})
+}
+
+/**
+ * The adapter object with the Rust engine. `config.db.init` is synchronous and the engine module
+ * asynchronous: once it has loaded, `init` is exactly `withRustMongoEngine(adapterObj).init`.
+ * Before that, the built adapter's `init` installs the engine when payload awaits it (before
+ * `connect` and any data method) and then forwards to the engine's `init`, for this and every later
+ * call. A consumer that wrapped the adapter's `init` in the meantime keeps its wrapper (it reaches
+ * the engine through the function it wrapped); otherwise the engine's `init` is installed as is.
+ */
+function withRustMongoEngineOnInit(adapterObj: DatabaseAdapterObj): DatabaseAdapterObj {
+  return {
+    ...adapterObj,
+    init: (args) => {
+      if (rustEngine) {
+        return rustEngine.withRustMongoEngine(adapterObj).init(args)
+      }
+      const adapter = adapterObj.init(args)
+      const upstreamInit = adapter.init
+      let rustInit: typeof upstreamInit
+      const installingInit: typeof upstreamInit = function (this: BaseDatabaseAdapter) {
+        if (rustInit) {
+          return rustInit.call(this)
+        }
+        return loadRustEngine().then((loaded) => {
+          if (!rustInit) {
+            const currentInit = adapter.init
+            adapter.init = upstreamInit
+            loaded.withRustMongoEngine({ ...adapterObj, init: () => adapter }).init(args)
+            rustInit = adapter.init
+            adapter.init = currentInit === installingInit ? rustInit : currentInit
+          }
+          return rustInit?.call(this)
+        })
+      }
+      adapter.init = installingInit
+      return adapter
+    },
+  }
+}
+
+/**
+ * Imports `specifier` (an `@payloadcms/engine-rs` subpath, an optional peer dependency) the way
+ * this package resolves it where it is installed. When db-mongodb is bundled (e.g. Next.js), the
+ * runtime `import()` would resolve from the emitted chunk instead, where engine-rs is usually not
+ * installed, and `import.meta.url` may be the chunk's or a build-time path: it is used only when
+ * the nearest package.json above it is this package's; otherwise db-mongodb is looked up in the
+ * `node_modules` directories from the working directory up. The specifier is computed, so bundlers
+ * neither trace nor bundle engine-rs.
+ */
+function importRustEngine(specifier: string): Promise<unknown> {
+  const fs = process.getBuiltinModule('node:fs')
+  const path = process.getBuiltinModule('node:path')
+  const { createRequire } = process.getBuiltinModule('node:module')
+  const { fileURLToPath, pathToFileURL } = process.getBuiltinModule('node:url')
+  const packageName = '@payloadcms/db-mongodb'
+  const readName = (manifest: string): string | undefined => {
+    try {
+      return (JSON.parse(fs.readFileSync(manifest, 'utf8')) as { name?: string }).name
+    } catch {
+      return undefined
+    }
+  }
+  let manifest: string | undefined
+  if (import.meta.url.startsWith('file:')) {
+    for (let dir = path.dirname(fileURLToPath(import.meta.url)); ; dir = path.dirname(dir)) {
+      const candidate = path.join(dir, 'package.json')
+      if (fs.existsSync(candidate)) {
+        manifest = readName(candidate) === packageName ? candidate : undefined
+        break
+      }
+      if (dir === path.dirname(dir)) {
+        break
+      }
+    }
+  }
+  for (let dir = process.cwd(); !manifest; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, 'node_modules', packageName, 'package.json')
+    if (fs.existsSync(candidate)) {
+      manifest = fs.realpathSync(candidate)
+    } else if (dir === path.dirname(dir)) {
+      break
+    }
+  }
+  let resolved = specifier
+  if (manifest) {
+    try {
+      resolved = pathToFileURL(createRequire(manifest).resolve(specifier)).href
+    } catch {
+      // not installed next to db-mongodb: Node's own resolution reports it
+    }
+  }
+  return import(/* @vite-ignore */ /* webpackIgnore: true */ resolved)
+}

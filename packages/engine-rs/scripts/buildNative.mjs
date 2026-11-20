@@ -18,7 +18,9 @@ const libName = {
   win32: 'payload_node.dll',
 }[process.platform]
 
-fs.copyFileSync(
-  path.join(rootDir, 'target', isRelease ? 'release' : 'debug', libName),
-  path.join(packageDir, 'payload-engine.node'),
-)
+// cargo honours CARGO_TARGET_DIR (relative to the workspace root); copied under a temporary name
+// and renamed, so a process that has the previous addon loaded keeps its file
+const targetDir = path.resolve(rootDir, process.env.CARGO_TARGET_DIR || 'target')
+const addon = path.join(packageDir, 'payload-engine.node')
+fs.copyFileSync(path.join(targetDir, isRelease ? 'release' : 'debug', libName), `${addon}.tmp`)
+fs.renameSync(`${addon}.tmp`, addon)

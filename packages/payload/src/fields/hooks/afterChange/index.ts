@@ -32,12 +32,12 @@ type RustCoreHooks = {
  * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_PORT.md.
  */
 const isRustCoreEngine = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
-const rustCoreHooksSpecifier = '../../../../../engine-rs/src/runtime/hooks.js'
+const rustCoreHooksSpecifier = '@payloadcms/engine-rs/runtime/hooks'
 let rustCoreHooks: RustCoreHooks | undefined
 const rustCoreHooksLoad: Promise<RustCoreHooks> | undefined = isRustCoreEngine
-  ? import(/* @vite-ignore */ /* webpackIgnore: true */ rustCoreHooksSpecifier).then(
-      (loaded: RustCoreHooks) => (rustCoreHooks = loaded),
-    )
+  ? import('../../../utilities/importRustEngine.js')
+      .then(({ importRustEngine }) => importRustEngine(rustCoreHooksSpecifier))
+      .then((loaded: RustCoreHooks) => (rustCoreHooks = loaded))
   : undefined
 void rustCoreHooksLoad?.catch(() => {})
 

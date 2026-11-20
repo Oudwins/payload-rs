@@ -34,16 +34,95 @@ export type NativeEngine = {
   version: () => string
 }
 
+/**
+ * The addon API this glue is written against: every export of `crates/payload-node` that some
+ * engine-rs loader (or payload's `fields/validations.ts`) calls. An addon built from an older tree
+ * lacks some of them (e.g. one from before the live MongoDB engine has no `mongoLive*Binding`), and
+ * the glue would otherwise notice only when it reaches the missing export, or fall back to an older
+ * engine. Each binding additionally checks its own `apiVersion` when it is created.
+ */
+export const engineAddonExports = [
+  'MongoEngine',
+  'SqliteEngine',
+  'buildMongoSchemaDescription',
+  'buildRawSchema',
+  'coreHooksAfterBinding',
+  'coreOpsBinding',
+  'coreOpsGlobalBinding',
+  'coreOpsWriteBinding',
+  'coreQueryBinding',
+  'coreRuntimeBinding',
+  'hooksBeforeChangeBinding',
+  'hooksBeforeValidateBinding',
+  'mongoLiveBinding',
+  'mongoLiveJoinsBinding',
+  'mongoLiveQueryBinding',
+  'mongoLiveSchemaBinding',
+  'mongoLiveTransformBinding',
+  'mongoLiveWriteBinding',
+  'sqliteClientClose',
+  'sqliteCreateClient',
+  'sqliteEngineQuery',
+  'sqliteExecute',
+  'sqliteExecuteMultiple',
+  'sqliteExecuteSync',
+  'sqliteGetDbSync',
+  'sqliteInTransaction',
+  'sqliteParameterNamesSync',
+  'sqliteRelease',
+  'sqliteStartStatementTrace',
+  'sqliteStats',
+  'sqliteTakeStatementTrace',
+  'sqliteTransaction',
+  'sqliteTransactionClose',
+  'sqliteTransactionEnd',
+  'validateBinding',
+  'version',
+] as const
+
+/**
+ * Throws unless `addon` (loaded from `addonPath`) has every export in `engineAddonExports`: a stale
+ * addon fails loudly at load instead of running an older engine.
+ */
+export const assertEngineAddon = ({
+  addon,
+  addonPath,
+}: {
+  addon: unknown
+  addonPath: string
+}): void => {
+  const missing = engineAddonExports.filter(
+    (name) => typeof (addon as null | Record<string, unknown>)?.[name] !== 'function',
+  )
+  if (missing.length > 0) {
+    throw new Error(
+      `The engine addon at ${addonPath} does not match @payloadcms/engine-rs: it lacks ${missing.join(', ')}. It was built from an older tree; rebuild it (pnpm --filter @payloadcms/engine-rs build:native)`,
+    )
+  }
+}
+
+/**
+ * Marks engine-rs as loaded in this process: db-sqlite's `connect` only considers the Rust libsql
+ * client for an adapter wrapped outside its own `PAYLOAD_ENGINE=rs` path (a harness calling
+ * `withRustEngine`, which imports this module) when this is set, so it never imports engine-rs
+ * otherwise.
+ */
+;(globalThis as Record<symbol, unknown>)[Symbol.for('@payloadcms/engine-rs')] ??= true
+
 let native: NativeEngine | undefined
 
 /**
  * Loads the addon. `PAYLOAD_ENGINE_ADDON` may point at an alternative build (an agent-local cargo
  * target dir); it is the same path `sqlite/native.ts` loads, so both share one addon instance.
+ * Throws when the addon is not the one this glue expects (`assertEngineAddon`).
  */
 export const getNativeEngine = (): NativeEngine => {
   if (!native) {
     const require = createRequire(import.meta.url)
-    native = require(process.env.PAYLOAD_ENGINE_ADDON || '../payload-engine.node') as NativeEngine
+    const addonPath = process.env.PAYLOAD_ENGINE_ADDON || '../payload-engine.node'
+    const addon = require(addonPath)
+    assertEngineAddon({ addon, addonPath })
+    native = addon as NativeEngine
   }
   return native
 }

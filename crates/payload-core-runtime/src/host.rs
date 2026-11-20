@@ -5,7 +5,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::executor;
 use crate::js::{self, JsResult, Local, Persist, Type};
 
 pub struct Host {
@@ -47,8 +46,8 @@ thread_local! {
 
 pub fn install(obj: Local) -> JsResult<()> {
   let f = |name: &str| -> JsResult<Persist> { Persist::new(js::get_named(obj, name)?) };
-  executor::install_await_helper(js::get_named(obj, "awaitValue")?)?;
-  executor::install_then_return_helper(js::get_named(obj, "thenReturn")?)?;
+  // `awaitValue` / `thenReturn` are the binding's own compiled helpers
+  // (`executor::install_native_await`, done when the binding is created); a host's are ignored.
   let host = Host {
     obj: Persist::new(obj)?,
     get: f("get")?,
@@ -123,22 +122,117 @@ pub fn set(o: Local, k: Local, v: Local) -> JsResult<()> {
   call_host(&host()?.set, &[o, k, v]).map(|_| ())
 }
 
-/// `delete o[k]` in strict mode.
+/// `delete o[k]` in strict mode: ONE [[Delete]] (one `deleteProperty` trap call on a proxy); a
+/// false result throws V8's TypeError, like the TS `delete` in module code. (`napi_delete_property`
+/// is sloppy and cannot be followed by a strict retry without running the trap twice.)
 pub fn del(o: Local, k: Local) -> JsResult<()> {
-  if js::type_of(o).is_object_like() && js::delete_property(o, k)? {
-    return Ok(());
-  }
   call_host(&host()?.del, &[o, k]).map(|_| ())
 }
 
-/// `Object.values(o)` (returns a JS array).
-pub fn object_values(o: Local) -> JsResult<Local> {
-  call_host(&host()?.object_values, &[o])
+thread_local! {
+  /// `(k, o) => k in o`, compiled once per thread (strict mode).
+  static HAS_IN: RefCell<Option<Persist>> = const { RefCell::new(None) };
 }
 
-/// `Object.entries(o)` (returns a JS array of `[key, value]` pairs).
+/// `k in o`: [[HasProperty]] for objects (proxy `has` traps run); for a primitive `o` the
+/// operator's own intrinsic `TypeError` (`Cannot use 'in' operator to search for ...`), exactly
+/// as V8 formats it.
+pub fn has(o: Local, k: Local) -> JsResult<bool> {
+  if js::type_of(o).is_object_like() {
+    return js::has_property(o, k);
+  }
+  let helper = match HAS_IN.with(|h| h.borrow().as_ref().map(|p| p.get())) {
+    Some(f) => f,
+    None => {
+      let f = js::run_script("'use strict'; (k, o) => k in o")?;
+      let p = Persist::new(f)?;
+      HAS_IN.with(|h| *h.borrow_mut() = Some(p));
+      f
+    }
+  };
+  Ok(js::truthy(js::call(helper, js::undefined(), &[k, o])?))
+}
+
+/// The current value of the global binding `name` (`Object`, `Array`, `Promise`, ...), read now:
+/// what an identifier reference to a global built-in evaluates to in module code (one [[Get]] on
+/// the global object; replaced or patched globals are seen, like upstream).
+pub fn global(name: &str) -> JsResult<Local> {
+  js::get_named(js::global(), name)
+}
+
+/// A method reference evaluated the way the TS evaluates `Recv.method` before the arguments of
+/// `Recv.method(...args)`: `recv` is read first, then `method` on it; call it with [`Method::call`]
+/// after evaluating the arguments.
+pub struct Method {
+  pub this: Local,
+  pub func: Local,
+}
+
+impl Method {
+  /// `this.func(...args)`; a non-callable `func` throws V8's intrinsic `TypeError: <expr> is not a
+  /// function` (`expr` = the TS callee text, e.g. `Object.keys`).
+  pub fn call(&self, args: &[Local], expr: &str) -> JsResult<Local> {
+    call_fn(self.func, self.this, args, expr)
+  }
+}
+
+/// `Global.method` evaluated now (`Object.keys`, `Array.isArray`, `Number.isNaN`, ...): reads the
+/// global `name`, then its property `method` (TypeError on a nullish global like V8).
+pub fn global_method(name: &str, method: &str) -> JsResult<Method> {
+  let this = global(name)?;
+  let func = get_named(this, method)?;
+  Ok(Method { this, func })
+}
+
+/// `recv.method` evaluated now (for `recv.method(...args)`; `recv` may be a primitive: string
+/// methods are looked up like JS does, with the primitive as `this` of the call).
+pub fn method(recv: Local, name: &str) -> JsResult<Method> {
+  Ok(Method { this: recv, func: get_named(recv, name)? })
+}
+
+/// `f(...args)` with `this`, as the TS call expression `expr(...)`: a non-callable throws the
+/// intrinsic `TypeError: <expr> is not a function`.
+pub fn call_fn(f: Local, this: Local, args: &[Local], expr: &str) -> JsResult<Local> {
+  if js::type_of(f) == Type::Function {
+    js::call(f, this, args)
+  } else {
+    Err(js::not_a_function(expr))
+  }
+}
+
+/// `recv.name(...args)` where the arguments have no side effects of their own (already evaluated
+/// values): method read, then the call. `expr` is the TS callee text (`docs.push`).
+pub fn call_method(recv: Local, name: &str, args: &[Local], expr: &str) -> JsResult<Local> {
+  method(recv, name)?.call(args, expr)
+}
+
+/// `Object.keys(o)` with the current global `Object.keys` (read at call time, called once).
+pub fn object_keys(o: Local) -> JsResult<Local> {
+  global_method("Object", "keys")?.call(&[o], "Object.keys")
+}
+
+/// `Array.isArray(v)` with the current global (read at call time, called once).
+pub fn array_is_array(v: Local) -> JsResult<bool> {
+  Ok(js::truthy(global_method("Array", "isArray")?.call(&[v], "Array.isArray")?))
+}
+
+/// `arr.push(value)` through `arr`'s own `push` lookup (patched `Array.prototype.push`, own
+/// `push` methods and frozen arrays behave like the TS). `expr` = the TS callee text
+/// (`fieldPromises.push`).
+pub fn push(arr: Local, value: Local, expr: &str) -> JsResult<Local> {
+  call_method(arr, "push", &[value], expr)
+}
+
+/// `Object.values(o)` with the current global `Object.values` (returns what it returns). For
+/// `Object.values(<expr>)` whose argument expression has effects, evaluate
+/// `global_method("Object", "values")` first, then the argument, then call.
+pub fn object_values(o: Local) -> JsResult<Local> {
+  global_method("Object", "values")?.call(&[o], "Object.values")
+}
+
+/// `Object.entries(o)` with the current global `Object.entries` (see [`object_values`]).
 pub fn object_entries(o: Local) -> JsResult<Local> {
-  call_host(&host()?.object_entries, &[o])
+  global_method("Object", "entries")?.call(&[o], "Object.entries")
 }
 
 /// Engine-created `new Error(message)` (same class and message as the TS reference).

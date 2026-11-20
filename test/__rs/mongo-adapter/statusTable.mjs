@@ -23,7 +23,10 @@ const columnArgs = argv.flatMap((arg, i) => (arg === '--column' ? [argv[i + 1]] 
 const readRuns = (tags) => {
   const files = {}
   for (const tag of (tags ?? '').split(',').filter(Boolean)) {
-    const summary = path.join('/tmp/rs-mongo-runs', tag, 'summary.json')
+    // a tag, or the run's --out directory (any value containing a `/`)
+    const summary = tag.includes('/')
+      ? path.resolve(root, tag, 'summary.json')
+      : path.join('/tmp/rs-mongo-runs', tag, 'summary.json')
     if (fs.existsSync(summary)) {
       Object.assign(files, JSON.parse(fs.readFileSync(summary, 'utf8')).files)
     }
@@ -50,7 +53,7 @@ const countsOf = (fileResult) => {
 }
 const cell = (entry) =>
   entry
-    ? `${entry.counts.passed}/${entry.counts.failed}/${entry.counts.skipped}${entry.differences?.length ? ` **${entry.differences.length} diff**` : ''}${entry.loadError ? ' LOAD' : ''}`
+    ? `${entry.counts.passed}/${entry.counts.failed}/${entry.counts.skipped}${entry.differences?.length ? ` **${entry.differences.length} diff**` : ''}${entry.loadError ? ' LOAD' : ''}${entry.nativeProof ? ' **no native proof**' : ''}${entry.shadow ? ` (${entry.shadow.calls} calls, ${entry.shadow.divergences ? `**${entry.shadow.divergences} div**` : '0 div'})` : ''}${entry.rerun?.isClean && (entry.differences?.length || entry.loadError || entry.nativeProof) ? `, solo rerun clean ${entry.rerun.counts.passed}/${entry.rerun.counts.failed}/${entry.rerun.counts.skipped}` : ''}`
     : '-'
 
 const files = [
@@ -70,16 +73,39 @@ for (const file of files) {
 lines.push('')
 for (const column of columns) {
   const entries = Object.values(column.runs)
-  const totals = { differences: 0, engineCalls: 0, failed: 0, files: entries.length, passed: 0, skipped: 0 }
+  const totals = {
+    differences: 0,
+    divergences: 0,
+    engineCalls: 0,
+    failed: 0,
+    files: entries.length,
+    nativeCalls: 0,
+    noNativeProof: 0,
+    passed: 0,
+    shadowCalls: 0,
+    skipped: 0,
+  }
   for (const entry of entries) {
     totals.passed += entry.counts.passed
     totals.failed += entry.counts.failed
     totals.skipped += entry.counts.skipped
     totals.differences += entry.differences?.length ?? 0
     totals.engineCalls += entry.engineCalls ?? 0
+    totals.nativeCalls += entry.engineStats?.nativeCalls ?? 0
+    totals.noNativeProof += entry.nativeProof ? 1 : 0
+    totals.shadowCalls += entry.shadow?.calls ?? 0
+    totals.divergences += entry.shadow?.divergences ?? 0
   }
   lines.push(`- ${column.name}: ${JSON.stringify(totals)}`)
   for (const [file, entry] of Object.entries(column.runs).sort()) {
+    if (
+      entry.rerun?.isClean &&
+      (entry.differences?.length || entry.loadError || entry.nativeProof)
+    ) {
+      lines.push(
+        `  - ${file}: first run differed, solo rerun matches the baseline (below: first run)`,
+      )
+    }
     for (const difference of entry.differences ?? []) {
       lines.push(
         `  - ${file}: ${difference.baseline} -> ${difference.status}: ${difference.name}${difference.failure ? ` (${String(difference.failure).slice(0, 160)})` : ''}`,
@@ -87,6 +113,12 @@ for (const column of columns) {
     }
     if (entry.loadError) {
       lines.push(`  - ${file}: load error ${String(entry.loadError).split('\n')[0].slice(0, 160)}`)
+    }
+    if (entry.nativeProof) {
+      lines.push(`  - ${file}: native execution not proven: ${entry.nativeProof}`)
+    }
+    for (const divergence of entry.shadow?.first ?? []) {
+      lines.push(`  - ${file}: divergence ${String(divergence).slice(0, 200)}`)
     }
   }
 }

@@ -38,7 +38,9 @@ impl Slot {
           s.2 - 1
         }
       };
-      set_element(s.0.as_ref().map(|p| p.get()).unwrap_or_else(undefined), index, value)?;
+      // Engine-internal table: define, so index setters user code installs on
+      // `Array.prototype` / `Object.prototype` neither run nor swallow the value.
+      define_element(s.0.as_ref().map(|p| p.get()).unwrap_or_else(undefined), index, value)?;
       Ok(Slot(index))
     })
   }
@@ -578,6 +580,15 @@ pub fn call(func: Local, this: Local, args: &[Local]) -> JsResult<Local> {
   Ok(Local(out))
 }
 
+/// `new ctor(...args)` (`ctor` must be a function; [[Construct]] with `newTarget === ctor`).
+#[track_caller]
+pub fn construct(ctor: Local, args: &[Local]) -> JsResult<Local> {
+  let mut out = ptr::null_mut();
+  let raw = args.as_ptr().cast::<sys::napi_value>();
+  check(unsafe { sys::napi_new_instance(env(), ctor.0, args.len(), raw, &mut out) })?;
+  Ok(Local(out))
+}
+
 /// Creates a promise and its deferred.
 #[track_caller]
 pub fn create_promise() -> JsResult<(sys::napi_deferred, Local)> {
@@ -656,7 +667,242 @@ impl Drop for HandleScope {
 pub fn string_array<'a>(items: impl Iterator<Item = &'a str>) -> JsResult<Local> {
   let arr = array();
   for (i, s) in items.enumerate() {
-    set_element(arr, i as u32, string(s))?;
+    define_element(arr, i as u32, string(s))?;
   }
   Ok(arr)
+}
+
+// ---------------------------------------------------------------------------------------------
+// literals: CreateDataProperty, never [[Set]]
+
+fn data_descriptor(name: Local, value: Local) -> sys::napi_property_descriptor {
+  sys::napi_property_descriptor {
+    utf8name: ptr::null(),
+    name: name.0,
+    method: None,
+    getter: None,
+    setter: None,
+    value: value.0,
+    attributes: sys::PropertyAttributes::writable
+      | sys::PropertyAttributes::enumerable
+      | sys::PropertyAttributes::configurable,
+    data: ptr::null_mut(),
+  }
+}
+
+/// `CreateDataPropertyOrThrow(obj, key, value)`: what an object/array literal, a spread or
+/// `Array.prototype.map` does for each entry. Defines an own writable/enumerable/configurable data
+/// property; never runs (inherited) setters, never consults the prototype chain. `key` must be a
+/// string or symbol. Use [`set_property`] / `host::set` only where the TS assigns (`o[k] = v`).
+#[track_caller]
+pub fn define_property(obj: Local, key: Local, value: Local) -> JsResult<()> {
+  let desc = data_descriptor(key, value);
+  check(unsafe { sys::napi_define_properties(env(), obj.0, 1, &desc) })
+}
+
+#[track_caller]
+pub fn define_named(obj: Local, name: &str, value: Local) -> JsResult<()> {
+  define_property(obj, key(name), value)
+}
+
+/// [`define_property`] for an array index (`[a, b]`, `arr.map(...)` results, engine arrays).
+#[track_caller]
+pub fn define_element(arr: Local, index: u32, value: Local) -> JsResult<()> {
+  let mut buf = [0u8; 10];
+  let mut at = buf.len();
+  let mut n = index;
+  loop {
+    at -= 1;
+    buf[at] = b'0' + (n % 10) as u8;
+    n /= 10;
+    if n == 0 {
+      break;
+    }
+  }
+  let mut k = ptr::null_mut();
+  unsafe {
+    sys::node_api_create_property_key_latin1(env(), buf[at..].as_ptr().cast(), (buf.len() - at) as isize, &mut k)
+  };
+  define_property(arr, Local(k), value)
+}
+
+/// A fresh object literal `{ k1: v1, k2: v2, ... }`: keys in the given order, each defined with
+/// CreateDataProperty (inherited setters on `Object.prototype` never run; own `undefined` values
+/// are kept). Not for `__proto__` keys (a literal `{ __proto__: v }` sets the prototype).
+#[track_caller]
+pub fn object_literal(entries: &[(&str, Local)]) -> JsResult<Local> {
+  let o = object();
+  if entries.is_empty() {
+    return Ok(o);
+  }
+  let descs: Vec<sys::napi_property_descriptor> =
+    entries.iter().map(|(k, v)| data_descriptor(key(k), *v)).collect();
+  check(unsafe { sys::napi_define_properties(env(), o.0, descs.len(), descs.as_ptr()) })?;
+  Ok(o)
+}
+
+/// A fresh array literal `[a, b, ...]` (CreateDataProperty per index: inherited index setters on
+/// `Array.prototype` / `Object.prototype` never run).
+#[track_caller]
+pub fn array_literal(items: &[Local]) -> JsResult<Local> {
+  let arr = array();
+  for (i, item) in items.iter().enumerate() {
+    define_element(arr, i as u32, *item)?;
+  }
+  Ok(arr)
+}
+
+// ---------------------------------------------------------------------------------------------
+// intrinsic errors (what V8 itself throws, independent of `globalThis.TypeError`)
+
+/// A `TypeError` of the realm's intrinsic %TypeError% (like the one V8 throws for `x is not a
+/// function` / `Cannot read properties of undefined`), whatever `globalThis.TypeError` currently
+/// is. Use it where the TS error comes from the language itself; where the TS source says
+/// `new TypeError(...)`, call the current global instead (`host::new_global`).
+pub fn type_error(message: &str) -> Thrown {
+  let mut err = ptr::null_mut();
+  unsafe { sys::napi_create_type_error(env(), ptr::null_mut(), string(message).0, &mut err) };
+  Thrown(Val::from_local(Local(err)).unwrap_or(Val::Undefined))
+}
+
+/// A `RangeError` of the intrinsic %RangeError% (see [`type_error`]).
+pub fn range_error(message: &str) -> Thrown {
+  let mut err = ptr::null_mut();
+  unsafe { sys::napi_create_range_error(env(), ptr::null_mut(), string(message).0, &mut err) };
+  Thrown(Val::from_local(Local(err)).unwrap_or(Val::Undefined))
+}
+
+/// V8's `TypeError: <expr> is not a function` (intrinsic class) for a call of a non-callable.
+pub fn not_a_function(expr: &str) -> Thrown {
+  type_error(&format!("{expr} is not a function"))
+}
+
+// ---------------------------------------------------------------------------------------------
+// closures handed to user code
+
+/// The body of a [`closure`]: `(this, args) -> result`. It owns everything it captures
+/// (`'static`): keep JS values as [`Val`], shared engine state as `Rc<RefCell<..>>`.
+pub type ClosureBody = dyn Fn(Local, &[Local]) -> JsResult<Local>;
+
+struct ClosureData {
+  body: Rc<ClosureBody>,
+}
+
+unsafe extern "C" fn closure_trampoline(env: sys::napi_env, info: sys::napi_callback_info) -> sys::napi_value {
+  set_env_uncounted(env);
+  const INLINE: usize = 8;
+  let mut argc = INLINE;
+  let mut argv = [ptr::null_mut(); INLINE];
+  let mut this = ptr::null_mut();
+  let mut data = ptr::null_mut();
+  unsafe { sys::napi_get_cb_info(env, info, &mut argc, argv.as_mut_ptr(), &mut this, &mut data) };
+  let heap: Vec<sys::napi_value>;
+  let raw: &[sys::napi_value] = if argc > INLINE {
+    let mut n = argc;
+    let mut all = vec![ptr::null_mut(); argc];
+    unsafe { sys::napi_get_cb_info(env, info, &mut n, all.as_mut_ptr(), ptr::null_mut(), ptr::null_mut()) };
+    heap = all;
+    &heap[..n.min(heap.len())]
+  } else {
+    &argv[..argc]
+  };
+  // SAFETY: `Local` is `repr(transparent)` over `napi_value`.
+  let args: &[Local] = unsafe { std::slice::from_raw_parts(raw.as_ptr().cast::<Local>(), raw.len()) };
+  // A clone keeps the body alive for this call whatever the call does (the function object, and
+  // so the finalizer, cannot be collected while it runs anyway).
+  let body = unsafe { &*(data as *const ClosureData) }.body.clone();
+  match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(Local(this), args))) {
+    Ok(Ok(v)) => v.0,
+    Ok(Err(Thrown(e))) => {
+      throw(e.get());
+      ptr::null_mut()
+    }
+    Err(_) => {
+      let Thrown(e) = engine_error("payload core runtime: closure panicked");
+      throw(e.get());
+      ptr::null_mut()
+    }
+  }
+}
+
+unsafe extern "C" fn closure_finalize(env: sys::napi_env, data: *mut c_void, _hint: *mut c_void) {
+  // Runs outside any engine call (deferred by Node after GC), or at env teardown after the env
+  // cleanup hook cleared `ENV` (drops then skip their napi calls and leak nothing that outlives
+  // the env).
+  if !self::env().is_null() {
+    set_env_uncounted(env);
+  }
+  drop(unsafe { Box::from_raw(data as *mut ClosureData) });
+}
+
+/// A JS function (native, `name`, `length` 0, constructible) running `body`. The body lives as
+/// long as the function object: it is freed by a finalizer when the GC collects the function, so
+/// user code may keep the function and call it at any later time, re-entrantly and recursively,
+/// exactly like a TS closure (no "expired callback" state). For upstream arrow callbacks use
+/// [`arrow`] (non-constructible, upstream `length`).
+///
+/// The body's captured `Val`s are strong references: a cycle through them (the function stored
+/// in an object the body holds) is only freed with the env.
+pub fn closure(name: &str, body: impl Fn(Local, &[Local]) -> JsResult<Local> + 'static) -> JsResult<Local> {
+  closure_rc(name, Rc::new(body))
+}
+
+pub fn closure_rc(name: &str, body: Rc<ClosureBody>) -> JsResult<Local> {
+  let data = Box::into_raw(Box::new(ClosureData { body })).cast::<c_void>();
+  let mut f = ptr::null_mut();
+  let status = unsafe {
+    sys::napi_create_function(env(), name.as_ptr().cast(), name.len() as isize, Some(closure_trampoline), data, &mut f)
+  };
+  if status != sys::Status::napi_ok {
+    drop(unsafe { Box::from_raw(data.cast::<ClosureData>()) });
+    check(status)?;
+  }
+  let status = unsafe { sys::napi_add_finalizer(env(), f, data, Some(closure_finalize), ptr::null_mut(), ptr::null_mut()) };
+  if status != sys::Status::napi_ok {
+    drop(unsafe { Box::from_raw(data.cast::<ClosureData>()) });
+    check(status)?;
+  }
+  Ok(Local(f))
+}
+
+thread_local! {
+  /// `[(f) => () => f(), (f) => (a) => f(a), ...]`, compiled once per env.
+  static ARROW_FACTORIES: std::cell::RefCell<Option<Persist>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Highest [`arrow`] arity.
+pub const MAX_ARROW_ARITY: usize = 6;
+
+/// Compiles a strict-mode script in the current env and returns its completion value.
+#[track_caller]
+pub fn run_script(source: &str) -> JsResult<Local> {
+  let mut out = ptr::null_mut();
+  check(unsafe { sys::napi_run_script(env(), string(source).0, &mut out) })?;
+  Ok(Local(out))
+}
+
+/// An upstream arrow callback `(a, b) => ...` with `arity` parameters: a real JS arrow function
+/// (no `prototype`, not constructible, `length === arity`, `name === ''`) that forwards its
+/// parameters to `body` (`this` is `undefined`: arrows have no own `this`). Same lifetime rules as
+/// [`closure`]: callable for as long as user code holds it.
+pub fn arrow(arity: usize, body: impl Fn(&[Local]) -> JsResult<Local> + 'static) -> JsResult<Local> {
+  if arity > MAX_ARROW_ARITY {
+    return Err(engine_error("payload core runtime: arrow arity too high"));
+  }
+  let native = closure("", move |_this, args| body(args))?;
+  let factories = ARROW_FACTORIES.with(|a| a.borrow().as_ref().map(|p| p.get()));
+  let factories = match factories {
+    Some(f) => f,
+    None => {
+      let list = run_script(
+        "'use strict'; [(f) => () => f(), (f) => (a) => f(a), (f) => (a, b) => f(a, b), \
+         (f) => (a, b, c) => f(a, b, c), (f) => (a, b, c, d) => f(a, b, c, d), \
+         (f) => (a, b, c, d, e) => f(a, b, c, d, e), (f) => (a, b, c, d, e, g) => f(a, b, c, d, e, g)]",
+      )?;
+      let p = Persist::new(list)?;
+      ARROW_FACTORIES.with(|a| *a.borrow_mut() = Some(p));
+      list
+    }
+  };
+  call(get_element(factories, arity as u32)?, undefined(), &[native])
 }

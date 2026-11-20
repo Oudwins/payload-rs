@@ -7,7 +7,7 @@ use std::ptr;
 use napi::sys;
 
 use crate::js::{self, JsResult, Local, Thrown};
-use crate::{after_read, bench, executor, host};
+use crate::{after_read, bench, executor, host, probes};
 
 type Body<const N: usize> = fn([Local; N]) -> JsResult<Local>;
 
@@ -75,6 +75,37 @@ export!(stats, 0, |[]| {
 });
 
 export!(noop, 0, |[]| Ok(js::undefined()));
+
+export!(probe_await_once, 1, |[v]| probes::await_once(v));
+export!(probe_await_n, 2, |[v, n]| probes::await_n(v, u32_arg(n)));
+export!(probe_await_tail, 2, |[p, v]| probes::await_tail(p, v));
+export!(probe_del, 2, |[o, k]| {
+  host::del(o, k)?;
+  Ok(js::undefined())
+});
+export!(probe_set, 3, |[o, k, v]| {
+  host::set(o, k, v)?;
+  Ok(js::undefined())
+});
+export!(probe_literal, 2, |[k, v]| {
+  let name = js::get_string(k).unwrap_or_default();
+  js::object_literal(&[(name.as_str(), v), ("after", js::number(1.0))])
+});
+export!(probe_array_literal, 2, |[a, b]| js::array_literal(&[a, b]));
+export!(probe_call_fn, 2, |[f, expr]| {
+  let expr = js::get_string(expr).unwrap_or_default();
+  host::call_fn(f, js::undefined(), &[], &expr)
+});
+export!(probe_object_keys, 1, |[o]| host::object_keys(o));
+export!(probe_has, 2, |[o, k]| Ok(js::boolean(host::has(o, k)?)));
+export!(probe_is_array, 1, |[v]| Ok(js::boolean(host::array_is_array(v)?)));
+export!(probe_push, 2, |[arr, v]| host::push(arr, v, "arr.push"));
+export!(probe_closure, 2, |[f, counter]| probes::closure_probe(f, counter));
+export!(probe_arrow, 1, |[n]| probes::arrow_probe(u32_arg(n)));
+export!(probe_counted_closure, 0, |[]| probes::counted_closure());
+export!(probe_live_closures, 0, |[]| Ok(js::number(probes::live_closures() as f64)));
+export!(probe_nest, 2, |[n, leaf]| probes::nest(u32_arg(n), leaf));
+export!(probe_nest_call, 2, |[n, leaf]| probes::nest_call(u32_arg(n), leaf));
 
 export!(bench_call_js, 2, |[f, n]| Ok(js::number(bench::call_js(f, u32_arg(n))?)));
 export!(bench_get_property, 3, |[o, k, n]| {
@@ -144,11 +175,41 @@ pub fn create() -> JsResult<Local> {
   }
   add!("init", init);
   add!("resume", resume);
+  // `awaitValue(value, token)`: the native-await helper every JS-side `await f(...)` host helper
+  // must use (executor::install_native_await); `thenReturn` likewise.
+  let helpers = executor::install_native_await(js::get_named(o, "resume")?)?;
+  js::define_named(o, "awaitValue", js::get_element(helpers, 0)?)?;
+  js::define_named(o, "thenReturn", js::get_element(helpers, 1)?)?;
   add!("afterRead", after_read_export);
   add!("afterReadTraverseFields", after_read_traverse_fields_export);
   add!("stats", stats);
   add!("noop", noop);
   add!("probe", probe);
+  let probes = js::object();
+  macro_rules! probe {
+    ($js:literal, $f:ident) => {
+      js::set_named(probes, $js, js::create_function($js, $f, ptr::null_mut()))?;
+    };
+  }
+  probe!("awaitOnce", probe_await_once);
+  probe!("awaitN", probe_await_n);
+  probe!("awaitTail", probe_await_tail);
+  probe!("del", probe_del);
+  probe!("set", probe_set);
+  probe!("literal", probe_literal);
+  probe!("arrayLiteral", probe_array_literal);
+  probe!("callFn", probe_call_fn);
+  probe!("objectKeys", probe_object_keys);
+  probe!("has", probe_has);
+  probe!("isArray", probe_is_array);
+  probe!("push", probe_push);
+  probe!("closure", probe_closure);
+  probe!("arrow", probe_arrow);
+  probe!("countedClosure", probe_counted_closure);
+  probe!("liveClosures", probe_live_closures);
+  probe!("nest", probe_nest);
+  probe!("nestCall", probe_nest_call);
+  js::set_named(o, "probes", probes)?;
   add!("benchCallJs", bench_call_js);
   add!("benchGetProperty", bench_get_property);
   add!("benchSetProperty", bench_set_property);
