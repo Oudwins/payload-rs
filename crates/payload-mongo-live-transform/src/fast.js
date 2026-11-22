@@ -955,11 +955,19 @@
      * cannot plan them (the exhaustive port then transforms the document). `flattenAllFields` is
      * pure (its cache only memoizes), so calling it here, before upstream would, is not observable.
      */
+    const planned = new WeakMap()
     const plansOf = (config, fields) => {
+      if (fields !== null && typeof fields === 'object') {
+        const hit = planned.get(fields)
+        if (hit !== undefined && hit.config === config) {
+          return hit.plans
+        }
+      }
+      let plans
       try {
         need(config !== null && typeof config === 'object')
         const cp = configPlanOf(config)
-        return {
+        plans = {
           cp,
           strip: stripPlanOf(flattenAllFields({ cache: true, fields }), cp),
           traverse: traversePlanOf(fields, cp),
@@ -967,8 +975,12 @@
       } catch {
         // UNPLANNABLE, or a config that throws while it is planned (upstream throws only once data
         // reaches it): the exhaustive port runs the document
-        return null
+        plans = null
       }
+      if (fields !== null && typeof fields === 'object') {
+        planned.set(fields, { config, plans })
+      }
+      return plans
     }
 
     const transformOne = (cx, data, pil) => {
