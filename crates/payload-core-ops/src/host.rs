@@ -22,6 +22,8 @@ use payload_core_runtime::js::{self, JsResult, Local, Persist, Thrown, Type, Val
 
 pub struct Host {
   pub obj: Persist,
+  /// Helpers already looked up by [`call`] (the host object is engine-internal and never changes).
+  helpers: RefCell<std::collections::HashMap<String, Rc<Persist>, std::hash::BuildHasherDefault<js::FnvHasher>>>,
   /// `afterRead` to call instead of the Rust port (`PAYLOAD_OPS_AFTER_READ=ts`): isolates the
   /// operations from the traversal in differential runs.
   pub after_read: Option<Persist>,
@@ -50,6 +52,7 @@ pub fn install(obj: Local) -> JsResult<()> {
   }
   let host = Host {
     obj: Persist::new(obj)?,
+    helpers: RefCell::new(Default::default()),
     after_read,
     done,
     #[cfg(feature = "mutants")]
@@ -80,10 +83,18 @@ pub fn mutant(_n: u32) -> bool {
 /// Calls the host helper `name` with `this === undefined`.
 pub fn call(name: &str, args: &[Local]) -> JsResult<Local> {
   let h = host()?;
-  let f = js::get_named(h.obj.get(), name)?;
-  if js::type_of(f) != Type::Function {
-    return Err(js::engine_error(&format!("core ops host helper `{name}` is missing")));
-  }
+  let cached = h.helpers.borrow().get(name).cloned();
+  let f = match cached {
+    Some(f) => f.get(),
+    None => {
+      let f = js::get_named(h.obj.get(), name)?;
+      if js::type_of(f) != Type::Function {
+        return Err(js::engine_error(&format!("core ops host helper `{name}` is missing")));
+      }
+      h.helpers.borrow_mut().insert(name.to_string(), Rc::new(Persist::new(f)?));
+      f
+    }
+  };
   js::call(f, js::undefined(), args)
 }
 

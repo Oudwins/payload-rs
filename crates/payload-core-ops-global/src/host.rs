@@ -19,18 +19,26 @@ pub use payload_core_ops::host::{
   thrown, val,
 };
 
+type HelperCache = std::collections::HashMap<String, Persist, std::hash::BuildHasherDefault<js::FnvHasher>>;
+
 thread_local! {
   static HOST: RefCell<Option<Persist>> = const { RefCell::new(None) };
+  /// Helpers already looked up by [`call`] (the host object is engine-internal and never changes).
+  static HELPERS: RefCell<HelperCache> = RefCell::new(HelperCache::default());
 }
 
 pub fn install(obj: Local) -> JsResult<()> {
   let host = Persist::new(obj)?;
   HOST.with(|h| *h.borrow_mut() = Some(host));
+  HELPERS.with(|c| c.borrow_mut().clear());
   Ok(())
 }
 
 /// Calls the host helper `name` with `this === undefined`.
 pub fn call(name: &str, args: &[Local]) -> JsResult<Local> {
+  if let Some(f) = HELPERS.with(|c| c.borrow().get(name).map(Persist::get)) {
+    return js::call(f, js::undefined(), args);
+  }
   let f = HOST.with(|h| match h.borrow().as_ref() {
     Some(host) => js::get_named(host.get(), name),
     None => Err(js::engine_error("core global/auth operations binding not initialized")),
@@ -38,6 +46,8 @@ pub fn call(name: &str, args: &[Local]) -> JsResult<Local> {
   if js::type_of(f) != Type::Function {
     return Err(js::engine_error(&format!("core global/auth operations host helper `{name}` is missing")));
   }
+  let persisted = Persist::new(f)?;
+  HELPERS.with(|c| c.borrow_mut().insert(name.to_string(), persisted));
   js::call(f, js::undefined(), args)
 }
 

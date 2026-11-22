@@ -17,7 +17,8 @@ use napi::sys;
 
 thread_local! {
   static ENV: Cell<sys::napi_env> = const { Cell::new(ptr::null_mut()) };
-  /// JS array holding primitives napi cannot reference (strings, bigints): `Val::Slot` indexes.
+  /// JS object (null prototype) holding primitives napi cannot reference (strings, bigints):
+  /// `Val::Slot` indexes.
   static SLOTS: std::cell::RefCell<(Option<Persist>, Vec<u32>, u32)> = const { std::cell::RefCell::new((None, Vec::new(), 0)) };
 }
 
@@ -29,7 +30,10 @@ impl Slot {
     SLOTS.with(|s| {
       let mut s = s.borrow_mut();
       if s.0.is_none() {
-        s.0 = Some(Persist::new(array())?);
+        // Engine-internal table with a null prototype: an element write is an own data property
+        // (no index setters user code installs on `Array.prototype` / `Object.prototype` can run
+        // or swallow the value), and a plain `set_element` (no property descriptor) suffices.
+        s.0 = Some(Persist::new(run_script("({ __proto__: null })")?)?);
       }
       let index = match s.1.pop() {
         Some(i) => i,
@@ -38,9 +42,7 @@ impl Slot {
           s.2 - 1
         }
       };
-      // Engine-internal table: define, so index setters user code installs on
-      // `Array.prototype` / `Object.prototype` neither run nor swallow the value.
-      define_element(s.0.as_ref().map(|p| p.get()).unwrap_or_else(undefined), index, value)?;
+      set_element(s.0.as_ref().map(|p| p.get()).unwrap_or_else(undefined), index, value)?;
       Ok(Slot(index))
     })
   }
