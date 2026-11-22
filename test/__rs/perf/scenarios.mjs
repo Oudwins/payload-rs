@@ -221,9 +221,9 @@ const local = [
   },
   {
     name: 'update by id',
-    setup: (ctx, iteration) => ({ id: by(ctx, iteration), views: iteration }),
-    run: (ctx, { id, views }) =>
-      ctx.payload.update({ overrideAccess: true, collection: 'posts', data: { views }, id }),
+    setup: (ctx, iteration) => ({ id: by(ctx, iteration), revision: iteration }),
+    run: (ctx, { id, revision }) =>
+      ctx.payload.update({ overrideAccess: true, collection: 'posts', data: { revision }, id }),
   },
   {
     name: 'update by id (de locale)',
@@ -240,12 +240,12 @@ const local = [
   },
   {
     name: 'update many (10 by where)',
-    setup: (ctx, iteration) => ({ ids: someIDs(ctx, iteration, 10), views: iteration }),
-    run: (ctx, { ids, views }) =>
+    setup: (ctx, iteration) => ({ ids: someIDs(ctx, iteration, 10), revision: iteration }),
+    run: (ctx, { ids, revision }) =>
       ctx.payload.update({
         overrideAccess: true,
         collection: 'posts',
-        data: { views },
+        data: { revision },
         where: { id: { in: ids } },
       }),
   },
@@ -438,9 +438,14 @@ const local = [
   },
   {
     name: 'login',
+    isCountVariable: true,
     run: (ctx) => ctx.payload.login({ collection: 'users', data: ctx.credentials }),
   },
-  { name: 'auth (JWT)', run: (ctx) => ctx.payload.auth({ headers: ctx.authHeaders() }) },
+  {
+    name: 'auth (JWT)',
+    isCountVariable: true,
+    run: (ctx) => ctx.payload.auth({ headers: ctx.authHeaders() }),
+  },
 ]
 
 /** REST endpoints (`/api/...`). */
@@ -478,8 +483,9 @@ const rest = [
   },
   {
     name: 'PATCH /posts/:id',
-    setup: (ctx, iteration) => ({ id: by(ctx, iteration), views: iteration }),
-    run: (ctx, { id, views }) => ctx.rest('PATCH', ['posts', String(id)], { body: { views } }),
+    setup: (ctx, iteration) => ({ id: by(ctx, iteration), revision: iteration }),
+    run: (ctx, { id, revision }) =>
+      ctx.rest('PATCH', ['posts', String(id)], { body: { revision } }),
   },
   {
     name: 'DELETE /posts/:id',
@@ -530,10 +536,15 @@ const rest = [
   { name: 'GET /globals/settings', run: (ctx) => ctx.rest('GET', ['globals', 'settings']) },
   {
     name: 'POST /users/login',
+    isCountVariable: true,
     run: (ctx) => ctx.rest('POST', ['users', 'login'], { auth: false, body: ctx.credentials }),
   },
-  { name: 'GET /users/me', run: (ctx) => ctx.rest('GET', ['users', 'me']) },
-  { name: 'POST /users/refresh-token', run: (ctx) => ctx.rest('POST', ['users', 'refresh-token']) },
+  { name: 'GET /users/me', isCountVariable: true, run: (ctx) => ctx.rest('GET', ['users', 'me']) },
+  {
+    name: 'POST /users/refresh-token',
+    isCountVariable: true,
+    run: (ctx) => ctx.rest('POST', ['users', 'refresh-token']),
+  },
   { name: 'GET /access', run: (ctx) => ctx.rest('GET', ['access']) },
 ]
 
@@ -558,13 +569,13 @@ const graphql = [
   },
   {
     name: 'mutation updatePost',
-    setup: (ctx, iteration) => ({ id: by(ctx, iteration), views: iteration }),
-    run: (ctx, { id, views }) =>
+    setup: (ctx, iteration) => ({ id: by(ctx, iteration), revision: iteration }),
+    run: (ctx, { id, revision }) =>
       ctx.graphql(
-        `mutation ($id: ${ctx.idType}!, $views: Float) { updatePost(id: $id, data: { views: $views }) { id views } }`,
+        `mutation ($id: ${ctx.idType}!, $revision: Float) { updatePost(id: $id, data: { revision: $revision }) { id revision } }`,
         {
           id,
-          views,
+          revision,
         },
       ),
   },

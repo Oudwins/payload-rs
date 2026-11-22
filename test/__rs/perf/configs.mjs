@@ -100,8 +100,9 @@ export const buildConfigInput = ({ db, editor, hookCounter, shape, uploadDir }) 
         authors({ shape: 'typical' }),
         categories(),
         media({ uploadDir }),
+        // the first is `posts`: the settings global relates to it
         ...Array.from({ length: count }, (_, index) => ({
-          slug: `wide-${index}`,
+          slug: index === 0 ? 'posts' : `wide-${index}`,
           fields: postFields({ editor, shape: 'typical' }),
         })),
       ],
@@ -218,6 +219,9 @@ const postFields = ({ editor, shape }) => {
   const fields = [
     { name: 'title', type: 'text', index: true, localized: isLocalized, required: true },
     { name: 'views', type: 'number', defaultValue: 0 },
+    // what the update scenarios write: no scenario filters or sorts on it, so reads see the same
+    // documents however many updates ran
+    { name: 'revision', type: 'number', defaultValue: 0 },
     { name: 'author', type: 'relationship', relationTo: 'authors' },
   ]
   if (shape === 'minimal') {
