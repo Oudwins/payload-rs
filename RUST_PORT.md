@@ -12,13 +12,14 @@ Upstream base: see `UPSTREAM.md`.
 **The Rust engine is the default** (`PAYLOAD_ENGINE` unset; `ts` selects upstream). Install the
 packages built from this tree in place of upstream's; nothing else changes.
 
-| part                                                        | state                                                                                                                                                                                                                                   |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| MongoDB adapter (`@payloadcms/db-mongodb`)                  | every `payload.db.*` method, model building, queries, joins, transforms, versions / drafts, localization, transactions: Rust on the live JS objects (mongoose stays the driver: `payload.db.collections` / `connection` are public API) |
-| SQLite adapter (`@payloadcms/db-sqlite`)                    | Rust SQL engine on Rust libSQL connections                                                                                                                                                                                              |
-| core (operations, field hooks, validators, query utilities) | Rust for every database, Postgres included (db-postgres itself is upstream TS)                                                                                                                                                          |
-| Postgres SQL engine                                         | not ported (`RUST_POSTGRES_PLAN.md`)                                                                                                                                                                                                    |
-| prebuilt addons                                             | linux-x64-gnu built and verified here; CI workflow for the other platforms written, not yet run                                                                                                                                         |
+| part                                                        | state                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MongoDB adapter (`@payloadcms/db-mongodb`)                  | every `payload.db.*` method, model building, queries, joins, transforms, versions / drafts, localization, transactions: Rust on the live JS objects (mongoose stays the driver: `payload.db.collections` / `connection` are public API)        |
+| SQLite adapter (`@payloadcms/db-sqlite`)                    | Rust SQL engine on Rust libSQL connections                                                                                                                                                                                                     |
+| core (operations, field hooks, validators, query utilities) | Rust for every database, Postgres included (db-postgres itself is upstream TS)                                                                                                                                                                 |
+| Postgres SQL engine                                         | not ported (`RUST_POSTGRES_PLAN.md`)                                                                                                                                                                                                           |
+| prebuilt addons                                             | linux-x64-gnu built and verified here; CI workflow for the other platforms written, not yet run. A local build links against the build machine's glibc (here 2.44, nix): release addons must come from the workflow (ubuntu-22.04, glibc 2.35) |
+| stage-1 MongoDB JSON engine                                 | removed (the live engine is the only one); release addon 15.0 -> 13.0 MB; MongoDB suite after the removal: 3330 / 164 / 422, equal to the TS baseline                                                                                          |
 
 Verified on this machine (per test, against TS baselines recorded here with `PAYLOAD_ENGINE=ts`):
 
@@ -36,9 +37,26 @@ Verified on this machine (per test, against TS baselines recorded here with `PAY
 | Next.js (`nextDev.mjs`, dev and `--prod`, sqlite and mongodb)                              | OK: 0 mismatches, nothing of engine-rs in `.next`                                                                                                                     |
 | `default-path/check.mjs --upstream ec35164`, `--self-test`, `switch.int.spec.ts`           | OK, OK, 9/9                                                                                                                                                           |
 
-Remaining: Postgres SQL engine; prebuilt addons for the other platforms (needs the CI workflow to
-run); the upstream JS helpers the Rust core still calls
-(`RUST_OPS_DESIGN.md` section 7).
+Performance (test/__rs/perf, full matrix: 4 config shapes x 100 / 1k / 10k posts x 3 databases,
+startup with up to 200 collections; geometric mean of TS median / Rust median, > 1 = Rust faster):
+
+| database                    | Local API | REST  | GraphQL | startup (typical / wide-200) |
+| --------------------------- | --------- | ----- | ------- | ---------------------------- |
+| MongoDB                     | 0.69x     | 0.72x | 0.75x   | 0.93x / 0.86x                |
+| SQLite                      | 0.94x     | 1.03x | 0.91x   | 0.93x / 0.80x                |
+| PostgreSQL (Rust core only) | 0.87x     | 0.94x | 0.92x   | 0.96x / 0.96x                |
+
+The Rust engine is not faster than upstream yet. MongoDB attribution (typical / 1k, `--engines
+ts,rs,db-rs,core-rs`): the live Mongo engine alone 0.75x, the Rust core alone 0.94x. The cost is
+per returned document and field, independent of the collection size (`find limit 100`: 4.3 ms TS,
+12.2 ms with the Rust Mongo engine, at every size): the live transform crosses Node-API once per
+field in both directions (JS `fields.some(native.traverseField)` -> Rust -> JS `get` / `forIn` /
+`forOf` helpers -> Rust callbacks), about 40% of the CPU profile. Single-document SQLite operations
+are faster (findByID 1.4-1.8x, findGlobal 2.2x); multi-document reads are slower on every database.
+
+Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
+the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
+calls (`RUST_OPS_DESIGN.md` section 7).
 
 ## Layout
 
