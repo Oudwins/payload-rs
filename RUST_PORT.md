@@ -7,6 +7,40 @@ working exactly as it does upstream.
 
 Upstream base: see `UPSTREAM.md`.
 
+## Status (2026-11-22, linux x64, Node 24.22.2, MongoDB 8.2.11, PostgreSQL 17.11)
+
+**The Rust engine is the default** (`PAYLOAD_ENGINE` unset; `ts` selects upstream). Install the
+packages built from this tree in place of upstream's; nothing else changes.
+
+| part                                                        | state                                                                                                                                                                                                                                   |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MongoDB adapter (`@payloadcms/db-mongodb`)                  | every `payload.db.*` method, model building, queries, joins, transforms, versions / drafts, localization, transactions: Rust on the live JS objects (mongoose stays the driver: `payload.db.collections` / `connection` are public API) |
+| SQLite adapter (`@payloadcms/db-sqlite`)                    | Rust SQL engine on Rust libSQL connections                                                                                                                                                                                              |
+| core (operations, field hooks, validators, query utilities) | Rust for every database, Postgres included (db-postgres itself is upstream TS)                                                                                                                                                          |
+| Postgres SQL engine                                         | not ported (`RUST_POSTGRES_PLAN.md`)                                                                                                                                                                                                    |
+| prebuilt addons                                             | linux-x64-gnu built and verified here; CI workflow for the other platforms written, not yet run                                                                                                                                         |
+
+Verified on this machine (per test, against TS baselines recorded here with `PAYLOAD_ENGINE=ts`):
+
+| check                                                                                      | result                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MongoDB TS baseline (135 files)                                                            | 3330 / 164 / 422 (failures: storage emulators, import-export localstack, next's agent upgrade gate in test/hmr, 2 uploads paste-url network tests)                    |
+| MongoDB `PAYLOAD_ENGINE=rs`, committed tree before the default flip                        | every file equal to the baseline except load errors identical to it; cli / schedules-autocron first-run flakes, solo reruns clean                                     |
+| MongoDB shadow (serial, 76,806 calls)                                                      | 38 divergences, all the server's `$clusterTime` / `operationTime` copied onto write-conflict errors (normalised now); rerun of those files: **0 divergences**         |
+| MongoDB flag unset (default = Rust)                                                        | equal to the baseline (cli first-run flake, solo rerun clean); create-payload-app 11/11 after adding engine-rs to the publish list                                    |
+| MongoDB glue self-tests, parity goldens on Rust                                            | 26/26, 503/503                                                                                                                                                        |
+| MongoDB `cosmosdb` variant (no join aggregations, no transactions, bigint ids), flag unset | equal to its TS baseline (one race test of plugin-ecommerce on the non-transactional adapter: solo rerun clean)                                                       |
+| SQLite flag unset                                                                          | **135/135 files identical** to the TS baseline, 52,668 engine calls                                                                                                   |
+| PostgreSQL flag unset (Rust core, upstream adapter)                                        | equal to the TS baseline (one cli test failed in the TS run only; a TS rerun passes it)                                                                               |
+| packaging (`test/__rs/packaging/run.mjs`, release addon)                                   | OK: clean install from tarballs, platform package addon, default and `rs` runs equal to `ts` runs for sqlite and mongodb, sqlite-only install loads no MongoDB module |
+| Next.js (`nextDev.mjs`, dev and `--prod`, sqlite and mongodb)                              | OK: 0 mismatches, nothing of engine-rs in `.next`                                                                                                                     |
+| `default-path/check.mjs --upstream ec35164`, `--self-test`, `switch.int.spec.ts`           | OK, OK, 9/9                                                                                                                                                           |
+
+Remaining: Postgres SQL engine; prebuilt addons for the other platforms (needs the CI workflow to
+run); the stage-1 MongoDB JSON engine is still compiled in (only reachable with
+`PAYLOAD_RS_MONGO_ENGINE=stage1`); the upstream JS helpers the Rust core still calls
+(`RUST_OPS_DESIGN.md` section 7).
+
 ## Layout
 
 ```
@@ -23,8 +57,8 @@ the addon. `PAYLOAD_ENGINE` selects the implementation while porting:
 
 | value    | behaviour                                                       |
 | -------- | --------------------------------------------------------------- |
-| `ts`     | upstream TypeScript implementation (reference)                  |
-| `rs`     | Rust implementation (default once a module is ported)           |
+| `ts`     | upstream TypeScript implementation (the reference)              |
+| `rs`     | Rust implementation (the default: also selected when unset)     |
 | `shadow` | run both, return TS result, record every divergence (diff mode) |
 
 ## Porting order
@@ -78,10 +112,20 @@ the upstream suite. Baseline results for the TS engine live in
 
 Run (Node 24, see `.nvmrc`):
 
+Build requirements: Rust, cmake, libclang (`LIBCLANG_PATH`); MongoDB 8.2 replica set `rs0` on
+:27018 (test/__rs/README-mongo.md), PostgreSQL 17 + PostGIS + pgvector on :5433
+(test/__rs/pg-harness/README.md).
+
 ```sh
-pnpm build:engine-rs                           # build the native addon
-PAYLOAD_ENGINE=rs pnpm test:int:sqlite <suite>
+pnpm --filter @payloadcms/engine-rs build:native   # build the addon (debug; build:native:release)
+pnpm build:core
+pnpm test:int:sqlite <suite>                       # the default: Rust
+PAYLOAD_ENGINE=ts pnpm test:int:sqlite <suite>     # upstream TS
 PAYLOAD_ENGINE=shadow pnpm test:int:sqlite <suite>
+# whole suite against a TS baseline (per test)
+node test/__rs/mongo-harness/runSuites.mjs --engine ts --write-baseline .rs-baseline/mongodb-all.json
+node test/__rs/mongo-harness/runSuites.mjs --engine default --rerun-failed --baseline .rs-baseline/mongodb-all.json
+node test/__rs/mongo-harness/runSuites.mjs --shadow --candidate rs --baseline .rs-baseline/mongodb-all.json
 ```
 
 ## SQLite build: the `libsqlite3-sys` patch
