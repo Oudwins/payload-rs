@@ -341,6 +341,51 @@ Nothing here changes what user code can observe: the same objects, the same prop
 in the same order (checked with recording proxies, see section 4), the same calls with the same
 args and `this`, the same number of promises settling at the same microtask.
 
+### afterRead: plan traversal (phase K, the default)
+
+Profiles of the read operations (perf suite, `find limit 100` on db-postgres) showed the Rust
+traversal spending ~45 µs per typical document in Node-API crossings (TS: ~22 µs for the whole
+afterRead): every JS-observable step of a container field's `promise()` was a crossing, and so
+were the per-document task, its ~18 persistent references and the promise loop. Since V8 performs
+those steps far faster than any crossing, the traversal now splits like this:
+
+- **Rust decides.** `config.rs` classifies every field once per fields array and per
+  `overrideAccess` / parent-localized combination (`fast_kind`): a plain leaf (the `Leaf`
+  classification of the fast paths above, hooked leaves included), a relationship / upload / join,
+  a named group, an array, an unnamed row / collapsible / group, or `UPSTREAM`. A fast kind is a
+  data field without a virtual path, without read access to await (or `overrideAccess`) and not
+  localized under a non-localized parent (no value hoisting, no `locale: 'all'` hook runs), or a
+  passthrough container. `FieldsDesc::js_plan(variant)` hands the host a plan object (`fields`, the
+  `keys` / `flags` leaf table, `kinds`, `isArray`, a `children` cache), created once.
+- **The host executes.** `packages/engine-rs/src/runtime/afterReadPlan.ts`: `traverse` pushes one
+  promise per field (`fieldPromises.push(...)`, `push` read before the field runs); `UPSTREAM`
+  fields call upstream's own `promise()` with upstream's args literal (`hookedLeaf`), every other
+  field runs `fastField`, an `async` function containing exactly the branches of upstream's
+  `promise()` the classification leaves reachable, in upstream's order, with upstream's awaits
+  (field hooks loop, default value step): hidden check, `stripUnselectedFields`, the hoisting
+  reads, the group `{}` fill, the hooks, the default value, `relationshipPopulationPromise`, then
+  the rows / group / passthrough traversal with the same plans (nested plans come from Rust through
+  the binding's `afterReadPlan(fields, variant)` and are cached on the parent plan). Path strings
+  come from upstream's `getFieldPaths`, segment arrays are built like upstream's (fresh arrays,
+  shared by the hooks of one field). Real `forEach` / `Object.values` / `Array.isArray` calls, so
+  patched built-ins and proxies of arrays behave as upstream.
+- **afterRead itself** is a synchronous Rust entry: the args destructuring (host, upstream's
+  pattern), `depth` / `currentDepth`, `(collection?.fields || global?.fields)`, `getSelectMode`,
+  the root traversal (one host call), and then the host's `afterReadLoop(c)`: the rest of
+  upstream's body verbatim (`while` loop over the spliced promise arrays, the 100-iteration error,
+  `return incomingDoc`) as an `async` function whose promise is returned. Upstream's promise is
+  that of one async function that reaches the same loop synchronously, so it settles in the same
+  microtask; a throw in the synchronous part rejects (host `rejected`). No Rust task, persistent
+  reference or resume per document remains.
+
+What the plans skip is config work only (args literals, `getFieldPaths` / segment arrays nobody
+reads, `fieldAffectsData` / `fieldShouldBeLocalized` / `stripUnselectedFields` calls the config
+decides). `PAYLOAD_RS_AFTER_READ_TRAVERSAL=rust` selects the Rust traversal of the sections above
+(also still used by `afterReadTraverseFields`, the rich text editors' entry). Mutation checks of
+the plan path against the core-runtime suites: dropping the hoisting-check reads (traced runs
+only) 277 diffs in `hooks`; skipping the await tick of a synchronous field hook result 45 (`hooks`)
+and 986 (`synthetic`) diffs.
+
 ## 4. Prototype: `afterRead` in Rust, differential verification
 
 `after_read.rs` ports `afterRead/index.ts`, `traverseFields.ts`, `promise.ts`,

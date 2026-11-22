@@ -82,6 +82,16 @@ costs the same ticks as awaiting the TS `async` function).
 | object literals, spreads (`{ ...doc, collection }`, `{ ...where, and: [...] }`), destructuring patterns                                                                                                                                                                                                                       | JS helpers (one expression each)                                                                                   |
 | `Array.isArray`, `Array.prototype.map/filter/find`, `for...of`, `for...in`, `new Date(v).getTime()`                                                                                                                                                                                                                           | the JS built-ins, driven from Rust (below)                                                                         |
 
+Per-document arrows (phase K): the `result.docs.map(async (doc) => ...)` arrows of find (the
+afterRead call, the collection beforeRead / afterRead hook loops) and findVersions (the version
+fallback and beforeRead hooks, `data.version = await afterRead(...)`, the afterRead hooks) are
+upstream's arrow bodies in host helpers (`findAfterReadAll`, `findBeforeReadHooksAll`,
+`findAfterReadHooksAll`, `findVersions*All`; `<expr>.map` errors from `mapWith`), one host call
+for all documents instead of one Rust task per document; `afterRead` there is the Rust one (or the
+`PAYLOAD_OPS_AFTER_READ` override). The Rust per-document paths remain for the mutant builds
+(M1, M2, M5). The control flow around them, the awaits of their `Promise.all` and everything else
+of the operations stay in Rust.
+
 The query utilities come from `crates/payload-core-query/src/live` (strategy B on the same
 runtime): they work on the caller's `where` / `joins` objects, so `sanitizeWhereQuery`'s in-place
 mutation, `combineQueries` returning the caller's object and the identity of the `where` handed to

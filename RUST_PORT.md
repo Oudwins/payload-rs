@@ -54,6 +54,28 @@ field in both directions (JS `fields.some(native.traverseField)` -> Rust -> JS `
 `forOf` helpers -> Rust callbacks), about 40% of the CPU profile. Single-document SQLite operations
 are faster (findByID 1.4-1.8x, findGlobal 2.2x); multi-document reads are slower on every database.
 
+Read path, phase K (2026-11-23, release addon, 13th-gen Intel E-cores 16-31 shared with other
+jobs; 1000 posts, shapes typical / complex / hooks, categories read / locale / versions / globals,
+TS and Rust cells of the same run; geometric means of TS median / Rust median):
+
+| database                                         | read before | read after | globals | locale | versions |
+| ------------------------------------------------ | ----------- | ---------- | ------- | ------ | -------- |
+| PostgreSQL (Rust core, upstream db-postgres)     | 0.76x       | 0.98x      | 0.96x   | 0.97x  | 0.95x    |
+| MongoDB, Rust core on the TS adapter (`core-rs`) | 0.94x (doc) | 0.99x      | 0.91x   | 0.99x  | 0.95x    |
+| MongoDB, default (Rust adapter + Rust core)      | 0.46x       | 0.52x      | 0.81x   | 0.55x  | 0.67x    |
+
+Multi-document reads are now faster than TS (PostgreSQL typical `find limit 100` 1.13x, `limit 200`
+1.15x, hooks shape 1.08x, REST / GraphQL lists 1.05-1.10x; MongoDB `core-rs` `find limit 100`
+1.25x); single-document operations are 0.84-1.01x (per-operation Node-API overhead of the ported
+operation and query-validation code, ~25-70 µs). What changed: afterRead runs from Rust-decoded
+plans in the host (RUST_CORE_DESIGN.md "afterRead: plan traversal"), the per-document arrows of the
+read operations run in the host (RUST_OPS_DESIGN.md section 2), cheaper string slots, and a V8
+artifact that had made db-postgres's own `payload.db.find` 25% slower in Rust-engine processes
+(the `{ id }` literal shape of drizzle's documents falling out of the transition tree, see
+`reservedLiteralShapes` in packages/engine-rs/src/runtime/index.ts). The database layer bounds what
+the core can gain: TS `payload.db.find` of 100 typical posts is ~6.0 ms of a ~9.2 ms `payload.find`
+on PostgreSQL, so even a zero-cost core would be ~1.5x there.
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).
