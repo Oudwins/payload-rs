@@ -29,6 +29,7 @@ import { defaultTimezones } from '../baseFields/timezone/defaultTimezones.js'
 import { getFieldPaths } from '../getFieldPaths.js'
 import { setDefaultBeforeDuplicate } from '../setDefaultBeforeDuplicate.js'
 import { validations } from '../validations.js'
+import { defaultFieldValidators } from './defaultFieldValidators.js'
 import {
   reservedAPIKeyFieldNames,
   reservedBaseAuthFieldNames,
@@ -361,13 +362,16 @@ export const sanitizeField = ({
     if (typeof field.validate === 'undefined') {
       if ('virtual' in field && field.virtual) {
         field.validate = (): true => true
+        defaultFieldValidators.set(field.validate, { field, validate: field.validate })
       } else {
         const defaultValidate = validations[field.type as keyof typeof validations]
         if (defaultValidate) {
           field.validate = (val: any, options: any) =>
             defaultValidate(val, { ...field, ...options })
+          defaultFieldValidators.set(field.validate, { field, validate: defaultValidate })
         } else {
           field.validate = (): true => true
+          defaultFieldValidators.set(field.validate, { field, validate: field.validate })
         }
       }
     }

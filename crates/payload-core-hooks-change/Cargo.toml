@@ -21,6 +21,9 @@ mutant-skip-sync-await = []
 mutant-inline-traverse = []
 mutant-reverse-fields = []
 mutant-merge-before-errors = []
+# Container fields run the Rust port instead of the glue's generated upstream copies in JS (the
+# default: Node-API crossings per container field cost more than V8 running the same code).
+ported-traversals = []
 
 [[example]]
 name = "before_change_addon"

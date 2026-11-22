@@ -416,6 +416,7 @@ export const registerBeforeChangeSuite = ({
   extraInputs = {},
   extraVariants = {},
   fuzzRounds = 3,
+  keepDefaultValidators = false,
   name,
   only,
 }: {
@@ -424,6 +425,8 @@ export const registerBeforeChangeSuite = ({
   extraInputs?: Record<string, (variant: Variant) => BeforeChangeInput[][]>
   extraVariants?: Record<string, Variant[]>
   fuzzRounds?: number
+  /** Leave sanitize's default validators unwrapped (`instrument`). */
+  keepDefaultValidators?: boolean
   name: string
   /** Restrict to these collection/global slugs. */
   only?: string[]
@@ -433,7 +436,7 @@ export const registerBeforeChangeSuite = ({
       'beforeChange: Rust port matches TS (data, callback order/args, errors)',
       { timeout: 1_800_000 },
       async ({ payload }) => {
-        instrument(payload)
+        instrument(payload, { keepDefaultValidators })
         const stats: DiffStats = {
           diffs: [],
           events: {},

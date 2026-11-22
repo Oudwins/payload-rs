@@ -244,12 +244,15 @@ fn js_string_arg(v: Local) -> String {
   }
 }
 
-/// Calls `traverseFields` (an async function) and returns its promise. A fields array made only of
-/// leaf fields ([`is_leaf`]) runs upstream's `traverseFields.ts` body in JS
-/// (`beforeValidateLeafTraversal`: `unflattenData`, `fields.forEach` pushing the leaf `promise()`,
-/// `await Promise.all`), so the whole traversal is upstream code; other arrays run the port.
+/// Calls `traverseFields` (an async function) and returns its promise: upstream's
+/// `traverseFields.ts` body in JS (`beforeValidateLeafTraversal`: `unflattenData`,
+/// `fields.forEach` pushing upstream's `promise()`, `await Promise.all`), so the whole traversal is
+/// upstream code. With the `ported-traversals` feature (implied by `mutants`) only a fields array
+/// made of leaf fields ([`is_leaf`]) does; other arrays run the port.
 fn traverse(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Local> {
-  let all_leaves = t.tab_fields.is_none() && t.fields.items.as_ref().is_some_and(|items| items.iter().all(|f| is_leaf(f.kind)));
+  let all_leaves = t.tab_fields.is_none()
+    && (!cfg!(feature = "ported-traversals")
+      || t.fields.items.as_ref().is_some_and(|items| items.iter().all(|f| is_leaf(f.kind))));
   if all_leaves && mutant("M13") {
     // Mutant: the leaf `promise()`s are pushed and `Promise.all` is returned directly, without
     // `traverseFields`' own async function (one microtask less).

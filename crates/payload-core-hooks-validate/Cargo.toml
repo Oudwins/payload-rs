@@ -14,4 +14,7 @@ payload-core-runtime = { path = "../payload-core-runtime" }
 [features]
 # Deliberately wrong behaviours selected at runtime by PAYLOAD_BV_MUTANT=<id>, used only to prove
 # the differential suites are sensitive (test/__rs/core-hooks-before-validate/mutants.sh).
-mutants = []
+mutants = ["ported-traversals"]
+# Container fields run the Rust port instead of upstream's `traverseFields.ts` in JS (the
+# default: Node-API crossings per container field cost more than V8 running the same code).
+ported-traversals = []

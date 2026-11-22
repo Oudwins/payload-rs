@@ -1,5 +1,5 @@
 //! JS helpers specific to the beforeChange port, installed by the binding's `init`. Each one is
-//! either a Payload utility the TS code calls (deep merge, flattenValidationData,
+//! either a Payload utility the TS code calls (validation merges, flattenValidationData,
 //! validateBlocksFilterOptions, isolateObjectProperty, ValidationError, ...) or an expression of
 //! `promise.ts` copied verbatim (label building, object literals with their key order) so its
 //! evaluation order and V8 error messages stay identical.
@@ -17,7 +17,8 @@ pub struct ChangeHost {
   pub locale_context: Persist,
   pub locales_in: Persist,
   pub isolate_locale: Persist,
-  pub deep_merge: Persist,
+  /// `[validationData, validationSiblingData, validateFn to call]` of a field's validation.
+  pub validation_merges: Persist,
   pub try_json_parse: Persist,
   pub validate_blocks_filter_options: Persist,
   pub blocks_filter_options_errors: Persist,
@@ -39,9 +40,9 @@ pub struct ChangeHost {
   /// `traverseFields` over a run of leaf fields: pushes upstream's `promise()` of each (a JS
   /// `async` function) into the traversal's promises array.
   pub before_change_leaves: Persist,
-  /// `traverseFields(...)` for a fields array made only of leaf fields: upstream's
-  /// `traverseFields.ts` body (a JS `async` function) calling the leaf `promise()` per field.
-  pub before_change_leaf_traversal: Persist,
+  /// `traverseFields(...)`: upstream's `traverseFields.ts` / `promise.ts` with the validation
+  /// merge elision (generated JS copies of the glue, `async` functions).
+  pub before_change_traversal: Persist,
 }
 
 thread_local! {
@@ -57,7 +58,7 @@ pub fn install(obj: Local) -> JsResult<()> {
     locale_context: f("localeContext")?,
     locales_in: f("localesIn")?,
     isolate_locale: f("isolateLocale")?,
-    deep_merge: f("deepMergeWithSourceArrays")?,
+    validation_merges: f("validationMerges")?,
     try_json_parse: f("tryJSONParse")?,
     validate_blocks_filter_options: f("validateBlocksFilterOptions")?,
     blocks_filter_options_errors: f("blocksFilterOptionsErrors")?,
@@ -77,7 +78,7 @@ pub fn install(obj: Local) -> JsResult<()> {
     parse_float: f("parseFloat")?,
     object_prototype: f("objectPrototype")?,
     before_change_leaves: f("beforeChangeLeaves")?,
-    before_change_leaf_traversal: f("beforeChangeLeafTraversal")?,
+    before_change_traversal: f("beforeChangeTraversal")?,
   };
   HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
   Ok(())

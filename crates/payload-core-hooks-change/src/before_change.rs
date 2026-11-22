@@ -19,6 +19,14 @@ use payload_core_runtime::js::{self, JsResult, Local, Thrown, Type, Val};
 
 use crate::host::{call_fn, change_host, in_op, type_error};
 
+/// Whether traversals run the port instead of the generated upstream copies (mutation tests).
+const USES_PORT: bool = cfg!(any(
+  feature = "ported-traversals",
+  feature = "mutant-skip-sync-await",
+  feature = "mutant-inline-traverse",
+  feature = "mutant-reverse-fields"
+));
+
 /// The destructured `beforeChange` args shared by the whole traversal.
 struct Ctx {
   /// `[id, collection, context, data, doc, docWithLocales, errors, global, isValidationOperation,
@@ -312,15 +320,14 @@ fn entity_fields(ctx: &Ctx) -> JsResult<Local> {
 }
 
 /// Calls the async `traverseFields` (runs synchronously to its first await) and returns its
-/// promise. A fields array made only of leaf fields ([`is_leaf`]) runs upstream's
-/// `traverseFields.ts` body in JS (`beforeChangeLeafTraversal`: `fields.forEach` pushing the leaf
-/// `promise()`, `await Promise.all`); other arrays run the port.
+/// promise: upstream's `traverseFields.ts` / `promise.ts` in JS (`beforeChangeTraversal`, the
+/// glue's generated copies with the validation merge elision). Node-API crossings for every
+/// container field cost more than V8 running the same code, so the port below ([`traverse_fields`],
+/// [`field_promise`]) only runs in the mutant builds of this crate, which mutate it.
 fn traverse(ctx: &Rc<Ctx>, trav: Trav) -> JsResult<Local> {
-  let all_leaves =
-    trav.tab_fields.is_none() && trav.fields.items.as_ref().is_some_and(|items| items.iter().all(|f| is_leaf(f.kind)));
-  if all_leaves && !cfg!(feature = "mutant-reverse-fields") {
+  if !USES_PORT && trav.tab_fields.is_none() {
     return call_host(
-      &change_host()?.before_change_leaf_traversal,
+      &change_host()?.before_change_traversal,
       &[
         ctx.arr.get(),
         trav.fields.node.get(),
@@ -679,14 +686,29 @@ async fn field_promise(
         json_error = Val::from_local(call_host(&ch.try_json_parse, &[sd(), name()])?)?;
       }
 
-      let validate_fn = Val::from_local(rt::get_named(field_js.get(), "validate")?)?;
+      let validate_fn = rt::get_named(field_js.get(), "validate")?;
 
       let mut validation_result = Val::Bool(true);
       let mut failed_locale = Val::Undefined;
 
-      let validation_data = Val::from_local(call_host(&ch.deep_merge, &[ctx.doc.get(), ctx.data.get()])?)?;
-      let validation_sibling_data =
-        Val::from_local(call_host(&ch.deep_merge, &[t.sibling_doc.get(), sd()])?)?;
+      // `deepMergeWithSourceArrays(doc, data)` / `(siblingDoc, siblingData)`, skipped for merge-free
+      // built-in validators when unobservable (`validationMerges`, mergeElision.ts of the glue),
+      // which then returns the built-in to call.
+      let merges = call_host(
+        &ch.validation_merges,
+        &[
+          field_js.get(),
+          validate_fn,
+          js::boolean(is_locale_keyed_value),
+          ctx.doc.get(),
+          ctx.data.get(),
+          t.sibling_doc.get(),
+          sd(),
+        ],
+      )?;
+      let validation_data = Val::from_local(js::get_element(merges, 0)?)?;
+      let validation_sibling_data = Val::from_local(js::get_element(merges, 1)?)?;
+      let validate_fn = Val::from_local(js::get_element(merges, 2)?)?;
 
       for (locale, value) in localized_values_to_validate {
         let has_locale = js::truthy(locale.get());

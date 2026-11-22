@@ -19,8 +19,11 @@ import type {
 
 import { types } from 'node:util'
 
-import { beforeChange as beforeChangeRS } from '../../../packages/engine-rs/src/runtime/beforeChange/index.js'
-import { traverseFields as beforeChangeTraverseFieldsRS } from '../../../packages/engine-rs/src/runtime/beforeChange/index.js'
+import {
+  beforeChange as beforeChangeRS,
+  traverseFields as beforeChangeTraverseFieldsRS,
+} from '../../../packages/engine-rs/src/runtime/beforeChange/index.js'
+import { defaultFieldValidators } from '../../../packages/payload/src/fields/config/defaultFieldValidators.js'
 import { upstreamBeforeChange as beforeChangeTS } from '../../../packages/payload/src/fields/hooks/beforeChange/index.js'
 import { traverseFields as beforeChangeTraverseFieldsTS } from '../../../packages/payload/src/fields/hooks/beforeChange/traverseFields.js'
 import { createPayloadRequest } from '../../../packages/payload/src/utilities/createPayloadRequest.js'
@@ -238,16 +241,23 @@ const describeError = (error: unknown) =>
 /**
  * Wraps every beforeChange-relevant user callback in the sanitized config and labels config
  * objects (fields, field arrays, blocks, collections, globals, editors) so snapshots refer to them
- * by path.
+ * by path. `keepDefaultValidators`: leave the validators field sanitization installed unwrapped
+ * (they are not user code), so the Rust port's validation merge elision applies.
  */
-export const instrument = (payload: Payload): void => {
+export const instrument = (
+  payload: Payload,
+  { keepDefaultValidators = false }: { keepDefaultValidators?: boolean } = {},
+): void => {
   const wrapField = (field: any, fieldPath: string) => {
     if (Array.isArray(field.hooks?.beforeChange)) {
       field.hooks.beforeChange = field.hooks.beforeChange.map((hook: Function, i: number) =>
         wrap(hook, 'hook', `${fieldPath}#${i}`),
       )
     }
-    if (typeof field.validate === 'function') {
+    if (
+      typeof field.validate === 'function' &&
+      !(keepDefaultValidators && defaultFieldValidators.has(field.validate))
+    ) {
       field.validate = wrap(field.validate, 'validate', fieldPath)
     }
     if (typeof field.admin?.condition === 'function') {

@@ -10,7 +10,7 @@
  *     [--scenarios <regex>] [--startup-shapes ...] [--startup-runs 5] [--engines ts,rs]
  *     [--addon file] [--out dir] [--reuse] [--quick] [--min-time-ms 1000] [--min-iterations 10]
  *     [--max-iterations 300] [--max-time-ms 5000] [--no-samples] [--no-startup] [--no-scenarios]
- *     [--verbose]
+ *     [--db-prefix perf] [--verbose]
  *   node test/__rs/perf/run.mjs --list      # the scenario catalogue (markdown), nothing runs
  *
  * `--engines ts` or `--engines rs` alone measures one engine (absolute numbers, no comparison).
@@ -60,6 +60,8 @@ if (process.argv.includes('--list')) {
 const options = {
   addon: path.resolve(option('--addon', path.join(root, 'target/release/libpayload_node.so'))),
   databases: list('--databases', 'mongodb,sqlite,postgres'),
+  /** Prefix of the per-cell database names (shared servers: one prefix per user of the server). */
+  dbPrefix: option('--db-prefix', 'perf'),
   engines: list('--engines', 'ts,rs'),
   maxIterations: Number(option('--max-iterations', isQuick ? 50 : 300)),
   maxTimeMs: Number(option('--max-time-ms', isQuick ? 1500 : 5000)),

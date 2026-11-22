@@ -15,7 +15,6 @@ import type { JsonObject } from '../../../../payload/src/types/index.js'
 import { ValidationError } from '../../../../payload/src/errors/ValidationError.js'
 import { recordNewDoc } from '../../../../payload/src/fields/baseFields/authorship/index.js'
 import { flattenValidationData } from '../../../../payload/src/fields/hooks/beforeChange/flattenValidationData.js'
-import { promise as upstreamPromise } from '../../../../payload/src/fields/hooks/beforeChange/promise.js'
 import { traverseFields as upstreamTraverseFields } from '../../../../payload/src/fields/hooks/beforeChange/traverseFields.js'
 import { validateBlocksFilterOptions } from '../../../../payload/src/fields/validations.js'
 import { deepMergeWithSourceArrays } from '../../../../payload/src/utilities/deepMerge.js'
@@ -23,6 +22,9 @@ import { getTranslatedLabel } from '../../../../payload/src/utilities/getTransla
 import { isolateObjectProperty } from '../../../../payload/src/utilities/isolateObjectProperty.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../../addon.js'
 import { getCoreRuntime } from '../index.js'
+import { promise as generatedPromise } from './generated/promise.js'
+import { traverseFields as generatedTraverseFields } from './generated/traverseFields.js'
+import { foreignCodeRan, mergeFreeValidator, withInertCache } from './mergeElision.js'
 
 export type BeforeChangeBinding = {
   beforeChange: (args: unknown) => Promise<unknown>
@@ -67,8 +69,10 @@ const C_SUBMITTED_TOP_LEVEL_FIELD_NAMES = 14
 
 /**
  * Upstream's `promise()` of a leaf field (crates/payload-core-hooks-change `is_leaf`: no subfield
- * traversal, no editor hooks), called with the args object upstream's `traverseFields` builds
- * (same keys, same order). The traversal-constant values come from the run context array `c`.
+ * traversal, no editor hooks; generated/promise.ts: upstream's promise.ts with the validation
+ * merge elision of mergeElision.ts), called with the args object upstream's `traverseFields`
+ * builds (same keys, same order). The traversal-constant values come from the run context array
+ * `c`. Used by the ported traversal (mutant builds of the crate).
  */
 const leafPromise = (
   c: any[],
@@ -86,7 +90,7 @@ const leafPromise = (
   siblingDocWithLocales: any,
   skipValidation: any,
 ): Promise<void> =>
-  upstreamPromise({
+  generatedPromise({
     id: c[C_ID],
     blockData,
     blockFields,
@@ -119,6 +123,56 @@ const leafPromise = (
   })
 
 /**
+ * A `traverseFields` call of the crate (`traverse`): generated/traverseFields.ts (upstream's
+ * traverseFields.ts and promise.ts with the validation merge elision of mergeElision.ts), with the
+ * arguments the crate's call has.
+ */
+const traversal = (
+  c: any[],
+  fields: any[],
+  blockData: any,
+  blockFields: any,
+  fieldLabelPath: any,
+  parentIndexPath: string,
+  parentIsLocalized: any,
+  parentPath: string,
+  parentSchemaPath: string,
+  siblingData: any,
+  siblingDoc: any,
+  siblingDocWithLocales: any,
+  skipValidation: any,
+): Promise<void> =>
+  generatedTraverseFields({
+    id: c[C_ID],
+    blockData,
+    blockFields,
+    collection: c[C_COLLECTION],
+    context: c[C_CONTEXT],
+    data: c[C_DATA],
+    doc: c[C_DOC],
+    docWithLocales: c[C_DOC_WITH_LOCALES],
+    errors: c[C_ERRORS],
+    fieldLabelPath,
+    fields,
+    global: c[C_GLOBAL],
+    isValidationOperation: c[C_IS_VALIDATION_OPERATION],
+    mergeLocaleActions: c[C_MERGE_LOCALE_ACTIONS],
+    operation: c[C_OPERATION],
+    overrideAccess: c[C_OVERRIDE_ACCESS],
+    parentIndexPath,
+    parentIsLocalized,
+    parentPath,
+    parentSchemaPath,
+    req: c[C_REQ],
+    siblingData,
+    siblingDoc,
+    siblingDocWithLocales,
+    skipHooks: c[C_SKIP_HOOKS],
+    skipValidation,
+    submittedTopLevelFieldNames: c[C_SUBMITTED_TOP_LEVEL_FIELD_NAMES],
+  })
+
+/**
  * Loads `hooksBeforeChangeBinding()` from the addon `getCoreRuntime()` uses
  * (`PAYLOAD_CORE_RUNTIME_ADDON`, else `PAYLOAD_ENGINE_ADDON`, else
  * `packages/engine-rs/payload-engine.node`).
@@ -133,54 +187,8 @@ export const getBeforeChangeBinding = (): BeforeChangeBinding => {
   const created = addon.hooksBeforeChangeBinding()
 
   created.init({
-    /**
-     * A `traverseFields` call whose fields are all leaves (the crate's `traverse`): upstream's
-     * own `traverseFields.ts`, with the arguments the crate's call has.
-     */
-    beforeChangeLeafTraversal: (
-      c: any[],
-      fields: any[],
-      blockData: any,
-      blockFields: any,
-      fieldLabelPath: any,
-      parentIndexPath: string,
-      parentIsLocalized: any,
-      parentPath: string,
-      parentSchemaPath: string,
-      siblingData: any,
-      siblingDoc: any,
-      siblingDocWithLocales: any,
-      skipValidation: any,
-    ): Promise<void> =>
-      upstreamTraverseFields({
-        id: c[C_ID],
-        blockData,
-        blockFields,
-        collection: c[C_COLLECTION],
-        context: c[C_CONTEXT],
-        data: c[C_DATA],
-        doc: c[C_DOC],
-        docWithLocales: c[C_DOC_WITH_LOCALES],
-        errors: c[C_ERRORS],
-        fieldLabelPath,
-        fields,
-        global: c[C_GLOBAL],
-        isValidationOperation: c[C_IS_VALIDATION_OPERATION],
-        mergeLocaleActions: c[C_MERGE_LOCALE_ACTIONS],
-        operation: c[C_OPERATION],
-        overrideAccess: c[C_OVERRIDE_ACCESS],
-        parentIndexPath,
-        parentIsLocalized,
-        parentPath,
-        parentSchemaPath,
-        req: c[C_REQ],
-        siblingData,
-        siblingDoc,
-        siblingDocWithLocales,
-        skipHooks: c[C_SKIP_HOOKS],
-        skipValidation,
-        submittedTopLevelFieldNames: c[C_SUBMITTED_TOP_LEVEL_FIELD_NAMES],
-      }),
+    /** A `traverseFields` call of the crate (`traverse`): generated/traverseFields.ts. */
+    beforeChangeTraversal: traversal,
     /** `promises.push(promise({...}))` of `traverseFields` for the leaf fields `start..end`. */
     beforeChangeLeaves: (
       c: any[],
@@ -199,28 +207,29 @@ export const getBeforeChangeBinding = (): BeforeChangeBinding => {
       siblingDoc: unknown,
       siblingDocWithLocales: unknown,
       skipValidation: unknown,
-    ) => {
-      for (let fieldIndex = start; fieldIndex < end; fieldIndex++) {
-        promises.push(
-          leafPromise(
-            c,
-            fields,
-            fieldIndex,
-            blockData,
-            blockFields,
-            fieldLabelPath,
-            parentIndexPath,
-            parentIsLocalized,
-            parentPath,
-            parentSchemaPath,
-            siblingData,
-            siblingDoc,
-            siblingDocWithLocales,
-            skipValidation,
-          ),
-        )
-      }
-    },
+    ) =>
+      withInertCache(() => {
+        for (let fieldIndex = start; fieldIndex < end; fieldIndex++) {
+          promises.push(
+            leafPromise(
+              c,
+              fields,
+              fieldIndex,
+              blockData,
+              blockFields,
+              fieldLabelPath,
+              parentIndexPath,
+              parentIsLocalized,
+              parentPath,
+              parentSchemaPath,
+              siblingData,
+              siblingDoc,
+              siblingDocWithLocales,
+              skipValidation,
+            ),
+          )
+        }
+      }),
     blocksFilterOptionsErrors: (
       validationResult: any,
       field: any,
@@ -265,8 +274,34 @@ export const getBeforeChangeBinding = (): BeforeChangeBinding => {
       }
       return filterOptionsError
     },
-    deepMergeWithSourceArrays: (obj1: object, obj2: object) =>
-      deepMergeWithSourceArrays<JsonObject>(obj1, obj2),
+    /**
+     * `validationData` / `validationSiblingData` of a container field's validation and the function
+     * to call (mergeElision.ts): `[undefined, undefined, builtin]` when the merges are elided, else
+     * upstream's merges and `validateFn`.
+     */
+    validationMerges: (
+      field: any,
+      validateFn: any,
+      isLocaleKeyedValue: boolean,
+      doc: any,
+      data: any,
+      siblingDoc: any,
+      siblingData: any,
+    ) => {
+      const elidedValidate = isLocaleKeyedValue
+        ? undefined
+        : mergeFreeValidator(field, validateFn, doc, data, siblingDoc, siblingData)
+      if (elidedValidate !== undefined) {
+        return [undefined, undefined, elidedValidate]
+      }
+      const merged = [
+        deepMergeWithSourceArrays<JsonObject>(doc, data),
+        deepMergeWithSourceArrays<JsonObject>(siblingDoc, siblingData),
+        validateFn,
+      ]
+      foreignCodeRan()
+      return merged
+    },
     // The args object literal of the rich text editor beforeChange hooks (same key order).
     editorHookArgs: (
       collection: unknown,

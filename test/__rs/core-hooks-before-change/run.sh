@@ -8,7 +8,9 @@ cd "$(dirname "$0")/../../.."
 # The TS reference must be upstream TS (the harness also fails if a reference run reaches Rust).
 export PAYLOAD_ENGINE=ts # upstream TS (unset selects Rust)
 unset PAYLOAD_CORE_ENGINE
-suites=("${@:-hooks fields localization validate synthetic}")
+# The glue's generated copies of upstream's beforeChange traversal must match upstream's sources.
+node packages/engine-rs/scripts/generateBeforeChange.mjs --check
+suites=("${@:-hooks fields localization validate synthetic elision elision-fields elision-localization}")
 for suite in ${suites[@]}; do
   db="${RS_CORE_HOOKS_BC_DB:-/tmp/rs-before-change.db}"
   rm -f "$db"*

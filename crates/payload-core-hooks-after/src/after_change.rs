@@ -165,14 +165,15 @@ pub fn traverse_fields_entry(a: Local) -> JsResult<Local> {
   })
 }
 
-/// Calls `traverseFields` (an async function) and returns its promise. A fields array made only of
-/// leaf fields ([`is_leaf`]) runs upstream's `traverseFields.ts` body in JS
-/// (`afterChangeLeafTraversal`: `fields.forEach` pushing the leaf `promise()`, `await
-/// Promise.all`); other arrays run the port.
+/// Calls `traverseFields` (an async function) and returns its promise: upstream's
+/// `traverseFields.ts` body in JS (`afterChangeLeafTraversal`: `fields.forEach` pushing upstream's
+/// `promise()`, `await Promise.all`), so the whole traversal is upstream code. With the
+/// `ported-traversals` feature only a fields array made of leaf fields ([`is_leaf`]) does; other
+/// arrays run the port.
 fn traverse_fields(ctx: &Rc<Ctx>, trav: Trav) -> JsResult<Local> {
   let all_leaves =
     trav.tab_fields.is_none() && trav.fields.items.as_ref().is_some_and(|items| items.iter().all(|f| is_leaf(f.kind)));
-  if all_leaves {
+  if all_leaves || (!cfg!(feature = "ported-traversals") && trav.tab_fields.is_none()) {
     return host::call(
       &host::host()?.after_change_leaf_traversal,
       &[

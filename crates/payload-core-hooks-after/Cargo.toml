@@ -7,6 +7,12 @@ version.workspace = true
 # Ports of payload/src/fields/hooks/{afterChange,beforeDuplicate} on the payload-core-runtime
 # (strategy B: Rust drives the user's JS objects through Node-API on the JS thread).
 
+[features]
+# Container fields (arrays, blocks, groups, tabs, ...) run the Rust ports instead of upstream's
+# `traverseFields.ts` in JS (the default: Node-API crossings per container field cost more than
+# V8 running the same code). Kept to exercise and compare the ports.
+ported-traversals = []
+
 [dependencies]
 napi = { version = "3", features = ["napi10"] }
 payload-core-runtime = { path = "../payload-core-runtime" }
