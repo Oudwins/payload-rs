@@ -17,7 +17,7 @@
 use std::rc::Rc;
 
 use payload_core_runtime::config::{self, FieldDesc, FieldsDesc, Kind};
-use payload_core_runtime::executor::{Tail, await_js, spawn, spawn_tail};
+use payload_core_runtime::executor::{Tail, await_js, spawn_tail};
 use payload_core_runtime::host as rt;
 use payload_core_runtime::js::{self, JsResult, Local, Thrown, Type, Val};
 
@@ -134,17 +134,10 @@ fn new_ctx(
 /// (`blockData, collection, context, data, doc, fields, global, operation, parentIndexPath,
 /// parentIsLocalized, parentPath, parentSchemaPath, previousDoc, previousSiblingDoc, req,
 /// siblingData, siblingDoc, siblingFields`; the TS glue destructures with upstream's pattern and
-/// only calls this with string paths). Returns the traversal's promise: upstream's
-/// `traverseFields` in JS (its promise as is), or with the `ported-traversals` feature the port as
-/// the entry's task.
+/// only calls this with string paths). Returns the traversal's promise (the entry's task; every
+/// field's `promise()` is upstream's unless built with `ported-traversals`, see
+/// [`traverse_fields_body`]).
 pub fn traverse_fields_entry(a: Local) -> JsResult<Local> {
-  if !cfg!(feature = "ported-traversals") {
-    return match entry_args(a) {
-      Ok((ctx, trav)) => traverse_fields(&ctx, trav),
-      // a throw while reading the arguments rejects, like upstream's async function
-      Err(error) => spawn(async move { Err::<Val, _>(error) }),
-    };
-  }
   let a = Val::from_local(a)?;
   spawn_tail(async move {
     let (ctx, trav) = entry_args(a.get())?;
@@ -217,11 +210,14 @@ async fn traverse_fields_body(ctx: Rc<Ctx>, t: Rc<Trav>) -> JsResult<Tail> {
   };
   let promises = js::array();
   let mut index = 0;
+  // Without `ported-traversals` (the traversals are upstream's JS; only the rich text entry gets
+  // here) every field is pushed by the host, container fields included.
+  let pushed_by_host = |kind: Kind| is_leaf(kind) || !cfg!(feature = "ported-traversals");
   while index < items.len() {
-    if t.tab_fields.is_none() && is_leaf(items[index].kind) {
+    if t.tab_fields.is_none() && pushed_by_host(items[index].kind) {
       // A run of leaves: upstream's `promise()` of each, pushed in order by the host.
       let start = index;
-      while index < items.len() && is_leaf(items[index].kind) {
+      while index < items.len() && pushed_by_host(items[index].kind) {
         index += 1;
       }
       let h = host::host()?;
