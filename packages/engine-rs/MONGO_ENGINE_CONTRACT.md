@@ -195,6 +195,34 @@ Verification (livereads):
   --addon <addon> --baseline .rs-baseline/mongodb-all.json <files>`; each process writes
   `livereads-<pid>.json` (calls per method, `ported`) into the run's stats dir.
 
+## Transform fast path (2026-11-22, `crates/payload-mongo-live-transform/src/fast.js`)
+
+`deps::transform` (every read and write method) runs fast.js, not the exhaustive Rust port: the
+per-field Node-API crossings in both directions of the port (JS `fields.some` -> Rust
+`traverseField` -> JS `get` / `forIn` / `forOf` helpers -> Rust callbacks) cost about 150 µs per
+returned document (find limit 100: 22 ms vs 7 ms TS).
+
+- Data (documents, rows, operator objects, the adapter): upstream's expressions in upstream's
+  order, evaluated by V8 (reads, `in`, writes, deletes, `for...in` / `for...of`, `Array.isArray`,
+  `Object.keys` / `values` / `entries`, `map` / `filter` on data arrays, `instanceof Date`,
+  `toISOString`, `toHexString`, `new Types.ObjectId(...)`, the JSON round trip, `Number(...)`,
+  `new Date().toISOString()`), so results, partial mutations before a throw and thrown values are
+  upstream's for any data, getters and proxies included.
+- Config: planned once per fields array (and config) and cached; the sanitized config is treated as
+  immutable, like everywhere else in the engine (RUST_CORE_DESIGN.md section 3, "Config").
+- Falls back to the exhaustive port (`native.slowTransform`, the whole call) when a built-in
+  fast.js does not call itself (`some` / `find` / `includes` / `push` / `forEach` / `reverse` /
+  `map`, array iteration, `Array.isArray`, `Object.keys` / `hasOwn`, `String.prototype.includes`)
+  is no longer the intrinsic, and per document (`native.slowTransformDoc`, after upstream's
+  `config` read) for a config it cannot plan (e.g. an array / tabs / group without `fields`, where
+  upstream throws only once data reaches it).
+- `mongoLiveTransformBinding()`: `transform` is still the exhaustive port (differential.spec.ts),
+  `fastTransform` / `fastTransformStats` are the live engine's entry and its path counters.
+- Verification: `test/__rs/mongo-live-transform/fast.spec.ts` (the fixed and seeded random cases
+  of differential.spec.ts against upstream, every trap on data / operators / adapter compared in
+  order, the config graph's own traps excluded; built-in replacement; unplannable configs; negative
+  control).
+
 ## Selection (no user-facing API change)
 
 - `packages/engine-rs` exports `withRustMongoEngine(adapterObj)`, wrapping the object returned
