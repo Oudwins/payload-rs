@@ -55,8 +55,33 @@ export!(init, 1, |[deps]| {
 
 export!(transform_export, 1, |[args]| transform::transform(&transform::TransformArgs::from_object(args)?));
 
+// the live engine's entry (fast.js, register.rs) with the TS args object, for the differentials
+export!(fast_transform_export, 1, |[args]| {
+  let a = transform::TransformArgs::from_object(args)?;
+  let fast = live::fast_transform()?;
+  js::call(
+    fast.get(),
+    js::undefined(),
+    &[
+      a.add_to_set,
+      a.inc,
+      a.pull,
+      a.push,
+      a.adapter,
+      a.data,
+      a.fields,
+      a.global_slug,
+      a.operation,
+      a.parent_is_localized,
+      a.validate_relationships,
+    ],
+  )
+});
+
 // every export destructures its argument with the TS parameter pattern (helpers.js), so missing /
 // null arguments throw V8's destructuring TypeErrors and defaults apply like upstream
+
+export!(fast_stats_export, 0, |[]| live::fast_stats());
 
 export!(handle_error_export, 1, |[args]| {
   let h = live::helpers()?;
@@ -93,6 +118,8 @@ pub fn create() -> JsResult<Local> {
   };
   add("init", init)?;
   add("transform", transform_export)?;
+  add("fastTransform", fast_transform_export)?;
+  add("fastTransformStats", fast_stats_export)?;
   add("handleError", handle_error_export)?;
   add("getCollection", get_collection_export)?;
   add("getGlobal", get_global_export)?;

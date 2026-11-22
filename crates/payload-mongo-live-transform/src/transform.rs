@@ -163,6 +163,18 @@ fn transform_one(h: &Helpers, a: &TransformArgs, data: Local, parent_is_localize
   }
 
   let config = call(&h.config_of, &[a.adapter])?;
+  transform_doc(h, a, data, parent_is_localized, validate_relationships, config)
+}
+
+/// The body of `transform` for one (non-array, truthy) document after its `config` read.
+fn transform_doc(
+  h: &Helpers,
+  a: &TransformArgs,
+  data: Local,
+  parent_is_localized: bool,
+  validate_relationships: Local,
+  config: Local,
+) -> JsResult<Local> {
   let state = call(
     &h.doc_state,
     &[a.add_to_set, a.inc, a.pull, a.push, a.adapter, config, a.operation, validate_relationships],
@@ -792,6 +804,23 @@ native!(native_map_relationship_value, 4, |a| {
   let cx = Cx::from_state(a[0])?;
   map_relationship_value(&cx, a[1], a[2], a[3])
 });
+
+// the exhaustive port behind fast.js (`native.slowTransform(args)`: the whole call;
+// `native.slowTransformDoc(args, data, parentIsLocalized, config)`: one document after its `config`
+// read), for intrinsics fast.js does not call and configs it cannot plan
+native!(native_slow_transform, 1, |a| transform(&TransformArgs::from_object(a[0])?));
+
+native!(native_slow_transform_doc, 4, |a| {
+  let h = live::helpers()?;
+  let args = TransformArgs::from_object(a[0])?;
+  let validate_relationships =
+    if js::type_of(args.validate_relationships) == Type::Undefined { js::boolean(true) } else { args.validate_relationships };
+  transform_doc(&h, &args, a[1], js::truthy(a[2]), validate_relationships, a[3])
+});
+
+/// The `native` object fast.js calls.
+pub(crate) const FAST_NATIVES: &[(&str, Native)] =
+  &[("slowTransform", native_slow_transform), ("slowTransformDoc", native_slow_transform_doc)];
 
 /// The `native` object helpers.js calls (`native.<name>(...)`).
 pub(crate) const NATIVES: &[(&str, Native)] = &[

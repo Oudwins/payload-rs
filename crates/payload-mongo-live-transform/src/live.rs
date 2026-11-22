@@ -156,7 +156,41 @@ pub fn install(deps: Local) -> JsResult<()> {
   let obj = js::call(Local(factory), js::undefined(), &[deps, native])?;
   let helpers = load_helpers(obj)?;
   HELPERS.with(|h| *h.borrow_mut() = Some(Rc::new(helpers)));
+
+  let mut factory = ptr::null_mut();
+  js::check(unsafe { sys::napi_run_script(js::env(), js::string(FAST_SOURCE).0, &mut factory) })?;
+  let native = js::object();
+  for (name, f) in crate::transform::FAST_NATIVES {
+    js::set_named(native, name, js::create_function(name, *f, ptr::null_mut()))?;
+  }
+  let obj = js::call(Local(factory), js::undefined(), &[deps, native])?;
+  let fast = Persist::new(js::get_named(obj, "transform")?)?;
+  FAST.with(|f| *f.borrow_mut() = Some(Rc::new(fast)));
+  let stats = Persist::new(js::get_named(obj, "stats")?)?;
+  FAST_STATS.with(|f| *f.borrow_mut() = Some(Rc::new(stats)));
   Ok(())
+}
+
+const FAST_SOURCE: &str = include_str!("fast.js");
+
+thread_local! {
+  static FAST: RefCell<Option<Rc<Persist>>> = const { RefCell::new(None) };
+  static FAST_STATS: RefCell<Option<Rc<Persist>>> = const { RefCell::new(None) };
+}
+
+/// fast.js `stats()`: `{ fastDocs, slowCalls, slowDocs }`.
+pub(crate) fn fast_stats() -> JsResult<Local> {
+  let stats = FAST_STATS
+    .with(|f| f.borrow().clone())
+    .ok_or_else(|| js::engine_error("payload-mongo-live-transform is not initialized (call init(deps) first)"))?;
+  js::call(stats.get(), js::undefined(), &[])
+}
+
+/// fast.js `transform` (the live engine's entry, register.rs).
+pub(crate) fn fast_transform() -> JsResult<Rc<Persist>> {
+  FAST
+    .with(|f| f.borrow().clone())
+    .ok_or_else(|| js::engine_error("payload-mongo-live-transform is not initialized (call init(deps) first)"))
 }
 
 pub(crate) fn helpers() -> JsResult<Rc<Helpers>> {
