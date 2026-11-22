@@ -40,7 +40,13 @@ const tImport1 = now()
 const hookCounter = {}
 const tConfig0 = now()
 const config = await buildConfig(
-  buildConfigInput({ db, editor: lexicalEditor(), hookCounter, shape: spec.shape }),
+  buildConfigInput({
+    db,
+    editor: lexicalEditor(),
+    hookCounter,
+    shape: spec.shape,
+    uploadDir: spec.uploadDir,
+  }),
 )
 const tConfig1 = now()
 const payload = await getPayload({ config })
@@ -158,6 +164,28 @@ async function seed() {
     data: { postsPerPage: 10, siteName: 'perf' },
     slug: 'settings',
   })
+  const media = []
+  for (let index = 0; index < 20; index++) {
+    media.push(
+      (
+        await payload.create({
+          collection: 'media',
+          data: { alt: `media ${index}` },
+          file: textFile(`seed-${index}.txt`),
+          overrideAccess: true,
+        })
+      ).id,
+    )
+  }
+  if (spec.shape === 'complex') {
+    for (let index = 0; index < 5; index++) {
+      await payload.updateGlobal({
+        data: { postsPerPage: index },
+        overrideAccess: true,
+        slug: 'settings',
+      })
+    }
+  }
   const tPosts = now()
   const datas = Array.from({ length: spec.size }, (_, index) =>
     postData({ authorIDs: authors, categoryIDs: categories, index, random, shape: spec.shape }),
@@ -182,7 +210,7 @@ async function seed() {
     totalMs: tDone - t0,
   }
 
-  const { token, user } = await payload.login({ collection: 'users', data: credentials })
+  let { token, user } = await payload.login({ collection: 'users', data: credentials })
   const { GRAPHQL_POST, REST_DELETE, REST_GET, REST_PATCH, REST_POST } =
     await import('@payloadcms/next/routes')
   const qs = await import('qs-esm')
@@ -218,23 +246,34 @@ async function seed() {
       return { json, status: response.status }
     },
     idType: payload.db.defaultIDType === 'number' ? 'Int' : 'String',
-    ids: { authors, categories, posts: readable },
+    ids: { authors, categories, media, posts: readable },
+    textFile,
     /** Fresh document indexes: per scenario from its own base, so ts and rs create equal data. */
     nextIndex: () => counter.base + counter.next++,
+    /** A new session for the REST / GraphQL scenarios (after one that ended the sessions). */
+    relogin: async () => {
+      ;({ token, user } = await payload.login({ collection: 'users', data: credentials }))
+    },
     startScenario: (number) => {
       counter.base = number * 100_000
       counter.next = 0
     },
     payload,
     random,
+    /** `body`: JSON, or a FormData (multipart, e.g. an upload; fetch sets the boundary). */
     rest: async (method, slug, { auth = true, body, query } = {}) => {
       const headers = auth ? authHeaders() : new Headers()
-      if (body) {
+      const isForm = body instanceof FormData
+      if (body && !isForm) {
         headers.set('Content-Type', 'application/json')
       }
       const url = `http://localhost:3000/api/${slug.join('/')}${qs.stringify(query ?? {}, { addQueryPrefix: true })}`
       const response = await handlers[method](
-        new Request(url, { body: body ? JSON.stringify(body) : undefined, headers, method }),
+        new Request(url, {
+          body: isForm ? body : body ? JSON.stringify(body) : undefined,
+          headers,
+          method,
+        }),
         { params: Promise.resolve({ slug }) },
       )
       const json = await response.json()
@@ -248,7 +287,9 @@ async function seed() {
     shape: spec.shape,
     size: spec.size,
     titles: [datas[0].title],
-    user,
+    get user() {
+      return user
+    },
   }
 }
 
@@ -274,7 +315,7 @@ async function measure(ctx, scenario) {
       delete hookCounter[key]
     }
     const first = await once()
-    entry.fingerprint = fingerprint(first.value)
+    entry.fingerprint = fingerprint(first.value, 0, { isCountVariable: scenario.isCountVariable })
     entry.hookCalls = { ...hookCounter }
     for (let index = 1; index < spec.warmup; index++) {
       await once()
@@ -318,4 +359,10 @@ function isAddonLoaded() {
   } catch {
     return null
   }
+}
+
+/** A small text file for the upload scenarios (no image processing: sharp is not installed). */
+function textFile(name) {
+  const data = Buffer.from(`perf upload ${name}\n`.repeat(64))
+  return { data, mimetype: 'text/plain', name, size: data.length }
 }

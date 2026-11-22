@@ -246,8 +246,11 @@ await connection.close()`
   execFileSync('node', ['--input-type=module', '-e', script], { cwd: dbMongodb, stdio: 'ignore' })
 }
 
-function spawnBench({ engine, label, spec }) {
+function spawnBench({ engine, label, spec: specInput }) {
   const specFile = path.join(cellsDir, `${label}.spec.json`)
+  // the media collection's files: one directory per process, removed afterwards
+  const uploadDir = path.join(options.out, 'uploads', label)
+  const spec = { ...specInput, uploadDir }
   fs.writeFileSync(specFile, JSON.stringify(spec, null, 2))
   const env = { ...process.env, NODE_ENV: 'production', TZ: 'UTC' }
   for (const key of Object.keys(env)) {
@@ -267,6 +270,7 @@ function spawnBench({ engine, label, spec }) {
     stdio: isVerbose ? ['ignore', 'inherit', 'pipe'] : 'pipe',
     timeout: 3_600_000,
   })
+  fs.rmSync(uploadDir, { force: true, recursive: true })
   if (child.status !== 0) {
     fail(`${label} exited ${child.status ?? child.signal}: ${(child.stderr ?? '').slice(-3000)}`)
     return undefined

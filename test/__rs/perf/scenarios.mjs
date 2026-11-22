@@ -37,6 +37,17 @@ const freshPost = (ctx, iteration) =>
 const deletePost = (ctx, id) =>
   ctx.payload.delete({ overrideAccess: true, collection: 'posts', id })
 
+const latestVersion = async (ctx, parent) =>
+  (
+    await ctx.payload.findVersions({
+      collection: 'posts',
+      limit: 1,
+      overrideAccess: true,
+      sort: '-updatedAt',
+      where: { parent: { equals: parent } },
+    })
+  ).docs[0]
+
 /** Local API: every collection, global, version and auth operation. */
 const local = [
   {
@@ -276,6 +287,7 @@ const local = [
   },
   {
     name: 'findVersions',
+    isCountVariable: true,
     shapes: ['complex'],
     setup: by,
     run: (ctx, id) =>
@@ -299,6 +311,116 @@ const local = [
     },
     run: (ctx, versionID) =>
       ctx.payload.restoreVersion({ overrideAccess: true, collection: 'posts', id: versionID }),
+  },
+  {
+    name: 'countVersions',
+    isCountVariable: true,
+    shapes: ['complex'],
+    setup: by,
+    run: (ctx, id) =>
+      ctx.payload.countVersions({
+        collection: 'posts',
+        overrideAccess: true,
+        where: { parent: { equals: id } },
+      }),
+  },
+  {
+    name: 'findVersionByID',
+    shapes: ['complex'],
+    setup: async (ctx, iteration) => (await latestVersion(ctx, by(ctx, iteration))).id,
+    run: (ctx, id) =>
+      ctx.payload.findVersionByID({ collection: 'posts', id, overrideAccess: true }),
+  },
+  {
+    name: 'findGlobalVersions',
+    isCountVariable: true,
+    shapes: ['complex'],
+    run: (ctx) =>
+      ctx.payload.findGlobalVersions({ limit: 10, overrideAccess: true, slug: 'settings' }),
+  },
+  {
+    name: 'restoreGlobalVersion',
+    shapes: ['complex'],
+    setup: async (ctx) =>
+      (await ctx.payload.findGlobalVersions({ limit: 1, overrideAccess: true, slug: 'settings' }))
+        .docs[0].id,
+    run: (ctx, id) =>
+      ctx.payload.restoreGlobalVersion({ id, overrideAccess: true, slug: 'settings' }),
+  },
+  {
+    name: 'create upload',
+    setup: (ctx) => ctx.textFile(`upload-${ctx.nextIndex()}.txt`),
+    run: (ctx, file) =>
+      ctx.payload.create({
+        collection: 'media',
+        data: { alt: 'upload' },
+        file,
+        overrideAccess: true,
+      }),
+    teardown: (ctx, _file, doc) =>
+      ctx.payload.delete({ collection: 'media', id: doc.id, overrideAccess: true }),
+  },
+  {
+    name: 'find uploads',
+    run: (ctx) => ctx.payload.find({ collection: 'media', limit: 20, overrideAccess: true }),
+  },
+  {
+    name: 'jobs queue',
+    setup: (_ctx, iteration) => iteration,
+    run: (ctx, n) =>
+      ctx.payload.jobs.queue({ input: { n }, overrideAccess: true, task: 'perfTask' }),
+    teardown: (ctx, _n, job) =>
+      ctx.payload.delete({ collection: 'payload-jobs', id: job.id, overrideAccess: true }),
+  },
+  {
+    name: 'jobs runByID',
+    setup: (ctx, iteration) =>
+      ctx.payload.jobs.queue({ input: { n: iteration }, overrideAccess: true, task: 'perfTask' }),
+    run: (ctx, job) => ctx.payload.jobs.runByID({ id: job.id, overrideAccess: true }),
+    // a completed job is deleted by default (deleteJobOnComplete): remove it only if it remains
+    teardown: (ctx, job) =>
+      ctx.payload.delete({
+        collection: 'payload-jobs',
+        overrideAccess: true,
+        where: { id: { equals: job.id } },
+      }),
+  },
+  {
+    name: 'forgotPassword (no email)',
+    run: (ctx) =>
+      ctx.payload.forgotPassword({
+        collection: 'users',
+        data: { email: ctx.credentials.email },
+        disableEmail: true,
+        overrideAccess: true,
+      }),
+  },
+  {
+    name: 'resetPassword',
+    setup: (ctx) =>
+      ctx.payload.forgotPassword({
+        collection: 'users',
+        data: { email: ctx.credentials.email },
+        disableEmail: true,
+        overrideAccess: true,
+      }),
+    run: (ctx, token) =>
+      ctx.payload.resetPassword({
+        collection: 'users',
+        data: { password: ctx.credentials.password, token },
+        overrideAccess: true,
+      }),
+    // a reset ends the user's sessions: the JWT the REST / GraphQL scenarios send is renewed
+    teardown: (ctx) => ctx.relogin(),
+  },
+  {
+    name: 'unlock',
+    run: (ctx) =>
+      ctx.payload.unlock({
+        collection: 'users',
+        data: { email: ctx.credentials.email },
+        overrideAccess: true,
+      }),
   },
   {
     name: 'findGlobal',
@@ -369,6 +491,42 @@ const rest = [
       }),
     run: (ctx, doc) => ctx.rest('DELETE', ['posts', String(doc.id)]),
   },
+  {
+    name: 'GET /posts/versions',
+    isCountVariable: true,
+    shapes: ['complex'],
+    run: (ctx) => ctx.rest('GET', ['posts', 'versions'], { query: { limit: 10 } }),
+  },
+  {
+    name: 'GET /posts/versions/:id',
+    shapes: ['complex'],
+    setup: async (ctx, iteration) => (await latestVersion(ctx, by(ctx, iteration))).id,
+    run: (ctx, id) => ctx.rest('GET', ['posts', 'versions', String(id)]),
+  },
+  {
+    name: 'POST /media (multipart upload)',
+    setup: (ctx) => {
+      const file = ctx.textFile(`rest-upload-${ctx.nextIndex()}.txt`)
+      const form = new FormData()
+      form.append('file', new Blob([file.data], { type: file.mimetype }), file.name)
+      form.append('_payload', JSON.stringify({ alt: 'rest upload' }))
+      return form
+    },
+    run: (ctx, form) => ctx.rest('POST', ['media'], { body: form }),
+    teardown: (ctx, _form, response) =>
+      ctx.payload.delete({ collection: 'media', id: response.json.doc.id, overrideAccess: true }),
+  },
+  { name: 'GET /media', run: (ctx) => ctx.rest('GET', ['media'], { query: { limit: 20 } }) },
+  {
+    name: 'POST /payload-preferences/:key',
+    setup: (_ctx, iteration) => iteration,
+    run: (ctx, iteration) =>
+      ctx.rest('POST', ['payload-preferences', 'perf'], { body: { value: { iteration } } }),
+  },
+  {
+    name: 'GET /payload-preferences/:key',
+    run: (ctx) => ctx.rest('GET', ['payload-preferences', 'perf']),
+  },
   { name: 'GET /globals/settings', run: (ctx) => ctx.rest('GET', ['globals', 'settings']) },
   {
     name: 'POST /users/login',
@@ -411,6 +569,12 @@ const graphql = [
       ),
   },
   {
+    name: 'query versionsPosts',
+    isCountVariable: true,
+    shapes: ['complex'],
+    run: (ctx) => ctx.graphql(`{ versionsPosts(limit: 10) { totalDocs docs { id } } }`),
+  },
+  {
     name: 'mutation createPost',
     setup: (ctx, iteration) => freshPost(ctx, iteration),
     run: (ctx, data) =>
@@ -434,16 +598,18 @@ export const scenarios = [
 /**
  * A structural summary of a result that does not depend on generated ids or timestamps: object
  * keys (sorted), array lengths, the shape of the first element, and the values of pagination
- * counters. ts and rs must produce equal fingerprints for every scenario.
+ * counters. ts and rs must produce equal fingerprints for every scenario. `isCountVariable`
+ * (scenarios listing versions, whose number depends on how many updates earlier scenarios made):
+ * lengths and counters are left out, the shape is kept.
  */
-export const fingerprint = (value, depth = 0) => {
+export const fingerprint = (value, depth = 0, options = {}) => {
   if (value === null || value === undefined) {
     return String(value)
   }
   if (Array.isArray(value)) {
     return {
-      length: value.length,
-      first: value.length > 0 && depth < 4 ? fingerprint(value[0], depth + 1) : null,
+      length: options.isCountVariable ? 'array' : value.length,
+      first: value.length > 0 && depth < 4 ? fingerprint(value[0], depth + 1, options) : null,
     }
   }
   if (value instanceof Date) {
@@ -453,20 +619,15 @@ export const fingerprint = (value, depth = 0) => {
     if (depth >= 4) {
       return 'object'
     }
+    const counters = ['totalDocs', 'totalPages', 'page', 'limit', 'hasNextPage', 'hasPrevPage']
     const out = {}
     for (const key of Object.keys(value).sort()) {
-      out[key] = [
-        'totalDocs',
-        'totalPages',
-        'page',
-        'limit',
-        'hasNextPage',
-        'hasPrevPage',
-        'status',
-        'valid',
-      ].includes(key)
-        ? value[key]
-        : fingerprint(value[key], depth + 1)
+      const isKept = options.isCountVariable
+        ? ['status', 'valid']
+        : [...counters, 'status', 'valid']
+      // generated ids used as keys (e.g. `jobStatus` of jobs.runByID): ObjectIds and uuids
+      const outKey = /^[0-9a-f]{24}$|^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(key) ? '<id>' : key
+      out[outKey] = isKept.includes(key) ? value[key] : fingerprint(value[key], depth + 1, options)
     }
     return out
   }

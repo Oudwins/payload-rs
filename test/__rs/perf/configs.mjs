@@ -88,9 +88,9 @@ const sentence = (random, count) =>
 /**
  * The `buildConfig` input for `shape`. `editor`: the lexical editor (imported by the caller from
  * the installed richtext-lexical). `hookCounter` counts hook invocations (reported per scenario so
- * ts and rs can be compared).
+ * ts and rs can be compared). `uploadDir`: the `media` collection's static dir.
  */
-export const buildConfigInput = ({ db, editor, hookCounter, shape }) => {
+export const buildConfigInput = ({ db, editor, hookCounter, shape, uploadDir }) => {
   if (isWideShape(shape)) {
     const count = Number(shape.slice('wide-'.length))
     return {
@@ -99,12 +99,14 @@ export const buildConfigInput = ({ db, editor, hookCounter, shape }) => {
         users(),
         authors({ shape: 'typical' }),
         categories(),
+        media({ uploadDir }),
         ...Array.from({ length: count }, (_, index) => ({
           slug: `wide-${index}`,
           fields: postFields({ editor, shape: 'typical' }),
         })),
       ],
-      globals: [settings()],
+      globals: [settings({ shape: 'typical' })],
+      jobs,
     }
   }
   const hooks = shape === 'hooks' ? collectionHooks(hookCounter) : undefined
@@ -124,8 +126,10 @@ export const buildConfigInput = ({ db, editor, hookCounter, shape }) => {
           shape === 'hooks' ? hookCounter : undefined,
         ),
       },
+      media({ uploadDir }),
     ],
-    globals: [settings()],
+    globals: [settings({ shape })],
+    jobs,
     localization:
       shape === 'complex'
         ? { defaultLocale: 'en', fallback: true, locales: ['en', 'de', 'fr'] }
@@ -168,9 +172,29 @@ const categories = () => ({
   fields: [{ name: 'title', type: 'text', required: true }],
 })
 
-const settings = () => ({
+const media = ({ uploadDir }) => ({
+  slug: 'media',
+  access: { create: () => true, delete: () => true, read: () => true, update: () => true },
+  fields: [{ name: 'alt', type: 'text' }],
+  upload: { staticDir: uploadDir },
+})
+
+/** One task, queued and run by the jobs scenarios. */
+const jobs = {
+  tasks: [
+    {
+      slug: 'perfTask',
+      handler: ({ input }) => ({ output: { doubled: input.n * 2 } }),
+      inputSchema: [{ name: 'n', type: 'number', required: true }],
+      outputSchema: [{ name: 'doubled', type: 'number' }],
+    },
+  ],
+}
+
+const settings = ({ shape }) => ({
   slug: 'settings',
-  access: { read: () => true, update: () => true },
+  access: { read: () => true, readVersions: () => true, update: () => true },
+  versions: shape === 'complex' ? { max: 50 } : undefined,
   fields: [
     { name: 'siteName', type: 'text' },
     { name: 'postsPerPage', type: 'number' },
