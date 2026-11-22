@@ -218,6 +218,8 @@ export default defineConfig({
         '@vitest/valid-expect': 'off',
         '@vitest/valid-title': 'off',
         'payload/no-relative-monorepo-imports': 'off',
+        // reordering cases of a switch with fall-through would change the harness's behaviour
+        'perfectionist/sort-switch-case': 'off',
         'typescript/no-unsafe-function-type': 'off',
         'typescript/require-await': 'off',
       },

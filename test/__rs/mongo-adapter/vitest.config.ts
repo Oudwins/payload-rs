@@ -1,10 +1,10 @@
 /**
  * test/__rs/mongo-harness/vitest.config.ts with `databaseAdapter.js` resolved to
  * test/__rs/mongo-adapter/databaseAdapter.ts: the harness adapter wrapped by
- * `withRustMongoEngine` (imported by path) while `@payloadcms/db-mongodb` has no PAYLOAD_ENGINE
- * switch yet. Configs that build their own `mongooseAdapter` are not wrapped.
+ * `withRustMongoEngine` (imported by path). Configs that build their own `mongooseAdapter` are not
+ * wrapped.
  *
- *   PAYLOAD_DATABASE=mongodb PAYLOAD_RS_MONGO_LOOPBACK=true MONGODB_URL=... \
+ *   PAYLOAD_DATABASE=mongodb PAYLOAD_ENGINE=ts MONGODB_URL=... \
  *     pnpm test:int --config test/__rs/mongo-adapter/vitest.config.ts test/hooks/int.spec.ts
  */
 import path from 'node:path'

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
  * Per-suite markdown table for packages/engine-rs/MONGO_ENGINE_STATUS.md from run summaries of
- * test/__rs/mongo-adapter/runSuites.mjs or test/__rs/mongo-harness/runSuites.mjs (same per-file
+ * test/__rs/mongo-harness/runSuites.mjs (same per-file
  * shape). Each `--column <name>=<tag>[,<tag>...]` is one column; later tags override earlier ones per
  * file (solo reruns). Totals and every difference / load error are listed below the table.
  *
  *   node test/__rs/mongo-adapter/statusTable.mjs --baseline .rs-baseline/mongodb-all.json \
- *     --column loopback=madl2,madl3,madl4 --column native=madn1 --column 'engine rs'=madrs1
+ *     --column 'engine ts'=<tag> --column 'engine rs'=<tag>
  */
 import fs from 'node:fs'
 import path from 'node:path'

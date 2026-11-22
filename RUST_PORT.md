@@ -37,8 +37,7 @@ Verified on this machine (per test, against TS baselines recorded here with `PAY
 | `default-path/check.mjs --upstream ec35164`, `--self-test`, `switch.int.spec.ts`           | OK, OK, 9/9                                                                                                                                                           |
 
 Remaining: Postgres SQL engine; prebuilt addons for the other platforms (needs the CI workflow to
-run); the stage-1 MongoDB JSON engine is still compiled in (only reachable with
-`PAYLOAD_RS_MONGO_ENGINE=stage1`); the upstream JS helpers the Rust core still calls
+run); the upstream JS helpers the Rust core still calls
 (`RUST_OPS_DESIGN.md` section 7).
 
 ## Layout

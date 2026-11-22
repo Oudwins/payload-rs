@@ -9,7 +9,6 @@ mod ops_global;
 mod ops_write;
 mod engine;
 mod runtime;
-mod mongo_engine;
 mod mongo_live;
 mod mongo_live_write;
 mod mongo_schema;

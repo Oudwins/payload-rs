@@ -53,9 +53,8 @@ const requireEngineAddon = () => {
 
 /**
  * The addon exports the live engine is made of (reads, query, transform, joins, model building,
- * writes). `PAYLOAD_ENGINE=rs` requires all of them: nothing falls back to the stage-1 JSON engine
- * or to upstream's TS (only the explicit `PAYLOAD_RS_MONGO_ENGINE=stage1` /
- * `PAYLOAD_RS_MONGO_LOOPBACK=true` select stage 1).
+ * writes). The Rust engine requires all of them: nothing falls back to upstream's TS silently
+ * (`PAYLOAD_ENGINE=ts` selects upstream explicitly).
  */
 export const requiredLiveBindings = [
   'mongoLiveBinding',
@@ -68,7 +67,7 @@ export const requiredLiveBindings = [
 
 const missingLiveEngineError = ({ addonPath, missing }: { addonPath: string; missing: string[] }) =>
   new Error(
-    `PAYLOAD_ENGINE=rs: the engine addon at ${addonPath} lacks the live MongoDB engine (${missing.join(', ')}); rebuild crates/payload-node (cargo build -p payload-node) and reinstall the addon`,
+    `The Rust MongoDB engine: the engine addon at ${addonPath} lacks the live MongoDB engine (${missing.join(', ')}); rebuild crates/payload-node (cargo build -p payload-node) and reinstall the addon, or set PAYLOAD_ENGINE=ts to run upstream TypeScript`,
   )
 
 /** Throws (before anything is initialized) unless the addon has every live binding. */

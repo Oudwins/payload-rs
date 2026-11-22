@@ -4,7 +4,7 @@ Binding interface between `crates/payload-mongo-*` + `crates/payload-node/src/mo
 (Rust) and `packages/engine-rs/src/mongo-adapter/**` (TS). Either side may extend it;
 breaking changes are written here first. Mirrors `ENGINE_CONTRACT.md` (SQLite).
 
-## Boundary (stage 1)
+## Boundary (stage 1, historical: the stage-1 JSON engine was removed on 2026-11-22)
 
 `@payloadcms/db-mongodb` logic moves to Rust: schema description (`models/buildSchema.ts`
 and friends), queries (`queries/*`), projection, sort, joins/aggregation pipelines
@@ -209,15 +209,15 @@ Typed values cross the boundary in the tree encoding and are decoded into typed 
 (never compared as strings). Canonical markers, implemented in `crates/payload-engine/src/bson.rs`
 and `js.rs` (owned by mongoengine; everyone else consumes this API):
 
-| JS value | marker | Rust |
-|---|---|---|
-| bson `ObjectId` | `{"$oid": "<24 lowercase hex>"}` | `BsonValue::ObjectId([u8; 12])`, `JsVal::object_id` / `as_object_id` |
-| `RegExp` | `{"$regex": {"source": "…", "flags": "…"}}` | `BsonValue::RegExp { source, flags }`, `JsVal::regexp` |
-| bson `Decimal128` | `{"$decimal": "<toString()>"}` | `BsonValue::Decimal128`, `JsVal::decimal128` |
-| bson `Binary` | `{"$binary": {"base64": "…", "subType": <0..=255>}}` | `BsonValue::Binary { sub_type, bytes }`, `JsVal::binary` |
-| Node `Buffer` / `Uint8Array` (not a bson `Binary`) | `{"$buffer": "<base64>"}` | `BsonValue::Buffer`, `JsVal::buffer` |
-| host-held JS object (see below) | `{"$hostObject": n}` | `JsVal::host_object(n)` |
-| `Date`, `bigint`, `undefined`, non-finite numbers | `$date`, `$bigint`, `$undefined`, `$num` (unchanged) | `TypedValue` |
+| JS value                                           | marker                                               | Rust                                                                 |
+| -------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
+| bson `ObjectId`                                    | `{"$oid": "<24 lowercase hex>"}`                     | `BsonValue::ObjectId([u8; 12])`, `JsVal::object_id` / `as_object_id` |
+| `RegExp`                                           | `{"$regex": {"source": "…", "flags": "…"}}`          | `BsonValue::RegExp { source, flags }`, `JsVal::regexp`               |
+| bson `Decimal128`                                  | `{"$decimal": "<toString()>"}`                       | `BsonValue::Decimal128`, `JsVal::decimal128`                         |
+| bson `Binary`                                      | `{"$binary": {"base64": "…", "subType": <0..=255>}}` | `BsonValue::Binary { sub_type, bytes }`, `JsVal::binary`             |
+| Node `Buffer` / `Uint8Array` (not a bson `Binary`) | `{"$buffer": "<base64>"}`                            | `BsonValue::Buffer`, `JsVal::buffer`                                 |
+| host-held JS object (see below)                    | `{"$hostObject": n}`                                 | `JsVal::host_object(n)`                                              |
+| `Date`, `bigint`, `undefined`, non-finite numbers  | `$date`, `$bigint`, `$undefined`, `$num` (unchanged) | `TypedValue`                                                         |
 
 - `$buffer` is canonical for Buffers (decision 2026-11-01 14:45; `$binary` without `subType`
   is NOT used). `packages/engine-rs/src/mongo-adapter/codec.ts` must follow this table.
@@ -298,11 +298,20 @@ rethrown as the original value.
 ```ts
 class MongoEngine {
   /** Decodes `graphJson` (`serializeForEngine({ blocks, collections: { [slug]: { config, customIDType } }, config })`) once. */
-  static create(graphJson: string, optionsJson: string, callFunction: (id: number, argJson: string) => string): MongoEngine
+  static create(
+    graphJson: string,
+    optionsJson: string,
+    callFunction: (id: number, argJson: string) => string,
+  ): MongoEngine
   /** payload-mongo-schema's description of the engine's graph (`optionsJson`: collectionsSchemaOptions, autoPluralization, useBigIntForNumberIDs, isCacheEnabled). */
   schemaDescription(): string
   /** Runs one data method (`METHODS` in crates/payload-mongo-engine/src/lib.rs). */
-  call(method: string, argsJson: string, contextJson: string, host: (opJson: string) => Promise<string>): Promise<string>
+  call(
+    method: string,
+    argsJson: string,
+    contextJson: string,
+    host: (opJson: string) => Promise<string>,
+  ): Promise<string>
 }
 ```
 

@@ -11,7 +11,6 @@ const names = [
   'mongoLiveJoinsBinding',
   'mongoLiveSchemaBinding',
   'mongoLiveWriteBinding',
-  'MongoEngine',
 ]
 
 for (const name of names) {

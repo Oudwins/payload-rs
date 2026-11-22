@@ -42,7 +42,6 @@ export type NativeEngine = {
  * engine. Each binding additionally checks its own `apiVersion` when it is created.
  */
 export const engineAddonExports = [
-  'MongoEngine',
   'SqliteEngine',
   'buildMongoSchemaDescription',
   'buildRawSchema',

@@ -29,12 +29,10 @@ export const testsOf = (fileResult) => {
 
 /**
  * Mongo engine stats of every process of one file (glue `PAYLOAD_RS_MONGO_ENGINE_STATS_DIR`):
- * adapters served per engine kind (live Rust engine, stage-1 native `MongoEngine`, stage-1 TS
- * loopback) and the data-method calls they served. `nativeCalls` = calls served by Rust (live +
- * stage-1 native); a process with a loopback engine contributes none.
+ * live Rust engines created and the data-method calls they served (`calls` = `nativeCalls`).
  */
 export const readEngineStats = (dir) => {
-  const out = { calls: 0, files: 0, live: 0, liveCalls: 0, loopback: 0, native: 0, nativeCalls: 0 }
+  const out = { calls: 0, files: 0, live: 0, nativeCalls: 0 }
   if (!dir || !fs.existsSync(dir)) {
     return out
   }
@@ -43,14 +41,10 @@ export const readEngineStats = (dir) => {
     const stats = readJSON(path.join(dir, name))
     if (!stats) continue
     out.files++
-    const stage1Calls = sum(stats.calls)
     const liveCalls = sum(stats.liveCalls)
-    out.calls += stage1Calls + liveCalls
-    out.liveCalls += liveCalls
+    out.calls += liveCalls
     out.live += stats.engines?.live ?? 0
-    out.loopback += stats.engines?.loopback ?? 0
-    out.native += stats.engines?.native ?? 0
-    out.nativeCalls += liveCalls + (stats.engines?.loopback ? 0 : stage1Calls)
+    out.nativeCalls += liveCalls
   }
   return out
 }

@@ -1,7 +1,6 @@
 /**
- * Live differential of the Mongo query port (crates/payload-mongo-live-query) over the recorded
- * where / sort / select corpus of stage 1 (test/__rs/mongo-query/corpus.int.spec.ts), regenerated
- * as live inputs: the same deterministic generator (paths of every collection / global / version
+ * Live differential of the Mongo query port (crates/payload-mongo-live-query) over a where / sort /
+ * select corpus generated as live inputs: the same deterministic generator (paths of every collection / global / version
  * field set, operator x value pools from the seeded documents, structural wheres, relationship
  * merges, `Model.buildQuery` of collection / version / globals models, sorts with and without
  * `sortAggregation`, selects) builds each case's live values, and harness.ts runs them through
@@ -42,7 +41,6 @@ import {
   summarize,
 } from './harness.js'
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- arbitrary live inputs */
 type Any = any
 
 assertDistinctEngines('buildQuery', buildQueryTS, buildQueryRS)
@@ -98,7 +96,9 @@ const mutate =
         return rs(inputs, rec)
       case 'copy-sort':
         return rs(
-          kind === 'sort' && Array.isArray(inputs[0]) ? [[...inputs[0]], ...inputs.slice(1)] : inputs,
+          kind === 'sort' && Array.isArray(inputs[0])
+            ? [[...inputs[0]], ...inputs.slice(1)]
+            : inputs,
           rec,
         )
       case 'identity': {

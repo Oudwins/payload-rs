@@ -8,7 +8,7 @@
  *     pnpm test:int --config test/__rs/mongo-transform/vitest.config.ts test/relationships/int.spec.ts
  *
  * See test/__rs/mongo-transform/record.mjs (runs many files) and
- * crates/payload-mongo-transform/tests/replay.rs (replays the recordings).
+ * test/__rs/mongo-live-transform/replay.spec.ts (replays the recordings live).
  */
 import { defineConfig } from 'vitest/config'
 
@@ -37,7 +37,6 @@ export default defineConfig({
           include: [
             'packages/db-mongodb/src/utilities/transform.spec.ts',
             'test/__rs/mongo-transform/synthetic.spec.ts',
-            'test/__rs/mongo-transform/utilities.spec.ts',
           ],
           name: 'unit',
         },

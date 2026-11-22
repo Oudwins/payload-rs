@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 /**
- * Runs upstream int spec files on MongoDB (upstream TS engine: PAYLOAD_ENGINE /
- * PAYLOAD_CORE_ENGINE unset) through test/__rs/mongo-transform/vitest.config.ts, recording every
+ * Runs upstream int spec files on MongoDB (upstream TS engine: PAYLOAD_ENGINE=ts) through test/__rs/mongo-transform/vitest.config.ts, recording every
  * `transform` call (./recorder.ts), one database per file (dropped afterwards).
  *
  *   node test/__rs/mongo-transform/record.mjs [--out /tmp/rs-mongo-transform] [--jobs 2] \
  *     [--tag rsmt] [--unit] [files...]
  *
- * Recordings: <out>/<file slug>/<pid>-<thread>.jsonl; logs: <out>/<file slug>.log. Replay with
- *   PAYLOAD_RS_MONGO_TRANSFORM_FIXTURES=<out> cargo test -p payload-mongo-transform --test replay -- --nocapture
+ * Recordings: <out>/<file slug>/<pid>-<thread>.jsonl; logs: <out>/<file slug>.log. Replayed live
+ * by test/__rs/mongo-live-transform/replay.spec.ts (`PAYLOAD_RS_LIVE_TRANSFORM_FIXTURES=<out>`).
  *
  * Suites that spawn child processes importing test/databaseAdapter.js are skipped while
  * /tmp/rs-phase-f-done does not exist (test/__rs/mongo-harness/runSuites.mjs CHILD_PROCESS_SUITES).
@@ -61,7 +60,6 @@ if (options.unit) {
   queue.unshift(
     'packages/db-mongodb/src/utilities/transform.spec.ts',
     'test/__rs/mongo-transform/synthetic.spec.ts',
-    'test/__rs/mongo-transform/utilities.spec.ts',
   )
 }
 
@@ -91,6 +89,8 @@ const run = (file) =>
     ]) {
       delete env[key]
     }
+    // upstream TS records upstream's `transform` calls (unset selects the Rust engine)
+    env.PAYLOAD_ENGINE = 'ts'
     const args = isUnit
       ? [
           'vitest',

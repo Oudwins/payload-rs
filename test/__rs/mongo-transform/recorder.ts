@@ -1,6 +1,6 @@
 /**
- * Records every top-level call of upstream `transform` (wrapped by ./plugin.ts) for the Rust
- * replay in crates/payload-mongo-transform/tests/replay.rs.
+ * Records every top-level call of upstream `transform` (wrapped by ./plugin.ts) for the live
+ * replay in test/__rs/mongo-live-transform/replay.spec.ts.
  *
  * Enabled by PAYLOAD_RS_MONGO_TRANSFORM_RECORD_DIR; one JSONL file per process / thread. Lines:
  *

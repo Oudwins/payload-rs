@@ -560,7 +560,7 @@ function verify(runs) {
         typeof stats.opsWrite?.calls === 'number'
           ? stats.opsWrite.calls
           : sum(stats.opsWrite?.calls),
-      // mongodb: the live engine (MONGO_ENGINE_CONTRACT.md stage 1b); stage-1 calls must be 0
+      // mongodb: the live engine (MONGO_ENGINE_CONTRACT.md stage 1b)
       [`${database} engine calls`]:
         database === 'sqlite' ? sum(dataEngine?.calls) : sum(dataEngine?.liveCalls),
       [`${database} engines (${database === 'sqlite' ? 'native' : 'live'})`]:
@@ -568,22 +568,11 @@ function verify(runs) {
           ? (dataEngine?.engines?.native ?? 0)
           : (dataEngine?.engines?.live ?? 0),
     }
-    if (
-      database === 'mongodb' &&
-      (sum(dataEngine?.calls) > 0 || (dataEngine?.engines?.native ?? 0) > 0)
-    ) {
-      fail(
-        `${label}: the stage-1 MongoDB engine served calls (no stage-1 fallback on the Rust engine)`,
-      )
-    }
     console.log(`${label} engine stats: ${JSON.stringify(checks)}`)
     for (const [name, count] of Object.entries(checks)) {
       if (!(count > 0)) {
         fail(`${label}: no ${name} served by the Rust engine`)
       }
-    }
-    if ((dataEngine?.engines?.loopback ?? 0) > 0) {
-      fail(`${label}: used the loopback (TS stand-in) engine`)
     }
   }
 

@@ -472,7 +472,7 @@ function verify(runs) {
       // payload's traverseFields called by the bundled richtext-lexical, forwarded to Rust
       'lexical afterReadTraverseFields': coreCalls?.afterReadTraverseFields ?? 0,
       'ops-write': read('engine.json.ops-write.json')?.calls ?? 0,
-      // mongodb: the live engine (stage-1 calls must be 0, checked below)
+      // mongodb: the live engine
       'data engine calls':
         database === 'sqlite' ? sum(dataEngine?.calls) : sum(dataEngine?.liveCalls),
       'data engines (native / live)':
@@ -482,12 +482,6 @@ function verify(runs) {
       'ops (read)': sum(
         read(written.find((name) => /^ops-\d+\.json$/.test(name)) ?? 'none')?.calls,
       ),
-    }
-    if (
-      database === 'mongodb' &&
-      (sum(dataEngine?.calls) > 0 || (dataEngine?.engines?.native ?? 0) > 0)
-    ) {
-      fail(`${entry.label}: the stage-1 MongoDB engine served calls`)
     }
     console.log(`${entry.label} engine stats: ${JSON.stringify(checks)}`)
     for (const [name, count] of Object.entries(checks)) {

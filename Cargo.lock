@@ -586,29 +586,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "payload-mongo-engine"
-version = "0.1.0"
-dependencies = [
- "indexmap",
- "payload-engine",
- "payload-mongo-joins",
- "payload-mongo-query",
- "payload-mongo-schema",
- "payload-mongo-transform",
- "serde_json",
-]
-
-[[package]]
-name = "payload-mongo-joins"
-version = "0.1.0"
-dependencies = [
- "indexmap",
- "payload-engine",
- "payload-sql-read",
- "serde_json",
-]
-
-[[package]]
 name = "payload-mongo-live"
 version = "0.1.0"
 dependencies = [
@@ -658,32 +635,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "payload-mongo-query"
-version = "0.1.0"
-dependencies = [
- "indexmap",
- "payload-engine",
- "payload-sql-query",
- "payload-sql-read",
- "serde_json",
-]
-
-[[package]]
 name = "payload-mongo-schema"
 version = "0.1.0"
 dependencies = [
  "indexmap",
  "napi",
  "payload-core-runtime",
- "payload-engine",
- "serde_json",
-]
-
-[[package]]
-name = "payload-mongo-transform"
-version = "0.1.0"
-dependencies = [
- "indexmap",
  "payload-engine",
  "serde_json",
 ]
@@ -706,7 +663,6 @@ dependencies = [
  "payload-core-validate",
  "payload-core-validate-live",
  "payload-engine",
- "payload-mongo-engine",
  "payload-mongo-live",
  "payload-mongo-live-joins",
  "payload-mongo-live-query",

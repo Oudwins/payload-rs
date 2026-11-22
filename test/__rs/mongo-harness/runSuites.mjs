@@ -16,10 +16,8 @@
  *                      default: PAYLOAD_ENGINE unset (the default engine selection, Rust), checked
  *                      like rs. Every
  *                      process writes its Mongo engine stats (PAYLOAD_RS_MONGO_ENGINE_STATS_DIR);
- *                      a file with passing tests but no data-method call served by Rust (live
- *                      engine or stage-1 native MongoEngine), or with the TS loopback engine
- *                      anywhere, counts as differing (see `nativeProof` and the exemption sets).
- *                      PAYLOAD_RS_MONGO_LOOPBACK in the environment is rejected.
+ *                      a file with passing tests but no data-method call served by the live
+ *                      Rust engine counts as differing (see `nativeProof` and the exemption sets).
  *   --core ts          with --engine rs: PAYLOAD_CORE_ENGINE=ts
  *   --database <name>  PAYLOAD_DATABASE: mongodb (default) | cosmosdb | documentdb | firestore
  *                      (upstream's test/dbAdapters.ts entries with `compatibilityOptions`, same server)
@@ -188,12 +186,6 @@ const isNativeExpected =
   options.engine === 'rs' ||
   options.engine === 'default' ||
   (options.shadow && options.candidate === 'rs')
-if (isNativeExpected && process.env.PAYLOAD_RS_MONGO_LOOPBACK) {
-  // the loopback engine is TS: a run through it proves nothing about the Rust engine
-  throw new Error(
-    'PAYLOAD_RS_MONGO_LOOPBACK is set: unset it for --engine rs / --candidate rs (native runs only)',
-  )
-}
 if (!/^[a-zA-Z0-9_]{1,40}$/.test(options.tag)) {
   throw new Error('--tag must be 1-40 characters of [a-zA-Z0-9_]')
 }
@@ -317,7 +309,6 @@ const runFileNow = (file, { attempt }) =>
       'PAYLOAD_RS_ENGINE_STATS_FILE',
       'PAYLOAD_RS_MONGO_ENGINE_STATS_DIR',
       'PAYLOAD_RS_MONGO_ENGINE_STATS_FILE',
-      'PAYLOAD_RS_MONGO_LOOPBACK',
     ]) {
       delete env[key]
     }
@@ -512,18 +503,16 @@ const summarize = (run) => {
   const stats = readEngineStats(run.statsDir)
   // a file where no test passed proves nothing either way (its statuses are still compared)
   const hasPassedTests = counts.passed > 0
-  // native execution proof: the Rust engine served data methods, no loopback engine anywhere
-  const nativeProof = !isNativeExpected
-    ? undefined
-    : stats.loopback > 0
-      ? `loopback engine used (${stats.loopback})`
-      : !hasPassedTests ||
-          stats.nativeCalls > 0 ||
-          FILES_WITHOUT_MONGO_ADAPTER.has(run.file) ||
-          FILES_WITHOUT_MONGO_ADAPTER_ON[run.file]?.includes(options.database) ||
-          (FILES_WITHOUT_DATA_METHOD_CALLS.has(run.file) && stats.live > 0 && stats.calls === 0)
-        ? undefined
-        : `no Rust-served data method call (${stats.files} stats files, ${stats.live} live engines, ${stats.native} stage-1 native engines)`
+  // native execution proof: the Rust engine served data methods
+  const nativeProof =
+    !isNativeExpected ||
+    !hasPassedTests ||
+    stats.nativeCalls > 0 ||
+    FILES_WITHOUT_MONGO_ADAPTER.has(run.file) ||
+    FILES_WITHOUT_MONGO_ADAPTER_ON[run.file]?.includes(options.database) ||
+    (FILES_WITHOUT_DATA_METHOD_CALLS.has(run.file) && stats.live > 0 && stats.calls === 0)
+      ? undefined
+      : `no Rust-served data method call (${stats.files} stats files, ${stats.live} live engines)`
   return {
     code: run.code,
     counts,

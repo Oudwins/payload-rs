@@ -37,40 +37,30 @@ test('testsOf keys duplicate full names by occurrence index', () => {
   assert.equal(testsOf(undefined).size, 0)
 })
 
-test('readEngineStats sums per-process files and separates loopback engines', () => {
+test('readEngineStats sums the live engine calls of per-process files', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-runnerlib-'))
   try {
     assert.deepEqual(readEngineStats(path.join(dir, 'missing')), {
       calls: 0,
       files: 0,
       live: 0,
-      liveCalls: 0,
-      loopback: 0,
-      native: 0,
       nativeCalls: 0,
     })
     fs.writeFileSync(
       path.join(dir, 'mongo-engine-1.json'),
-      JSON.stringify({ calls: { create: 2, find: 3 }, engines: { loopback: 0, native: 1 } }),
-    )
-    fs.writeFileSync(
-      path.join(dir, 'mongo-engine-2.json'),
-      JSON.stringify({ calls: { find: 4 }, engines: { loopback: 1, native: 0 } }),
+      JSON.stringify({ engines: { live: 1 }, liveCalls: { create: 2, find: 3 } }),
     )
     fs.writeFileSync(
       path.join(dir, 'mongo-engine-4.json'),
-      JSON.stringify({ calls: {}, engines: { live: 1 }, liveCalls: { create: 1, find: 6 } }),
+      JSON.stringify({ engines: { live: 1 }, liveCalls: { create: 1, find: 6 } }),
     )
     // temporaries and foreign files are ignored
     fs.writeFileSync(path.join(dir, 'mongo-engine-3.json.3.tmp'), '{')
-    fs.writeFileSync(path.join(dir, 'other.json'), JSON.stringify({ calls: { find: 100 } }))
+    fs.writeFileSync(path.join(dir, 'other.json'), JSON.stringify({ liveCalls: { find: 100 } }))
     assert.deepEqual(readEngineStats(dir), {
-      calls: 16,
-      files: 3,
-      live: 1,
-      liveCalls: 7,
-      loopback: 1,
-      native: 1,
+      calls: 12,
+      files: 2,
+      live: 2,
       nativeCalls: 12,
     })
   } finally {

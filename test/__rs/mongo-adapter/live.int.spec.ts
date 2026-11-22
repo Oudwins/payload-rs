@@ -1,7 +1,7 @@
 /**
  * `withRustMongoEngine` on the live engine (packages/engine-rs/src/mongo-adapter/live.ts):
  *
- * - every data method of the adapter is the live Rust port (no stage-1 `MongoEngine`, no copy of
+ * - every data method of the adapter is the live Rust port (no copy of
  *   the arguments), proven by the addon's own call counters;
  * - shadow differential, serial and concurrent mode: reference = upstream TS adapter, candidate =
  *   `withRustMongoEngine(mongooseAdapter(args))` on a second database; zero divergences required
@@ -212,7 +212,6 @@ describe('withRustMongoEngine (live engine)', () => {
     expect(payload.db.init.toString()).toContain('getMongoLiveSchema()')
     expect(stats.liveMethods).toEqual([...mongoEngineMethods].sort())
     const before = getLiveEngineCalls()
-    const stage1Before = Object.values(stats.calls).reduce((x, y) => x + y, 0)
     await exercise(payload)
     const after = getLiveEngineCalls()
     const served = (method: string) => (after[method] ?? 0) - (before[method] ?? 0)
@@ -234,8 +233,6 @@ describe('withRustMongoEngine (live engine)', () => {
     ]) {
       expect(served(method), method).toBeGreaterThan(0)
     }
-    // no stage-1 engine call
-    expect(Object.values(stats.calls).reduce((x, y) => x + y, 0)).toBe(stage1Before)
     // the installed write methods are the live write binding's own functions
     const writes = getMongoLiveWrite()!
     for (const method of ['create', 'updateOne', 'upsert', 'deleteMany', 'updateJobs']) {
