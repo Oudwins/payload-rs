@@ -67,6 +67,24 @@ const options = {
   surfaces: list('--surfaces', 'local,rest,graphql'),
   warmup: Number(option('--warmup', 3)),
 }
+/**
+ * `--engines` values: `ts` (upstream), `rs` (the default selection), and for attributing a
+ * difference to a layer `db-rs` (Rust database engine, TS core) and `core-rs` (TS database
+ * adapter, Rust core). Only ts and rs cells are paired for the fingerprint checks and the report.
+ */
+const engineVariants = {
+  'core-rs': { PAYLOAD_CORE_ENGINE: 'rs', PAYLOAD_ENGINE: 'ts' },
+  'db-rs': { PAYLOAD_CORE_ENGINE: 'ts' },
+  rs: {},
+  ts: { PAYLOAD_ENGINE: 'ts' },
+}
+for (const engine of options.engines) {
+  if (!engineVariants[engine]) {
+    throw new Error(
+      `--engines: unknown engine ${engine} (${Object.keys(engineVariants).join(', ')})`,
+    )
+  }
+}
 const isReuse = argv.includes('--reuse')
 const isStartup = !argv.includes('--no-startup')
 const isScenarios = !argv.includes('--no-scenarios')
@@ -258,9 +276,7 @@ function spawnBench({ engine, label, spec: specInput }) {
       delete env[key]
     }
   }
-  if (engine === 'ts') {
-    env.PAYLOAD_ENGINE = 'ts'
-  }
+  Object.assign(env, engineVariants[engine])
   const started = Date.now()
   const child = spawnSync(process.execPath, ['--expose-gc', 'bench.mjs', specFile], {
     cwd: appDir,
@@ -366,7 +382,7 @@ function checkCells(cells) {
   for (const cell of cells) {
     const name = `${cell.kind} ${cell.database} ${cell.shape}${cell.size !== undefined ? ` ${cell.size}` : ''} ${cell.engine}`
     for (const loaded of cell.addonLoaded) {
-      if (loaded === false && cell.engine === 'rs') {
+      if (loaded === false && cell.engine !== 'ts') {
         fail(`${name}: the engine addon was not loaded`)
       }
       if (loaded === true && cell.engine === 'ts') {
