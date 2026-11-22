@@ -694,6 +694,13 @@ const local = [
     setup: by,
     run: (ctx, id) =>
       ctx.payload.updateGlobal({ data: { featured: id }, overrideAccess: true, slug: 'settings' }),
+    // later global results populate `featured`: which post it is must not depend on iteration counts
+    teardown: (ctx) =>
+      ctx.payload.updateGlobal({
+        data: { featured: null },
+        overrideAccess: true,
+        slug: 'settings',
+      }),
   },
   // ---- auth -----------------------------------------------------------------------------------
   {
