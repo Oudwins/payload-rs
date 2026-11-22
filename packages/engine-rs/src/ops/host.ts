@@ -384,6 +384,57 @@ export const createOpsHost = (
       }),
     )
   },
+  /** find.ts `result.docs.map(async (doc) => { ...beforeRead hooks... })` (verbatim). */
+  findBeforeReadHooksAll: (
+    docs: Any,
+    collectionConfig: Any,
+    overrideAccess: Any,
+    fullWhere: Any,
+    req: Any,
+  ) =>
+    mapWith(docs, 'result.docs', async (doc: Any) => {
+      let docRef = doc
+
+      for (const hook of collectionConfig.hooks.beforeRead) {
+        docRef =
+          (await hook({
+            collection: collectionConfig,
+            context: req.context,
+            doc: docRef,
+            overrideAccess: overrideAccess!,
+            query: fullWhere,
+            req,
+          })) || docRef
+      }
+
+      return docRef
+    }),
+  /** find.ts `result.docs.map(async (doc) => { ...afterRead hooks... })` (verbatim). */
+  findAfterReadHooksAll: (
+    docs: Any,
+    collectionConfig: Any,
+    overrideAccess: Any,
+    fullWhere: Any,
+    req: Any,
+  ) =>
+    mapWith(docs, 'result.docs', async (doc: Any) => {
+      let docRef = doc
+
+      for (const hook of collectionConfig.hooks.afterRead) {
+        docRef =
+          (await hook({
+            collection: collectionConfig,
+            context: req.context,
+            doc: docRef,
+            findMany: true,
+            overrideAccess: overrideAccess!,
+            query: fullWhere,
+            req,
+          })) || docRef
+      }
+
+      return docRef
+    }),
   findArgs: (args: Any) => {
     const {
       collection: { config: collectionConfig },
@@ -914,6 +965,40 @@ export const createOpsHost = (
       trash,
     ]
   },
+  /** findVersions.ts `result.docs.map(async (data) => { data.version = await afterRead(...) })`. */
+  findVersionsAfterReadAll: (
+    docs: Any,
+    collectionConfig: Any,
+    req: Any,
+    depth: Any,
+    fallbackLocale: Any,
+    locale: Any,
+    overrideAccess: Any,
+    populate: Any,
+    select: Any,
+    showHiddenFields: Any,
+  ) => {
+    const afterReadOf = (afterRead ?? rustAfterRead)!
+    return mapWith(docs, 'result.docs', async (data: Any) => {
+      data.version = await afterReadOf({
+        collection: collectionConfig,
+        context: req.context,
+        depth: depth!,
+        doc: data.version,
+        draft: undefined,
+        fallbackLocale: fallbackLocale!,
+        findMany: true,
+        global: null,
+        locale: locale!,
+        overrideAccess: overrideAccess!,
+        populate,
+        req,
+        select: typeof select?.version === 'object' ? select.version : undefined,
+        showHiddenFields: showHiddenFields!,
+      })
+      return data
+    })
+  },
   findVersionsAfterReadArgs: (
     collectionConfig: Any,
     req: Any,
@@ -941,6 +1026,63 @@ export const createOpsHost = (
     select: typeof select?.version === 'object' ? select.version : undefined,
     showHiddenFields: showHiddenFields!,
   }),
+  /** findVersions.ts `result.docs.map(async (doc) => { ...afterRead hooks... })` (verbatim). */
+  findVersionsAfterReadHooksAll: (
+    docs: Any,
+    collectionConfig: Any,
+    overrideAccess: Any,
+    fullWhere: Any,
+    req: Any,
+  ) =>
+    mapWith(docs, 'result.docs', async (doc: Any) => {
+      const docRef = doc
+
+      for (const hook of collectionConfig.hooks.afterRead) {
+        docRef.version =
+          (await hook({
+            collection: collectionConfig,
+            context: req.context,
+            doc: doc.version,
+            findMany: true,
+            overrideAccess,
+            query: fullWhere,
+            req,
+          })) || doc.version
+      }
+
+      return docRef
+    }),
+  /** findVersions.ts `paginatedDocs.docs.map(async (doc) => { ... })` (verbatim). */
+  findVersionsBeforeReadAll: (
+    docs: Any,
+    collectionConfig: Any,
+    overrideAccess: Any,
+    fullWhere: Any,
+    req: Any,
+  ) =>
+    mapWith(docs, 'paginatedDocs.docs', async (doc: Any) => {
+      const docRef = doc
+      // Fallback if not selected
+      if (!docRef.version) {
+        ;(docRef as any).version = {}
+      }
+
+      if (collectionConfig.hooks?.beforeRead?.length) {
+        for (const hook of collectionConfig.hooks.beforeRead) {
+          docRef.version =
+            (await hook({
+              collection: collectionConfig,
+              context: req.context,
+              doc: docRef.version,
+              overrideAccess,
+              query: fullWhere,
+              req,
+            })) || docRef.version
+        }
+      }
+
+      return docRef
+    }),
   isInheritedReadVersionsAccess: (access: Any) => isInheritedReadVersionsAccess(access),
   /** The `result.docs.map` arrow of findVersions.ts for upload collections. */
   markHistoricalRow: (row: Any, collectionConfig: Any, req: Any) => ({

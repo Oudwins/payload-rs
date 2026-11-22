@@ -240,11 +240,19 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
   // beforeRead - Collection
   if has_hooks(collection_config.get(), "beforeRead")? {
     let docs = get(result.get(), "docs")?;
-    let promises = host::map_array(docs, "result.docs", |doc| {
-      let ctx = ctx.clone();
-      let doc = val(doc)?;
-      spawn(async move { ctx.hooks("beforeRead").run(HookTarget::Doc(doc)).await })
-    })?;
+    let promises = if host::mutant(1) {
+      host::map_array(docs, "result.docs", |doc| {
+        let ctx = ctx.clone();
+        let doc = val(doc)?;
+        spawn(async move { ctx.hooks("beforeRead").run(HookTarget::Doc(doc)).await })
+      })?
+    } else {
+      // the per-doc async arrows (upstream's hook loop) run in the host
+      call(
+        "findBeforeReadHooksAll",
+        &[docs, ctx.collection_config.get(), ctx.override_access.get(), ctx.full_where.get(), ctx.req.get()],
+      )?
+    };
     let docs = await_js(host::promise_all(promises)?).await?;
     host::set(result.get(), "docs", docs.get())?;
   }
@@ -308,15 +316,22 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
   // afterRead - Collection
   if has_hooks(collection_config.get(), "afterRead")? {
     let docs = get(result.get(), "docs")?;
-    let promises = host::map_array(docs, "result.docs", |doc| {
-      let ctx = ctx.clone();
-      let doc = val(doc)?;
-      spawn(async move {
-        let mut hooks = ctx.hooks("afterRead");
-        hooks.find_many = true;
-        hooks.run(HookTarget::Doc(doc)).await
-      })
-    })?;
+    let promises = if host::mutant(1) || host::mutant(5) {
+      host::map_array(docs, "result.docs", |doc| {
+        let ctx = ctx.clone();
+        let doc = val(doc)?;
+        spawn(async move {
+          let mut hooks = ctx.hooks("afterRead");
+          hooks.find_many = true;
+          hooks.run(HookTarget::Doc(doc)).await
+        })
+      })?
+    } else {
+      call(
+        "findAfterReadHooksAll",
+        &[docs, ctx.collection_config.get(), ctx.override_access.get(), ctx.full_where.get(), ctx.req.get()],
+      )?
+    };
     let docs = await_js(host::promise_all(promises)?).await?;
     host::set(result.get(), "docs", docs.get())?;
   }

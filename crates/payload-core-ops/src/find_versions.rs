@@ -176,63 +176,69 @@ async fn run(args: Val) -> JsResult<Val> {
   // beforeRead - Collection
   let result = paginated_docs.clone();
   let docs = get(paginated_docs.get(), "docs")?;
-  let promises = host::map_array(docs, "paginatedDocs.docs", |doc| {
-    let ctx = ctx.clone();
-    let doc_ref = val(doc)?;
-    spawn(async move {
-      // Fallback if not selected
-      if !js::truthy(get(doc_ref.get(), "version")?) {
-        host::set(doc_ref.get(), "version", js::object())?;
-      }
-      if has_hooks(ctx.collection_config.get(), "beforeRead")? {
-        ctx.hooks("beforeRead", false).run(HookTarget::Version(doc_ref.clone())).await?;
-      }
-      Ok(doc_ref)
-    })
-  })?;
+  let promises = if host::mutant(1) {
+    host::map_array(docs, "paginatedDocs.docs", |doc| {
+      let ctx = ctx.clone();
+      let doc_ref = val(doc)?;
+      spawn(async move {
+        // Fallback if not selected
+        if !js::truthy(get(doc_ref.get(), "version")?) {
+          host::set(doc_ref.get(), "version", js::object())?;
+        }
+        if has_hooks(ctx.collection_config.get(), "beforeRead")? {
+          ctx.hooks("beforeRead", false).run(HookTarget::Version(doc_ref.clone())).await?;
+        }
+        Ok(doc_ref)
+      })
+    })?
+  } else {
+    // the per-doc async arrows run in the host (upstream's arrow body)
+    call(
+      "findVersionsBeforeReadAll",
+      &[docs, ctx.collection_config.get(), ctx.override_access.get(), ctx.full_where.get(), ctx.req.get()],
+    )?
+  };
   let docs = await_js(host::promise_all(promises)?).await?;
   host::set(result.get(), "docs", docs.get())?;
 
   // afterRead - Fields
   let docs = get(result.get(), "docs")?;
-  let promises = host::map_array(docs, "result.docs", |data| {
-    let ctx = ctx.clone();
-    let data = val(data)?;
-    spawn(async move {
-      let after_read_args = call(
-        "findVersionsAfterReadArgs",
-        &[
-          ctx.collection_config.get(),
-          ctx.req.get(),
-          ctx.depth.get(),
-          data.get(),
-          ctx.fallback_locale.get(),
-          ctx.locale.get(),
-          ctx.override_access.get(),
-          ctx.populate.get(),
-          ctx.select.get(),
-          ctx.show_hidden_fields.get(),
-        ],
-      )?;
-      let version = await_js(host::after_read(after_read_args)?).await?;
-      host::set(data.get(), "version", version.get())?;
-      Ok(data)
-    })
-  })?;
+  let promises = call(
+    "findVersionsAfterReadAll",
+    &[
+      docs,
+      ctx.collection_config.get(),
+      ctx.req.get(),
+      ctx.depth.get(),
+      ctx.fallback_locale.get(),
+      ctx.locale.get(),
+      ctx.override_access.get(),
+      ctx.populate.get(),
+      ctx.select.get(),
+      ctx.show_hidden_fields.get(),
+    ],
+  )?;
   let docs = await_js(host::promise_all(promises)?).await?;
   host::set(result.get(), "docs", docs.get())?;
 
   // afterRead - Collection
   if has_hooks_strict(collection_config.get(), "afterRead")? {
     let docs = get(result.get(), "docs")?;
-    let promises = host::map_array(docs, "result.docs", |doc| {
-      let ctx = ctx.clone();
-      let doc_ref = val(doc)?;
-      spawn(async move {
-        ctx.hooks("afterRead", true).run(HookTarget::Version(doc_ref.clone())).await?;
-        Ok(doc_ref)
-      })
-    })?;
+    let promises = if host::mutant(1) || host::mutant(5) {
+      host::map_array(docs, "result.docs", |doc| {
+        let ctx = ctx.clone();
+        let doc_ref = val(doc)?;
+        spawn(async move {
+          ctx.hooks("afterRead", true).run(HookTarget::Version(doc_ref.clone())).await?;
+          Ok(doc_ref)
+        })
+      })?
+    } else {
+      call(
+        "findVersionsAfterReadHooksAll",
+        &[docs, ctx.collection_config.get(), ctx.override_access.get(), ctx.full_where.get(), ctx.req.get()],
+      )?
+    };
     let docs = await_js(host::promise_all(promises)?).await?;
     host::set(result.get(), "docs", docs.get())?;
   }

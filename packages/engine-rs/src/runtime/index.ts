@@ -21,6 +21,20 @@ import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 import { type AfterReadPlan, createAfterReadTraverse } from './afterReadPlan.js'
 
+/**
+ * V8 caps the transitions of one map (`kMaxNumberOfTransitions`). The map every object literal
+ * with one property starts from fills up during startup (module bundles such as drizzle-kit's,
+ * loaded by `pushDevSchema`, are full of one-property literals), and a literal shape first created
+ * after that gets a map outside the transition tree: every property added to such an object then
+ * creates a fresh map. drizzle's read transform builds every document from `{ id: data.id }`, so
+ * whether that shape was created in time decides how fast the database adapter itself is. The
+ * engine's modules load early and add literals of their own, which made this shape lose the race in
+ * Rust-engine processes (measured: `payload.db.find` of 100 posts on db-postgres 7.6 ms instead of
+ * 6.0 ms). Creating the shape here, at engine load, and keeping it alive (a transition is dropped
+ * when its target map dies) keeps it in the tree. Nothing reads it.
+ */
+export const reservedLiteralShapes = [{ id: undefined }]
+
 export type CoreRuntimeBinding = {
   afterRead: (args: unknown) => Promise<unknown>
   /** The traversal plan of a fields array (crates/payload-core-runtime config.rs `js_plan`). */
