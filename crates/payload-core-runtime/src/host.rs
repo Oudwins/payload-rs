@@ -38,6 +38,16 @@ pub struct Host {
   pub path_segments: Persist,
   pub push_settled: Persist,
   pub leaf_rows: Persist,
+  /// `afterReadTraverse(c, plan, siblingDoc, select, selectMode)`: afterRead's root
+  /// `traverseFields` run by the host from the decoded plans (config.rs `FieldsDesc::js_plan`).
+  pub after_read_traverse: Persist,
+  /// `afterReadLoop(c)`: the rest of upstream's `afterRead` body after the root traversal (an
+  /// `async` function: the promise loop, `return incomingDoc`).
+  pub after_read_loop: Persist,
+  /// `rejected(e)`: a rejected promise (a throw in the synchronous part of an `async` function).
+  pub rejected: Persist,
+  /// `afterReadTraverse` is used (`false`: the host disabled it, the Rust traversal runs).
+  pub plan_traversal: bool,
 }
 
 thread_local! {
@@ -79,6 +89,10 @@ pub fn install(obj: Local) -> JsResult<()> {
     path_segments: f("pathSegments")?,
     push_settled: f("pushSettled")?,
     leaf_rows: f("leafRows")?,
+    after_read_traverse: f("afterReadTraverse")?,
+    after_read_loop: f("afterReadLoop")?,
+    rejected: f("rejected")?,
+    plan_traversal: js::truthy(js::get_named(obj, "planTraversal")?),
   };
   HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
   Ok(())

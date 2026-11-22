@@ -135,6 +135,8 @@ pub struct FieldsDesc {
   leaf_table: OnceCell<LeafTable>,
   /// Segmentations, indexed by `override_access_truthy | parent_localized_truthy << 1`.
   plans: [OnceCell<Rc<[Segment]>>; 4],
+  /// The host traversal plans ([`FieldsDesc::js_plan`]), same index.
+  js_plans: [OnceCell<Persist>; 4],
 }
 
 /// JS arrays handed to the host's `leafRun`: `keys[i]` is `field.name`, `flags[i]` the
@@ -160,6 +162,32 @@ pub mod leaf_flags {
   /// The field has `afterRead` hooks to run (a hooked leaf, see `FieldDesc::hooked_leaf`):
   /// `leafRun` runs its whole `promise()` as the host's `hookedLeaf` and pushes its promise.
   pub const HOOKED: u32 = 32;
+  /// `field.hidden === true` (the array / blocks `siblingDoc[field.name] = []` branch)
+  pub const HIDDEN_IS_TRUE: u32 = 64;
+}
+
+/// How the host's `afterReadTraverse` runs a field's `promise()` (the `kinds` array of a
+/// [`FieldsDesc::js_plan`], mirrored in `packages/engine-rs/src/runtime/afterReadPlan.ts`). Every
+/// kind but [`fast_kind::UPSTREAM`] is a field whose `promise()`, given the decoded config and the
+/// plan's `overrideAccess` / parent-localized conditions, has no field hooks, no virtual
+/// population, no read access to await, no localized value to hoist and no `locale === 'all'`
+/// branch: what remains of upstream's body is a fixed sequence of sibling doc operations (hidden
+/// check, `stripUnselectedFields`, the hoisting check reads, the default value step), plus the
+/// population push or the nested traversal of its kind. The host runs exactly that sequence in an
+/// `async` function of the same shape (same awaits). Anything else calls upstream's `promise()`.
+pub mod fast_kind {
+  /// upstream's `promise()` with the args literal of upstream's `traverseFields`
+  pub const UPSTREAM: u32 = 0;
+  /// a plain leaf (see [`super::Leaf`])
+  pub const LEAF: u32 = 1;
+  /// relationship / upload / join: the leaf sequence, then `relationshipPopulationPromise`
+  pub const RELATIONSHIP: u32 = 2;
+  /// named group: the leaf sequence, the `{}` fill, then its fields
+  pub const GROUP: u32 = 3;
+  /// array: the leaf sequence, then its rows
+  pub const ARRAY: u32 = 4;
+  /// unnamed row / collapsible / group: its fields with the passthrough args
+  pub const UNNAMED: u32 = 5;
 }
 
 /// One step of `traverseFields` over a fields array: a run of consecutive plain or hooked leaves
@@ -178,7 +206,37 @@ impl FieldsDesc {
       items,
       leaf_table: OnceCell::new(),
       plans: [OnceCell::new(), OnceCell::new(), OnceCell::new(), OnceCell::new()],
+      js_plans: [OnceCell::new(), OnceCell::new(), OnceCell::new(), OnceCell::new()],
     }
+  }
+
+  /// The plan the host's `afterReadTraverse` runs this fields array with, for `variant` =
+  /// `override_access_truthy | parent_localized_truthy << 1`: `{ fields, keys, flags, kinds,
+  /// isArray, children }` (`keys` / `flags` are the [`LeafTable`] arrays, `kinds` the
+  /// [`fast_kind`] of each field, `children` the host's cache of nested plans). Created once per
+  /// fields array and variant.
+  pub fn js_plan(&self, variant: usize) -> JsResult<Local> {
+    let cell = &self.js_plans[variant & 3];
+    if let Some(p) = cell.get() {
+      return Ok(p.get());
+    }
+    let (override_access, parent_localized) = (variant & 1 != 0, variant & 2 != 0);
+    let table = self.leaf_table()?;
+    let kinds = js::array();
+    if let Some(items) = &self.items {
+      for (i, f) in items.iter().enumerate() {
+        js::set_element(kinds, i as u32, js::number(f64::from(f.fast_kind(override_access, parent_localized))))?;
+      }
+    }
+    let plan = js::object();
+    js::set_named(plan, "fields", self.node.get())?;
+    js::set_named(plan, "keys", table.keys.get())?;
+    js::set_named(plan, "flags", table.flags.get())?;
+    js::set_named(plan, "kinds", kinds)?;
+    js::set_named(plan, "isArray", js::boolean(self.items.is_some()))?;
+    js::set_named(plan, "children", js::array())?;
+    let persisted = Persist::new(plan)?;
+    Ok(cell.get_or_init(|| persisted).get())
   }
 
   /// The traversal plan for the given dynamic conditions. Without items (not an array) the
@@ -303,7 +361,30 @@ impl FieldDesc {
     if matches!(self.hooked_leaf, Leaf::Yes { .. }) {
       bits |= leaf_flags::HOOKED;
     }
+    if self.hidden_is_true {
+      bits |= leaf_flags::HIDDEN_IS_TRUE;
+    }
     bits
+  }
+
+  /// The [`fast_kind`] of this field under these dynamic conditions.
+  pub fn fast_kind(&self, override_access: bool, parent_localized: bool) -> u32 {
+    if self.leaf.holds(override_access, parent_localized) {
+      return fast_kind::LEAF;
+    }
+    // what gates the leaf sequence of a data field (`config::Leaf` for leaf kinds)
+    let plain_data = self.affects_data
+      && !self.has_after_read_hooks
+      && self.virtual_path.is_none()
+      && (!self.has_read_access || override_access)
+      && (!self.localized_truthy || parent_localized);
+    match self.kind {
+      Kind::Relationship | Kind::Upload | Kind::Join if plain_data => fast_kind::RELATIONSHIP,
+      Kind::Group if self.has_name && plain_data => fast_kind::GROUP,
+      Kind::Array if plain_data => fast_kind::ARRAY,
+      Kind::Row | Kind::Collapsible | Kind::Group if !self.has_name => fast_kind::UNNAMED,
+      _ => fast_kind::UPSTREAM,
+    }
   }
 
   /// `field.fields` (array/row/collapsible/group/tab)

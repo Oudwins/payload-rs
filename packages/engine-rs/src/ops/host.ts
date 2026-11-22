@@ -77,8 +77,22 @@ const sanitizeSortValue = (fields: Any[], sort: Any): string => {
   return sort
 }
 
+/** `<expr>.map(callback)`: V8's errors for a nullish value or a non-callable `map`. */
+const mapWith = (array: Any, expr: string, callback: Any) => {
+  if (array === null || array === undefined) {
+    throw new TypeError(`Cannot read properties of ${array} (reading 'map')`)
+  }
+  const map = array.map
+  if (typeof map !== 'function') {
+    throw new TypeError(`${expr}.map is not a function`)
+  }
+  return Reflect.apply(map, array, [callback])
+}
+
 export const createOpsHost = (
   afterRead?: (args: Any) => Promise<unknown>,
+  /** the Rust `afterRead` (core runtime binding), used when `afterRead` is not overridden */
+  rustAfterRead?: (args: Any) => Promise<unknown>,
 ): Record<string, unknown> => ({
   afterRead,
   DONE,
@@ -126,20 +140,10 @@ export const createOpsHost = (
       // the loop body's error wins
     }
   },
+  dateTime: (value: Any) => new Date(value).getTime(),
   filterWith: (array: Any, callback: Any) => array.filter(callback),
   findWith: (array: Any, callback: Any) => array.find(callback),
-  /** `<expr>.map(callback)`: V8's errors for a nullish value or a non-callable `map`. */
-  dateTime: (value: Any) => new Date(value).getTime(),
-  mapWith: (array: Any, expr: string, callback: Any) => {
-    if (array === null || array === undefined) {
-      throw new TypeError(`Cannot read properties of ${array} (reading 'map')`)
-    }
-    const map = array.map
-    if (typeof map !== 'function') {
-      throw new TypeError(`${expr}.map is not a function`)
-    }
-    return Reflect.apply(map, array, [callback])
-  },
+  mapWith,
   /** `name in o` for a primitive `o` (throws V8's TypeError). */
   hasIn: (o: Any, name: string) => name in o,
   lessThan: (a: Any, b: Any) => a < b,
@@ -341,6 +345,45 @@ export const createOpsHost = (
     select,
     showHiddenFields: showHiddenFields!,
   }),
+  /**
+   * find.ts `result.docs.map(async (doc) => afterRead({ ... }))` (the async arrow returns
+   * afterRead's promise), with `afterRead` the dispatched one: the Rust traversal, or the override.
+   */
+  findAfterReadAll: (
+    docs: Any,
+    collectionConfig: Any,
+    req: Any,
+    currentDepth: Any,
+    depth: Any,
+    draftsEnabled: Any,
+    fallbackLocale: Any,
+    locale: Any,
+    overrideAccess: Any,
+    populate: Any,
+    select: Any,
+    showHiddenFields: Any,
+  ) => {
+    const afterReadOf = (afterRead ?? rustAfterRead)!
+    return mapWith(docs, 'result.docs', async (doc: Any) =>
+      afterReadOf({
+        collection: collectionConfig,
+        context: req.context,
+        currentDepth,
+        depth: depth!,
+        doc,
+        draft: draftsEnabled!,
+        fallbackLocale: fallbackLocale!,
+        findMany: true,
+        global: null,
+        locale: locale!,
+        overrideAccess: overrideAccess!,
+        populate,
+        req,
+        select,
+        showHiddenFields: showHiddenFields!,
+      }),
+    )
+  },
   findArgs: (args: Any) => {
     const {
       collection: { config: collectionConfig },

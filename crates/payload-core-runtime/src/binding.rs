@@ -63,6 +63,13 @@ export!(after_read_traverse_fields_export, 1, |[destructured]| {
   Ok(js::undefined())
 });
 
+// `afterReadPlan(fields, variant)`: the host traversal plan of a fields array (config.rs
+// `FieldsDesc::js_plan`; `fields.forEach`'s TypeError for a value that is not an array is raised
+// by the host when it runs the plan).
+export!(after_read_plan_export, 2, |[fields, variant]| {
+  crate::config::fields_desc(fields)?.js_plan(u32_arg(variant) as usize)
+});
+
 export!(stats, 0, |[]| {
   // `stats` calls are not engine work
   executor::uncount_entry();
@@ -163,7 +170,7 @@ export!(probe, 2, |[value, frozen]| {
 /// Version of the host-helper contract between the core runtime family (this crate and the field
 /// hook crates built into the same addon: payload-core-hooks-validate, -change, -after) and
 /// `packages/engine-rs/src/runtime`, which checks it at load.
-pub const API_VERSION: u32 = 2;
+pub const API_VERSION: u32 = 3;
 
 /// Builds the binding object.
 pub fn create() -> JsResult<Local> {
@@ -182,6 +189,7 @@ pub fn create() -> JsResult<Local> {
   js::define_named(o, "thenReturn", js::get_element(helpers, 1)?)?;
   add!("afterRead", after_read_export);
   add!("afterReadTraverseFields", after_read_traverse_fields_export);
+  add!("afterReadPlan", after_read_plan_export);
   add!("stats", stats);
   add!("noop", noop);
   add!("probe", probe);

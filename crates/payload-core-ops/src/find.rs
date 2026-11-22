@@ -281,31 +281,26 @@ async fn run(incoming_args: Val) -> JsResult<Val> {
     }
     host::set(result.get(), "docs", out_val.get())?;
   } else {
+    // `result.docs.map(async (doc) => afterRead({ ... }))`: the arrow (it returns afterRead's
+    // promise) runs in the host, one call for all docs
     let docs = get(result.get(), "docs")?;
-    let promises = host::map_array(docs, "result.docs", |doc| {
-      let ctx = ctx.clone();
-      let doc = val(doc)?;
-      spawn(async move {
-        let after_read_args = call(
-          "findAfterReadArgs",
-          &[
-            ctx.collection_config.get(),
-            ctx.req.get(),
-            ctx.current_depth.get(),
-            ctx.depth.get(),
-            doc.get(),
-            ctx.drafts_enabled.get(),
-            ctx.fallback_locale.get(),
-            ctx.locale.get(),
-            ctx.override_access.get(),
-            ctx.populate.get(),
-            ctx.select.get(),
-            ctx.show_hidden_fields.get(),
-          ],
-        )?;
-        val(host::after_read(after_read_args)?)
-      })
-    })?;
+    let promises = call(
+      "findAfterReadAll",
+      &[
+        docs,
+        ctx.collection_config.get(),
+        ctx.req.get(),
+        ctx.current_depth.get(),
+        ctx.depth.get(),
+        ctx.drafts_enabled.get(),
+        ctx.fallback_locale.get(),
+        ctx.locale.get(),
+        ctx.override_access.get(),
+        ctx.populate.get(),
+        ctx.select.get(),
+        ctx.show_hidden_fields.get(),
+      ],
+    )?;
     let docs = await_js(host::promise_all(promises)?).await?;
     host::set(result.get(), "docs", docs.get())?;
   }

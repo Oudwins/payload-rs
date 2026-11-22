@@ -16,7 +16,7 @@ use crate::{count, doc_access, find, find_by_id, find_distinct, find_version_by_
 type Body<const N: usize> = fn([Local; N]) -> JsResult<Local>;
 
 /// Version of the binding / host-helper contract with `packages/engine-rs/src/ops`.
-pub const API_VERSION: u32 = 2;
+pub const API_VERSION: u32 = 3;
 
 /// Runs an exported function body: sets the env, converts `Err(Thrown)` into a JS throw and
 /// never lets a panic cross the FFI boundary.

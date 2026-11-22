@@ -78,6 +78,8 @@ const options = {
     isQuick ? 'minimal,complex,wide-50' : 'minimal,typical,complex,hooks,wide-10,wide-50,wide-200',
   ),
   categories: list('--categories', ''),
+  /** Prefix of the per-cell database names (shared servers: one prefix per user / agent). */
+  dbPrefix: option('--db-prefix', 'perf'),
   isSamplesKept: !argv.includes('--no-samples'),
   scenarioPattern: option('--scenarios', ''),
   surfaces: list('--surfaces', 'local,rest,graphql'),
@@ -321,7 +323,7 @@ function runStartup({ database, engine, shape }) {
   const label = `startup-${database}-${shape}-${engine}`
   const { drop, location } = createDatabase(
     database,
-    `perf_${process.pid}_${label.replaceAll('-', '_')}`,
+    `${options.dbPrefix}_${process.pid}_${label.replaceAll('-', '_')}`,
   )
   const base = { database, location, shape, size: 0, surfaces: [] }
   const runs = []
@@ -359,7 +361,7 @@ function runScenarios({ database, engine, shape, size }) {
   const label = `${database}-${shape}-${size}-${engine}`
   const { drop, location } = createDatabase(
     database,
-    `perf_${process.pid}_${label.replaceAll('-', '_')}`,
+    `${options.dbPrefix}_${process.pid}_${label.replaceAll('-', '_')}`,
   )
   try {
     const output = spawnBench({

@@ -19,9 +19,12 @@ import { deepCopyObjectSimple } from '../../../payload/src/utilities/deepCopyObj
 import { getBlockSelect } from '../../../payload/src/utilities/getBlockSelect.js'
 import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
+import { type AfterReadPlan, createAfterReadTraverse } from './afterReadPlan.js'
 
 export type CoreRuntimeBinding = {
   afterRead: (args: unknown) => Promise<unknown>
+  /** The traversal plan of a fields array (crates/payload-core-runtime config.rs `js_plan`). */
+  afterReadPlan: (fields: unknown, variant: number) => AfterReadPlan
   /**
    * afterRead's `traverseFields` with its parameter already destructured: the `afterReadArgs`
    * layout followed by the `TRAV_*` entries (after_read.rs `traverse_fields_entry`).
@@ -60,7 +63,7 @@ export type CoreRuntimeBinding = {
 let binding: CoreRuntimeBinding | undefined
 
 /** The contract this glue implements (crates/payload-core-runtime/src/binding.rs `API_VERSION`). */
-const CORE_RUNTIME_API_VERSION = 2
+const CORE_RUNTIME_API_VERSION = 3
 
 /** The `pathSegments`, `schemaPathSegments` and `indexPathSegments` of `promise.ts`. */
 const pathSegments = (path: string, schemaPath: string, indexPath: string): unknown[][] => [
@@ -402,7 +405,44 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
       ])
     })
 
+  const forEachFields = (fields: any) => fields.forEach(() => {})
   created.init({
+    /**
+     * afterRead's root `traverseFields`, run from the Rust plans (./afterReadPlan.ts).
+     * `PAYLOAD_RS_AFTER_READ_TRAVERSAL=rust` runs the Rust port of the traversal instead.
+     */
+    afterReadTraverse: createAfterReadTraverse({
+      forEachFields,
+      hookedLeaf,
+      planFor: (fields, variant) => created.afterReadPlan(fields, variant),
+    }),
+    planTraversal: process.env.PAYLOAD_RS_AFTER_READ_TRAVERSAL !== 'rust',
+    /**
+     * The rest of upstream's `afterRead` body after its root `traverseFields` call (verbatim,
+     * fields/hooks/afterRead/index.ts), with the values destructured into the `afterReadArgs`
+     * array `c`; the Rust `afterRead` returns its promise.
+     */
+    afterReadLoop: async (c: any[]) => {
+      const fieldPromises: Promise<void>[] = c[ARG_FIELD_PROMISES]
+      const populationPromises: Promise<void>[] = c[ARG_POPULATION_PROMISES]
+      let iterations = 0
+      while (fieldPromises.length > 0 || populationPromises.length > 0) {
+        const currentFieldPromises = fieldPromises.splice(0, fieldPromises.length)
+        const currentPopulationPromises = populationPromises.splice(0, populationPromises.length)
+
+        await Promise.all(currentFieldPromises)
+        await Promise.all(currentPopulationPromises)
+
+        iterations++
+        if (iterations >= 100) {
+          throw new Error(
+            'Infinite afterRead promise loop detected. A hook is likely adding field promises in an infinitely recursive way.',
+          )
+        }
+      }
+      return c[ARG_DOC]
+    },
+    rejected,
     // read only by addons built before 2026-11-16 (TRANSITIONAL, see above)
     awaitValue,
     thenReturn: (promise: Promise<unknown>, value: unknown) =>
@@ -624,7 +664,7 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
       delete target[key]
     },
     descCache: new WeakMap(),
-    forEachFields: (fields: any) => fields.forEach(() => {}),
+    forEachFields,
     get: (target: any, key: PropertyKey) => target[key],
     greaterThan: (a: any, b: any) => a > b,
     pathSegments,

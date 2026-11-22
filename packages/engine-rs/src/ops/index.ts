@@ -52,7 +52,7 @@ type OperationName = Exclude<keyof CoreOpsBinding, 'apiVersion' | 'init' | 'sani
 let binding: CoreOpsBinding | undefined
 
 /** The binding contract this host implements (crates/payload-core-ops/src/binding.rs `API_VERSION`). */
-const CORE_OPS_API_VERSION = 2
+const CORE_OPS_API_VERSION = 3
 
 export const getCoreOps = (): CoreOpsBinding => {
   if (binding) {
@@ -77,6 +77,7 @@ export const getCoreOps = (): CoreOpsBinding => {
   created.init({
     ...createOpsHost(
       process.env.PAYLOAD_OPS_AFTER_READ === 'ts' ? (tsAfterRead as Any) : undefined,
+      getCoreRuntime().afterRead,
     ),
     ...(process.env.RS_OPS_MUTANT ? { mutant: Number(process.env.RS_OPS_MUTANT) } : {}),
   })

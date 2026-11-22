@@ -109,6 +109,14 @@ impl Trav {
 /// TS `async function`, everything (including the args destructuring) runs inside the task, so
 /// a throw there rejects the returned promise.
 pub fn after_read(args: Local) -> JsResult<Local> {
+  let h = host()?;
+  if h.plan_traversal {
+    // Like the TS `async function`: a throw before its first await rejects its promise.
+    return match after_read_planned(&h, args) {
+      Ok(promise) => Ok(promise),
+      Err(Thrown(e)) => call_host(&h.rejected, &[e.get()]),
+    };
+  }
   let args = Val::from_local(args)?;
   spawn(async move {
     let (ctx, select) = prologue(args.get())?;
@@ -116,34 +124,76 @@ pub fn after_read(args: Local) -> JsResult<Local> {
   })
 }
 
+/// `afterRead` with the host plan traversal: the synchronous part of upstream's body (the args
+/// destructuring, `depth` / `currentDepth`, the root `traverseFields`) runs here, then the rest of
+/// the body, from `let iterations = 0` (the `while` loop awaiting `fieldPromises` /
+/// `populationPromises`, `return incomingDoc`), is the host's `afterReadLoop`: an `async`
+/// function with upstream's loop, whose promise is returned. Upstream's `afterRead` promise is
+/// the promise of one async function that reaches that loop synchronously, so the same awaits
+/// settle it in the same microtasks.
+fn after_read_planned(h: &host::Host, args: Local) -> JsResult<Local> {
+  let arr = prologue_array(h, args)?;
+  let el = |i: u32| js::get_element(arr, i);
+  // (collection?.fields || global?.fields)!
+  let collection_fields = host::get_optional(el(arg::COLLECTION)?, js::key("fields"))?;
+  let fields = if js::truthy(collection_fields) {
+    collection_fields
+  } else {
+    host::get_optional(el(arg::GLOBAL)?, js::key("fields"))?
+  };
+  let select = el(arg::SELECT)?;
+  let select_mode = if js::truthy(select) { call_host(&h.get_select_mode, &[select])? } else { js::undefined() };
+  let fields = config::fields_desc(fields)?;
+  if fields.items.is_some() {
+    let override_access = js::truthy(el(arg::OVERRIDE_ACCESS)?);
+    let plan = fields.js_plan(usize::from(override_access))?;
+    call_host(&h.after_read_traverse, &[arr, plan, el(arg::DOC)?, select, select_mode])?;
+  } else {
+    config::throw_not_array(&fields)?;
+  }
+  call_host(&h.after_read_loop, &[arr])
+}
+
 /// The `afterRead` prologue: destructuring (by the host, with the TS pattern and its
 /// `flattenLocales = true` default), promise arrays, `depth` and `currentDepth`.
 fn prologue(args: Local) -> JsResult<(Rc<Ctx>, Val)> {
   let h = host()?;
+  let arr = prologue_array(&h, args)?;
+  Ok((ctx_from(arr)?, Val::from_local(js::get_element(arr, arg::SELECT)?)?))
+}
+
+/// The `afterReadArgs` array of a call with its final `currentDepth` / `depth`.
+fn prologue_array(h: &host::Host, args: Local) -> JsResult<Local> {
   let arr = call_host(&h.after_read_args, &[args])?;
   let el = |i: u32| js::get_element(arr, i);
-  let val = |i: u32| -> JsResult<Val> { Val::from_local(el(i)?) };
   let incoming_current_depth = el(arg::CURRENT_DEPTH)?;
   let incoming_depth = el(arg::DEPTH)?;
-  let req = val(arg::REQ)?;
+  let req = el(arg::REQ)?;
 
   // let depth = incomingDepth || incomingDepth === 0 ? parseInt(String(incomingDepth), 10) : req.payload.config.defaultDepth
   let is_zero = js::type_of(incoming_depth) == Type::Number && js::get_f64(incoming_depth) == 0.0;
   let mut depth = if js::truthy(incoming_depth) || is_zero {
-    call_host(&h.parse_depth, &[incoming_depth])?
+    let n = js::get_f64(incoming_depth);
+    if js::type_of(incoming_depth) == Type::Number && n == n.trunc() && (0.0..1e21).contains(&n) {
+      // parseInt(String(n), 10) of a non-negative integer below 1e21 (decimal digits): n
+      // itself (-0 becomes 0)
+      js::number(n + 0.0)
+    } else {
+      call_host(&h.parse_depth, &[incoming_depth])?
+    }
   } else {
-    host::get_named(host::get_named(host::get_named(req.get(), "payload")?, "config")?, "defaultDepth")?
+    host::get_named(host::get_named(host::get_named(req, "payload")?, "config")?, "defaultDepth")?
   };
   // if (depth > req.payload.config.maxDepth) depth = req.payload.config.maxDepth
-  let max_depth = host::get_named(host::get_named(host::get_named(req.get(), "payload")?, "config")?, "maxDepth")?;
+  let max_depth = host::get_named(host::get_named(host::get_named(req, "payload")?, "config")?, "maxDepth")?;
   if greater_than(depth, max_depth)? {
-    depth = host::get_named(host::get_named(host::get_named(req.get(), "payload")?, "config")?, "maxDepth")?;
+    depth = host::get_named(host::get_named(host::get_named(req, "payload")?, "config")?, "maxDepth")?;
   }
   let current_depth =
     if js::truthy(incoming_current_depth) { incoming_current_depth } else { js::number(1.0) };
   js::set_element(arr, arg::CURRENT_DEPTH, current_depth)?;
   js::set_element(arr, arg::DEPTH, depth)?;
-  Ok((ctx_from(arr)?, val(arg::SELECT)?))
+  Ok(arr)
 }
 
 /// The run state from an `afterReadArgs`-layout array (`currentDepth`/`depth` final).
@@ -242,23 +292,38 @@ async fn run(ctx: Rc<Ctx>, select: Val) -> JsResult<Val> {
     Val::Undefined
   };
 
-  traverse_fields(
-    &ctx,
-    Rc::new(Trav {
-      block_data: Val::Undefined,
-      field_depth: 0.0,
-      fields: config::fields_desc(fields)?,
-      tab_fields: None,
-      parent_index_path: "".into(),
-      parent_is_localized: Val::Bool(false),
-      parent_path: "".into(),
-      parent_schema_path: "".into(),
-      select,
-      select_mode,
-      sibling_doc: ctx.doc.clone(),
-    }),
-  )
-  .await?;
+  let fields = config::fields_desc(fields)?;
+  if h.plan_traversal {
+    // the root `traverseFields` call, run by the host from the decoded plan (one call per doc)
+    match fields.items {
+      Some(_) => {
+        let plan = fields.js_plan(usize::from(ctx.override_access_truthy))?;
+        call_host(
+          &h.after_read_traverse,
+          &[ctx.arr.get(), plan, ctx.doc.get(), select.get(), select_mode.get()],
+        )?;
+      }
+      None => config::throw_not_array(&fields)?,
+    }
+  } else {
+    traverse_fields(
+      &ctx,
+      Rc::new(Trav {
+        block_data: Val::Undefined,
+        field_depth: 0.0,
+        fields,
+        tab_fields: None,
+        parent_index_path: "".into(),
+        parent_is_localized: Val::Bool(false),
+        parent_path: "".into(),
+        parent_schema_path: "".into(),
+        select,
+        select_mode,
+        sibling_doc: ctx.doc.clone(),
+      }),
+    )
+    .await?;
+  }
 
   let mut iterations = 0;
   loop {
