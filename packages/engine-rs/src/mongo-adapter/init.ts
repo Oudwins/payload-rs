@@ -15,7 +15,6 @@
  * workspace resolves `payload` to these same source files, so the functions are the very ones
  * db-mongodb imports).
  */
-import { createRequire } from 'node:module'
 
 import { combineQueries } from '../../../payload/src/database/combineQueries.js'
 import { createSchemaBuildContext } from '../../../payload/src/database/createSchemaBuildContext.js'
@@ -28,11 +27,12 @@ import {
   tabHasName,
 } from '../../../payload/src/fields/config/types.js'
 import { hasDraftsEnabled } from '../../../payload/src/utilities/getVersionsConfig.js'
-import { appendVersionToQueryKey } from '../../../payload/src/versions/drafts/appendVersionToQueryKey.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
 import { buildVersionGlobalFields } from '../../../payload/src/versions/buildGlobalFields.js'
 import { buildVersionCompoundIndexes } from '../../../payload/src/versions/buildVersionCompoundIndexes.js'
+import { appendVersionToQueryKey } from '../../../payload/src/versions/drafts/appendVersionToQueryKey.js'
 import { getQueryDraftsSort } from '../../../payload/src/versions/drafts/getQueryDraftsSort.js'
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 import { getMongoLive } from '../mongo-live/index.js'
 import { getCoreRuntime } from '../runtime/index.js'
 
@@ -53,11 +53,6 @@ const MONGO_LIVE_JOINS_API_VERSION = 1
 
 let joinsBinding: MongoLiveJoinsBinding | undefined
 
-const addonPath = () =>
-  process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-  process.env.PAYLOAD_ENGINE_ADDON ??
-  '../../payload-engine.node'
-
 /**
  * Loads `mongoLiveJoinsBinding()` once (after the shared live helpers of the same addon instance)
  * and registers the ports with the live reads.
@@ -67,8 +62,8 @@ export const getMongoLiveJoins = ({ mongoose }: { mongoose?: Any } = {}): MongoL
     return joinsBinding
   }
   getMongoLive({ mongoose })
-  const path = addonPath()
-  const addon = createRequire(import.meta.url)(path) as {
+  const path = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as {
     mongoLiveJoinsBinding?: () => MongoLiveJoinsBinding
   }
   if (typeof addon.mongoLiveJoinsBinding !== 'function') {
@@ -117,8 +112,8 @@ export const getMongoLiveSchema = (): MongoLiveSchemaBinding => {
     return schemaBinding
   }
   getCoreRuntime()
-  const path = addonPath()
-  const addon = createRequire(import.meta.url)(path) as {
+  const path = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as {
     mongoLiveSchemaBinding?: () => MongoLiveSchemaBinding
   }
   if (typeof addon.mongoLiveSchemaBinding !== 'function') {
@@ -179,6 +174,7 @@ export const createRustMongoInit = (deps: MongoSchemaDeps) =>
         payload: payloadDeps,
       })
     } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- rejects with the thrown value as is, like upstream's async function
       return Promise.reject(error)
     }
   }

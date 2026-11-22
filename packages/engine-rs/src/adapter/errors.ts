@@ -7,13 +7,9 @@
  */
 import type { NativeError } from '../sqlite/native.js'
 
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
 import { APIError } from '../../../payload/src/errors/APIError.js'
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
 import { NotFound } from '../../../payload/src/errors/NotFound.js'
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
 import { QueryError } from '../../../payload/src/errors/QueryError.js'
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
 import { ValidationError } from '../../../payload/src/errors/ValidationError.js'
 import { createEngineError } from '../schema.js'
 import { LibsqlError, SqliteError, toJsError } from '../sqlite/errors.js'

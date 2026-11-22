@@ -3,12 +3,12 @@
  * main addon as `coreHooksAfterBinding()`) and installs its JS helpers. It runs on the core
  * runtime's executor and host, so the core runtime is initialized first, from the same addon file.
  */
-import { createRequire } from 'node:module'
 
 import { promise as upstreamAfterChangePromise } from '../../../../payload/src/fields/hooks/afterChange/promise.js'
 import { traverseFields as upstreamAfterChangeTraverseFields } from '../../../../payload/src/fields/hooks/afterChange/traverseFields.js'
 import { promise as upstreamBeforeDuplicatePromise } from '../../../../payload/src/fields/hooks/beforeDuplicate/promise.js'
 import { traverseFields as upstreamBeforeDuplicateTraverseFields } from '../../../../payload/src/fields/hooks/beforeDuplicate/traverseFields.js'
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../../addon.js'
 import { getCoreRuntime } from '../index.js'
 
 /*
@@ -188,13 +188,9 @@ export const getCoreHooksAfter = (): CoreHooksAfterBinding => {
     return binding
   }
   getCoreRuntime()
-  const require = createRequire(import.meta.url)
   // Same resolution as `getCoreRuntime()`: both bindings must come from one addon instance.
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../../payload-engine.node'
-  const addon = require(addonPath) as { coreHooksAfterBinding?: () => CoreHooksAfterBinding }
+  const addonPath = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as { coreHooksAfterBinding?: () => CoreHooksAfterBinding }
   if (typeof addon.coreHooksAfterBinding !== 'function') {
     throw new Error(`The engine addon at ${addonPath} has no coreHooksAfterBinding export`)
   }

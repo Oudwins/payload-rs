@@ -17,12 +17,12 @@
  *   `payload-core-ops/mutants` feature (the shipped addon rejects it at init).
  */
 import { writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 
 import type { Access, AccessResult } from '../../../payload/src/config/types.js'
 
 import { afterRead as tsAfterRead } from '../../../payload/src/fields/hooks/afterRead/index.js'
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 import { getCoreQueryBinding } from '../query/index.js'
 import { getCoreRuntime } from '../runtime/index.js'
 import { createOpsHost } from './host.js'
@@ -62,13 +62,9 @@ export const getCoreOps = (): CoreOpsBinding => {
   // The operations call the live query port (crates/payload-core-query) directly: its host must
   // be installed on the same addon instance.
   getCoreQueryBinding()
-  const require = createRequire(import.meta.url)
   // Same resolution as `getCoreRuntime()`: all bindings must come from one addon instance.
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../payload-engine.node'
-  const addon = require(addonPath) as { coreOpsBinding?: () => CoreOpsBinding }
+  const addonPath = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as { coreOpsBinding?: () => CoreOpsBinding }
   if (typeof addon.coreOpsBinding !== 'function') {
     throw new Error(`The engine addon at ${addonPath} has no coreOpsBinding export`)
   }

@@ -1,4 +1,4 @@
-import { createRequire } from 'node:module'
+import { loadedEngineAddonPath, loadEngineAddon } from './addon.js'
 
 /** `crates/payload-node/src/engine.rs` (see ENGINE_CONTRACT.md). */
 export type NativeSqliteEngine = {
@@ -112,16 +112,13 @@ export const assertEngineAddon = ({
 let native: NativeEngine | undefined
 
 /**
- * Loads the addon. `PAYLOAD_ENGINE_ADDON` may point at an alternative build (an agent-local cargo
- * target dir); it is the same path `sqlite/native.ts` loads, so both share one addon instance.
- * Throws when the addon is not the one this glue expects (`assertEngineAddon`).
+ * Loads the addon (`addon.cjs`: the one instance every loader shares). Throws when the addon is not
+ * the one this glue expects (`assertEngineAddon`).
  */
 export const getNativeEngine = (): NativeEngine => {
   if (!native) {
-    const require = createRequire(import.meta.url)
-    const addonPath = process.env.PAYLOAD_ENGINE_ADDON || '../payload-engine.node'
-    const addon = require(addonPath)
-    assertEngineAddon({ addon, addonPath })
+    const addon = loadEngineAddon()
+    assertEngineAddon({ addon, addonPath: loadedEngineAddonPath() })
     native = addon as NativeEngine
   }
   return native

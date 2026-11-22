@@ -13,9 +13,9 @@
  * number of calls each Rust operation served (throttled, and at exit).
  */
 import { writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 import { getCoreOps } from '../ops/index.js'
 import { getCoreOpsWrite } from '../ops-write/index.js'
 import { createOpsGlobalHost } from './host.js'
@@ -68,12 +68,8 @@ export const getOpsGlobal = (): CoreOpsGlobalBinding => {
   // the write operations' host (the global validate runs their `runValidationLifecycle` port).
   getCoreOps()
   getCoreOpsWrite()
-  const require = createRequire(import.meta.url)
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../payload-engine.node'
-  const addon = require(addonPath) as { coreOpsGlobalBinding?: () => CoreOpsGlobalBinding }
+  const addonPath = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as { coreOpsGlobalBinding?: () => CoreOpsGlobalBinding }
   if (typeof addon.coreOpsGlobalBinding !== 'function') {
     throw new Error(`The engine addon at ${addonPath} has no coreOpsGlobalBinding export`)
   }

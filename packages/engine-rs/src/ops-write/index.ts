@@ -17,12 +17,12 @@
  * (throttled, and at exit) to `<file>.ops-write.json`.
  */
 import { writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
 
 import { afterChange as tsAfterChange } from '../../../payload/src/fields/hooks/afterChange/index.js'
 import { afterRead as tsAfterRead } from '../../../payload/src/fields/hooks/afterRead/index.js'
 import { beforeChange as tsBeforeChange } from '../../../payload/src/fields/hooks/beforeChange/index.js'
 import { beforeValidate as tsBeforeValidate } from '../../../payload/src/fields/hooks/beforeValidate/index.js'
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 import { getCoreOps } from '../ops/index.js'
 import { getCoreHooksAfter } from '../runtime/afterChange/binding.js'
 import { getBeforeChangeBinding } from '../runtime/beforeChange/index.js'
@@ -64,12 +64,8 @@ export const getCoreOpsWrite = (): CoreOpsWriteBinding => {
   getBeforeValidateBinding()
   getBeforeChangeBinding()
   getCoreHooksAfter()
-  const require = createRequire(import.meta.url)
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../payload-engine.node'
-  const addon = require(addonPath) as { coreOpsWriteBinding?: () => CoreOpsWriteBinding }
+  const addonPath = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as { coreOpsWriteBinding?: () => CoreOpsWriteBinding }
   if (typeof addon.coreOpsWriteBinding !== 'function') {
     throw new Error(`The engine addon at ${addonPath} has no coreOpsWriteBinding export`)
   }

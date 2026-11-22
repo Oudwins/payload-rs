@@ -1,8 +1,6 @@
-import { createRequire } from 'node:module'
-import path from 'node:path'
-
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
 import type * as Upstream from '../../../payload/src/fields/validations.js'
+
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 
 /** Every validator export of `validations.ts` (the `validations` object aside). */
 export type RustValidations = Omit<typeof Upstream, 'validations'>
@@ -17,13 +15,8 @@ export const loadValidateBinding = (deps: {
   ObjectId: unknown
   validateJSONSchema: unknown
 }): RustValidations => {
-  const require = createRequire(import.meta.url)
-  const envAddonPath = process.env.PAYLOAD_CORE_RUNTIME_ADDON ?? process.env.PAYLOAD_ENGINE_ADDON
-  // A path from the environment is relative to the working directory, not to this module.
-  const addonPath = envAddonPath
-    ? path.resolve(process.cwd(), envAddonPath)
-    : '../../payload-engine.node'
-  const addon = require(addonPath) as { validateBinding?: (deps: object) => RustValidations }
+  const addonPath = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as { validateBinding?: (deps: object) => RustValidations }
   if (typeof addon.validateBinding !== 'function') {
     throw new Error(`The engine addon at ${addonPath} does not export validateBinding`)
   }

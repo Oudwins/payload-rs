@@ -16,6 +16,7 @@ import { createRequire } from 'node:module'
 import { APIError } from '../../../payload/src/errors/APIError.js'
 import { ValidationError } from '../../../payload/src/errors/ValidationError.js'
 import { flattenAllFields } from '../../../payload/src/utilities/flattenAllFields.js'
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 import { resolveDbMongodbMongoose } from '../mongo-live/host.js'
 import { getMongoLive, getMongoLiveReadStats, installLiveReads } from '../mongo-live/index.js'
 import { getMongoLiveQueryBinding } from '../mongo-live/query.js'
@@ -36,13 +37,9 @@ let writeBinding: MongoLiveWriteBinding | null | undefined
 
 /** The engine addon, resolved like `getMongoLive()` / `getCoreRuntime()` (one addon instance). */
 const requireEngineAddon = () => {
-  const require = createRequire(import.meta.url)
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../payload-engine.node'
+  const addonPath = coreRuntimeAddonPath()
   return {
-    addon: require(addonPath) as {
+    addon: loadCoreRuntimeAddon() as {
       mongoLiveBinding?: unknown
       mongoLiveJoinsBinding?: unknown
       mongoLiveQueryBinding?: unknown

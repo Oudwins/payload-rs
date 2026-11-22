@@ -6,7 +6,6 @@
  * Payload internals are imported by relative path: engine-rs has no installed `payload` link, and
  * the population helpers are not exported. These are the same module instances payload uses.
  */
-import { createRequire } from 'node:module'
 
 import type { AfterReadArgs } from '../../../payload/src/fields/hooks/afterRead/index.js'
 import type { JsonObject } from '../../../payload/src/types/index.js'
@@ -19,6 +18,7 @@ import { virtualFieldPopulationPromise } from '../../../payload/src/fields/hooks
 import { deepCopyObjectSimple } from '../../../payload/src/utilities/deepCopyObject.js'
 import { getBlockSelect } from '../../../payload/src/utilities/getBlockSelect.js'
 import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 
 export type CoreRuntimeBinding = {
   afterRead: (args: unknown) => Promise<unknown>
@@ -380,12 +380,8 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
   if (binding) {
     return binding
   }
-  const require = createRequire(import.meta.url)
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../payload-engine.node'
-  const addon = require(addonPath) as { coreRuntimeBinding: () => CoreRuntimeBinding }
+  const addonPath = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as { coreRuntimeBinding: () => CoreRuntimeBinding }
   const created = addon.coreRuntimeBinding()
   if (created.apiVersion !== CORE_RUNTIME_API_VERSION) {
     throw new Error(

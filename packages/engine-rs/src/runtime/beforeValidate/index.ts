@@ -7,7 +7,6 @@
  * Payload internals are imported by relative path (engine-rs has no installed `payload` link);
  * these are the module instances payload itself uses.
  */
-import { createRequire } from 'node:module'
 
 import type { SanitizedCollectionConfig } from '../../../../payload/src/collections/config/types.js'
 import type { SanitizedGlobalConfig } from '../../../../payload/src/globals/config/types.js'
@@ -24,6 +23,7 @@ import { promise as upstreamPromise } from '../../../../payload/src/fields/hooks
 import { stripNullRows } from '../../../../payload/src/fields/hooks/beforeValidate/stripNullRows.js'
 import { traverseFields as upstreamTraverseFields } from '../../../../payload/src/fields/hooks/beforeValidate/traverseFields.js'
 import { unflattenData } from '../../../../payload/src/utilities/unflattenData.js'
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../../addon.js'
 import { getCoreRuntime } from '../index.js'
 
 export type BeforeValidateBinding = {
@@ -148,13 +148,11 @@ export const getBeforeValidateBinding = (): BeforeValidateBinding => {
   }
   // Installs the shared runtime host (executor await helper, property helpers, descriptor cache).
   getCoreRuntime()
-  const require = createRequire(import.meta.url)
   // Must resolve to the same file as the core runtime so both bindings share one Rust instance.
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../../payload-engine.node'
-  const addon = require(addonPath) as { hooksBeforeValidateBinding?: () => BeforeValidateBinding }
+  const addonPath = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as {
+    hooksBeforeValidateBinding?: () => BeforeValidateBinding
+  }
   if (typeof addon.hooksBeforeValidateBinding !== 'function') {
     throw new Error(`The engine addon at ${addonPath} does not export hooksBeforeValidateBinding`)
   }

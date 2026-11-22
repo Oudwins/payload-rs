@@ -8,7 +8,6 @@
  * copied verbatim (labels, object literals) so evaluation order, key order and V8 error messages
  * stay identical. Payload internals are imported by relative path (see ../index.ts).
  */
-import { createRequire } from 'node:module'
 
 import type { Args as BeforeChangeArgs } from '../../../../payload/src/fields/hooks/beforeChange/index.js'
 import type { JsonObject } from '../../../../payload/src/types/index.js'
@@ -22,6 +21,7 @@ import { validateBlocksFilterOptions } from '../../../../payload/src/fields/vali
 import { deepMergeWithSourceArrays } from '../../../../payload/src/utilities/deepMerge.js'
 import { getTranslatedLabel } from '../../../../payload/src/utilities/getTranslatedLabel.js'
 import { isolateObjectProperty } from '../../../../payload/src/utilities/isolateObjectProperty.js'
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../../addon.js'
 import { getCoreRuntime } from '../index.js'
 
 export type BeforeChangeBinding = {
@@ -128,12 +128,8 @@ export const getBeforeChangeBinding = (): BeforeChangeBinding => {
     return binding
   }
   getCoreRuntime()
-  const require = createRequire(import.meta.url)
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../../payload-engine.node'
-  const addon = require(addonPath) as { hooksBeforeChangeBinding: () => BeforeChangeBinding }
+  const addonPath = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as { hooksBeforeChangeBinding: () => BeforeChangeBinding }
   const created = addon.hooksBeforeChangeBinding()
 
   created.init({
@@ -636,6 +632,7 @@ export const traverseFields = (args: BeforeChangeTraverseFieldsArgs): Promise<vo
       submittedTopLevelFieldNames,
     ])
   } catch (error) {
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- rejects with the thrown value as is, like upstream's async function
     return Promise.reject(error)
   }
 }

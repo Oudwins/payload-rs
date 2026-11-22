@@ -1,4 +1,4 @@
-import { createRequire } from 'node:module'
+import { loadEngineAddon } from '../addon.js'
 
 /** A statement normalized by `normalizeStatement` (see client.ts). */
 export type NativeStatement = {
@@ -90,16 +90,10 @@ export type NativeSqlite = {
 
 let native: NativeSqlite | undefined
 
-/**
- * Loads the SQLite part of the addon. `PAYLOAD_ENGINE_ADDON` may point at an
- * alternative build of the addon (e.g. an agent-local cargo target dir).
- */
+/** Loads the SQLite part of the addon (`addon.cjs`: the one instance every loader shares). */
 export const getNativeSqlite = (): NativeSqlite => {
   if (!native) {
-    const require = createRequire(import.meta.url)
-    native = require(
-      process.env.PAYLOAD_ENGINE_ADDON || '../../payload-engine.node',
-    ) as NativeSqlite
+    native = loadEngineAddon() as NativeSqlite
   }
   return native
 }

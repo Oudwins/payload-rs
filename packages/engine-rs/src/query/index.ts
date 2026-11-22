@@ -14,7 +14,6 @@
  *
  * The read operations (`../ops`) install this host before their own binding.
  */
-import { createRequire } from 'node:module'
 
 import { executeAccess } from '../../../payload/src/auth/executeAccess.js'
 import { hasWhereAccessResult } from '../../../payload/src/auth/types.js'
@@ -28,6 +27,7 @@ import {
 import { deepCopyObjectSimple } from '../../../payload/src/utilities/deepCopyObject.js'
 import { getEntityPermissions } from '../../../payload/src/utilities/getEntityPermissions/getEntityPermissions.js'
 import { isolateObjectProperty } from '../../../payload/src/utilities/isolateObjectProperty.js'
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 import { getCoreRuntime } from '../runtime/index.js'
 
 export type CoreQueryBinding = {
@@ -57,13 +57,9 @@ export const getCoreQueryBinding = (): CoreQueryBinding => {
     return binding
   }
   const runtime = getCoreRuntime()
-  const require = createRequire(import.meta.url)
   // Must resolve to the same file as the core runtime so both bindings share one Rust instance.
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../payload-engine.node'
-  const addon = require(addonPath) as { coreQueryBinding?: () => CoreQueryBinding }
+  const addonPath = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as { coreQueryBinding?: () => CoreQueryBinding }
   if (typeof addon.coreQueryBinding !== 'function') {
     throw new Error(`The engine addon at ${addonPath} does not export coreQueryBinding`)
   }

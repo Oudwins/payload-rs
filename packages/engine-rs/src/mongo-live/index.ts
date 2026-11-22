@@ -18,8 +18,8 @@
  *   `buildSortParam` / `buildProjectionFromSelect` / `transform` / `buildJoinAggregation` /
  *   `resolveJoins` even where a live port is registered (differential isolation).
  */
-import { createRequire } from 'node:module'
 
+import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 import { getCoreQueryBinding } from '../query/index.js'
 import { getCoreRuntime } from '../runtime/index.js'
 import { createMongoLiveHost } from './host.js'
@@ -74,13 +74,9 @@ export const getMongoLive = ({ mongoose }: { mongoose?: Any } = {}): MongoLiveBi
   getCoreRuntime()
   // combineQueries of the reads is the live query port (crates/payload-core-query)
   getCoreQueryBinding()
-  const require = createRequire(import.meta.url)
   // same resolution as `getCoreRuntime()`: all bindings must come from one addon instance
-  const addonPath =
-    process.env.PAYLOAD_CORE_RUNTIME_ADDON ??
-    process.env.PAYLOAD_ENGINE_ADDON ??
-    '../../payload-engine.node'
-  const addon = require(addonPath) as {
+  const addonPath = coreRuntimeAddonPath()
+  const addon = loadCoreRuntimeAddon() as {
     mongoLiveBinding?: () => MongoLiveBinding
     mongoLiveQueryBinding?: () => any
   }

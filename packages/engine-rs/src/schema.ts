@@ -2,9 +2,7 @@ import type { EntryReader } from './serialize.js'
 
 // engine-rs has no node_modules: import payload's error classes by path (the same module 'payload'
 // resolves to in this monorepo, so `instanceof` holds)
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
 import { APIError } from '../../payload/src/errors/APIError.js'
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
 import { InvalidConfiguration } from '../../payload/src/errors/InvalidConfiguration.js'
 import { getNativeEngine } from './native.js'
 import {

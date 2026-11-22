@@ -13,7 +13,6 @@
 import type { EngineError } from '../adapter/errors.js'
 import type { BsonClasses } from './codec.js'
 
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
 import { ValidationError } from '../../../payload/src/errors/ValidationError.js'
 import { describeError, rebuildError } from '../adapter/errors.js'
 

@@ -147,7 +147,7 @@ export const NORMALISATIONS = {
   databaseState:
     'Databases are compared as every non-system collection (sorted by name) with its type, options, indexes (listIndexes without `ns`, sorted by name) and documents (find sorted by _id), read through the native driver of each adapter connection, after awaiting every model init (background index builds). No document reordering beyond the _id sort is applied. Index `partialFilterExpression.globalType` is replaced by a placeholder: the globals discriminators race to create same-named indexes and the winner varies between runs.',
   errors:
-    "Thrown values: primitives as they are; errors by constructor / name / message / data / status plus prototype id, own enumerable properties and `cause` (stack ignored: it names the shadow harness frames, which differ between the halves). A MongoDB server error's `errorResponse.$clusterTime` / `operationTime` (the server's logical clock at that operation, never equal for two operations) are left out (TS vs TS 2026-11-16: test/versions `should keep latest true with parallel writes`, write conflicts one increment apart).",
+    "Thrown values: primitives as they are; errors by constructor / name / message / data / status plus prototype id, own enumerable properties and `cause` (stack ignored: it names the shadow harness frames, which differ between the halves). A MongoDB driver error's `$clusterTime` / `operationTime`, own and under `errorResponse` (the server's logical clock at that operation, never equal for two operations; MongoServerError copies the response fields onto itself) are left out (TS vs TS 2026-11-16: test/versions `should keep latest true with parallel writes`, write conflicts one increment apart).",
   events:
     'Per pair half (AsyncLocalStorage), in order: every MongoDB driver `Collection` operation (method, collection, arguments, argument-state fingerprint) and every replayed clock / uuid / ObjectId counter reading (trace.ts). The sequences must be identical (`$events`): call order, readings relative to I/O, mutation timing relative to I/O.',
   generatedValues:
@@ -555,6 +555,7 @@ function createShadowInstance({ args, cand, nowWindows, ref, reporter }: Instanc
     tracedEvents: 0,
     unshadowed: {},
   }
+  // eslint-disable-next-line prefer-const -- assigned below (the Proxy), read by the closures defined before it
   let proxy: AnyAdapter
 
   // ---- comparison -------------------------------------------------------------------------
@@ -729,7 +730,12 @@ function createShadowInstance({ args, cand, nowWindows, ref, reporter }: Instanc
         own[key] = (error as unknown as Record<string, unknown>)[key]
       }
     }
-    // NORMALISATIONS.errors: the server's cluster time of the failed operation
+    // NORMALISATIONS.errors: the server's cluster time of the failed operation. The driver's
+    // MongoServerError copies every field of the server response onto the error as well.
+    if (error.name.startsWith('Mongo')) {
+      delete own.$clusterTime
+      delete own.operationTime
+    }
     if (isPlainObject(own.errorResponse)) {
       const {
         $clusterTime: _clusterTime,

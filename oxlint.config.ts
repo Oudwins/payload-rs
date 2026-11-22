@@ -134,6 +134,13 @@ export default defineConfig({
       },
     },
     {
+      // The engine glue runs on payload's / drizzle's / db-mongodb's own module instances: it
+      // imports their sources by relative path, and buildDist rewrites each import to the
+      // installed peer's dist file (RUST_PORT.md, Packaging).
+      files: ['packages/engine-rs/src/**/*.ts'],
+      rules: { 'payload/no-relative-monorepo-imports': 'off' },
+    },
+    {
       files: ['test/**/*.ts'],
       rules: {
         'no-console': 'off',

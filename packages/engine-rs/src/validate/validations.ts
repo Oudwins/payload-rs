@@ -13,10 +13,8 @@ import { createRequire } from 'node:module'
  *
  * `validationsModule` is all value exports as one object, typed as the upstream module.
  */
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
 import type * as Upstream from '../../../payload/src/fields/validations.js'
 
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- no 'payload' dependency is installed here
 import { validateJSONSchema } from '../../../payload/src/fields/validateJSONSchema.js'
 import { loadValidateBinding } from './native.js'
 

@@ -5,13 +5,9 @@
 import type { RawSchemaAdapter, RawSchemaResult } from '../schema.js'
 import type { FunctionRegistry } from '../serialize.js'
 
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- same module @payloadcms/drizzle uses (engine-rs has no drizzle dependency)
 import { buildDrizzleRelations } from '../../../drizzle/src/schema/buildDrizzleRelations.js'
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- same module @payloadcms/drizzle uses (engine-rs has no drizzle dependency)
 import { buildDrizzleTable } from '../../../drizzle/src/sqlite/schema/buildDrizzleTable.js'
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- same module @payloadcms/drizzle uses (engine-rs has no drizzle dependency)
 import { executeSchemaHooks } from '../../../drizzle/src/utilities/executeSchemaHooks.js'
-// oxlint-disable-next-line payload/no-relative-monorepo-imports -- same module @payloadcms/drizzle uses (engine-rs has no drizzle dependency)
 import { InternalBlockTableNameIndex } from '../../../drizzle/src/utilities/validateExistingBlockIsIdentical.js'
 import { applyRawSchemaRS } from '../schema.js'
 import { deserializeFromEngine, serializeForEngine } from '../serialize.js'
