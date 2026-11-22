@@ -176,10 +176,26 @@ pub fn before_validate(args: Local) -> JsResult<Local> {
 }
 
 /// `traverseFields(args)` (traverseFields.ts, exported by payload as `beforeValidateTraverseFields`).
+/// Upstream's `traverseFields` in JS (its promise is returned as is), or with the
+/// `ported-traversals` feature the port as the entry's task.
 pub fn traverse_fields_entry(args: Local) -> JsResult<Local> {
+  if !cfg!(feature = "ported-traversals") {
+    return match entry_args(args) {
+      Ok((ctx, trav)) => traverse(ctx, trav),
+      // a throw while reading the arguments rejects, like upstream's async function
+      Err(error) => spawn(async move { Err::<Val, _>(error) }),
+    };
+  }
   let args = Val::from_local(args)?;
   spawn_tail(async move {
-    let a = args.get();
+    let (ctx, trav) = entry_args(args.get())?;
+    traverse_fields(ctx, trav).await
+  })
+}
+
+/// The `traverseFields` parameter read into the traversal's context and arguments.
+fn entry_args(a: Local) -> JsResult<(Rc<Ctx>, Rc<Trav>)> {
+  {
     let g = |name: &str| -> JsResult<Val> { Val::from_local(host::get_named(a, name)?) };
     let s = |name: &str| -> JsResult<Rc<str>> { Ok(js_string_arg(host::get_named(a, name)?).into()) };
     let id = g("id")?;
@@ -226,8 +242,8 @@ pub fn traverse_fields_entry(args: Local) -> JsResult<Local> {
       sibling_data,
       sibling_doc,
     });
-    traverse_fields(ctx, trav).await
-  })
+    Ok((ctx, trav))
+  }
 }
 
 /// The string path arguments of the `traverseFields` entry. The TS drop-in destructures with

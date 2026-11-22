@@ -154,11 +154,26 @@ impl Ctx {
 /// parentIndexPath, parentIsLocalized, parentPath, parentSchemaPath, req, siblingData, siblingDoc,
 /// siblingDocWithLocales, skipHooks, skipValidation, submittedTopLevelFieldNames`; the TS glue
 /// destructures with upstream's pattern and only calls this with string paths). Returns the
-/// traversal's promise.
+/// traversal's promise: the JS traversal's promise as is ([`traverse`]), or in builds that use the
+/// port, the port as the entry's task.
 pub fn traverse_fields_entry(a: Local) -> JsResult<Local> {
+  if !USES_PORT {
+    return match entry_args(a) {
+      Ok((ctx, trav)) => traverse(&ctx, trav),
+      // a throw while reading the arguments rejects, like upstream's async function
+      Err(error) => spawn(async move { Err::<Val, _>(error) }),
+    };
+  }
   let a = Val::from_local(a)?;
   spawn_tail(async move {
-    let a = a.get();
+    let (ctx, trav) = entry_args(a.get())?;
+    traverse_fields(ctx, Rc::new(trav)).await
+  })
+}
+
+/// The destructured `traverseFields` parameter read into the traversal's context and arguments.
+fn entry_args(a: Local) -> JsResult<(Rc<Ctx>, Trav)> {
+  {
     let e = |i: u32| -> JsResult<Val> { Val::from_local(js::get_element(a, i)?) };
     let s = |i: u32| -> JsResult<Rc<str>> { Ok(js::get_string(js::get_element(a, i)?).unwrap_or_default().into()) };
     let (id, block_data, block_fields, collection, context) = (e(0)?, e(1)?, e(2)?, e(3)?, e(4)?);
@@ -201,8 +216,8 @@ pub fn traverse_fields_entry(a: Local) -> JsResult<Local> {
       sibling_doc_with_locales,
       skip_validation,
     };
-    traverse_fields(ctx, Rc::new(trav)).await
-  })
+    Ok((ctx, trav))
+  }
 }
 
 /// Port of `index.ts`.

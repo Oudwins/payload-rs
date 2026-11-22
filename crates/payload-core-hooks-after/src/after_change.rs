@@ -17,7 +17,7 @@
 use std::rc::Rc;
 
 use payload_core_runtime::config::{self, FieldDesc, FieldsDesc, Kind};
-use payload_core_runtime::executor::{Tail, await_js, spawn_tail};
+use payload_core_runtime::executor::{Tail, await_js, spawn, spawn_tail};
 use payload_core_runtime::host as rt;
 use payload_core_runtime::js::{self, JsResult, Local, Thrown, Type, Val};
 
@@ -134,11 +134,27 @@ fn new_ctx(
 /// (`blockData, collection, context, data, doc, fields, global, operation, parentIndexPath,
 /// parentIsLocalized, parentPath, parentSchemaPath, previousDoc, previousSiblingDoc, req,
 /// siblingData, siblingDoc, siblingFields`; the TS glue destructures with upstream's pattern and
-/// only calls this with string paths). Returns the traversal's promise.
+/// only calls this with string paths). Returns the traversal's promise: upstream's
+/// `traverseFields` in JS (its promise as is), or with the `ported-traversals` feature the port as
+/// the entry's task.
 pub fn traverse_fields_entry(a: Local) -> JsResult<Local> {
+  if !cfg!(feature = "ported-traversals") {
+    return match entry_args(a) {
+      Ok((ctx, trav)) => traverse_fields(&ctx, trav),
+      // a throw while reading the arguments rejects, like upstream's async function
+      Err(error) => spawn(async move { Err::<Val, _>(error) }),
+    };
+  }
   let a = Val::from_local(a)?;
   spawn_tail(async move {
-    let a = a.get();
+    let (ctx, trav) = entry_args(a.get())?;
+    traverse_fields_body(ctx, Rc::new(trav)).await
+  })
+}
+
+/// The destructured `traverseFields` parameter read into the traversal's context and arguments.
+fn entry_args(a: Local) -> JsResult<(Rc<Ctx>, Trav)> {
+  {
     let e = |i: u32| -> JsResult<Val> { Val::from_local(js::get_element(a, i)?) };
     let s = |i: u32| -> JsResult<Rc<str>> { Ok(js::get_string(js::get_element(a, i)?).unwrap_or_default().into()) };
     let (block_data, collection, context, data, doc) = (e(0)?, e(1)?, e(2)?, e(3)?, e(4)?);
@@ -161,8 +177,8 @@ pub fn traverse_fields_entry(a: Local) -> JsResult<Local> {
       sibling_doc,
       sibling_fields,
     };
-    traverse_fields_body(ctx, Rc::new(trav)).await
-  })
+    Ok((ctx, trav))
+  }
 }
 
 /// Calls `traverseFields` (an async function) and returns its promise: upstream's
