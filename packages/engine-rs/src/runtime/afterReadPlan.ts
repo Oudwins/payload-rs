@@ -7,9 +7,9 @@
  * field can reach. For the kinds it classifies (plain leaves, relationship-like fields, named
  * groups, arrays, unnamed rows / collapsibles / groups) every remaining branch is a fixed
  * sequence of sibling doc operations; `fastField` performs exactly that sequence, in upstream's
- * order, as an `async` function with upstream's awaits (only the default value step can await
- * here), and recurses into nested fields with the same plans. Every other field (field hooks,
- * virtual fields, read access to await, localized values to hoist, `locale: 'all'`, blocks,
+ * order, as an `async` function with upstream's awaits (the field hooks loop and the default
+ * value step), and recurses into nested fields with the same plans. Every other field (virtual
+ * fields, read access to await, localized values to hoist, `locale: 'all'`, blocks,
  * tabs, rich text, points) runs upstream's own `promise()` with the args literal upstream's
  * `traverseFields` builds, so its behaviour is upstream's by construction.
  *
@@ -58,11 +58,16 @@ type Trav = {
 }
 
 // Indices of the `afterReadArgs` array (crates/payload-core-runtime after_read.rs `arg`).
+const ARG_COLLECTION = 0
+const ARG_CONTEXT = 1
 const ARG_CURRENT_DEPTH = 2
 const ARG_DEPTH = 3
+const ARG_DOC = 4
 const ARG_DRAFT = 5
 const ARG_FALLBACK_LOCALE = 6
+const ARG_FIND_MANY = 7
 const ARG_FLATTEN_LOCALES = 8
+const ARG_GLOBAL = 9
 const ARG_LOCALE = 10
 const ARG_OVERRIDE_ACCESS = 11
 const ARG_POPULATE = 12
@@ -78,6 +83,7 @@ const NAME_IS_ID = 4
 const NAME_TRUTHY = 8
 const HAS_DEFAULT_VALUE = 16
 const HIDDEN_IS_TRUE = 64
+const HAS_HOOKS = 128
 
 // config.rs `fast_kind`
 const UPSTREAM = 0
@@ -249,7 +255,51 @@ export const createAfterReadTraverse = ({
     }
 
     if (flags & AFFECTS_DATA) {
-      // no hooks, no virtual population; read access (if any) is skipped by `overrideAccess`
+      // Execute hooks (`shouldRunHookOnAllLocales` is false for these kinds)
+      if (flags & HAS_HOOKS) {
+        const field = plan.fields[i]
+        const { indexPath, path, schemaPath } = getFieldPaths({
+          field,
+          index: i,
+          parentIndexPath: t.parentIndexPath,
+          parentPath: t.parentPath,
+          parentSchemaPath: t.parentSchemaPath,
+        })
+        const pathSegments = path ? path.split('.') : []
+        const schemaPathSegments = schemaPath ? schemaPath.split('.') : []
+        const indexPathSegments = indexPath ? indexPath.split('-').filter(Boolean)?.map(Number) : []
+        for (const hook of field.hooks.afterRead) {
+          const hookedValue = await hook({
+            blockData: t.blockData,
+            collection: c[ARG_COLLECTION],
+            context: c[ARG_CONTEXT],
+            currentDepth: c[ARG_CURRENT_DEPTH],
+            data: c[ARG_DOC],
+            depth: c[ARG_DEPTH],
+            draft: c[ARG_DRAFT],
+            field,
+            findMany: c[ARG_FIND_MANY],
+            global: c[ARG_GLOBAL],
+            indexPath: indexPathSegments,
+            operation: 'read',
+            originalDoc: c[ARG_DOC],
+            overrideAccess: c[ARG_OVERRIDE_ACCESS],
+            path: pathSegments,
+            req: c[ARG_REQ],
+            schemaPath: schemaPathSegments,
+            showHiddenFields: c[ARG_SHOW_HIDDEN_FIELDS],
+            siblingData: siblingDoc,
+            siblingFields: plan.fields,
+            value: siblingDoc[key],
+          })
+
+          if (hookedValue !== undefined) {
+            siblingDoc[key] = hookedValue
+          }
+        }
+      }
+
+      // no virtual population; read access (if any) is skipped by `overrideAccess`
       if (
         !removedFieldValue &&
         typeof siblingDoc[key] === 'undefined' &&

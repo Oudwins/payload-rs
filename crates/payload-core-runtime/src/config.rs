@@ -164,16 +164,19 @@ pub mod leaf_flags {
   pub const HOOKED: u32 = 32;
   /// `field.hidden === true` (the array / blocks `siblingDoc[field.name] = []` branch)
   pub const HIDDEN_IS_TRUE: u32 = 64;
+  /// A data field with `afterRead` hooks to run (`'hooks' in field && field.hooks?.afterRead`)
+  pub const HAS_HOOKS: u32 = 128;
 }
 
 /// How the host's `afterReadTraverse` runs a field's `promise()` (the `kinds` array of a
 /// [`FieldsDesc::js_plan`], mirrored in `packages/engine-rs/src/runtime/afterReadPlan.ts`). Every
 /// kind but [`fast_kind::UPSTREAM`] is a field whose `promise()`, given the decoded config and the
-/// plan's `overrideAccess` / parent-localized conditions, has no field hooks, no virtual
+/// plan's `overrideAccess` / parent-localized conditions, has no virtual
 /// population, no read access to await, no localized value to hoist and no `locale === 'all'`
 /// branch: what remains of upstream's body is a fixed sequence of sibling doc operations (hidden
-/// check, `stripUnselectedFields`, the hoisting check reads, the default value step), plus the
-/// population push or the nested traversal of its kind. The host runs exactly that sequence in an
+/// check, `stripUnselectedFields`, the hoisting check reads, the field hooks loop when the field
+/// has hooks, the default value step), plus the population push or the nested traversal of its
+/// kind. The host runs exactly that sequence in an
 /// `async` function of the same shape (same awaits). Anything else calls upstream's `promise()`.
 pub mod fast_kind {
   /// upstream's `promise()` with the args literal of upstream's `traverseFields`
@@ -364,17 +367,20 @@ impl FieldDesc {
     if self.hidden_is_true {
       bits |= leaf_flags::HIDDEN_IS_TRUE;
     }
+    if self.affects_data && self.has_after_read_hooks {
+      bits |= leaf_flags::HAS_HOOKS;
+    }
     bits
   }
 
   /// The [`fast_kind`] of this field under these dynamic conditions.
   pub fn fast_kind(&self, override_access: bool, parent_localized: bool) -> u32 {
-    if self.leaf.holds(override_access, parent_localized) {
+    if self.leaf.holds(override_access, parent_localized) || self.hooked_leaf.holds(override_access, parent_localized) {
       return fast_kind::LEAF;
     }
-    // what gates the leaf sequence of a data field (`config::Leaf` for leaf kinds)
+    // what gates the leaf sequence of a data field (`config::Leaf` for leaf kinds; field hooks
+    // run in the host like upstream's loop, `HAS_HOOKS`)
     let plain_data = self.affects_data
-      && !self.has_after_read_hooks
       && self.virtual_path.is_none()
       && (!self.has_read_access || override_access)
       && (!self.localized_truthy || parent_localized);
