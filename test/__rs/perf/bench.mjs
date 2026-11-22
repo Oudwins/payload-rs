@@ -22,6 +22,7 @@
  */
 import fs from 'node:fs'
 import os from 'node:os'
+import { PerformanceObserver } from 'node:perf_hooks'
 
 import { authorCount, buildConfigInput, categoryCount, createRandom, postData } from './configs.mjs'
 import { fingerprint, scenarios } from './scenarios.mjs'
@@ -30,6 +31,15 @@ const spec = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
 const now = () => Number(process.hrtime.bigint()) / 1e6
 const result = { spec, startedAt: new Date().toISOString() }
 let scenarioNumber = 0
+
+/**
+ * GC pauses while a scenario's timed loop runs (`gc` performance entries; the observer callback
+ * runs between iterations, so the entries are collected when the loop ends).
+ */
+const gcEntries = []
+new PerformanceObserver((list) => gcEntries.push(...list.getEntries())).observe({
+  entryTypes: ['gc'],
+})
 
 const tImport0 = now()
 const { buildConfig, getPayload } = await import('payload')
@@ -82,6 +92,12 @@ if (spec.mode === 'scenarios') {
       continue
     }
     if (scenario.shapes && !scenario.shapes.includes(spec.shape)) {
+      continue
+    }
+    if (spec.categories?.length && !spec.categories.includes(scenario.category)) {
+      continue
+    }
+    if (spec.scenarioPattern && !new RegExp(spec.scenarioPattern, 'i').test(scenario.name)) {
       continue
     }
     result.scenarios.push(await measure(ctx, scenario))
@@ -294,21 +310,24 @@ async function seed() {
 }
 
 async function measure(ctx, scenario) {
-  const entry = { name: scenario.name, surface: scenario.surface }
+  const entry = { category: scenario.category, name: scenario.name, surface: scenario.surface }
   ctx.startScenario(++scenarioNumber)
   globalThis.gc?.()
   const durations = []
+  const cpuMicros = []
   let iteration = 0
   const once = async () => {
     const state = scenario.setup ? await scenario.setup(ctx, iteration) : undefined
+    const cpu0 = process.cpuUsage()
     const t0 = now()
     const value = await scenario.run(ctx, state)
     const elapsed = now() - t0
+    const cpu = process.cpuUsage(cpu0)
     if (scenario.teardown) {
       await scenario.teardown(ctx, state, value)
     }
     iteration++
-    return { elapsed, value }
+    return { cpu: cpu.user + cpu.system, elapsed, value }
   }
   try {
     for (const key of Object.keys(hookCounter)) {
@@ -317,17 +336,40 @@ async function measure(ctx, scenario) {
     const first = await once()
     entry.fingerprint = fingerprint(first.value, 0, { isCountVariable: scenario.isCountVariable })
     entry.hookCalls = { ...hookCounter }
+    entry.result = describeResult(first.value)
     for (let index = 1; index < spec.warmup; index++) {
       await once()
     }
+    globalThis.gc?.()
+    await new Promise((resolve) => setImmediate(resolve))
+    gcEntries.length = 0
+    const heapBefore = process.memoryUsage().heapUsed
     const started = now()
     while (
       durations.length < spec.maxIterations &&
       now() - started < spec.maxTimeMs &&
       (durations.length < spec.minIterations || now() - started < spec.minTimeMs)
     ) {
-      durations.push((await once()).elapsed)
+      const { cpu, elapsed } = await once()
+      durations.push(elapsed)
+      cpuMicros.push(cpu)
     }
+    entry.wallMs = now() - started
+    await new Promise((resolve) => setImmediate(resolve))
+    entry.gc = {
+      count: gcEntries.length,
+      // per kind: minor (scavenge), major (mark-sweep-compact), incremental, weak callbacks
+      byKind: Object.fromEntries(
+        Object.entries(
+          Object.groupBy(gcEntries, (gcEntry) => String(gcEntry.detail?.kind ?? gcEntry.kind)),
+        ).map(([kind, entries]) => [
+          kind,
+          { count: entries.length, ms: entries.reduce((sum, e) => sum + e.duration, 0) },
+        ]),
+      ),
+      ms: gcEntries.reduce((sum, gcEntry) => sum + gcEntry.duration, 0),
+    }
+    entry.heapDeltaBytes = process.memoryUsage().heapUsed - heapBefore
   } catch (error) {
     entry.error = {
       message: String(error?.message ?? error).slice(0, 1000),
@@ -336,20 +378,55 @@ async function measure(ctx, scenario) {
     }
   }
   entry.stats = summarize(durations)
+  entry.cpu = summarize(cpuMicros.map((micros) => micros / 1000))
+  if (spec.isSamplesKept) {
+    entry.samples = durations.map((value) => Math.round(value * 1000) / 1000)
+    entry.cpuSamples = cpuMicros.map((micros) => Math.round(micros) / 1000)
+  }
   return entry
 }
 
-function summarize(durations) {
-  const sorted = [...durations].sort((a, b) => a - b)
-  const at = (q) =>
-    sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : NaN
+/** Size of a result (JSON bytes) and the documents it carries, for per-document costs. */
+function describeResult(value) {
+  const body =
+    value && typeof value === 'object' && 'json' in value && 'status' in value ? value.json : value
+  let bytes = NaN
+  try {
+    bytes = Buffer.byteLength(JSON.stringify(body) ?? '')
+  } catch {
+    // circular or BigInt: no size
+  }
+  const docs = Array.isArray(body?.docs)
+    ? body.docs.length
+    : Array.isArray(body?.data && Object.values(body.data)[0]?.docs)
+      ? Object.values(body.data)[0].docs.length
+      : body && typeof body === 'object'
+        ? 1
+        : 0
+  return { bytes, docs }
+}
+
+/** Order statistics, mean, standard deviation and coefficient of variation of `values` (ms). */
+function summarize(values) {
+  const sorted = [...values].sort((a, b) => a - b)
+  const n = sorted.length
+  const at = (q) => (n ? sorted[Math.min(n - 1, Math.floor(q * n))] : NaN)
+  const mean = n ? sorted.reduce((sum, value) => sum + value, 0) / n : NaN
+  const stddev =
+    n > 1 ? Math.sqrt(sorted.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (n - 1)) : 0
   return {
+    cv: n ? stddev / mean : NaN,
     maxMs: sorted.at(-1) ?? NaN,
-    meanMs: sorted.reduce((sum, value) => sum + value, 0) / (sorted.length || 1),
+    meanMs: mean,
     medianMs: at(0.5),
     minMs: sorted[0] ?? NaN,
-    n: sorted.length,
+    n,
+    p25Ms: at(0.25),
+    p75Ms: at(0.75),
+    p90Ms: at(0.9),
     p95Ms: at(0.95),
+    p99Ms: at(0.99),
+    stddevMs: stddev,
   }
 }
 

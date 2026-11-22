@@ -120,6 +120,7 @@ export const buildConfigInput = ({ db, editor, hookCounter, shape, uploadDir }) 
       {
         slug: 'posts',
         access: postAccess(shape),
+        endpoints: postEndpoints,
         hooks,
         versions: shape === 'complex' ? { drafts: true, maxPerDoc: 10 } : undefined,
         fields: withFieldHooks(
@@ -142,6 +143,7 @@ const base = ({ db, editor }) => ({
   admin: { disable: true },
   db,
   editor,
+  endpoints: rootEndpoints,
   graphQL: { disablePlaygroundInProduction: true },
   secret: 'payload-perf-suite-secret',
   telemetry: false,
@@ -192,9 +194,71 @@ const jobs = {
   ],
 }
 
+/**
+ * Custom endpoints (a user's own API surface): they run payload operations through `req.payload`,
+ * so the engine serves them like any built-in endpoint.
+ */
+const postEndpoints = [
+  {
+    handler: async (req) => {
+      const { totalDocs } = await req.payload.count({ collection: 'posts', overrideAccess: true })
+      return Response.json({ totalDocs })
+    },
+    method: 'get',
+    path: '/perf-stats',
+  },
+  {
+    handler: async (req) => {
+      const doc = await req.payload.update({
+        collection: 'posts',
+        data: { revision: Number(req.searchParams?.get('revision') ?? 0) },
+        id: req.routeParams.id,
+        overrideAccess: true,
+        req,
+      })
+      return Response.json({ id: doc.id, revision: doc.revision })
+    },
+    method: 'post',
+    path: '/:id/touch',
+  },
+]
+
+const rootEndpoints = [
+  { handler: () => Response.json({ ok: true }), method: 'get', path: '/perf/ping' },
+  {
+    handler: async (req) => Response.json({ received: await req.json() }),
+    method: 'post',
+    path: '/perf/echo',
+  },
+  {
+    handler: async (req) => {
+      const { docs } = await req.payload.find({
+        collection: 'posts',
+        depth: 1,
+        limit: 10,
+        overrideAccess: true,
+        req,
+      })
+      return Response.json({ titles: docs.map((doc) => doc.title) })
+    },
+    method: 'get',
+    path: '/perf/latest-posts',
+  },
+]
+
 const settings = ({ shape }) => ({
   slug: 'settings',
   access: { read: () => true, readVersions: () => true, update: () => true },
+  endpoints: [
+    {
+      handler: async (req) =>
+        Response.json(
+          await req.payload.findGlobal({ overrideAccess: true, req, slug: 'settings' }),
+        ),
+      method: 'get',
+      path: '/perf-summary',
+    },
+  ],
   versions: shape === 'complex' ? { max: 50 } : undefined,
   fields: [
     { name: 'siteName', type: 'text' },

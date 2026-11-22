@@ -6,10 +6,14 @@
  * and databases.
  *
  *   node test/__rs/perf/run.mjs [--databases mongodb,sqlite,postgres] [--shapes minimal,typical,...]
- *     [--sizes 100,1000,10000] [--surfaces local,rest,graphql] [--startup-shapes ...]
- *     [--startup-runs 5] [--engines ts,rs] [--addon file] [--out dir] [--reuse] [--quick]
- *     [--min-time-ms 1000] [--min-iterations 10] [--max-iterations 300] [--max-time-ms 5000]
- *     [--no-startup] [--no-scenarios] [--verbose]
+ *     [--sizes 100,1000,10000] [--surfaces local,rest,graphql] [--categories read,partial-update,...]
+ *     [--scenarios <regex>] [--startup-shapes ...] [--startup-runs 5] [--engines ts,rs]
+ *     [--addon file] [--out dir] [--reuse] [--quick] [--min-time-ms 1000] [--min-iterations 10]
+ *     [--max-iterations 300] [--max-time-ms 5000] [--no-samples] [--no-startup] [--no-scenarios]
+ *     [--verbose]
+ *   node test/__rs/perf/run.mjs --list      # the scenario catalogue (markdown), nothing runs
+ *
+ * `--engines ts` or `--engines rs` alone measures one engine (absolute numbers, no comparison).
  *
  * Install: packs the packages (release layout: engine-rs plus this platform's addon package, the
  * addon being `--addon`, default the release build target/release/libpayload_node.so) and installs
@@ -22,7 +26,10 @@
  *
  * Fails (exit 1) when a cell crashes, an rs process did not map the engine addon or a ts process
  * did, a scenario errors on one engine only, or ts and rs fingerprints of a scenario differ.
- * Writes <out>/results.json, <out>/report.md, <out>/report.html and the raw per-cell results.
+ * Writes <out>/results.json (everything, incl. every timed sample), <out>/scenarios.csv (one row
+ * per database x shape x size x engine x scenario with every statistic), <out>/samples.csv (one row
+ * per timed iteration), <out>/startup.csv, <out>/report.md and <out>/report.html (interactive
+ * charts with filters), and the raw per-process results in <out>/cells/.
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -33,6 +40,7 @@ import { fileURLToPath } from 'node:url'
 import { packRelease } from '../../../packages/engine-rs/scripts/release/packRelease.mjs'
 import { rebuildStaleDist } from '../packaging/rebuildStale.mjs'
 import { writeReports } from './report.mjs'
+import { categories, scenarios as catalogue } from './scenarios.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '../../..')
@@ -43,6 +51,11 @@ const option = (name, fallback) => {
 }
 const list = (name, fallback) => option(name, fallback).split(',').filter(Boolean)
 const isQuick = argv.includes('--quick')
+
+if (process.argv.includes('--list')) {
+  printCatalogue()
+  process.exit(0)
+}
 
 const options = {
   addon: path.resolve(option('--addon', path.join(root, 'target/release/libpayload_node.so'))),
@@ -64,8 +77,16 @@ const options = {
     '--startup-shapes',
     isQuick ? 'minimal,complex,wide-50' : 'minimal,typical,complex,hooks,wide-10,wide-50,wide-200',
   ),
+  categories: list('--categories', ''),
+  isSamplesKept: !argv.includes('--no-samples'),
+  scenarioPattern: option('--scenarios', ''),
   surfaces: list('--surfaces', 'local,rest,graphql'),
   warmup: Number(option('--warmup', 3)),
+}
+for (const category of options.categories) {
+  if (!categories.includes(category)) {
+    throw new Error(`--categories: unknown category ${category} (${categories.join(', ')})`)
+  }
 }
 /**
  * `--engines` values: `ts` (upstream), `rs` (the default selection), and for attributing a
@@ -134,7 +155,7 @@ const results = {
   failures,
   options: { ...options, addon: path.relative(root, options.addon) },
 }
-fs.writeFileSync(path.join(options.out, 'results.json'), JSON.stringify(results, null, 2))
+fs.writeFileSync(path.join(options.out, 'results.json'), JSON.stringify(results))
 writeReports({ outDir: options.out, results })
 console.log(`\nreport: ${path.join(options.out, 'report.md')}`)
 if (failures.length > 0) {
@@ -355,6 +376,9 @@ function runScenarios({ database, engine, shape, size }) {
         out: path.join(cellsDir, `${label}.json`),
         shape,
         size,
+        categories: options.categories,
+        isSamplesKept: options.isSamplesKept,
+        scenarioPattern: options.scenarioPattern,
         surfaces: options.surfaces,
         verbose: isVerbose,
         warmup: options.warmup,
@@ -429,4 +453,18 @@ function checkCells(cells) {
       }
     }
   }
+}
+
+/** The scenario catalogue as markdown, grouped by category. */
+function printCatalogue() {
+  const shapesOf = (scenario) => (scenario.shapes ? scenario.shapes.join(', ') : 'all')
+  let md = `${catalogue.length} scenarios (plus startup and seeding)\n`
+  for (const category of categories) {
+    const rows = catalogue.filter((scenario) => scenario.category === category)
+    md += `\n### ${category} (${rows.length})\n\n| surface | scenario | shapes |\n| --- | --- | --- |\n`
+    for (const scenario of rows) {
+      md += `| ${scenario.surface} | ${scenario.name} | ${shapesOf(scenario)} |\n`
+    }
+  }
+  console.log(md)
 }
