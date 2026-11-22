@@ -525,7 +525,10 @@ const SCRIPT = `
     const node = document.getElementById('summary')
     if (!isPaired) { node.replaceChildren(el('p', { class: 'empty' }, 'One engine measured: see the distributions and the table for absolute numbers.')); return }
     const groups = new Map()
-    for (const p of pairs) { for (const key of ['surface', 'category']) { const k = p.database + ' · ' + key + ': ' + p[key]; groups.set(k, [...(groups.get(k) || []), p]) } }
+    // per database: the surfaces, then the categories in catalogue order
+    const order = ['local', 'rest', 'graphql', 'read', 'create', 'update', 'partial-update', 'locale', 'versions', 'delete', 'globals', 'auth', 'uploads', 'jobs', 'validation', 'custom-endpoints', 'meta']
+    const sorted = pairs.slice().sort((a, b) => a.database.localeCompare(b.database))
+    for (const db of [...new Set(sorted.map((p) => p.database))]) for (const key of ['surface', 'category']) for (const value of order) { const ps = pairs.filter((p) => p.database === db && p[key] === value); if (ps.length) groups.set(db + ' · ' + key + ': ' + value, ps) }
     const items = [...groups].map(([label, ps]) => ({ label: label + ' (' + ps.length + ')', v: geomean(ps.map(speedupOf)), tip: (n) => { n.append(el('strong', {}, label), el('div', {}, 'geomean speedup ' + times(geomean(ps.map(speedupOf)))), el('div', {}, ps.length + ' scenario cells; faster ' + ps.filter((p) => speedupOf(p) > 1.05).length + ', slower ' + ps.filter((p) => speedupOf(p) < 0.95).length)) } })).filter((i) => isFinite(i.v))
     diverging(node, items)
   }
