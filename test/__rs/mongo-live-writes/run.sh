@@ -8,7 +8,8 @@
 # Rust methods call upstream's transform / buildQuery / ... instead of the registered live ports.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
-unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE
+export PAYLOAD_ENGINE=ts # upstream TS (unset selects Rust)
+unset PAYLOAD_CORE_ENGINE
 : "${PAYLOAD_ENGINE_ADDON:?set PAYLOAD_ENGINE_ADDON to the payload-node addon}"
 db="${1:-livewrites_1}"
 export PAYLOAD_DATABASE=mongodb

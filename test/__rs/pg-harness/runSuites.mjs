@@ -9,9 +9,11 @@
  * No files: every test/**\/*int.spec.ts outside test/__rs.
  *
  * Options:
- *   --engine ts|rs     ts (default): upstream TS (PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE unset);
+ *   --engine ts|rs|default
+ *                      ts (default): upstream TS (PAYLOAD_ENGINE=ts, PAYLOAD_CORE_ENGINE unset);
  *                      rs: PAYLOAD_ENGINE=rs (today only the core engine: db-postgres has no Rust
- *                      SQL engine yet, see RUST_POSTGRES_PLAN.md)
+ *                      SQL engine yet, see RUST_POSTGRES_PLAN.md); default: PAYLOAD_ENGINE unset
+ *                      (the default selection, i.e. what users get)
  *   --core ts          with --engine rs: PAYLOAD_CORE_ENGINE=ts
  *   --database <name>  PAYLOAD_DATABASE: postgres (default) | postgres-uuid | postgres-uuidv7 |
  *                      postgres-custom-schema (upstream's test/dbAdapters.ts entries, same server;
@@ -92,8 +94,8 @@ for (let i = 0; i < argv.length; i++) {
 if (!SUPPORTED_DATABASES.includes(options.database)) {
   throw new Error(`--database must be one of ${SUPPORTED_DATABASES.join(', ')}`)
 }
-if (!['rs', 'ts'].includes(options.engine)) {
-  throw new Error('--engine must be ts or rs')
+if (!['default', 'rs', 'ts'].includes(options.engine)) {
+  throw new Error('--engine must be ts, rs or default (PAYLOAD_ENGINE unset: Rust)')
 }
 if (!/^[a-z0-9_]{1,40}$/.test(options.tag)) {
   throw new Error('--tag must be 1-40 characters of [a-z0-9_]')
@@ -209,6 +211,12 @@ const runFileNow = (file, { attempt, dbName }) =>
       env.PAYLOAD_ENGINE = 'rs'
       env.PAYLOAD_RS_ENGINE_STATS_FILE = statsFile
       if (options.core) env.PAYLOAD_CORE_ENGINE = options.core
+    } else if (options.engine === 'default') {
+      env.PAYLOAD_RS_ENGINE_STATS_FILE = statsFile
+      if (options.core) env.PAYLOAD_CORE_ENGINE = options.core
+    } else {
+      // upstream TS (unset selects the Rust engine)
+      env.PAYLOAD_ENGINE = 'ts'
     }
     if (options.addon) env.PAYLOAD_ENGINE_ADDON = options.addon
     const started = Date.now()

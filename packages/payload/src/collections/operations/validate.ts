@@ -15,6 +15,7 @@ import { Forbidden, NotFound } from '../../errors/index.js'
 import { afterRead } from '../../fields/hooks/afterRead/index.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
 import { deepCopyObjectSimple } from '../../utilities/deepCopyObject.js'
+import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { flattenDataByLocale } from '../../utilities/flattenDataByLocale.js'
 import { runValidationLifecycle } from '../../utilities/runValidationLifecycle.js'
 import { appendVersionToQueryKey } from '../../versions/drafts/appendVersionToQueryKey.js'
@@ -220,16 +221,15 @@ async function validateOperationWithScopedRequest<TSlug extends CollectionSlug>(
 }
 
 type RustWriteOperations = {
-  validateOperation: (args: Parameters<typeof validateOperationTS>[0]) => Promise<any>
   recordDeferredCall: () => void
+  validateOperation: (args: Parameters<typeof validateOperationTS>[0]) => Promise<any>
 }
 
 /**
  * Rust engine (`packages/engine-rs/src/ops-write`), selected once at module load:
- * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ * `isRustCoreEngine()` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts). See RUST_OPS_DESIGN.md.
  */
-const isRustWriteOperations =
-  (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustWriteOperations = isRustCoreEngine()
 const rustWriteOperationsSpecifier = '@payloadcms/engine-rs/ops-write'
 let rustWriteOperations: RustWriteOperations | undefined
 const rustWriteOperationsLoad: Promise<RustWriteOperations> | undefined = isRustWriteOperations

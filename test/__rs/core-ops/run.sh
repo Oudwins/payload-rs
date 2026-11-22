@@ -14,7 +14,8 @@
 set -u
 source /tmp/penv.sh
 cd "$(dirname "$0")/../../.."
-unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE
+export PAYLOAD_ENGINE=ts # upstream TS (unset selects Rust)
+unset PAYLOAD_CORE_ENGINE
 if [ "${RS_OPS_SQL_ENGINE:-}" = rs ]; then
   export PAYLOAD_ENGINE=rs PAYLOAD_CORE_ENGINE=ts
 fi

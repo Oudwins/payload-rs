@@ -4,6 +4,7 @@ import type { CollectionSlug } from '../../index.js'
 import type { TransformCollectionWithSelect } from '../../types/index.js'
 import type { RequiredDataFromCollectionSlug, SelectFromCollectionSlug } from '../config/types.js'
 
+import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { type Arguments as CreateArguments, createOperation } from './create.js'
 
 export type Arguments<TSlug extends CollectionSlug> = {
@@ -32,10 +33,9 @@ type RustWriteOperations = {
 
 /**
  * Rust engine (`packages/engine-rs/src/ops-write`), selected once at module load:
- * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ * `isRustCoreEngine()` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts). See RUST_OPS_DESIGN.md.
  */
-const isRustWriteOperations =
-  (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustWriteOperations = isRustCoreEngine()
 const rustWriteOperationsSpecifier = '@payloadcms/engine-rs/ops-write'
 let rustWriteOperations: RustWriteOperations | undefined
 const rustWriteOperationsLoad: Promise<RustWriteOperations> | undefined = isRustWriteOperations

@@ -7,6 +7,7 @@ import {
   beforeChangeTraverseFields as upstreamBeforeChangeTraverseFields,
   beforeValidateTraverseFields as upstreamBeforeValidateTraverseFields,
 } from 'payload'
+import { isRustCoreEngine as selectsRustCoreEngine } from 'payload/internal'
 
 import type { SanitizedServerEditorConfig } from './lexical/config/types.js'
 
@@ -22,10 +23,10 @@ type RustCoreTraverseFields = {
 
 /**
  * Rust core engine (`packages/engine-rs/src/runtime/hooks.ts`) for payload's `*TraverseFields`,
- * selected once at module load like payload's own field-hook modules: `PAYLOAD_CORE_ENGINE=rs|ts`,
- * else `PAYLOAD_ENGINE=rs`. Unset, these are payload's exports. See RUST_PORT.md.
+ * selected once at module load like payload's own field-hook modules (`isRustCoreEngine()`: Rust
+ * unless `PAYLOAD_ENGINE=ts`). With TS selected, these are payload's exports. See RUST_PORT.md.
  */
-const isRustCoreEngine = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustCoreEngine = selectsRustCoreEngine()
 const rustCoreHooksSpecifier = '@payloadcms/engine-rs/runtime/hooks'
 let rustCoreHooks: RustCoreTraverseFields | undefined
 const rustCoreHooksLoad: Promise<RustCoreTraverseFields> | undefined = isRustCoreEngine

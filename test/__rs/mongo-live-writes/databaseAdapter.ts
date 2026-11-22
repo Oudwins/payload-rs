@@ -2,7 +2,7 @@
  * Alias target of `databaseAdapter.js` for upstream int suites with ONLY the write data methods on
  * the live Rust port (vitest.upstream.config.ts): upstream's `mongooseAdapter(mongodbArgs())` (the
  * mongo-harness adapter args) whose `init` result gets `installLiveWrites(adapter)` before anything
- * calls it. Reads, the core engine and everything else stay upstream TS (PAYLOAD_ENGINE unset), so
+ * calls it. Reads, the core engine and everything else stay upstream TS (PAYLOAD_ENGINE=ts), so
  * a status difference against the TS baseline is attributable to the live writes.
  *
  * With PAYLOAD_RS_LIVE_WRITE_STATS_DIR set, each process writes the binding's per-method call counts
@@ -16,9 +16,9 @@ import { threadId } from 'node:worker_threads'
 import { mongodbArgs } from '../mongo-harness/args.js'
 import { getMongoLiveWrite, installLiveWrites } from './glue.js'
 
-if (process.env.PAYLOAD_ENGINE || process.env.PAYLOAD_CORE_ENGINE) {
+if (process.env.PAYLOAD_ENGINE !== 'ts' || process.env.PAYLOAD_CORE_ENGINE) {
   throw new Error(
-    'test/__rs/mongo-live-writes/databaseAdapter.ts: unset PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE',
+    'test/__rs/mongo-live-writes/databaseAdapter.ts: set PAYLOAD_ENGINE=ts, unset PAYLOAD_CORE_ENGINE',
   )
 }
 

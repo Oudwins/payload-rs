@@ -11,6 +11,7 @@ import { validateSortQuery } from '../../database/queryValidation/validateSortQu
 import { sanitizeWhereQuery } from '../../database/sanitizeWhereQuery.js'
 import { NotFound } from '../../errors/index.js'
 import { afterRead } from '../../fields/hooks/afterRead/index.js'
+import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { hasVersionsEnabled } from '../../utilities/getVersionsConfig.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeInternalFields } from '../../utilities/sanitizeInternalFields.js'
@@ -200,13 +201,10 @@ type RustOperations = {
 
 /**
  * Rust engine (`packages/engine-rs/src/ops-global`), selected once at module load:
- * `PAYLOAD_OPS_GLOBAL_ENGINE=rs|ts`, else `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`.
+ * `isRustCoreEngine({ override: 'PAYLOAD_OPS_GLOBAL_ENGINE' })` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts).
  * See RUST_OPS_DESIGN.md.
  */
-const isRustOperations =
-  (process.env.PAYLOAD_OPS_GLOBAL_ENGINE ||
-    process.env.PAYLOAD_CORE_ENGINE ||
-    process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustOperations = isRustCoreEngine({ override: 'PAYLOAD_OPS_GLOBAL_ENGINE' })
 const rustOperationsSpecifier = '@payloadcms/engine-rs/ops-global'
 let rustOperations: RustOperations | undefined
 const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations

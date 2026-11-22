@@ -1,10 +1,10 @@
 {
   "name": "@payloadcms/engine-rs",
   "version": "4.0.0-beta.6",
-  "private": true,
   "description": "Rust implementation of the Payload engine, loaded as a Node addon",
   "license": "MIT",
   "files": [
+    "addon.cjs",
     "dist",
     "payload-engine.node"
   ],
@@ -17,6 +17,7 @@
       "require": "./src/index.ts",
       "types": "./src/index.ts"
     },
+    "./addon": "./addon.cjs",
     "./adapter": {
       "import": "./src/adapter/index.ts",
       "types": "./src/adapter/index.ts",
@@ -88,6 +89,7 @@
         "import": "./dist/index.js",
         "default": "./dist/index.js"
       },
+      "./addon": "./addon.cjs",
       "./adapter": {
         "import": "./dist/adapter/index.js",
         "default": "./dist/adapter/index.js"
@@ -160,6 +162,9 @@
       "optional": true
     },
     "@payloadcms/db-mongodb": {
+      "optional": true
+    },
+    "@payloadcms/drizzle": {
       "optional": true
     }
   }

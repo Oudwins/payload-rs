@@ -10,8 +10,11 @@
  * --include-rs).
  *
  * Options:
- *   --engine ts|rs     ts (default): upstream TS (PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE unset);
- *                      rs: PAYLOAD_ENGINE=rs (mongooseAdapter returns withRustMongoEngine). Every
+ *   --engine ts|rs|default
+ *                      ts (default): upstream TS (PAYLOAD_ENGINE=ts, PAYLOAD_CORE_ENGINE unset);
+ *                      rs: PAYLOAD_ENGINE=rs (mongooseAdapter returns withRustMongoEngine);
+ *                      default: PAYLOAD_ENGINE unset (the default engine selection, Rust), checked
+ *                      like rs. Every
  *                      process writes its Mongo engine stats (PAYLOAD_RS_MONGO_ENGINE_STATS_DIR);
  *                      a file with passing tests but no data-method call served by Rust (live
  *                      engine or stage-1 native MongoEngine), or with the TS loopback engine
@@ -178,11 +181,13 @@ if (!['cosmosdb', 'documentdb', 'firestore', 'mongodb'].includes(options.databas
 if (!['concurrent', 'serial'].includes(options.shadowMode)) {
   throw new Error('--shadow-mode must be serial or concurrent')
 }
-if (!['rs', 'ts'].includes(options.engine)) {
-  throw new Error('--engine must be ts or rs')
+if (!['default', 'rs', 'ts'].includes(options.engine)) {
+  throw new Error('--engine must be ts, rs or default')
 }
 const isNativeExpected =
-  options.engine === 'rs' || (options.shadow && options.candidate === 'rs')
+  options.engine === 'rs' ||
+  options.engine === 'default' ||
+  (options.shadow && options.candidate === 'rs')
 if (isNativeExpected && process.env.PAYLOAD_RS_MONGO_LOOPBACK) {
   // the loopback engine is TS: a run through it proves nothing about the Rust engine
   throw new Error(
@@ -321,6 +326,11 @@ const runFileNow = (file, { attempt }) =>
     if (options.engine === 'rs') {
       env.PAYLOAD_ENGINE = 'rs'
       if (options.core) env.PAYLOAD_CORE_ENGINE = options.core
+    } else if (options.engine === 'default') {
+      if (options.core) env.PAYLOAD_CORE_ENGINE = options.core
+    } else {
+      // upstream TS (unset selects the Rust engine)
+      env.PAYLOAD_ENGINE = 'ts'
     }
     if (options.addon) env.PAYLOAD_ENGINE_ADDON = options.addon
     const candidateDb = `${dbName}_c`
@@ -542,8 +552,7 @@ const summarize = (run) => {
 }
 
 const summaryFile = path.join(outDir, 'summary.json')
-const previous =
-  options.resume || options.resummarize ? (readJSON(summaryFile)?.files ?? {}) : {}
+const previous = options.resume || options.resummarize ? (readJSON(summaryFile)?.files ?? {}) : {}
 const results = { ...previous }
 const writeSummary = () =>
   fs.writeFileSync(
@@ -639,17 +648,17 @@ if (options.rerunFailed && !options.resummarize) {
 function rerunRecordOf(first, again) {
   const failedAgain = new Set(again.failures.map((f) => f.name))
   return {
-      counts: again.counts,
-      differences: again.differences,
-      // the solo rerun matches the baseline: the first run's difference was the environment
-      // (load timeouts, server restarts), not the engine. Counted clean, listed as such.
-      isClean: !again.differences.length && !again.loadError && !again.nativeProof,
-      flaky: first.failures.filter((f) => !failedAgain.has(f.name)).map((f) => f.name),
-      loadError: again.loadError,
-      newFailures: again.failures
-        .filter((f) => !first.failures.some((g) => g.name === f.name))
-        .map((f) => f.name),
-      reproduced: first.failures.filter((f) => failedAgain.has(f.name)).map((f) => f.name),
+    counts: again.counts,
+    differences: again.differences,
+    // the solo rerun matches the baseline: the first run's difference was the environment
+    // (load timeouts, server restarts), not the engine. Counted clean, listed as such.
+    isClean: !again.differences.length && !again.loadError && !again.nativeProof,
+    flaky: first.failures.filter((f) => !failedAgain.has(f.name)).map((f) => f.name),
+    loadError: again.loadError,
+    newFailures: again.failures
+      .filter((f) => !first.failures.some((g) => g.name === f.name))
+      .map((f) => f.name),
+    reproduced: first.failures.filter((f) => failedAgain.has(f.name)).map((f) => f.name),
   }
 }
 
@@ -674,10 +683,10 @@ if (options.writeBaseline) {
 const isFirstRunDiffering = (r) =>
   Boolean(
     r.differences.length ||
-      r.loadError ||
-      r.nativeProof ||
-      r.hasBaseline === false ||
-      (r.shadow && r.shadow.divergences),
+    r.loadError ||
+    r.nativeProof ||
+    r.hasBaseline === false ||
+    (r.shadow && r.shadow.divergences),
   )
 const isDiffering = (r) =>
   isFirstRunDiffering(r) && !(r.rerun?.isClean && !(r.shadow && r.shadow.divergences))

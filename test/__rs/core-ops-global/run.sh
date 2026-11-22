@@ -45,7 +45,8 @@ for suite in "$@"; do
     rm -rf "$OUT/$mode/$tag"
     mkdir -p "$OUT/$mode/$tag"
     (
-      unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE PAYLOAD_OPS_GLOBAL_ENGINE
+      export PAYLOAD_ENGINE=ts # upstream TS (unset selects Rust)
+      unset PAYLOAD_CORE_ENGINE PAYLOAD_OPS_GLOBAL_ENGINE
       case "$mode" in
         rs) export PAYLOAD_OPS_GLOBAL_ENGINE=rs ;;
       esac

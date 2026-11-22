@@ -14,6 +14,7 @@ export const tgzToPkgNameMap = {
   '@payloadcms/db-sqlite': 'payloadcms-db-sqlite-*',
   '@payloadcms/db-d1-sqlite': 'payloadcms-db-d1-sqlite-*',
   '@payloadcms/drizzle': 'payloadcms-drizzle-*',
+  '@payloadcms/engine-rs': 'payloadcms-engine-rs-*',
   '@payloadcms/email-nodemailer': 'payloadcms-email-nodemailer-*',
   '@payloadcms/email-resend': 'payloadcms-email-resend-*',
   '@payloadcms/figma': 'payloadcms-figma-*',
@@ -82,6 +83,13 @@ export function setupProd() {
         }
       }
     }
+  }
+
+  // Not a direct dependency: payload, the db adapters and richtext-lexical depend on it, so only an
+  // override makes them install the packed engine instead of the registry's.
+  const engineTgzPath = findActualTgzName(tgzToPkgNameMap['@payloadcms/engine-rs'])
+  if (engineTgzPath) {
+    allDependencies['@payloadcms/engine-rs'] = engineTgzPath
   }
 
   // write out package.json (direct deps now point at local tarballs)

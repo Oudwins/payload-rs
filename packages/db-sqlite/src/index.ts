@@ -254,7 +254,7 @@ export function sqliteAdapter(args: Args): DatabaseAdapterObj<SQLiteAdapter> {
     init: adapter,
   }
 
-  return process.env.PAYLOAD_ENGINE === 'rs' ? withRustEngineOnInit(adapterObj) : adapterObj
+  return isRustDatabaseEngine() ? withRustEngineOnInit(adapterObj) : adapterObj
 }
 
 export type {
@@ -274,6 +274,7 @@ export type {
   SQLiteAdapter,
   SQLiteSchemaHook,
 } from './types.js'
+import { isRustDatabaseEngine } from 'payload/internal'
 
 export { sql } from 'drizzle-orm'
 
@@ -285,7 +286,7 @@ type RustEngine = {
 }
 
 /**
- * `PAYLOAD_ENGINE=rs`: `withRustEngine` of `@payloadcms/engine-rs` (ENGINE_CONTRACT.md), loading
+ * `isRustDatabaseEngine()` (the default; `PAYLOAD_ENGINE=ts` selects upstream): `withRustEngine` of `@payloadcms/engine-rs` (ENGINE_CONTRACT.md), loading
  * from when this module is evaluated, and the Rust libsql client registered for `connect`. That package
  * is an optional peer dependency, imported only here (and by `connect` for a harness-wrapped
  * adapter), at runtime, from where db-sqlite is installed (`importRustEngine`); with the flag unset
@@ -307,7 +308,7 @@ const loadRustEngine = (): Promise<RustEngine> =>
     )
     return (rustEngine = engineAdapter as RustEngine)
   }))
-if (process.env.PAYLOAD_ENGINE === 'rs') {
+if (isRustDatabaseEngine()) {
   void loadRustEngine().catch(() => {})
 }
 

@@ -72,7 +72,12 @@ if (options.all) {
   for (const file of baseline.testResults) {
     const rel = path.relative(root, file.name)
     const ran = file.assertionResults.some((t) => t.status === 'passed' || t.status === 'failed')
-    if (ran && !rel.startsWith('test/storage-') && !rel.startsWith('test/__rs/') && !files.includes(rel)) {
+    if (
+      ran &&
+      !rel.startsWith('test/storage-') &&
+      !rel.startsWith('test/__rs/') &&
+      !files.includes(rel)
+    ) {
       files.push(rel)
     }
   }
@@ -104,7 +109,7 @@ const runFile = (file, index) =>
       SQLITE_URL: `file:${dbFile}`,
       TZ: 'UTC',
     }
-    delete env.PAYLOAD_ENGINE
+    env.PAYLOAD_ENGINE = 'ts'
     delete env.PAYLOAD_CORE_ENGINE
     if (options.mode === 'full') {
       env.PAYLOAD_ENGINE = 'rs'
@@ -153,7 +158,9 @@ const testsOf = (fileResult) =>
   new Map((fileResult?.assertionResults ?? []).map((test) => [test.fullName, test]))
 
 const compare = ({ code, coreStatsFile, durationMs, file, jsonFile, statsFile }) => {
-  const core = existsSync(coreStatsFile) ? JSON.parse(readFileSync(coreStatsFile, 'utf8')) : undefined
+  const core = existsSync(coreStatsFile)
+    ? JSON.parse(readFileSync(coreStatsFile, 'utf8'))
+    : undefined
   const coreCalls = core ? Object.values(core.calls).reduce((a, b) => a + b, 0) : 0
   const result = existsSync(jsonFile) ? JSON.parse(readFileSync(jsonFile, 'utf8')) : undefined
   const fileResult = result?.testResults?.[0]
@@ -277,10 +284,14 @@ for (const r of results) {
     problems.push(`${r.file}: ${r.differences.length} differences from the baseline`)
   }
 }
-const noCore = results.filter((r) => options.mode !== 'sql' && r.counts.passed > 0 && r.coreCalls === 0)
+const noCore = results.filter(
+  (r) => options.mode !== 'sql' && r.counts.passed > 0 && r.coreCalls === 0,
+)
 if (noCore.length) {
   // files whose tests never run a field traversal (CLI, config, helpers, ...)
-  process.stdout.write(`\nfiles without Rust core hook calls: ${noCore.map((r) => r.file).join(', ')}\n`)
+  process.stdout.write(
+    `\nfiles without Rust core hook calls: ${noCore.map((r) => r.file).join(', ')}\n`,
+  )
 }
 if (problems.length) {
   process.stdout.write(`\nFAIL\n${problems.map((p) => `- ${p}`).join('\n')}\n`)

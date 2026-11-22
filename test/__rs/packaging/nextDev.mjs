@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * The packed install under `next dev` (Turbopack, the bundler test/hmr uses), with and without
- * `PAYLOAD_ENGINE=rs`. Runs on the app a `run.mjs --keep` run installed (engine-rs opted in):
+ * The packed install under `next dev` (Turbopack, the bundler test/hmr uses), with `PAYLOAD_ENGINE=ts`
+ * (references) and with the flag unset (the default: Rust). Runs on the app a `run.mjs --keep`
+ * run installed:
  * packs @payloadcms/next and @payloadcms/graphql, adds them with `next` to the app, writes a
  * minimal Next.js app (`withPayload`, one route handler running Local API steps with lexical rich
  * text, hooks, localization, relationships and versions) and starts `next dev` per run.
@@ -15,16 +16,16 @@
  *     [--database sqlite|mongodb] [--mongodb-url url] [--skip-build] [--prod]
  *
  * --prod  `next build` + `next start` per run instead of `next dev` (the production bundling,
- *         where `withPayload` bundles payload unless the Rust engine is selected). Every rs run
+ *         where `withPayload` bundles payload only when `PAYLOAD_ENGINE=ts`). Every Rust run
  *         must see one payload instance: the route compares payload's `ValidationError` it
  *         imports with the one Node loads from the installed payload (what engine-rs uses).
  *
  * The package manager is `pnpm`, or `node $RS_PACKAGING_PNPM` (see run.mjs).
  *
- * Fails when: a server does not start or the route fails; a flag-unset run wrote engine stats;
- * the rs run made no Rust engine / core hook / ops calls; any engine-rs code or its addon ended
- * up in `.next` (it must be loaded by Node at runtime, never bundled); or the rs run's output
- * differs from the flag-unset runs (`compare.mjs`).
+ * Fails when: a server does not start or the route fails; a `PAYLOAD_ENGINE=ts` run wrote engine
+ * stats; the default run made no Rust engine / core hook / ops calls; any engine-rs code or its
+ * addon ended up in `.next` (it must be loaded by Node at runtime, never bundled); or the default
+ * run's output differs from the `PAYLOAD_ENGINE=ts` runs (`compare.mjs`).
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -56,9 +57,9 @@ const appDir = path.join(work, 'app')
 const packedDir = path.join(work, 'packed')
 if (
   !work.startsWith(path.join(root, '.rs-runs') + path.sep) ||
-  !fs.existsSync(path.join(appDir, 'node_modules/@payloadcms/engine-rs'))
+  !fs.existsSync(path.join(appDir, 'node_modules/payload'))
 ) {
-  throw new Error(`no opted-in app in ${appDir} (run test/__rs/packaging/run.mjs --keep first)`)
+  throw new Error(`no installed app in ${appDir} (run test/__rs/packaging/run.mjs --keep first)`)
 }
 
 const failures = []
@@ -77,7 +78,7 @@ try {
   for (const [engine, label] of [
     ['ts', 'reference 1'],
     ['ts', 'reference 2'],
-    ['rs', 'candidate'],
+    ['default', 'candidate (flag unset)'],
   ]) {
     runs.push(await runNextDev({ engine, index: runs.length, label }))
   }
@@ -144,8 +145,10 @@ function installNext() {
 
 function writeApp() {
   const files = {
+    // agentUpgrade: false: next 16.4 otherwise stops dev / build in agent environments to show an
+    // upgrade notice (exit 1), and this harness clears .next, where its retry receipt lives
     'next.config.mjs': `import { withPayload } from '@payloadcms/next/withPayload'
-export default withPayload({ typescript: { ignoreBuildErrors: true } })
+export default withPayload({ experimental: { agentUpgrade: false }, typescript: { ignoreBuildErrors: true } })
 `,
     'payload.config.js': `import { mongooseAdapter } from '@payloadcms/db-mongodb'
 import { sqliteAdapter } from '@payloadcms/db-sqlite'
@@ -341,8 +344,8 @@ async function runNextDev({ engine, index, label }) {
     PROBE_LOCATION: location,
     ...(isProd && database === 'sqlite' ? { PROBE_PUSH: 'true' } : {}),
   })
-  if (engine === 'rs') {
-    env.PAYLOAD_ENGINE = 'rs'
+  if (engine !== 'default') {
+    env.PAYLOAD_ENGINE = engine
   }
   const nextBin = path.join(appDir, 'node_modules/next/dist/bin/next')
   if (isProd) {
@@ -442,13 +445,11 @@ function checkBundle() {
 
 function verify(runs) {
   const references = runs.filter((entry) => entry.engine === 'ts')
-  const candidates = runs.filter((entry) => entry.engine === 'rs')
+  const candidates = runs.filter((entry) => entry.engine !== 'ts')
   for (const entry of references) {
     const written = fs.readdirSync(entry.statsDir)
     if (written.length > 0) {
-      fail(
-        `${entry.label}: PAYLOAD_ENGINE unset but engine stats were written: ${written.join(', ')}`,
-      )
+      fail(`${entry.label}: PAYLOAD_ENGINE=ts but engine stats were written: ${written.join(', ')}`)
     }
   }
   for (const entry of runs) {

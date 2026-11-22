@@ -3,6 +3,7 @@ import type { SanitizedGlobalConfig } from '../../../globals/config/types.js'
 import type { RequestContext } from '../../../index.js'
 import type { JsonObject, PayloadRequest } from '../../../types/index.js'
 
+import { isRustCoreEngine as selectsRustCoreEngine } from '../../../utilities/engineSelection.js'
 import { traverseFields } from './traverseFields.js'
 
 type Args<T extends JsonObject> = {
@@ -29,9 +30,9 @@ type RustCoreHooks = {
 
 /**
  * Rust core engine (`packages/engine-rs/src/runtime/hooks.ts`), selected once at module load:
- * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_PORT.md.
+ * `isRustCoreEngine()` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts). See RUST_PORT.md.
  */
-const isRustCoreEngine = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustCoreEngine = selectsRustCoreEngine()
 const rustCoreHooksSpecifier = '@payloadcms/engine-rs/runtime/hooks'
 let rustCoreHooks: RustCoreHooks | undefined
 const rustCoreHooksLoad: Promise<RustCoreHooks> | undefined = isRustCoreEngine

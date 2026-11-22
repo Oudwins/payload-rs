@@ -37,6 +37,7 @@ import { unlinkTempFiles } from '../../uploads/unlinkTempFiles.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
+import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { hasLocalizeStatusEnabled } from '../../utilities/getVersionsConfig.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
 import { initTransaction } from '../../utilities/initTransaction.js'
@@ -417,16 +418,15 @@ export const updateByIDOperationTS = async <
 }
 
 type RustWriteOperations = {
-  updateByIDOperation: (args: Parameters<typeof updateByIDOperationTS>[0]) => Promise<any>
   recordDeferredCall: () => void
+  updateByIDOperation: (args: Parameters<typeof updateByIDOperationTS>[0]) => Promise<any>
 }
 
 /**
  * Rust engine (`packages/engine-rs/src/ops-write`), selected once at module load:
- * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ * `isRustCoreEngine()` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts). See RUST_OPS_DESIGN.md.
  */
-const isRustWriteOperations =
-  (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustWriteOperations = isRustCoreEngine()
 const rustWriteOperationsSpecifier = '@payloadcms/engine-rs/ops-write'
 let rustWriteOperations: RustWriteOperations | undefined
 const rustWriteOperationsLoad: Promise<RustWriteOperations> | undefined = isRustWriteOperations

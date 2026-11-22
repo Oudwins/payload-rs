@@ -130,79 +130,68 @@ What this means for maintenance:
 
 ## Packaging
 
-How the engine reaches a real install with no API change, and why users who never opt in get
-exactly upstream. Opting in is two steps: install `@payloadcms/engine-rs` next to `payload` and
-set `PAYLOAD_ENGINE=rs`.
+The Rust engine is the default. A Payload project gets it by installing these packages instead of
+upstream's (same names, versions and public TS API); nothing else changes.
 
-### The default path (`PAYLOAD_ENGINE` and `PAYLOAD_CORE_ENGINE` unset)
+### Engine selection
 
-- No package imports `@payloadcms/engine-rs` statically, and nothing of it is evaluated or awaited.
-  Every dispatch site loads it only when the flag selects Rust, by a runtime `import()` of a
-  computed specifier carrying `/* @vite-ignore */ /* webpackIgnore: true */`, so bundlers see
-  neither a literal nor a context module. With the flag unset the exported function is the
-  upstream TS one.
-- Resolution is package-local at runtime: each site resolves the engine-rs subpath from where its
-  own package is installed (`createRequire(<package.json>).resolve(...)`, then `import()` of that
-  file URL). The package is located from `import.meta.url` only when the nearest package.json above
-  it is that package's (a bundled module's `import.meta.url` is a chunk or a build-time path);
-  otherwise it is looked up in `node_modules` from the working directory up. This fixes bundled
-  Next.js (Turbopack / webpack chunks under `.next`, e.g. test/hmr, where a bare runtime import
-  resolved from the chunk: "Cannot find package '@payloadcms/engine-rs' imported from
-  .next/dev/server/chunks/packages_db-mongodb_src_*.js").
-- The sites:
-  - payload: `@payloadcms/engine-rs/ops` (collection read operations, `auth/executeAccess.ts`),
-    `/ops-write` (collection write operations), `/ops-global` (global and auth operations),
-    `/runtime/hooks` (`fields/hooks/*/index.ts`): each loads `utilities/importRustEngine.ts` by a
-    literal dynamic import, only on the Rust path (never evaluated otherwise). The addon
-    `@payloadcms/engine-rs/payload-engine.node` (`fields/validations.ts`, synchronous, through
-    `process.getBuiltinModule`, the same package-local resolution inlined).
-  - richtext-lexical: `@payloadcms/engine-rs/runtime/hooks` (`hooks.ts`).
-  - db-sqlite: `@payloadcms/engine-rs/adapter` and `/sqlite`; db-mongodb:
-    `@payloadcms/engine-rs/mongodb`. Neither loads the engine root, so a SQLite-only install never
-    reaches the MongoDB engine (whose `mongo-live` imports db-mongodb internals). The load starts
-    when the adapter module is evaluated. `config.db.init` is synchronous: once the module has
-    loaded, the adapter object's `init` is exactly `withRustEngine(obj).init` /
-    `withRustMongoEngine(obj).init` (as before the runtime import); before that, the built
-    adapter's `init` installs the engine when payload awaits it (before `connect` and any data
-    method) and forwards to the engine's `init` for that and every later call; a consumer wrapper
-    of the adapter's `init` is kept (it reaches the engine through the function it wrapped).
-  - db-sqlite `connect` picks the Rust libsql client through a function db-sqlite's own rs path
-    registers (`setRustEngineClient`): unset, `connect` runs upstream's `createClient` with nothing
-    read or awaited first. Only when engine-rs is loaded in the process (its `native.ts` sets
-    `globalThis[Symbol.for('@payloadcms/engine-rs')]`) and the adapter's `init` is not drizzle's
-    does it ask engine-rs (harnesses that call `withRustEngine` themselves).
-- `withPayload` (packages/next): with `PAYLOAD_ENGINE=rs` or `PAYLOAD_CORE_ENGINE=rs`, the
-  server-only Payload packages (payload, drizzle, the db adapters, ...) stay external in production
-  too (as in development), so the engine, loaded by Node, shares payload's / drizzle's module
-  instances (error classes, symbols, module state) with the app. richtext-lexical stays bundled
-  (client components) and imports the external payload. Unset: unchanged.
-- Manifests: `@payloadcms/engine-rs` is an **optional peer dependency** of payload,
-  richtext-lexical, db-sqlite and db-mongodb, and nothing else differs from upstream (no
-  devDependency either: published manifests keep devDependencies). Nothing installs it for users
-  who do not ask for it; when they do, pnpm links it into each of those packages, npm / yarn hoist
-  it. In the monorepo, pnpm (`autoInstallPeers: true`) installs every peer of a workspace project,
-  optional ones included, as a dependency, so the four packages link `packages/engine-rs`.
-- engine-rs has no dependency on a workspace package: `payload` and `@payloadcms/drizzle` are
-  peers, `@payloadcms/db-mongodb` (internals used by `src/mongo-live`) and `@libsql/client`
-  optional peers, `jose` (payload's version) its only dependency. pnpm reports the cyclic workspace
-  peer db-mongodb <-> engine-rs as a warning; turbo ignores peers (no build cycle).
-- `pnpm-lock.yaml` lists the `packages/engine-rs` importer and the auto-installed engine-rs peer
-  of the four packages. `node test/__rs/packaging/lockfileCheck.mjs [--self-test]` checks every
-  importer against its manifest the way `pnpm install --frozen-lockfile` does (verified also with
-  pnpm 10.24 `install --frozen-lockfile --lockfile-only --offline` on a copy of the manifests).
+`packages/payload/src/utilities/engineSelection.ts` (exported from `payload/internal`) is the one
+rule every dispatch site uses (payload's operations / field hooks / validators, richtext-lexical's
+hooks, db-sqlite, db-mongodb; `withPayload` inlines the same rule):
 
-Checked by `node test/__rs/default-path/check.mjs [--upstream ec35164]`: walks the module graph
-of every workspace package from its entry points, over `src` (dev exports) and over `dist`
-(`publishConfig.exports`), across workspace packages, following import / export declarations,
-literal `import()` / `require()` / `createRequire()()` and `new URL(..., import.meta.url)`. It
-fails if engine-rs or its addon is reachable, if a non-literal `import()` in a module that names
-engine-rs lacks `webpackIgnore`, if a dist file is older than its source, if engine-rs is a
-dependency or a required peer anywhere, or (with `--upstream`) if any manifest field users or the
-packed tarball see (including `devDependencies`) differs from upstream except for the optional
-peer. `--self-test` is the negative control. `test/__rs/default-path/switch.int.spec.ts`: the
-adapter switch (unset `connect` timing with a replaced `init`, consumer `init` wrappers kept, the
-synchronous `init` once loaded, the Rust client only for the engine adapter), against stubbed
-engine modules; the previous implementation fails 6 of its 7 tests.
+| `PAYLOAD_ENGINE` | database adapters (sqlite, mongodb) | core (operations, hooks, validators) |
+| ---------------- | ----------------------------------- | ------------------------------------ |
+| unset (default)  | Rust                                | Rust                                 |
+| `rs`             | Rust                                | Rust                                 |
+| `ts`             | upstream TS                         | upstream TS                          |
+| `shadow`         | sqlite differential mode            | upstream TS                          |
+
+`PAYLOAD_CORE_ENGINE=rs|ts` overrides the core's selection (`PAYLOAD_OPS_GLOBAL_ENGINE` the global /
+auth operations'). Outside Node.js (the browser bundle of `fields/validations.ts`, edge runtimes) the
+default is `ts`: there is no addon to load. db-postgres has no Rust SQL engine yet: with the default it
+runs upstream's adapter under the Rust core.
+
+Every harness reference in `test/__rs` sets `PAYLOAD_ENGINE=ts` explicitly (unset is Rust); the
+differential specs that build their reference through the public factories fail unless it is set
+(`test/__rs/requireTsEngine.ts`). The runners take `--engine ts|rs|default` (`default`: the flag
+unset, checked like `rs`).
+
+### How engine-rs is loaded
+
+- `@payloadcms/engine-rs` is a regular dependency of payload, db-sqlite, db-mongodb and
+  richtext-lexical (`test/__rs/default-path/check.mjs` requires exactly that set, and that no package
+  has it as a peer / optional / dev dependency).
+- No package imports it statically: every dispatch site loads it, when the selection is Rust, by a
+  runtime `import()` of a computed specifier carrying `/* @vite-ignore */ /* webpackIgnore: true */`,
+  so bundlers neither trace nor bundle it or its addon, and `PAYLOAD_ENGINE=ts` evaluates nothing of
+  it. Resolution is package-local (`createRequire(<package.json>).resolve(...)`): from where the
+  dispatching package is installed, located from `import.meta.url` only when the nearest package.json
+  above it is that package's, otherwise in `node_modules` from the working directory up (bundled
+  Next.js chunks).
+- The addon is located and loaded in exactly one place, `packages/engine-rs/addon.cjs` (plain
+  CommonJS, the same file from src, dist and payload's synchronous `require` in
+  `fields/validations.ts` through `@payloadcms/engine-rs/addon`), so a process has one addon instance:
+  1. `PAYLOAD_ENGINE_ADDON` (a path, relative to the working directory); core bindings honour
+     `PAYLOAD_CORE_RUNTIME_ADDON` first (standalone crate builds, mutants);
+  2. `payload-engine.node` next to `addon.cjs` (a local `build:native`);
+  3. `@payloadcms/engine-rs-<platform>` (napi-rs suffixes: `linux-x64-gnu`, `linux-arm64-gnu`,
+     `linux-x64-musl`, `linux-arm64-musl`, `darwin-arm64`, `darwin-x64`, `win32-x64-msvc`), an
+     optional dependency of the published engine-rs selected by npm's `os` / `cpu` / `libc`.
+     An unsupported platform throws at the first Rust call with the platform package name and the
+     `PAYLOAD_ENGINE=ts` escape hatch.
+- `config.db.init` is synchronous and the engine module asynchronous: once the module has loaded,
+  the adapter object's `init` is exactly `withRustEngine(obj).init` / `withRustMongoEngine(obj).init`;
+  before that, the built adapter's `init` installs the engine when payload awaits it (before
+  `connect` and any data method); a consumer wrapper of `init` is kept
+  (`test/__rs/default-path/switch.int.spec.ts`).
+- `withPayload` (packages/next) keeps the server-only Payload packages external in production too
+  unless `PAYLOAD_ENGINE=ts`, so the engine (loaded by Node) shares payload's / drizzle's module
+  instances with the app.
+- engine-rs has no dependency on a workspace package: `payload` is a peer, `@payloadcms/drizzle`
+  (sqlite only), `@payloadcms/db-mongodb` (mongodb only) and `@libsql/client` optional peers, `jose`
+  its only dependency. pnpm reports the cyclic workspace peer db-mongodb <-> engine-rs as a warning.
+- It is in the releaser's publish list (`tools/releaser/src/lib/publishList.ts`, before payload), so
+  every local-tarball flow (`pnpm script:pack`, test/create-payload-app, `test/setupProd.ts`) packs it.
 
 ### engine-rs in an install
 
@@ -215,55 +204,62 @@ engine modules; the previous implementation fails 6 of its 7 tests.
   `./internal/*` exports. payload's `jose` file becomes `jose/jwt/decode` (same pinned version), a
   `<package>/package.json` URL becomes `import.meta.resolve('<name>')`. Any other escape fails the
   build.
-- The tarball ships `dist/` and `payload-engine.node` (`files`), no `src/`; `publishConfig` points
-  `main` / `exports` at `dist`; no `types`. The addon is built by `build:native` (honours
-  `CARGO_TARGET_DIR`), not by `build`; `build` (and so `pack`) **fails** when the addon is
-  missing, older than any Rust input (`crates/**` .rs / .toml / .c / .h / .js helpers,
-  `Cargo.toml`, `Cargo.lock`), or lacks an export the glue calls. `--allow-stale-addon` only warns
-  (glue-only iteration; never for a pack).
+- The tarball ships `addon.cjs`, `dist/` and (from a plain `pnpm pack`) the local
+  `payload-engine.node`, no `src/`; `publishConfig` points `main` / `exports` at `dist`; no `types`.
+  The addon is built by `build:native` (honours `CARGO_TARGET_DIR`; `build:native:release` for an
+  optimized build), not by `build`; `build` (and so `pack`) **fails** when the addon is missing,
+  older than any Rust input (`crates/**` .rs / .toml / .c / .h / .js helpers, `Cargo.toml`,
+  `Cargo.lock`), or lacks an export the glue calls. `--allow-stale-addon` only warns (glue-only
+  iteration; never for a pack).
 - Addon API check: `src/native.ts` `engineAddonExports` lists every addon export some engine-rs
   loader (or payload's `validations.ts`) calls; `assertEngineAddon` (run by `getNativeEngine()`
   and by buildDist on the emitted dist) throws "does not match @payloadcms/engine-rs: it lacks
   ..." for an addon built from an older tree. Each binding additionally checks its own
-  `apiVersion`; the live MongoDB glue requires every `mongoLive*Binding` (no stage-1 fallback on
-  `PAYLOAD_ENGINE=rs`).
+  `apiVersion`; the live MongoDB glue requires every `mongoLive*Binding` (no stage-1 fallback).
+
+### Release (prebuilt addons)
+
+- `.github/workflows/engine-rs-prebuild.yml`: builds `cargo build -p payload-node --release`
+  natively per platform (linux x64 / arm64 gnu on ubuntu-22.04, x64 / arm64 musl in
+  `node:24-alpine`, darwin arm64 / x64, win32 x64), smoke-loads each addon, then packs every
+  tarball with the release packer. Publishing is not part of it.
+- `node packages/engine-rs/scripts/release/packRelease.mjs --addons <dir> [--out dir]
+  [--packages a,b]` (`<dir>/<platform>/payload-engine.node`): one `@payloadcms/engine-rs-<platform>`
+  tarball per addon (`os` / `cpu` / `libc`, the addon only), engine-rs packed with its addon
+  removed and the platform packages as exact-version `optionalDependencies`, and every package of
+  the publish list as `pnpm pack` produces it; `release.json` lists them.
+- Requirements for every build: Rust (edition 2024), cmake and libclang (libsql-ffi's build script,
+  see the libsqlite3-sys section).
 
 ### Verification
 
 - `node test/__rs/packaging/run.mjs [--addon file] [--keep]`: packs translations, payload,
-  drizzle, db-sqlite, db-mongodb, ui, richtext-lexical and engine-rs with `pnpm pack` as is
-  (`--addon` only swaps the addon file) and installs them into apps under `.rs-runs/packaging/work`
-  (modules resolved from the monorepo outside it are failures). Phase 1 installs without engine-rs
-  and must contain no engine-rs at all; the scenario runs twice per database with the flag unset.
-  Phase 2 runs `pnpm add @payloadcms/engine-rs`; every dispatching package must resolve the same
-  copy; the scenario runs once more unset and twice with `PAYLOAD_ENGINE=rs`. Phase 3 installs
-  payload, db-sqlite, richtext-lexical and engine-rs without db-mongodb and runs the sqlite
-  scenario with `PAYLOAD_ENGINE=rs` (no MongoDB module may load). Every rs run must equal every
-  unset run of its database (`compare.mjs`), load the engine-rs dist entries its adapter uses and
-  the packaged addon, and show Rust calls in every part; unset runs must resolve nothing of
-  engine-rs and write no stats. `RS_PACKAGING_PNPM=<pnpm.cjs>` selects the package manager (the
-  registry mirror being down, a pnpm 10 with a public-registry npmrc was used).
+  drizzle, db-sqlite, db-mongodb, ui and richtext-lexical with `pnpm pack`, and engine-rs plus this
+  platform's package with the release packer (`--addon`: the addon the platform package ships), and
+  installs them into an app under `.rs-runs/packaging/work` that depends on payload, the adapters and
+  richtext-lexical only (engine-rs arrives as their dependency, the addon as its optional
+  dependency; modules resolved from the monorepo are failures). Every dispatching package must
+  resolve one engine-rs copy, which must resolve the platform package. The scenario runs twice per
+  database with `PAYLOAD_ENGINE=ts` (references: nothing of engine-rs may resolve, no stats), twice
+  with the flag unset and once with `PAYLOAD_ENGINE=rs` (candidates: equal to every reference, the
+  engine-rs dist entries of the adapter and the platform package's addon resolved, Rust calls in
+  every part). A second app without db-mongodb runs the sqlite scenario with the flag unset and
+  must load no MongoDB module.
 - `node test/__rs/packaging/nextDev.mjs [--database sqlite|mongodb] [--prod]` (after `run.mjs
   --keep`): the same install under `next dev` (Turbopack), or `next build` + `next start` with
-  `--prod`: two runs unset, one with `PAYLOAD_ENGINE=rs`; outputs compared, Rust calls required
+  `--prod`: two runs with `PAYLOAD_ENGINE=ts`, one unset; outputs compared, Rust calls required
   (including `afterReadTraverseFields` forwarded by the bundled richtext-lexical), no engine-rs
-  code or `.node` file in `.next`, and every rs run must see one payload instance (the route's
-  `ValidationError` is the installed payload's, which engine-rs uses).
+  code or `.node` file in `.next`, and every Rust run must see one payload instance.
+- test/create-payload-app (upstream suite): packs the publish list (engine-rs included) and installs
+  it into fresh Next.js / TanStack projects, which then build.
 - `node test/__rs/default-path/check.mjs --upstream ec35164` and `--self-test` (see above);
   `node test/__rs/packaging/lockfileCheck.mjs [--self-test]`.
 
 ### Not covered yet
 
-- Release (release owner): remove `"private": true` from engine-rs, add it to
-  `tools/releaser/src/lib/publishList.ts` (after drizzle, before its dependents) and to
-  `test/setupProd.ts`'s `tgzToPkgNameMap`; per-platform addon packages (napi optional
-  dependencies plus a loader on `process.platform` / `process.arch`) instead of the single
-  build-machine addon; every addon loader must agree on one path (`native.ts`, `sqlite/native.ts`,
-  `runtime/`, `ops*/`, `query/`, `validate/` and payload's `validations.ts`).
-- npm / yarn layouts and other platforms than macOS arm64 have not been run.
-- `PAYLOAD_ENGINE_ADDON` / `PAYLOAD_CORE_RUNTIME_ADDON` are resolved by each engine-rs loader
-  relative to its own module (payload's `validations.ts`: relative to the cwd). Pass absolute
-  paths.
+- The prebuild workflow has not run (it needs a push); only linux-x64-gnu has been built and
+  verified (this machine). macOS arm64 was verified for the debug addon before the default flip.
+- npm / yarn layouts have not been run (pnpm only).
 - A consumer that replaces the adapter's `init` without calling the previous one, before the
   engine module has loaded, gets the upstream adapter (the engine is installed through that
   function); once loaded, `init` is synchronous and this cannot happen.

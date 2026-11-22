@@ -6,7 +6,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 # The TS reference must be upstream TS (the harness also fails if a reference run reaches Rust).
-unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE
+export PAYLOAD_ENGINE=ts # upstream TS (unset selects Rust)
+unset PAYLOAD_CORE_ENGINE
 suites=("${@:-hooks fields localization validate synthetic}")
 for suite in ${suites[@]}; do
   db="${RS_CORE_HOOKS_BC_DB:-/tmp/rs-before-change.db}"

@@ -10,7 +10,8 @@
  * --addon      PAYLOAD_ENGINE_ADDON (default: the shared packages/engine-rs/payload-engine.node)
  * --core ts    PAYLOAD_CORE_ENGINE=ts: field hooks / validators stay TS (SQL engine parity only);
  *              default: PAYLOAD_ENGINE=rs alone, i.e. the Rust core runtime too
- * --engine ts  the reference side: PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE unset (upstream TS); the
+ * --engine default  PAYLOAD_ENGINE unset (the default selection: Rust), checked like rs
+ * --engine ts  the reference side: PAYLOAD_ENGINE=ts, PAYLOAD_CORE_ENGINE unset (upstream TS); the
  *              engine-call checks below do not apply. Default `rs`.
  * --variant v  the adapter matrix (test/__rs/harness/databaseAdapter.ts):
  *              `default`      PAYLOAD_DATABASE=sqlite (test/dbAdapters.ts `sqlite`)
@@ -90,10 +91,12 @@ const variants = {
 if (!variants[options.variant]) {
   throw new Error(`--variant must be one of ${Object.keys(variants).join(', ')}`)
 }
-if (options.engine !== 'rs' && options.engine !== 'ts') {
-  throw new Error('--engine must be rs or ts')
+if (!['default', 'rs', 'ts'].includes(options.engine)) {
+  throw new Error(
+    '--engine must be rs, ts or default (PAYLOAD_ENGINE unset: Rust, checked like rs)',
+  )
 }
-const isRs = options.engine === 'rs'
+const isRs = options.engine === 'rs' || options.engine === 'default'
 
 mkdirSync(options.out, { recursive: true })
 
@@ -160,8 +163,11 @@ const runFile = (file, index) =>
     } else {
       delete env.PAYLOAD_CORE_ENGINE
     }
-    if (!isRs) {
+    if (options.engine === 'default') {
       delete env.PAYLOAD_ENGINE
+    }
+    if (!isRs) {
+      env.PAYLOAD_ENGINE = 'ts'
       delete env.PAYLOAD_CORE_ENGINE
       delete env.PAYLOAD_ENGINE_ADDON
       delete env.PAYLOAD_RS_ENGINE_LOOPBACK

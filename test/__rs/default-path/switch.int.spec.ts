@@ -1,9 +1,10 @@
 /**
  * The PAYLOAD_ENGINE switch code of the database adapters (review-defaultpath-sol.md items 1 and 5):
  *
- * - flags unset, a consumer that replaced the sqlite adapter's `init` must not make `connect`
- *   import engine-rs or add a tick before upstream's `createClient` (the trace is upstream's:
- *   the client config is read synchronously, before `connect` returns);
+ * - `PAYLOAD_ENGINE=ts`, a consumer that replaced the sqlite adapter's `init` must not make
+ *   `connect` import engine-rs or add a tick before upstream's `createClient` (the trace is
+ *   upstream's: the client config is read synchronously, before `connect` returns);
+ * - flags unset: the Rust engine is selected (the default), as with `PAYLOAD_ENGINE=rs`;
  * - `PAYLOAD_ENGINE=rs`, engine module not loaded yet when `config.db.init` runs: a consumer
  *   wrapper of the built adapter's `init` survives every call and reaches the engine's `init`;
  * - `PAYLOAD_ENGINE=rs`, engine loaded: `init` is exactly `withRustEngine(adapterObj).init`.
@@ -110,8 +111,8 @@ const untilEngineAdapter = async (build: () => any) => {
 }
 
 test.suite('PAYLOAD_ENGINE switch of the database adapters', {}, () => {
-  test('should run upstream connect timing for a replaced sqlite init with the flags unset', async () => {
-    delete process.env.PAYLOAD_ENGINE
+  test('should run upstream connect timing for a replaced sqlite init with PAYLOAD_ENGINE=ts', async () => {
+    process.env.PAYLOAD_ENGINE = 'ts'
     delete process.env.PAYLOAD_CORE_ENGINE
     expect((globalThis as any)[engineMarker]).toBeUndefined()
     const getBuiltinModule = vi.spyOn(process, 'getBuiltinModule')
@@ -136,6 +137,30 @@ test.suite('PAYLOAD_ENGINE switch of the database adapters', {}, () => {
     expect(trace).toEqual(['client config', 'returned', 'rejected'])
     expect(getBuiltinModule).not.toHaveBeenCalled()
     expect((globalThis as any)[engineMarker]).toBeUndefined()
+  })
+
+  test('should select the Rust sqlite engine with the flags unset', async () => {
+    delete process.env.PAYLOAD_ENGINE
+    delete process.env.PAYLOAD_CORE_ENGINE
+    openAll()
+    const { sqliteAdapter } = await import(/* @vite-ignore */ sqliteIndex)
+    const adapter = await untilEngineAdapter(() =>
+      sqliteAdapter({ client: { url: 'file::memory:' } }).init({ payload: fakePayload() }),
+    )
+
+    expect(adapter.engine).toBe('sqlite')
+  })
+
+  test('should select the Rust mongodb engine with the flags unset', async () => {
+    delete process.env.PAYLOAD_ENGINE
+    delete process.env.PAYLOAD_CORE_ENGINE
+    openAll()
+    const { mongooseAdapter } = await import(/* @vite-ignore */ mongodbIndex)
+    const adapter = await untilEngineAdapter(() =>
+      mongooseAdapter({ url: 'mongodb://localhost:1/never' }).init({ payload: fakePayload() }),
+    )
+
+    expect(adapter.engine).toBe('mongodb')
   })
 
   test('should keep a consumer init wrapper when the sqlite engine loads after config.db.init', async () => {

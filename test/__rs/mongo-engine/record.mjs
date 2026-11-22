@@ -15,11 +15,19 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { dropDatabases, mongoUrlFor } from '../../../packages/engine-rs/scripts/mongo/mongoDatabases.mjs'
+import {
+  dropDatabases,
+  mongoUrlFor,
+} from '../../../packages/engine-rs/scripts/mongo/mongoDatabases.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const argv = process.argv.slice(2)
-const options = { jobs: 1, noAggregations: false, out: '/tmp/rs-mongoengine-fixtures', tag: `rsme${process.pid}` }
+const options = {
+  jobs: 1,
+  noAggregations: false,
+  out: '/tmp/rs-mongoengine-fixtures',
+  tag: `rsme${process.pid}`,
+}
 const files = []
 for (let i = 0; i < argv.length; i++) {
   const arg = argv[i]
@@ -53,15 +61,19 @@ const runFile = (file, index) =>
       PAYLOAD_RS_SKIP_ADAPTER_CODEGEN: 'true',
     }
     // reference side: the TS engine
-    delete env.PAYLOAD_ENGINE
+    env.PAYLOAD_ENGINE = 'ts'
     delete env.PAYLOAD_CORE_ENGINE
     if (options.noAggregations) env.PAYLOAD_RS_MONGO_ENGINE_NO_AGGREGATIONS = 'true'
     else delete env.PAYLOAD_RS_MONGO_ENGINE_NO_AGGREGATIONS
-    const child = spawn('pnpm', ['test:int', '--config', 'test/__rs/mongo-engine/vitest.config.ts', file], {
-      cwd: root,
-      env,
-      stdio: ['ignore', log, log],
-    })
+    const child = spawn(
+      'pnpm',
+      ['test:int', '--config', 'test/__rs/mongo-engine/vitest.config.ts', file],
+      {
+        cwd: root,
+        env,
+        stdio: ['ignore', log, log],
+      },
+    )
     child.on('close', async (code) => {
       fs.closeSync(log)
       await dropDatabases([db]).catch(() => {})

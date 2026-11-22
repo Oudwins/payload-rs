@@ -62,15 +62,19 @@ const runFile = (file, index) =>
       PAYLOAD_RS_JOINS_RECORD_DIR: options.out,
     }
     // reference side: the TS engine
-    delete env.PAYLOAD_ENGINE
+    env.PAYLOAD_ENGINE = 'ts'
     delete env.PAYLOAD_CORE_ENGINE
     if (options.noAggregations) env.PAYLOAD_RS_JOINS_NO_AGGREGATIONS = 'true'
     else delete env.PAYLOAD_RS_JOINS_NO_AGGREGATIONS
-    const child = spawn('pnpm', ['test:int', '--config', 'test/__rs/mongo-joins/vitest.config.ts', file], {
-      cwd: root,
-      env,
-      stdio: ['ignore', log, log],
-    })
+    const child = spawn(
+      'pnpm',
+      ['test:int', '--config', 'test/__rs/mongo-joins/vitest.config.ts', file],
+      {
+        cwd: root,
+        env,
+        stdio: ['ignore', log, log],
+      },
+    )
     child.on('close', async (code) => {
       fs.closeSync(log)
       await dropDatabases([db]).catch(() => {})

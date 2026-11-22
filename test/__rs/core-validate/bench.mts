@@ -10,7 +10,7 @@
  *
  * Without `BENCH_ADDONS` the Rust side is `packages/engine-rs/src/validate/validations.ts`
  * (`BENCH_RS_MODULE`: another drop-in); with it, each addon's `validateBinding` is measured in
- * the same process. PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE must be unset (the reference is TS).
+ * the same process. PAYLOAD_ENGINE must be `ts` and PAYLOAD_CORE_ENGINE unset (the reference is TS).
  */
 import { createRequire } from 'node:module'
 import path from 'node:path'
@@ -19,8 +19,8 @@ import { validateJSONSchema } from '../../../packages/payload/src/fields/validat
 import { translations as languages } from '../../../packages/translations/src/exports/all.js'
 import { initI18n } from '../../../packages/translations/src/utilities/init.js'
 
-if (process.env.PAYLOAD_ENGINE || process.env.PAYLOAD_CORE_ENGINE) {
-  console.error('unset PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE: the reference must be TS')
+if (process.env.PAYLOAD_ENGINE !== 'ts' || process.env.PAYLOAD_CORE_ENGINE) {
+  console.error('set PAYLOAD_ENGINE=ts, unset PAYLOAD_CORE_ENGINE: the reference must be TS')
   process.exit(1)
 }
 

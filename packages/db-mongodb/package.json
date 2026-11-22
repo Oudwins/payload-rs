@@ -71,6 +71,7 @@
     "clean": "rimraf -g {dist,*.tsbuildinfo}"
   },
   "dependencies": {
+    "@payloadcms/engine-rs": "workspace:*",
     "mongoose": "9.9.2",
     "mongoose-paginate-v2": "1.9.4",
     "prompts": "2.4.2",
@@ -84,12 +85,6 @@
     "payload": "workspace:*"
   },
   "peerDependencies": {
-    "@payloadcms/engine-rs": "workspace:*",
     "payload": "workspace:*"
-  },
-  "peerDependenciesMeta": {
-    "@payloadcms/engine-rs": {
-      "optional": true
-    }
   }
 }

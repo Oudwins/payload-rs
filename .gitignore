@@ -382,5 +382,6 @@ test/evals/eval-results/runs/
 # Rust engine
 /target
 .rs-baseline
+.rs-runs
 packages/engine-rs/*.node
 .metadata_never_index

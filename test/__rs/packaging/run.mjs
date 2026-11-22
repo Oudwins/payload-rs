@@ -1,30 +1,29 @@
 #!/usr/bin/env node
 /**
- * Proves the Rust engine works in a real install, and that the default path does not need it:
- * packs payload, translations, drizzle, db-sqlite, db-mongodb, ui, richtext-lexical and engine-rs
- * with `pnpm pack` exactly as the monorepo sources produce them (no edits to the tarballs, except
- * the addon file when `--addon` names another build), and
- * installs them into an app under .rs-runs/packaging/work in three phases:
+ * Proves the release tarballs work in a real install with the Rust engine as the default:
+ * packs translations, payload, drizzle, db-sqlite, db-mongodb, ui, richtext-lexical with `pnpm pack`
+ * exactly as the monorepo sources produce them, and engine-rs plus this platform's
+ * `@payloadcms/engine-rs-<platform>` package with the release packer
+ * (packages/engine-rs/scripts/release/packRelease.mjs: no addon in engine-rs, the addon in the
+ * platform package, an optional dependency of engine-rs). They are installed into an app under
+ * .rs-runs/packaging/work:
  *
- * 1. Without `@payloadcms/engine-rs` (what every user who never opts in gets). The install must
- *    not contain engine-rs at all; the Local API scenario (`scenario.mjs`) runs twice per
- *    database (sqlite, mongodb) with `PAYLOAD_ENGINE` unset (references).
- * 2. `pnpm add @payloadcms/engine-rs` (opting in). Every package that loads it must resolve the
- *    same installed copy. The scenario runs once more per database with the flag unset (an
- *    installed engine changes nothing) and twice with `PAYLOAD_ENGINE=rs` (candidates).
- * 3. A second app with payload, db-sqlite, richtext-lexical and engine-rs only (no db-mongodb:
- *    engine-rs's optional peer stays uninstalled). The sqlite scenario runs once with
- *    `PAYLOAD_ENGINE=rs` and must load no MongoDB module (db-mongodb, mongoose, engine-rs's
- *    mongo-adapter / mongo-live) and equal the sqlite references.
+ * 1. The app depends on payload, the database adapters and richtext-lexical only: engine-rs comes
+ *    in as their dependency and the platform package as its optional dependency; every
+ *    dispatching package must resolve the same engine-rs copy. The Local API scenario
+ *    (`scenario.mjs`) runs twice per database (sqlite, mongodb) with `PAYLOAD_ENGINE=ts`
+ *    (upstream TS, the references: nothing of engine-rs may load), twice with the flag unset (the
+ *    default: Rust) and once with `PAYLOAD_ENGINE=rs` (candidates).
+ * 2. A second app with payload, db-sqlite and richtext-lexical (no db-mongodb): the sqlite scenario
+ *    runs once with the flag unset and must load no MongoDB module.
  *
  * Every candidate is compared with every reference of its database (`compare.mjs`).
  *
  *   node test/__rs/packaging/run.mjs [--addon file] [--work dir] [--keep] [--skip-build]
  *     [--database sqlite|mongodb] [--mongodb-url mongodb://.../?...]
  *
- * --addon        addon the engine-rs tarball ships. `pnpm pack` must have packed
- *                packages/engine-rs/payload-engine.node (checked); a different --addon then replaces
- *                that one file in the tarball (reported), nothing else is touched
+ * --addon        the addon the platform package ships (default packages/engine-rs/payload-engine.node;
+ *                a release build: target/release/libpayload_node.so)
  * --work         scratch dir under .rs-runs/ (default .rs-runs/packaging/work; deleted at the end
  *                unless --keep). Modules resolved from the monorepo outside it are failures.
  * --skip-build   do not rebuild stale dist files / the engine-rs dist
@@ -33,15 +32,16 @@
  *                `packaging_pk_<n>`, dropped afterwards (default: the rs0 test server)
  * --reuse        rerun the scenarios against the app a previous `--keep` run installed (implies --keep)
  *
- * The package manager is `pnpm`, or `node $RS_PACKAGING_PNPM` when that names a pnpm.cjs (e.g. a
- * pnpm 10 with NPM_CONFIG_USERCONFIG pointing at a public-registry npmrc while the mirror is down).
+ * The package manager is `pnpm`, or `node $RS_PACKAGING_PNPM` when that names a pnpm.cjs.
  *
- * Fails when: a packed manifest makes engine-rs a dependency or a required peer; a packed dist
- * still points into the monorepo's engine-rs sources; the phase-1 install contains engine-rs; a
- * run exits non-zero or records no steps; runs disagree on the step list; a step throws that
- * should not (or the reverse); any module resolved from the monorepo or a Payload package from
- * two places; a flag-unset run resolved anything of engine-rs (module or addon); a candidate did
- * not load the engine-rs dist modules, the packaged addon, or made no Rust engine / ops /
+ * Fails when: a packed dispatching package does not depend on engine-rs; the packed engine-rs is
+ * private, ships an addon or src, or lacks the platform optional dependency; the platform package
+ * does not ship `--addon`; a packed dist still points into the monorepo's engine-rs sources; the
+ * dispatching packages resolve different engine-rs copies; a run exits non-zero or records no
+ * steps; runs disagree on the step list; a step throws that should not (or the reverse); any module
+ * resolved from the monorepo or a Payload package from two places; a `PAYLOAD_ENGINE=ts` run
+ * resolved anything of engine-rs (module or addon) or wrote engine stats; a candidate did not load
+ * the engine-rs dist modules, the platform package's addon, or made no Rust engine / ops /
  * ops-write / ops-global / field-hook calls; a candidate differs from any reference
  * (`compare.mjs`); or the negative controls (a changed value, swapped row ids, a stale
  * timestamp) are not detected.
@@ -49,9 +49,14 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import {
+  packEngine,
+  packPlatformPackage,
+} from '../../../packages/engine-rs/scripts/release/packRelease.mjs'
 import { compareRuns } from './compare.mjs'
 import { rebuildStaleDist } from './rebuildStale.mjs'
 
@@ -59,6 +64,9 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '../../..')
 const rootURL = pathToFileURL(root).href
 const engineName = '@payloadcms/engine-rs'
+const platformPackage = createRequire(import.meta.url)(
+  path.join(root, 'packages/engine-rs/addon.cjs'),
+).platformPackageName()
 let scenarioIndex = 0
 
 const argv = process.argv.slice(2)
@@ -141,12 +149,12 @@ try {
   const runs = []
   let tarballs
   if (options.isReuse) {
-    if (!fs.existsSync(path.join(appDir, 'node_modules', engineName))) {
-      throw new Error(`--reuse: no installed app with ${engineName} in ${appDir}`)
+    if (!fs.existsSync(path.join(appDir, 'node_modules', 'payload'))) {
+      throw new Error(`--reuse: no installed app in ${appDir}`)
     }
     fs.copyFileSync(path.join(here, 'scenario.mjs'), path.join(appDir, 'scenario.mjs'))
     for (const database of options.databases) {
-      for (const label of ['reference 1', 'reference 2', 'reference 3 (engine installed)']) {
+      for (const label of ['reference 1', 'reference 2']) {
         runs.push(runScenario({ database, engine: 'ts', label }))
       }
     }
@@ -155,19 +163,16 @@ try {
       build()
     }
     tarballs = pack()
-    installWithoutEngine(tarballs)
+    install(tarballs)
     for (const database of options.databases) {
       runs.push(runScenario({ database, engine: 'ts', label: 'reference 1' }))
       runs.push(runScenario({ database, engine: 'ts', label: 'reference 2' }))
     }
-    installEngine(tarballs)
-    for (const database of options.databases) {
-      runs.push(runScenario({ database, engine: 'ts', label: 'reference 3 (engine installed)' }))
-    }
   }
   for (const database of options.databases) {
-    runs.push(runScenario({ database, engine: 'rs', label: 'candidate 1' }))
-    runs.push(runScenario({ database, engine: 'rs', label: 'candidate 2' }))
+    runs.push(runScenario({ database, engine: 'default', label: 'candidate 1 (flag unset)' }))
+    runs.push(runScenario({ database, engine: 'default', label: 'candidate 2 (flag unset)' }))
+    runs.push(runScenario({ database, engine: 'rs', label: 'candidate 3 (PAYLOAD_ENGINE=rs)' }))
   }
   if (options.databases.includes('sqlite') && !options.isReuse) {
     installSqliteOnly(tarballs)
@@ -175,8 +180,8 @@ try {
       runScenario({
         app: sqliteOnlyAppDir,
         database: 'sqlite',
-        engine: 'rs',
-        label: 'candidate 3 (sqlite-only install)',
+        engine: 'default',
+        label: 'candidate 4 (sqlite-only install)',
       }),
     )
   }
@@ -209,18 +214,37 @@ function build() {
 function pack() {
   const tarballs = {}
   for (const { dir, name } of packages) {
-    const before = new Set(fs.readdirSync(packedDir))
-    runPnpm(['pack', '--pack-destination', packedDir], {
-      cwd: path.join(root, 'packages', dir),
-      isQuiet: true,
-    })
-    const created = fs
-      .readdirSync(packedDir)
-      .filter((file) => !before.has(file) && file.endsWith('.tgz'))
-    if (created.length !== 1) {
-      throw new Error(`pnpm pack of ${dir} produced ${created.join(', ') || 'nothing'}`)
+    let tarball
+    if (dir === 'engine-rs') {
+      // the release layout: the addon ships in this platform's package, not in engine-rs
+      const platform = platformPackage.slice(`${engineName}-`.length)
+      const platformTarball = packPlatformPackage({
+        addon: options.addon,
+        outDir: packedDir,
+        platform,
+      })
+      tarballs[platformTarball.name] = platformTarball.file
+      checkTarball({ name: platformTarball.name, tarball: platformTarball.file })
+      tarball = packEngine({
+        addons: { [platform]: options.addon },
+        optionalDependencies: [platform],
+        outDir: packedDir,
+        runPnpm: (args, cwd) => runPnpm(args, { cwd, isQuiet: true }),
+      }).file
+    } else {
+      const before = new Set(fs.readdirSync(packedDir))
+      runPnpm(['pack', '--pack-destination', packedDir], {
+        cwd: path.join(root, 'packages', dir),
+        isQuiet: true,
+      })
+      const created = fs
+        .readdirSync(packedDir)
+        .filter((file) => !before.has(file) && file.endsWith('.tgz'))
+      if (created.length !== 1) {
+        throw new Error(`pnpm pack of ${dir} produced ${created.join(', ') || 'nothing'}`)
+      }
+      tarball = path.join(packedDir, created[0])
     }
-    const tarball = path.join(packedDir, created[0])
     console.log(
       `packed ${name} -> ${path.basename(tarball)} (${(fs.statSync(tarball).size / 1e6).toFixed(1)} MB)`,
     )
@@ -230,7 +254,7 @@ function pack() {
   return tarballs
 }
 
-/** The packed manifest and dist, exactly as `pnpm pack` produced them. */
+/** The packed manifest and contents as a registry install would see them. */
 function checkTarball({ name, tarball }) {
   const extractDir = path.join(options.work, 'extract', path.basename(tarball, '.tgz'))
   fs.mkdirSync(extractDir, { recursive: true })
@@ -238,19 +262,27 @@ function checkTarball({ name, tarball }) {
   const packageDir = path.join(extractDir, 'package')
   const manifest = readJson(path.join(packageDir, 'package.json'))
   try {
-    for (const field of ['dependencies', 'optionalDependencies']) {
+    if (name === platformPackage) {
+      const shipped = path.join(packageDir, 'payload-engine.node')
+      if (!fs.existsSync(shipped) || sha256(shipped) !== sha256(options.addon)) {
+        fail(`packed ${name}: does not ship --addon ${options.addon}`)
+      } else {
+        console.log(`  ${name} ships the addon (sha256 ${sha256(shipped).slice(0, 16)})`)
+      }
+      return
+    }
+    for (const field of ['optionalDependencies', 'peerDependencies', 'devDependencies']) {
       if (manifest[field]?.[engineName]) {
         fail(`packed ${name}: ${engineName} is in ${field}`)
       }
     }
     if (
-      manifest.peerDependencies?.[engineName] &&
-      !manifest.peerDependenciesMeta?.[engineName]?.optional
+      dispatchingPackages.includes(name) &&
+      manifest.dependencies?.[engineName] !== manifest.version
     ) {
-      fail(`packed ${name}: ${engineName} is a required peer dependency`)
-    }
-    if (dispatchingPackages.includes(name) && !manifest.peerDependencies?.[engineName]) {
-      fail(`packed ${name}: no optional ${engineName} peer, so pnpm cannot link it when opted in`)
+      fail(
+        `packed ${name}: dependencies["${engineName}"] is ${manifest.dependencies?.[engineName]}, expected ${manifest.version}`,
+      )
     }
     if (name !== engineName) {
       for (const file of listFiles(path.join(packageDir, 'dist')).filter((file) =>
@@ -263,35 +295,37 @@ function checkTarball({ name, tarball }) {
       }
       return
     }
+    if (manifest.private) {
+      fail(`packed ${name}: private`)
+    }
+    if (manifest.optionalDependencies?.[platformPackage] !== manifest.version) {
+      fail(`packed ${name}: no optional dependency ${platformPackage}@${manifest.version}`)
+    }
     if (manifest.types?.includes('/src/') || JSON.stringify(manifest.exports).includes('/src/')) {
       fail(`packed ${name}: manifest points at src: ${JSON.stringify(manifest.exports)}`)
     }
     if (fs.existsSync(path.join(packageDir, 'src'))) {
       fail(`packed ${name}: ships src/`)
     }
-    if (!fs.existsSync(path.join(packageDir, 'dist/index.js'))) {
-      fail(`packed ${name}: no dist/index.js`)
+    if (fs.existsSync(path.join(packageDir, 'payload-engine.node'))) {
+      fail(`packed ${name}: ships an addon (it belongs in the platform packages)`)
     }
-    const shipped = path.join(packageDir, 'payload-engine.node')
-    const repoAddon = path.join(root, 'packages/engine-rs/payload-engine.node')
-    if (!fs.existsSync(shipped) || sha256(shipped) !== sha256(repoAddon)) {
-      fail(`packed ${name}: does not ship packages/engine-rs/payload-engine.node`)
-    } else if (sha256(options.addon) !== sha256(shipped)) {
-      // --addon: the packed manifest and dist stay as packed, only the addon file is replaced
-      fs.copyFileSync(options.addon, shipped)
-      run('tar', ['-czf', tarball, '-C', extractDir, 'package'])
-      console.log(
-        `  addon replaced by --addon ${options.addon} (sha256 ${sha256(shipped).slice(0, 16)})`,
-      )
-    } else {
-      console.log(`  ships the repo addon (sha256 ${sha256(shipped).slice(0, 16)})`)
+    for (const file of ['dist/index.js', 'addon.cjs']) {
+      if (!fs.existsSync(path.join(packageDir, file))) {
+        fail(`packed ${name}: no ${file}`)
+      }
     }
   } finally {
     fs.rmSync(extractDir, { force: true, recursive: true })
   }
 }
 
-function installWithoutEngine(tarballs) {
+/**
+ * The app: payload, the adapters and richtext-lexical (no engine-rs: it is their dependency).
+ * The packed tarballs replace the registry versions through overrides, as a registry would serve
+ * them.
+ */
+function install(tarballs) {
   const fileSpec = (tarball) => `file:${tarball}`
   const rootManifest = readJson(path.join(root, 'package.json'))
   const reactVersion = readJson(
@@ -311,9 +345,7 @@ function installWithoutEngine(tarballs) {
         dependencies: {
           '@payloadcms/db-mongodb': fileSpec(tarballs['@payloadcms/db-mongodb']),
           '@payloadcms/db-sqlite': fileSpec(tarballs['@payloadcms/db-sqlite']),
-          // engine-rs's `@payloadcms/drizzle` peer: in a registry install pnpm auto-installs it at
-          // the root with db-sqlite's exact version (one copy); with file: tarballs it would fetch
-          // the published version from the registry instead, so the app names the packed one
+          // the next probe route imports it (pushDevSchema under next start)
           '@payloadcms/drizzle': fileSpec(tarballs['@payloadcms/drizzle']),
           '@payloadcms/richtext-lexical': fileSpec(tarballs['@payloadcms/richtext-lexical']),
           payload: fileSpec(tarballs.payload),
@@ -326,10 +358,7 @@ function installWithoutEngine(tarballs) {
       2,
     ),
   )
-  // No override for engine-rs: pnpm applies overrides to peer specs too, which would install the
-  // optional peer. Opting in (`installEngine`) adds it as an app dependency instead.
   const overrides = Object.entries(tarballs)
-    .filter(([name]) => name !== engineName)
     .map(([name, tarball]) => `  '${name}': '${fileSpec(tarball)}'`)
     .join('\n')
   fs.writeFileSync(path.join(appDir, 'pnpm-workspace.yaml'), `overrides:\n${overrides}\n`)
@@ -339,57 +368,54 @@ function installWithoutEngine(tarballs) {
       cwd: appDir,
     },
   )
-  const store = path.join(appDir, 'node_modules/.pnpm')
-  const installed = fs.readdirSync(store).filter((entry) => entry.includes('engine-rs'))
-  if (installed.length > 0 || fs.existsSync(path.join(appDir, 'node_modules', engineName))) {
-    fail(`the install without opting in contains engine-rs: ${installed.join(', ')}`)
-  } else {
-    console.log('install without opting in: no @payloadcms/engine-rs anywhere in node_modules')
-  }
+  checkEngineResolution({ app: appDir, packageNames: dispatchingPackages })
   fs.copyFileSync(path.join(here, 'scenario.mjs'), path.join(appDir, 'scenario.mjs'))
 }
 
-/** Opting in: `pnpm add @payloadcms/engine-rs`; every dispatching package must see that copy. */
-function installEngine(tarballs) {
-  runPnpm(
-    [
-      'add',
-      `${engineName}@file:${tarballs[engineName]}`,
-      '--ignore-scripts',
-      '--prefer-offline',
-      '--config.confirmModulesPurge=false',
-    ],
-    { cwd: appDir },
-  )
+/** Every dispatching package resolves one engine-rs copy, which resolves this platform's addon. */
+function checkEngineResolution({ app, packageNames }) {
   const script = `
     import { createRequire } from 'node:module'
     import fs from 'node:fs'
-    const out = {}
-    for (const name of ${JSON.stringify(dispatchingPackages)}) {
+    const out = { packages: {} }
+    for (const name of ${JSON.stringify(packageNames)}) {
       const own = createRequire(import.meta.resolve(name))
       try {
-        out[name] = fs.realpathSync(own.resolve('${engineName}/package.json'))
+        out.packages[name] = fs.realpathSync(own.resolve('${engineName}/package.json'))
       } catch (error) {
-        out[name] = 'unresolved: ' + error.code
+        out.packages[name] = 'unresolved: ' + error.code
       }
     }
-    out.app = fs.realpathSync(createRequire(process.cwd() + '/')
-      .resolve('${engineName}/package.json'))
+    const engine = Object.values(out.packages)[0]
+    try {
+      out.addon = fs.realpathSync(createRequire(engine).resolve('${platformPackage}/payload-engine.node'))
+    } catch (error) {
+      out.addon = 'unresolved: ' + error.code
+    }
     console.log(JSON.stringify(out))`
   const resolved = JSON.parse(
-    execFileSync('node', ['--input-type=module', '-e', script], { cwd: appDir, encoding: 'utf8' }),
+    execFileSync('node', ['--input-type=module', '-e', script], { cwd: app, encoding: 'utf8' }),
   )
-  const copies = new Set(Object.values(resolved))
+  const copies = new Set(Object.values(resolved.packages))
   if (copies.size !== 1 || [...copies][0].startsWith('unresolved')) {
-    fail(`opted-in packages do not share one ${engineName}: ${JSON.stringify(resolved)}`)
+    fail(
+      `${path.basename(app)}: the dispatching packages do not share one ${engineName}: ${JSON.stringify(resolved.packages)}`,
+    )
   } else {
-    console.log(`opted in: every dispatching package resolves ${[...copies][0]}`)
+    console.log(`${path.basename(app)}: every dispatching package resolves ${[...copies][0]}`)
+  }
+  if (resolved.addon.startsWith('unresolved')) {
+    fail(
+      `${path.basename(app)}: ${engineName} does not resolve ${platformPackage}: ${resolved.addon}`,
+    )
+  } else {
+    console.log(`${path.basename(app)}: the addon comes from ${resolved.addon}`)
   }
 }
 
 /**
- * Phase 3: payload, db-sqlite, richtext-lexical and engine-rs, without db-mongodb (engine-rs's
- * optional peer): the install must not contain db-mongodb or mongoose.
+ * Phase 2: payload, db-sqlite and richtext-lexical, without db-mongodb (engine-rs's optional
+ * peer): the install must not contain db-mongodb or mongoose.
  */
 function installSqliteOnly(tarballs) {
   fs.mkdirSync(sqliteOnlyAppDir, { recursive: true })
@@ -397,20 +423,13 @@ function installSqliteOnly(tarballs) {
   const { '@payloadcms/db-mongodb': _mongodb, ...dependencies } = appManifest.dependencies
   fs.writeFileSync(
     path.join(sqliteOnlyAppDir, 'package.json'),
-    JSON.stringify(
-      {
-        ...appManifest,
-        name: 'rs-packaging-app-sqlite-only',
-        dependencies: { ...dependencies, [engineName]: `file:${tarballs[engineName]}` },
-      },
-      null,
-      2,
-    ),
+    JSON.stringify({ ...appManifest, name: 'rs-packaging-app-sqlite-only', dependencies }, null, 2),
   )
-  fs.copyFileSync(
-    path.join(appDir, 'pnpm-workspace.yaml'),
-    path.join(sqliteOnlyAppDir, 'pnpm-workspace.yaml'),
-  )
+  const overrides = Object.entries(tarballs)
+    .filter(([name]) => name !== '@payloadcms/db-mongodb')
+    .map(([name, tarball]) => `  '${name}': 'file:${tarball}'`)
+    .join('\n')
+  fs.writeFileSync(path.join(sqliteOnlyAppDir, 'pnpm-workspace.yaml'), `overrides:\n${overrides}\n`)
   runPnpm(
     ['install', '--ignore-scripts', '--prefer-offline', '--config.confirmModulesPurge=false'],
     {
@@ -424,13 +443,17 @@ function installSqliteOnly(tarballs) {
   } else {
     console.log('sqlite-only install: engine-rs without db-mongodb / mongoose / mongodb')
   }
+  checkEngineResolution({
+    app: sqliteOnlyAppDir,
+    packageNames: dispatchingPackages.filter((name) => name !== '@payloadcms/db-mongodb'),
+  })
   fs.copyFileSync(path.join(here, 'scenario.mjs'), path.join(sqliteOnlyAppDir, 'scenario.mjs'))
 }
 
 function verify(runs) {
   const database = runs[0]?.database
   const references = runs.filter((entry) => entry.engine === 'ts')
-  const candidates = runs.filter((entry) => entry.engine === 'rs')
+  const candidates = runs.filter((entry) => entry.engine !== 'ts')
   if (runs.some((entry) => !entry.output)) {
     return
   }
@@ -489,7 +512,7 @@ function verify(runs) {
     )
     if (engineURLs.length > 0) {
       fail(
-        `${database} ${entry.label}: PAYLOAD_ENGINE unset but resolved ${engineURLs.length} engine-rs module(s), e.g. ${engineURLs[0]}`,
+        `${database} ${entry.label}: PAYLOAD_ENGINE=ts but resolved ${engineURLs.length} engine-rs module(s), e.g. ${engineURLs[0]}`,
       )
     }
   }
@@ -521,9 +544,11 @@ function verify(runs) {
       fail(`${label}: did not load engine-rs ${missing.join(', ')}`)
     }
     if (
-      !entry.output.resolvedURLs.some((url) => url.endsWith(`/${engineName}/payload-engine.node`))
+      !entry.output.resolvedURLs.some((url) =>
+        url.endsWith(`/${platformPackage}/payload-engine.node`),
+      )
     ) {
-      fail(`${label}: the packaged addon was not resolved`)
+      fail(`${label}: the addon of ${platformPackage} was not resolved`)
     }
     const stats = entry.stats
     const dataEngine = database === 'sqlite' ? stats.engine : stats.mongoEngine
@@ -548,7 +573,7 @@ function verify(runs) {
       (sum(dataEngine?.calls) > 0 || (dataEngine?.engines?.native ?? 0) > 0)
     ) {
       fail(
-        `${label}: the stage-1 MongoDB engine served calls (no stage-1 fallback on PAYLOAD_ENGINE=rs)`,
+        `${label}: the stage-1 MongoDB engine served calls (no stage-1 fallback on the Rust engine)`,
       )
     }
     console.log(`${label} engine stats: ${JSON.stringify(checks)}`)
@@ -639,15 +664,15 @@ function runScenario({ app = appDir, database, engine, label }) {
       delete env[key]
     }
   }
-  // stats files are offered to every run: a flag-unset run must not write any
+  // stats files are offered to every run: a PAYLOAD_ENGINE=ts run must not write any
   Object.assign(env, {
     PAYLOAD_RS_CORE_STATS_FILE: path.join(statsDir, 'core.json'),
     PAYLOAD_RS_ENGINE_STATS_FILE: path.join(statsDir, 'engine.json'),
     PAYLOAD_RS_MONGO_ENGINE_STATS_FILE: path.join(statsDir, 'mongo-engine.json'),
     PAYLOAD_RS_OPS_STATS_DIR: statsDir,
   })
-  if (engine === 'rs') {
-    env.PAYLOAD_ENGINE = 'rs'
+  if (engine !== 'default') {
+    env.PAYLOAD_ENGINE = engine
   }
   const result = spawnSync(process.execPath, ['scenario.mjs', database, location, outFile], {
     cwd: app,
@@ -672,7 +697,7 @@ function runScenario({ app = appDir, database, engine, label }) {
   const output = readJson(outFile)
   const statsFiles = fs.readdirSync(statsDir)
   if (engine === 'ts' && statsFiles.length > 0) {
-    fail(`${database} ${label}: flag-unset run wrote engine stats ${statsFiles.join(', ')}`)
+    fail(`${database} ${label}: PAYLOAD_ENGINE=ts run wrote engine stats ${statsFiles.join(', ')}`)
   }
   const stats = {
     core: readJsonIfExists(path.join(statsDir, 'core.json')),

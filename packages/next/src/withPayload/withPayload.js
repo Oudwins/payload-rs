@@ -153,10 +153,11 @@ export const withPayload = (nextConfig = {}, options = {}) => {
         // with "Cannot find module as expression is too dynamic"
         'file-type',
         ...((process.env.NODE_ENV === 'development' && options.devBundleServerPackages !== true) ||
-        // The Rust engine (PAYLOAD_ENGINE=rs, loaded by Node at runtime) runs on payload's and
-        // the database adapters' own modules (error classes, symbols, module state): a bundled copy
-        // of them would be a second instance, so they stay external in every mode then.
-        process.env.PAYLOAD_ENGINE === 'rs' ||
+        // The Rust engine (the default, loaded by Node at runtime) runs on payload's and the
+        // database adapters' own modules (error classes, symbols, module state): a bundled copy of
+        // them would be a second instance, so they stay external in every mode unless both the
+        // database and the core engine are TS (payload's utilities/engineSelection.ts).
+        (process.env.PAYLOAD_ENGINE || 'rs') !== 'ts' ||
         process.env.PAYLOAD_CORE_ENGINE === 'rs'
           ? devServerExternalPayloadPackages
           : []),

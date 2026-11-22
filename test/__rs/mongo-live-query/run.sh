@@ -13,7 +13,8 @@
 # Logs: $RS_LQ_LOG_DIR/livequery-<name>.log (default .rs-runs/mongoquery).
 set -uo pipefail
 cd "$(dirname "$0")/../../.."
-unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE
+export PAYLOAD_ENGINE=ts # upstream TS (unset selects Rust)
+unset PAYLOAD_CORE_ENGINE
 if [ -z "${PAYLOAD_CORE_RUNTIME_ADDON:-}${PAYLOAD_ENGINE_ADDON:-}" ]; then
   echo "set PAYLOAD_ENGINE_ADDON to an addon exporting mongoLiveQueryBinding" >&2
   exit 2

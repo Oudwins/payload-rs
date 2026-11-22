@@ -22,6 +22,7 @@ import type {
 
 import mongoose from 'mongoose'
 import { createDatabaseAdapter, defaultBeginTransaction, findMigrationDir } from 'payload'
+import { isRustDatabaseEngine } from 'payload/internal'
 
 import type {
   CollectionModel,
@@ -348,7 +349,7 @@ export function mongooseAdapter({
     init: adapter,
   }
 
-  return process.env.PAYLOAD_ENGINE === 'rs' ? withRustMongoEngineOnInit(adapterObj) : adapterObj
+  return isRustDatabaseEngine() ? withRustMongoEngineOnInit(adapterObj) : adapterObj
 }
 
 export { compatibilityOptions } from './utilities/compatibilityOptions.js'
@@ -358,7 +359,7 @@ type RustMongoEngine = {
 }
 
 /**
- * `PAYLOAD_ENGINE=rs`: `withRustMongoEngine` of `@payloadcms/engine-rs/mongodb`
+ * `isRustDatabaseEngine()` (the default; `PAYLOAD_ENGINE=ts` selects upstream): `withRustMongoEngine` of `@payloadcms/engine-rs/mongodb`
  * (MONGO_ENGINE_CONTRACT.md), loading from when this module is evaluated. That package is an
  * optional peer dependency, imported only here, at runtime, from where db-mongodb is installed
  * (`importRustEngine`); with the flag unset it is never part of the module graph.
@@ -369,7 +370,7 @@ const loadRustEngine = (): Promise<RustMongoEngine> =>
   (rustEngineLoad ??= importRustEngine('@payloadcms/engine-rs/mongodb').then(
     (loaded) => (rustEngine = loaded as RustMongoEngine),
   ))
-if (process.env.PAYLOAD_ENGINE === 'rs') {
+if (isRustDatabaseEngine()) {
   void loadRustEngine().catch(() => {})
 }
 

@@ -7,7 +7,7 @@
  * cause chain) must be identical. Runs against the native engine, or against the TS loopback
  * engine with PAYLOAD_RS_ENGINE_LOOPBACK=true (then it verifies the glue alone):
  *
- *   PAYLOAD_ENGINE_ADDON=/tmp/x/payload-engine.node [PAYLOAD_RS_ENGINE_LOOPBACK=true] \
+ *   PAYLOAD_ENGINE=ts PAYLOAD_ENGINE_ADDON=/tmp/x/payload-engine.node [PAYLOAD_RS_ENGINE_LOOPBACK=true] \
  *     SQLITE_URL=file:/tmp/rs-adapter.db pnpm test:int:sqlite test/__rs/adapter/adapter.int.spec.ts
  */
 import type { Payload, PayloadRequest, SanitizedConfig } from 'payload'
@@ -38,6 +38,9 @@ import { createClient, getSqliteConnId } from '../../../packages/engine-rs/src/s
 import { Sqlite3Client } from '../../../packages/engine-rs/src/sqlite/index.js'
 import { getNativeSqlite } from '../../../packages/engine-rs/src/sqlite/native.js'
 import { test } from '../../__helpers/int/vitest.js'
+import { requireTsEngine } from '../requireTsEngine.js'
+
+requireTsEngine({ file: 'test/__rs/adapter/adapter.int.spec.ts' })
 
 const base = (process.env.SQLITE_URL || 'file:/tmp/rs-adapter.db')
   .replace(/^file:/, '')

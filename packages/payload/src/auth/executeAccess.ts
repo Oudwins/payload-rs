@@ -2,6 +2,7 @@ import type { Access, AccessResult } from '../config/types.js'
 import type { PayloadRequest } from '../types/index.js'
 
 import { Forbidden } from '../errors/index.js'
+import { isRustCoreEngine } from '../utilities/engineSelection.js'
 
 type OperationArgs = {
   data?: any
@@ -59,10 +60,10 @@ type RustOperations = {
 
 /**
  * Rust engine (`packages/engine-rs/src/ops`, crates/payload-core-ops `common::execute_access`),
- * selected once at module load: `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See
+ * selected once at module load: `isRustCoreEngine()` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts). See
  * RUST_OPS_DESIGN.md.
  */
-const isRustOperations = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustOperations = isRustCoreEngine()
 const rustOperationsSpecifier = '@payloadcms/engine-rs/ops'
 let rustOperations: RustOperations | undefined
 const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations

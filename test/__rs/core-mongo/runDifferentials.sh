@@ -12,7 +12,8 @@
 set -u
 source /tmp/penv.sh
 cd "$(dirname "$0")/../../.."
-unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE DATABASE_URL
+export PAYLOAD_ENGINE=ts # upstream TS (unset selects Rust)
+unset PAYLOAD_CORE_ENGINE DATABASE_URL
 # RS_ORDERED_IO: database results are delivered in call order (test/__rs/dispatch/settle.ts), so
 # concurrent work that queries the database interleaves the same way in every run.
 export RS_ORDERED_IO=${RS_ORDERED_IO:-true}

@@ -48,11 +48,13 @@ export const candidateURL = (url: string) => {
 /** The upstream TS adapter even when PAYLOAD_ENGINE=rs (the reference must always be TS). */
 export const tsMongooseAdapter: MongooseAdapterFactory = (args) => {
   const previous = process.env.PAYLOAD_ENGINE
-  delete process.env.PAYLOAD_ENGINE
+  process.env.PAYLOAD_ENGINE = 'ts'
   try {
     return mongooseAdapter(args)
   } finally {
-    if (previous !== undefined) {
+    if (previous === undefined) {
+      delete process.env.PAYLOAD_ENGINE
+    } else {
       process.env.PAYLOAD_ENGINE = previous
     }
   }

@@ -2,6 +2,7 @@ import type { SanitizedCollectionPermission } from '../../auth/index.js'
 import type { AllOperations, JsonObject, PayloadRequest } from '../../types/index.js'
 import type { Collection } from '../config/types.js'
 
+import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { getEntityPermissions } from '../../utilities/getEntityPermissions/getEntityPermissions.js'
 import { sanitizePermissions } from '../../utilities/sanitizePermissions.js'
 
@@ -72,9 +73,9 @@ type RustOperations = {
 
 /**
  * Rust engine (`packages/engine-rs/src/ops`), selected once at module load:
- * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ * `isRustCoreEngine()` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts). See RUST_OPS_DESIGN.md.
  */
-const isRustOperations = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustOperations = isRustCoreEngine()
 const rustOperationsSpecifier = '@payloadcms/engine-rs/ops'
 let rustOperations: RustOperations | undefined
 const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations

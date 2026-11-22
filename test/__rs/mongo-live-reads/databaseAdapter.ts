@@ -21,9 +21,9 @@ import { initLivePorts } from './ports.js'
 if (!process.env.MONGODB_URL) {
   throw new Error('test/__rs/mongo-live-reads: set MONGODB_URL to a database of your own')
 }
-if (process.env.PAYLOAD_ENGINE === 'rs') {
+if (process.env.PAYLOAD_ENGINE !== 'ts') {
   throw new Error(
-    'test/__rs/mongo-live-reads: run with PAYLOAD_ENGINE unset (live reads on the TS adapter)',
+    'test/__rs/mongo-live-reads: run with PAYLOAD_ENGINE=ts (live reads on the TS adapter)',
   )
 }
 

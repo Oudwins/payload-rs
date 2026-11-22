@@ -17,6 +17,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { getBuildQueryPlugin } from '../../../packages/db-mongodb/src/queries/getBuildQueryPlugin.js'
 import { createMongoInitRS } from '../../../packages/engine-rs/src/mongo-schema/index.js'
 import { getCoreRuntime } from '../../../packages/engine-rs/src/runtime/index.js'
+import { requireTsEngine } from '../requireTsEngine.js'
+
+requireTsEngine({ file: 'test/__rs/mongo-schema/databaseAdapter.ts' })
 
 if (process.env.PAYLOAD_DATABASE !== 'mongodb' || !process.env.MONGODB_URL) {
   throw new Error(

@@ -8,7 +8,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 # The TS reference must be upstream TS (the harness also fails if a reference run reaches Rust).
-unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE
+export PAYLOAD_ENGINE=ts # upstream TS (unset selects Rust)
+unset PAYLOAD_CORE_ENGINE
 suites=("${@:-hooks fields synthetic}")
 db="${RS_CORE_RUNTIME_DB:-/tmp/rs-core-runtime.db}"
 status=0

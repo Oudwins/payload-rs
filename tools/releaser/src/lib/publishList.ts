@@ -8,6 +8,9 @@
 export const packagePublishList = [
   // Foundation
   'translations',
+  // the Rust engine: a dependency of payload, the db adapters and richtext-lexical (its addon ships
+  // in per-platform packages, packages/engine-rs/scripts/release/packRelease.mjs)
+  'engine-rs',
   'payload',
   'transformer-sharp',
 

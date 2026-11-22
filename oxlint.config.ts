@@ -205,5 +205,22 @@ export default defineConfig({
         'typescript/no-unsafe-assignment': 'off',
       },
     },
+    {
+      // The Rust port's differential harnesses (not linted by `pnpm lint` either): they compare
+      // against payload's / the adapters' sources by relative path, assert with vitest's
+      // `expect(value, message)` form and inside generated / data-driven cases, and stub async
+      // upstream functions without awaiting.
+      files: ['test/__rs/**/*.{ts,mts,mjs}'],
+      rules: {
+        '@vitest/expect-expect': 'off',
+        '@vitest/no-conditional-expect': 'off',
+        '@vitest/no-standalone-expect': 'off',
+        '@vitest/valid-expect': 'off',
+        '@vitest/valid-title': 'off',
+        'payload/no-relative-monorepo-imports': 'off',
+        'typescript/no-unsafe-function-type': 'off',
+        'typescript/require-await': 'off',
+      },
+    },
   ],
 })

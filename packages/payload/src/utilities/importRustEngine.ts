@@ -1,7 +1,7 @@
 /**
  * Imports `specifier` (an `@payloadcms/engine-rs` subpath, an optional peer dependency) the way
  * payload resolves it where it is installed. Loaded (by a literal dynamic import) only by the
- * dispatch sites that selected the Rust engine (`PAYLOAD_ENGINE=rs` / `PAYLOAD_CORE_ENGINE=rs`), so
+ * dispatch sites that selected the Rust engine (`isRustCoreEngine()`, the default), so
  * with the flags unset it is never evaluated.
  *
  * When payload is bundled (e.g. Next.js with payload aliased to its sources), a runtime `import()`

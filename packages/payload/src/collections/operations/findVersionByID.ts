@@ -11,6 +11,7 @@ import { afterRead } from '../../fields/hooks/afterRead/index.js'
 import { checkFileAccess } from '../../uploads/checkFileAccess.js'
 import { markHistoricalFileURLs } from '../../uploads/fileVersioning/markHistoricalFileURLs.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
+import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { hasVersionsEnabled } from '../../utilities/getVersionsConfig.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
@@ -285,9 +286,9 @@ type RustOperations = {
 
 /**
  * Rust engine (`packages/engine-rs/src/ops`), selected once at module load:
- * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ * `isRustCoreEngine()` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts). See RUST_OPS_DESIGN.md.
  */
-const isRustOperations = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustOperations = isRustCoreEngine()
 const rustOperationsSpecifier = '@payloadcms/engine-rs/ops'
 let rustOperations: RustOperations | undefined
 const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations

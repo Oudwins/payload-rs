@@ -57,6 +57,8 @@ const fnIDs = new Map<Function, number>()
 
 const enc = (v: unknown): unknown => {
   switch (typeof v) {
+    case 'bigint':
+      return { $bigint: String(v) }
     case 'function': {
       const id = fnIDs.get(v)
       if (id === undefined) {
@@ -83,12 +85,10 @@ const enc = (v: unknown): unknown => {
       }
       return keys.length === 1 && reservedKeys.has(keys[0]!) ? { $obj: out } : out
     }
-    case 'undefined':
-      return { $undefined: true }
-    case 'bigint':
-      return { $bigint: String(v) }
     case 'symbol':
       return { $symbol: String(v) }
+    case 'undefined':
+      return { $undefined: true }
     default:
       return v
   }
@@ -722,9 +722,9 @@ const values: unknown[] = [
  * getters, proxies, own `toString` / `valueOf` / `toJSON` methods, symbols, bigints), made fresh
  * for every run. The Rust validators must read them through JS exactly like the TS.
  */
-const ObjectIdImport = createRequire(path.resolve(dirname, '../../../packages/payload/package.json'))(
-  'bson-objectid',
-)
+const ObjectIdImport = createRequire(
+  path.resolve(dirname, '../../../packages/payload/package.json'),
+)('bson-objectid')
 const ObjectId = 'default' in ObjectIdImport ? ObjectIdImport.default : ObjectIdImport
 const OID = '507f1f77bcf86cd799439011'
 class Labelled {
@@ -762,7 +762,6 @@ const exoticValues: (() => unknown)[] = [
   }),
   () => new Proxy(['a', 'b'], {}),
   () => new Proxy({ relationTo: 'posts', value: 2 }, {}),
-  // oxlint-disable-next-line no-sparse-arrays
   () => [1, , 3],
   () => Object.assign(['a', 'a'], { some: () => false }),
   () => new String('abc'),
@@ -1068,8 +1067,10 @@ if (SHIM) {
 async function runShimDifferential() {
   // The reference must be the TS module: with the dispatch flags set, payload's validations.ts
   // would export the Rust validators too and the comparison would be Rust against Rust.
-  if (process.env.PAYLOAD_ENGINE || process.env.PAYLOAD_CORE_ENGINE) {
-    console.error('generate.ts: unset PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE (the reference must be TS)')
+  if (process.env.PAYLOAD_ENGINE !== 'ts' || process.env.PAYLOAD_CORE_ENGINE) {
+    console.error(
+      'generate.ts: set PAYLOAD_ENGINE=ts, unset PAYLOAD_CORE_ENGINE (the reference must be TS)',
+    )
     process.exit(1)
   }
   const rs = await import('../../../packages/engine-rs/src/validate/validations.js')

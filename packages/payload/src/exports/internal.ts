@@ -49,6 +49,7 @@ export {
   type BatchProcessingOptions,
   type BatchProcessorResult,
 } from '../utilities/batchProcessing.js'
+export { isRustCoreEngine, isRustDatabaseEngine } from '../utilities/engineSelection.js'
 export { getEntityPermissions } from '../utilities/getEntityPermissions/getEntityPermissions.js'
 export { httpStatus } from '../utilities/httpStatus.js'
 export { isURLAllowed } from '../utilities/isURLAllowed.js'

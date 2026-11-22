@@ -11,7 +11,8 @@
 # Exits 1 when a comparison differs or a report is missing.
 set -u
 source /tmp/penv.sh
-unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE
+export PAYLOAD_ENGINE=ts # upstream TS (unset selects Rust)
+unset PAYLOAD_CORE_ENGINE
 export PAYLOAD_DATABASE=sqlite NODE_NO_WARNINGS=1 DISABLE_LOGGING=true
 OUT=${OUT:-/tmp/rs-validate}
 DB=${DB:-/tmp/rs-validate.db}

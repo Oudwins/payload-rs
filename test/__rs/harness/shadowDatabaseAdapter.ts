@@ -67,11 +67,13 @@ export const sqliteArgs = (url: string): Parameters<SqliteAdapterFactory>[0] => 
  */
 const tsSqliteAdapter: SqliteAdapterFactory = (args) => {
   const previous = process.env.PAYLOAD_ENGINE
-  delete process.env.PAYLOAD_ENGINE
+  process.env.PAYLOAD_ENGINE = 'ts'
   try {
     return sqliteAdapter(args)
   } finally {
-    if (previous !== undefined) {
+    if (previous === undefined) {
+      delete process.env.PAYLOAD_ENGINE
+    } else {
       process.env.PAYLOAD_ENGINE = previous
     }
   }

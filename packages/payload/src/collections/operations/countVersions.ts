@@ -7,6 +7,7 @@ import { combineQueries } from '../../database/combineQueries.js'
 import { validateQueryPaths } from '../../database/queryValidation/validateQueryPaths.js'
 import { sanitizeWhereQuery } from '../../database/sanitizeWhereQuery.js'
 import { buildVersionCollectionFields, type CollectionSlug } from '../../index.js'
+import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { buildAfterOperation } from './utilities/buildAfterOperation.js'
 import { buildBeforeOperation } from './utilities/buildBeforeOperation.js'
 
@@ -114,9 +115,9 @@ type RustOperations = {
 
 /**
  * Rust engine (`packages/engine-rs/src/ops`), selected once at module load:
- * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`. See RUST_OPS_DESIGN.md.
+ * `isRustCoreEngine()` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts). See RUST_OPS_DESIGN.md.
  */
-const isRustOperations = (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustOperations = isRustCoreEngine()
 const rustOperationsSpecifier = '@payloadcms/engine-rs/ops'
 let rustOperations: RustOperations | undefined
 const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations

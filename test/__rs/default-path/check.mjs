@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Static proof that the default path (PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE unset) never reaches
- * `@payloadcms/engine-rs`: for every workspace package (except engine-rs itself) the module graph
+ * Static proof that `@payloadcms/engine-rs` is only ever loaded at runtime, by the engine selection
+ * (`PAYLOAD_ENGINE=ts` loads nothing of it; bundlers never trace or bundle it or its native addon):
+ * for every workspace package (except engine-rs itself) the module graph
  * reachable from its entry points is walked twice, over `src` (the monorepo `exports`) and over
  * `dist` (the published `publishConfig.exports`). Fails when engine-rs or its addon is reachable
  * through anything a bundler or Node follows statically:
@@ -17,10 +18,11 @@
  * `@payloadcms/engine-rs` must carry `webpackIgnore: true` (otherwise webpack builds a context
  * module) and is listed as a guarded runtime-only load.
  *
- * Manifests: `@payloadcms/engine-rs` must not be a dependency / optionalDependency /
- * bundleDependency of any package; as a peer it must be optional. With `--upstream <ref>` the
- * install-relevant manifest fields of every package are compared with upstream payload at that
- * commit (fetched from GitHub); the only allowed difference is the optional engine-rs peer.
+ * Manifests: `@payloadcms/engine-rs` (the default engine) is a `dependencies` entry of exactly the
+ * packages that dispatch to it (`dispatchingPackages`), and no optional / peer / dev / bundled
+ * dependency anywhere. With `--upstream <ref>` the install-relevant manifest fields of every package
+ * are compared with upstream payload at that commit (fetched from GitHub); the only allowed
+ * difference is that dependency.
  *
  *   node test/__rs/default-path/check.mjs [--upstream ec35164] [--only payload,db-sqlite]
  *     [--allow-stale-dist] [--self-test] [--json out.json]
@@ -39,6 +41,13 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const engineName = '@payloadcms/engine-rs'
+/** The packages whose dispatch sites import engine-rs (RUST_PORT.md, Packaging). */
+const dispatchingPackages = new Set([
+  '@payloadcms/db-mongodb',
+  '@payloadcms/db-sqlite',
+  '@payloadcms/richtext-lexical',
+  'payload',
+])
 const argv = process.argv.slice(2)
 const option = (name) => {
   const index = argv.indexOf(name)
@@ -138,9 +147,16 @@ function check({
   return { failures, report }
 }
 
-/** `@payloadcms/engine-rs` must never be installed for a package's users. */
+/** `@payloadcms/engine-rs` is installed with exactly the packages that dispatch to it. */
 function checkManifest({ fail, manifest, name }) {
-  for (const field of ['dependencies', 'optionalDependencies']) {
+  const isDispatching = dispatchingPackages.has(manifest.name)
+  if (isDispatching && !manifest.dependencies?.[engineName]) {
+    fail(`${name}: ${engineName} is not in dependencies (it dispatches to the default engine)`)
+  }
+  if (!isDispatching && manifest.dependencies?.[engineName]) {
+    fail(`${name}: ${engineName} is in dependencies, but ${name} does not dispatch to it`)
+  }
+  for (const field of ['optionalDependencies', 'peerDependencies', 'devDependencies']) {
     if (manifest[field]?.[engineName]) {
       fail(`${name}: ${engineName} is in ${field}`)
     }
@@ -149,12 +165,6 @@ function checkManifest({ fail, manifest, name }) {
     if ((manifest[field] ?? []).includes?.(engineName)) {
       fail(`${name}: ${engineName} is in ${field}`)
     }
-  }
-  if (
-    manifest.peerDependencies?.[engineName] &&
-    !manifest.peerDependenciesMeta?.[engineName]?.optional
-  ) {
-    fail(`${name}: ${engineName} is a required peer dependency`)
   }
 }
 
@@ -181,7 +191,7 @@ const comparedManifestFields = [
   'engines',
 ]
 
-/** Install-relevant fields equal upstream's, except for the optional engine-rs peer. */
+/** Install-relevant fields equal upstream's, except for the engine-rs dependency. */
 function compareManifest({ fail, manifest, name, upstream }) {
   if (!upstream) {
     return 'not in upstream'
@@ -189,7 +199,7 @@ function compareManifest({ fail, manifest, name, upstream }) {
   const differences = []
   for (const field of comparedManifestFields) {
     let actual = manifest[field]
-    if (field === 'peerDependencies' || field === 'peerDependenciesMeta') {
+    if (field === 'dependencies') {
       actual = withoutKey(actual, engineName)
     }
     if (JSON.stringify(actual) !== JSON.stringify(upstream[field])) {
@@ -200,7 +210,7 @@ function compareManifest({ fail, manifest, name, upstream }) {
     fail(`${name}: package.json "${field}" differs from upstream`)
   }
   return differences.length === 0
-    ? 'equal to upstream (ignoring the optional engine-rs peer)'
+    ? 'equal to upstream (ignoring the engine-rs dependency)'
     : differences
 }
 
@@ -668,36 +678,42 @@ function selfTest() {
       "import type { x } from '@payloadcms/engine-rs'\nexport type X = typeof x\n",
       false,
     ],
-    'hard dependency': ['export const a = 1\n', true, { dependencies: { [engineName]: '1.0.0' } }],
-    'required peer': [
+    'dependency of a package that does not dispatch': [
       'export const a = 1\n',
       true,
-      { peerDependencies: { [engineName]: '1.0.0' } },
+      { dependencies: { [engineName]: '1.0.0' } },
+    ],
+    'dependency of a dispatching package': [
+      'export const a = 1\n',
+      false,
+      { name: 'payload', dependencies: { [engineName]: '1.0.0' } },
+    ],
+    'dispatching package without the dependency': [
+      'export const a = 1\n',
+      true,
+      { name: '@payloadcms/db-sqlite' },
     ],
     'optional peer': [
       'export const a = 1\n',
-      false,
+      true,
       {
         peerDependencies: { [engineName]: '1.0.0' },
         peerDependenciesMeta: { [engineName]: { optional: true } },
       },
     ],
   }
-  // vs upstream (`upstream` = the manifest upstream has): only the optional engine-rs peer may differ
+  // vs upstream (`upstream` = the manifest upstream has): only the engine-rs dependency may differ
   const upstreamCases = {
-    'vs upstream: optional peer only': [
+    'vs upstream: engine-rs dependency only': [
       false,
-      {
-        peerDependencies: { [engineName]: '1.0.0' },
-        peerDependenciesMeta: { [engineName]: { optional: true } },
-      },
+      { name: '@payloadcms/db-mongodb', dependencies: { [engineName]: '1.0.0' } },
     ],
     'vs upstream: engine-rs devDependency (published manifest)': [
       true,
       {
+        name: '@payloadcms/richtext-lexical',
+        dependencies: { [engineName]: '1.0.0' },
         devDependencies: { [engineName]: '1.0.0' },
-        peerDependencies: { [engineName]: '1.0.0' },
-        peerDependenciesMeta: { [engineName]: { optional: true } },
       },
     ],
   }
@@ -724,7 +740,7 @@ function selfTest() {
         isQuiet: true,
         only: [dir],
         root,
-        upstreamManifests: new Map([[dir, pkg(dir)]]),
+        upstreamManifests: new Map([[extra.name, pkg(dir, { name: extra.name })]]),
       })
       const didFail = failures.length > 0
       const isExpected = didFail === shouldFail

@@ -14,6 +14,7 @@ import { Forbidden } from '../../index.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
+import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { formatAdminURL } from '../../utilities/formatAdminURL.js'
 import { getRequestOrigin } from '../../utilities/getRequestOrigin.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
@@ -295,13 +296,10 @@ type RustOperations = {
 
 /**
  * Rust engine (`packages/engine-rs/src/ops-global`), selected once at module load:
- * `PAYLOAD_OPS_GLOBAL_ENGINE=rs|ts`, else `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs`.
+ * `isRustCoreEngine({ override: 'PAYLOAD_OPS_GLOBAL_ENGINE' })` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts).
  * See RUST_OPS_DESIGN.md.
  */
-const isRustOperations =
-  (process.env.PAYLOAD_OPS_GLOBAL_ENGINE ||
-    process.env.PAYLOAD_CORE_ENGINE ||
-    process.env.PAYLOAD_ENGINE) === 'rs'
+const isRustOperations = isRustCoreEngine({ override: 'PAYLOAD_OPS_GLOBAL_ENGINE' })
 const rustOperationsSpecifier = '@payloadcms/engine-rs/ops-global'
 let rustOperations: RustOperations | undefined
 const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations

@@ -25,7 +25,8 @@
 set -u
 source /tmp/penv.sh
 cd "$(dirname "$0")/../../.."
-unset PAYLOAD_ENGINE PAYLOAD_CORE_ENGINE PAYLOAD_CORE_OPS_ENGINE
+export PAYLOAD_ENGINE=ts # upstream TS (unset selects Rust)
+unset PAYLOAD_CORE_ENGINE PAYLOAD_CORE_OPS_ENGINE
 export PAYLOAD_DATABASE=sqlite NODE_NO_WARNINGS=1 DISABLE_LOGGING=true \
   NODE_OPTIONS="--no-deprecation --no-experimental-strip-types" TZ=${TZ:-UTC}
 OUT=${OUT:-/tmp/rs-ops-write}

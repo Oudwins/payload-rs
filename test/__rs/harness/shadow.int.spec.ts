@@ -24,7 +24,10 @@ import {
   getShadowState,
   installClockReplay,
 } from '../../../packages/engine-rs/src/shadow/index.js'
+import { requireTsEngine } from '../requireTsEngine.js'
 import { forceSchemaPushOnConnect, loadContext } from './shadowDatabaseAdapter.js'
+
+requireTsEngine({ file: 'test/__rs/harness/shadow.int.spec.ts' })
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-shadow-selftest-'))
 let counter = 0

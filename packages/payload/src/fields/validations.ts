@@ -33,6 +33,7 @@ import type {
   ValueWithRelation,
 } from './config/types.js'
 
+import { isRustCoreEngine } from '../utilities/engineSelection.js'
 import { isNumber } from '../utilities/isNumber.js'
 import { isValidID } from '../utilities/isValidID.js'
 
@@ -1077,17 +1078,13 @@ export let point: PointFieldValidation = (value = ['', ''], { req: { t }, requir
 
 /**
  * Rust validators (crates/payload-core-validate/live), selected once at module load:
- * `PAYLOAD_CORE_ENGINE=rs|ts`, else `PAYLOAD_ENGINE=rs` (see RUST_PORT.md). The addon
- * (`PAYLOAD_CORE_RUNTIME_ADDON`, else `PAYLOAD_ENGINE_ADDON`, else engine-rs/payload-engine.node) is
- * loaded synchronously, so every export is the Rust-backed validator, with the upstream name,
- * `length` and sync/async kind, before anything can call it. This module is also bundled for the
- * browser, where `process` may not exist.
+ * `isRustCoreEngine()` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts; always TS in
+ * the browser bundle of this module). The addon is loaded synchronously through engine-rs's
+ * `addon.cjs` (the resolver every engine-rs loader uses, so one addon instance per process), so
+ * every export is the Rust-backed validator, with the upstream name, `length` and sync/async kind,
+ * before anything can call it.
  */
-const isRustCoreEngine =
-  typeof process !== 'undefined' &&
-  (process.env.PAYLOAD_CORE_ENGINE || process.env.PAYLOAD_ENGINE) === 'rs'
-
-if (isRustCoreEngine) {
+if (isRustCoreEngine()) {
   type RustValidations = {
     array: ArrayFieldValidation
     blocks: BlocksFieldValidation
@@ -1115,12 +1112,7 @@ if (isRustCoreEngine) {
   const nodePath = process.getBuiltinModule('node:path')
   const fs = process.getBuiltinModule('node:fs')
   const { fileURLToPath } = process.getBuiltinModule('node:url')
-  const envAddonPath = process.env.PAYLOAD_CORE_RUNTIME_ADDON ?? process.env.PAYLOAD_ENGINE_ADDON
-  // A path from the environment is relative to the working directory, not to this module.
-  const addonPath = envAddonPath
-    ? nodePath.resolve(process.cwd(), envAddonPath)
-    : '@payloadcms/engine-rs/payload-engine.node'
-  // The addon is resolved from where payload is installed: when this module is bundled,
+  // engine-rs is resolved from where payload is installed: when this module is bundled,
   // `import.meta.url` may be the chunk's (or a build-time path), so it is used only when the
   // nearest package.json above it is payload's; otherwise payload is looked up in the
   // `node_modules` directories from the working directory up (utilities/importRustEngine.ts).
@@ -1156,9 +1148,14 @@ if (isRustCoreEngine) {
       break
     }
   }
-  const addon = createRequire(payloadManifest ?? import.meta.url)(addonPath) as {
-    validateBinding?: (deps: object) => RustValidations
+  // Not a literal: bundlers must neither trace nor bundle engine-rs (or its addon).
+  const addonSpecifier = '@payloadcms/engine-rs/addon'
+  const addonModule = createRequire(payloadManifest ?? import.meta.url)(addonSpecifier) as {
+    coreRuntimeAddonPath: () => string
+    loadCoreRuntimeAddon: () => { validateBinding?: (deps: object) => RustValidations }
   }
+  const addonPath = addonModule.coreRuntimeAddonPath()
+  const addon = addonModule.loadCoreRuntimeAddon()
   if (typeof addon.validateBinding !== 'function') {
     throw new Error(`The engine addon at ${addonPath} does not export validateBinding`)
   }

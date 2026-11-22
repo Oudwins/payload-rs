@@ -20,8 +20,10 @@ import { fileURLToPath } from 'node:url'
 
 // The reference must be the TS module: with the dispatch flags set, payload's validations.ts
 // would export the Rust validators too and the comparison would be Rust against Rust.
-if (process.env.PAYLOAD_ENGINE || process.env.PAYLOAD_CORE_ENGINE) {
-  console.error('live.ts: unset PAYLOAD_ENGINE / PAYLOAD_CORE_ENGINE (the reference must be TS)')
+if (process.env.PAYLOAD_ENGINE !== 'ts' || process.env.PAYLOAD_CORE_ENGINE) {
+  console.error(
+    'live.ts: set PAYLOAD_ENGINE=ts, unset PAYLOAD_CORE_ENGINE (the reference must be TS)',
+  )
   process.exit(1)
 }
 

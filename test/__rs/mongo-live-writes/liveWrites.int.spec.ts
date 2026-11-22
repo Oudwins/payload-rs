@@ -1,11 +1,11 @@
+import { types as utilTypes } from 'node:util'
 /**
  * Live differential of the db-mongodb write methods (harness.ts): every scenario of scenarios.ts runs
  * with upstream TS and with the live Rust port on the same inputs and database state and must record
  * identical traces, outcomes and database contents. Run through ./run.sh (MongoDB, own database,
- * PAYLOAD_ENGINE unset, PAYLOAD_ENGINE_ADDON = the payload-node addon).
+ * PAYLOAD_ENGINE=ts, PAYLOAD_ENGINE_ADDON = the payload-node addon).
  */
 import { afterAll, expect } from 'vitest'
-import { types as utilTypes } from 'node:util'
 
 import { create as upstreamCreate } from '../../../packages/db-mongodb/src/create.js'
 import { createGlobal as upstreamCreateGlobal } from '../../../packages/db-mongodb/src/createGlobal.js'
@@ -89,7 +89,7 @@ test.suite(
   { config: './config.ts', db: 'mongo', resetBetweenTests: false },
   () => {
     test('the reference is upstream TS and the candidate is the live binding', ({ payload }) => {
-      expect(process.env.PAYLOAD_ENGINE).toBeUndefined()
+      expect(process.env.PAYLOAD_ENGINE).toBe('ts')
       expect(process.env.PAYLOAD_CORE_ENGINE).toBeUndefined()
       const db = payload.db as any
       expect(payload.config.globals.map((g) => g.slug)).toContain('settings')

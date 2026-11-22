@@ -156,7 +156,7 @@ const runFile = (file, index, engine) =>
       PAYLOAD_RS_OPS_STATS_DIR: opsStatsDir,
       TZ: 'UTC',
     }
-    delete env.PAYLOAD_ENGINE
+    env.PAYLOAD_ENGINE = 'ts'
     delete env.PAYLOAD_CORE_ENGINE
     delete env.DATABASE_URL
     if (engine === 'core') {
