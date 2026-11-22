@@ -76,6 +76,14 @@ artifact that had made db-postgres's own `payload.db.find` 25% slower in Rust-en
 the core can gain: TS `payload.db.find` of 100 typical posts is ~6.0 ms of a ~9.2 ms `payload.find`
 on PostgreSQL, so even a zero-cost core would be ~1.5x there.
 
+Write path (2026-11-23; write categories, typical / complex / hooks at 1k posts, TS median / Rust
+median, geometric means, before -> after the validation merge elision and the JS field
+traversals of RUST_CORE_DESIGN.md section 3): PostgreSQL 0.89x -> 0.93x (validation 0.63x ->
+0.97x, create 0.89x -> 0.95x, update 0.89x -> 0.95x), MongoDB 0.72x -> 0.75x (validation 0.67x ->
+0.94x; the Rust core alone on the TS adapter, `--engines ts,core-rs`: 0.98x). The core is about
+10-15% of a write's CPU time in TS; the rest is the database adapter and I/O, which bounds what
+any core change can gain end to end.
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).
