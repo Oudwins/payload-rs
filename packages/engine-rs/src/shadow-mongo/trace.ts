@@ -98,6 +98,18 @@ export const installDriverTrace = (driverCollectionClass: unknown) => {
   }
 }
 
+/**
+ * Records a driver operation made without the Node driver (the Rust driver lane,
+ * packages/engine-rs/src/mongo-driver): the lane reports the `Collection` method calls the Node
+ * driver would have seen for the commands it sends, with the very arguments mongoose computed.
+ */
+export const traceDriverOperation = (collection: unknown, op: string, args: unknown[]) => {
+  const log = traceContext.getStore()
+  if (log) {
+    log.events.push({ args: log.describe(args), collection, op, state: log.fingerprint?.() })
+  }
+}
+
 const DRIVER_FRAME = /[\\/]node_modules[\\/]mongodb[\\/]lib[\\/]/
 
 /**

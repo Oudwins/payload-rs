@@ -33,6 +33,7 @@ import { flattenWhereToOperators } from '../../../payload/src/database/flattenWh
 import { flattenAllFields } from '../../../payload/src/utilities/flattenAllFields.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
 import { buildVersionGlobalFields } from '../../../payload/src/versions/buildGlobalFields.js'
+import { isTracing, traceDriverOperation } from '../shadow-mongo/trace.js'
 import { type DriverBinding } from './binding.js'
 import { buildTransformPlan } from './plan.js'
 import { verifyMode, verifyResult } from './verify.js'
@@ -269,6 +270,28 @@ const planFor = (
 const serializeArgs = (lane: DriverLane, args: Record<string, unknown>) =>
   lane.BSON.serialize(args, { ignoreUndefined: false })
 
+/**
+ * The Node driver `Collection` calls of a count (shadow / parity traces, `traceDriverOperation`):
+ * `estimatedDocumentCount(options)`, or `countDocuments(filter, options)` and the `aggregate` it
+ * runs (driver collection.js `countDocuments`).
+ */
+const traceCount = (collection: string, cast: Any) => {
+  if (cast.filter === undefined) {
+    traceDriverOperation(collection, 'estimatedDocumentCount', [cast.options])
+    return
+  }
+  traceDriverOperation(collection, 'countDocuments', [cast.filter, cast.options])
+  const pipeline: Any[] = [{ $match: cast.filter }]
+  if (typeof cast.options.skip === 'number') {
+    pipeline.push({ $skip: cast.options.skip })
+  }
+  if (typeof cast.options.limit === 'number') {
+    pipeline.push({ $limit: cast.options.limit })
+  }
+  pipeline.push({ $group: { _id: 1, n: { $sum: 1 } } })
+  traceDriverOperation(collection, 'aggregate', [pipeline, cast.options])
+}
+
 const outcome = (text: string) => {
   if (text.charCodeAt(0) === 33 /* ! */) {
     throw new Fallback(text.slice(1))
@@ -359,23 +382,28 @@ const lanePaginate = async (
   }
 
   let count: Any = null
+  let countCast: Any = null
   if (pagination) {
     if (useEstimatedCount === true) {
-      castQuery(Model.estimatedDocumentCount(), countOptionKeys, true)
+      countCast = castQuery(Model.estimatedDocumentCount(), countOptionKeys, true)
       count = 'estimated'
     } else if (paginationOptions.customCount) {
-      count = countSpec(
-        castQuery(Model.countDocuments(query, paginationOptions.customCount), countOptionKeys),
+      countCast = castQuery(
+        Model.countDocuments(query, paginationOptions.customCount),
+        countOptionKeys,
       )
+      count = countSpec(countCast)
     } else if (!query || Object.keys(query).length === 0) {
-      castQuery(Model.estimatedDocumentCount(), countOptionKeys, true)
+      countCast = castQuery(Model.estimatedDocumentCount(), countOptionKeys, true)
       count = 'estimated'
     } else {
-      count = countSpec(castQuery(Model.countDocuments(query, countOptions), countOptionKeys))
+      countCast = castQuery(Model.countDocuments(query, countOptions), countOptionKeys)
+      count = countSpec(countCast)
     }
   }
 
   let find: Any = null
+  let findCast: Any = null
   if (limit) {
     const mQuery = Model.find(query, projection, queryOptions)
     mQuery.select(select)
@@ -385,7 +413,8 @@ const lanePaginate = async (
       mQuery.skip(skip)
       mQuery.limit(limit)
     }
-    find = findSpec(castQuery(mQuery, findOptionKeys))
+    findCast = castQuery(mQuery, findOptionKeys)
+    find = findSpec(findCast)
   }
 
   const args: Record<string, unknown> = {
@@ -398,9 +427,18 @@ const lanePaginate = async (
   if (adapter.allowAdditionalKeys) {
     args.allowAdditionalKeys = true
   }
+  const trace = isTracing()
   const [rawCount, docs] = outcome(
     await lane.binding.paginate(lane.clientID, plan, serializeArgs(lane, args)),
   )
+  if (trace) {
+    if (countCast) {
+      traceCount(args.collection as string, countCast)
+    }
+    if (findCast) {
+      traceDriverOperation(args.collection, 'find', [findCast.filter, findCast.options])
+    }
+  }
 
   const total = pagination !== true ? docs.length : rawCount
   const meta: Record<string, unknown> = { totalDocs: total }
@@ -511,22 +549,22 @@ const laneAggregatePaginate = async ({
   }
 
   let count: Any = null
+  let countCast: Any = null
   if (pagination !== false && limit) {
     if (useEstimatedCount) {
       // upstream passes the query as the options of `estimatedDocumentCount`
-      castQuery(Model.estimatedDocumentCount(query), countOptionKeys, true)
+      countCast = castQuery(Model.estimatedDocumentCount(query), countOptionKeys, true)
       count = 'estimated'
     } else {
       const hint =
         adapter.disableIndexHints !== true && Object.keys(query).length === 0
           ? { _id: 1 }
           : undefined
-      count = countSpec(
-        castQuery(
-          Model.countDocuments(query, { collation, session: undefined, ...(hint ? { hint } : {}) }),
-          countOptionKeys,
-        ),
+      countCast = castQuery(
+        Model.countDocuments(query, { collation, session: undefined, ...(hint ? { hint } : {}) }),
+        countOptionKeys,
       )
+      count = countSpec(countCast)
     }
   }
 
@@ -547,9 +585,19 @@ const laneAggregatePaginate = async ({
   if (adapter.allowAdditionalKeys) {
     args.allowAdditionalKeys = true
   }
+  const trace = isTracing()
   const [countResult, docs] = outcome(
     await lane.binding.aggregate(lane.clientID, plan, serializeArgs(lane, args)),
   )
+  if (trace) {
+    traceDriverOperation(args.collection, 'aggregate', [
+      aggregation,
+      { collation, session: undefined },
+    ])
+    if (countCast) {
+      traceCount(args.collection as string, countCast)
+    }
+  }
 
   const total = countResult === null ? docs.length : countResult
   const totalPages =
@@ -784,7 +832,16 @@ const laneFindOne = async (lane: DriverLane, Model: Any, cast: Any, plan: number
   if (adapter.allowAdditionalKeys) {
     args.allowAdditionalKeys = true
   }
-  return outcome(await lane.binding.findOne(lane.clientID, plan, serializeArgs(lane, args)))
+  const trace = isTracing()
+  const result = outcome(await lane.binding.findOne(lane.clientID, plan, serializeArgs(lane, args)))
+  if (trace) {
+    traceDriverOperation(args.collection, 'findOne', [cast.filter, cast.options])
+    traceDriverOperation(args.collection, 'find', [
+      cast.filter,
+      { ...cast.options, singleBatch: true },
+    ])
+  }
+  return result
 }
 
 /** count / countVersions / countGlobalVersions after `buildQuery`. */
@@ -814,13 +871,22 @@ const laneCount = async ({
     options.hint = { _id: 1 }
   }
   let count: Any
+  let countCast: Any
   if (useEstimatedCount) {
-    castQuery(Model.estimatedDocumentCount({ session: options.session }), countOptionKeys, true)
+    countCast = castQuery(
+      Model.estimatedDocumentCount({ session: options.session }),
+      countOptionKeys,
+      true,
+    )
     count = 'estimated'
   } else {
-    count = countSpec(castQuery(Model.countDocuments(query, options), countOptionKeys))
+    countCast = castQuery(Model.countDocuments(query, options), countOptionKeys)
+    count = countSpec(countCast)
   }
   const args = { collection: Model.collection.collectionName, count }
+  if (isTracing()) {
+    traceCount(args.collection, countCast)
+  }
   const totalDocs = outcome(await lane.binding.count(lane.clientID, serializeArgs(lane, args)))
   return { totalDocs }
 }
