@@ -166,6 +166,7 @@ import { consoleEmailAdapter } from './email/consoleEmailAdapter.js'
 import { fieldAffectsData, type FlattenedBlock } from './fields/config/types.js'
 import { getJobsLocalAPI } from './queues/localAPI.js'
 import { _internal_jobSystemGlobals } from './queues/utilities/getCurrentDate.js'
+import { isRustCoreEngine } from './utilities/engineSelection.js'
 import { formatAdminURL } from './utilities/formatAdminURL.js'
 import { isNextBuild } from './utilities/isNextBuild.js'
 import { getLogger } from './utilities/logger.js'
@@ -1032,6 +1033,14 @@ export class BasePayload {
       },
       {} as Record<string, FlattenedBlock>,
     )
+
+    // Verification mode of the Rust engine's function compiler (engine-rs `compile/guard.ts`):
+    // every compiled access function, hook and validator is checked against the real function.
+    if (process.env.PAYLOAD_FN_COMPILE_GUARD && isRustCoreEngine()) {
+      const { importRustEngine } = await import('./utilities/importRustEngine.js')
+      const { installCompileGuards } = await importRustEngine('@payloadcms/engine-rs/compile')
+      installCompileGuards(this.config)
+    }
 
     // Generate types on startup
     if (process.env.NODE_ENV !== 'production' && this.config.typescript.autoGenerate !== false) {

@@ -59,7 +59,7 @@ const pristineBuiltins = new Map<string, unknown>([
   ['Object.values', Object.values],
   ['String', String],
 ])
-const prototypeMethods: [object, string[]][] = [
+const prototypeMethods: [object, PropertyKey[]][] = [
   [
     Array.prototype,
     [
@@ -105,17 +105,14 @@ const prototypeMethods: [object, string[]][] = [
     ],
   ],
   [Number.prototype, ['toString']],
-  [
-    RegExp.prototype,
-    ['test', 'exec', Symbol.replace as unknown as string, Symbol.split as unknown as string],
-  ],
+  [RegExp.prototype, ['test', 'exec', Symbol.replace, Symbol.split]],
   [Object.prototype, ['hasOwnProperty', 'toString', 'valueOf']],
-  [Array.prototype, [Symbol.iterator as unknown as string]],
-  [String.prototype, [Symbol.iterator as unknown as string]],
+  [Array.prototype, [Symbol.iterator]],
+  [String.prototype, [Symbol.iterator]],
 ]
 const pristineMethods = prototypeMethods.map(
   ([proto, names]) =>
-    [proto, names.map((n) => [n, (proto as Record<string, unknown>)[n]])] as const,
+    [proto, names.map((n): [PropertyKey, unknown] => [n, Reflect.get(proto, n)])] as const,
 )
 
 /** Why intrinsics no longer look pristine, or `undefined`. */
@@ -128,15 +125,15 @@ const patchedIntrinsics = (): string | undefined => {
   for (const [path, value] of pristineBuiltins) {
     const [base, member] = path.split('.')
     const current = member
-      ? (globalThis as Record<string, Record<string, unknown>>)[base!]?.[member]
-      : (globalThis as Record<string, unknown>)[base!]
+      ? (globalThis as unknown as Record<string, Record<string, unknown>>)[base!]?.[member]
+      : (globalThis as unknown as Record<string, unknown>)[base!]
     if (current !== value) {
       return `${path} was replaced`
     }
   }
   for (const [proto, methods] of pristineMethods) {
     for (const [name, value] of methods) {
-      if ((proto as Record<string, unknown>)[name] !== value) {
+      if (Reflect.get(proto, name) !== value) {
         return `a prototype method (${String(name)}) was replaced`
       }
     }
@@ -298,7 +295,7 @@ const resolveValue = (value: unknown, trie: PathTrie, path: string, depth: numbe
     if (memberNames.length > 0) {
       return { kind: 'unresolved', reason: `${path}: property of a function` }
     }
-    const result = compileInner(value, path, depth + 1)
+    const result = compileInner(value as AnyFunction, path, depth + 1)
     return result.ok
       ? { id: result.id, kind: 'function' }
       : { kind: 'unresolved', reason: `helper ${path}: ${result.reason}` }

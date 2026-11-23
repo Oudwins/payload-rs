@@ -1,4 +1,5 @@
-import { appendFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { inspect, types } from 'node:util'
 
 import type { ConfigFunction } from './configFunctions.js'
@@ -18,8 +19,8 @@ import { snapshot, snapshotArgs } from './snapshot.js'
  * the function permanently and is logged.
  *
  * `PAYLOAD_FN_COMPILE_GUARD=all` verifies every call; `=sample` the policy default (first 32
- * calls, then 1 in 256). `PAYLOAD_FN_COMPILE_STATS=<file>` appends one JSON line per process at
- * exit: every function seen, compiled or not (and why), with its counters and mismatches.
+ * calls, then 1 in 256). `PAYLOAD_FN_COMPILE_STATS=<dir>` writes `<dir>/<pid>.json`: every
+ * function seen, compiled or not (and why), with its counters and mismatches.
  */
 type Tracked = {
   calls: number
@@ -153,24 +154,29 @@ const logMismatch = (record: Tracked, args: unknown[], compiled: unknown, js: un
   )
 }
 
+/**
+ * Writes `<PAYLOAD_FN_COMPILE_STATS>/<pid>.json` (a directory) every second and at exit: test
+ * workers are often terminated without an `exit` event.
+ */
 const installExitHook = () => {
   if (exitHookInstalled) {
     return
   }
   exitHookInstalled = true
-  const file = process.env.PAYLOAD_FN_COMPILE_STATS
-  if (!file) {
+  const dir = process.env.PAYLOAD_FN_COMPILE_STATS
+  if (!dir) {
     return
   }
-  process.on('exit', () => {
+  mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, `${process.pid}.json`)
+  const flush = () => {
     const fnIr = getFnIr()
     const functions = tracked.map((t) => ({
       ...t,
       ...(t.id !== undefined ? { stats: fnIr.fnIrStats(t.id) } : {}),
     }))
-    appendFileSync(
-      file,
-      JSON.stringify({ functions, pid: process.pid, testFile: testFile ?? null }) + '\n',
-    )
-  })
+    writeFileSync(file, JSON.stringify({ functions, pid: process.pid, testFile: testFile ?? null }))
+  }
+  setInterval(flush, 1000).unref()
+  process.on('exit', flush)
 }

@@ -64,11 +64,13 @@ const copy = (value: unknown, state: State): unknown => {
     case 'undefined':
       return value
     case 'function':
-      return state.options.functionRef?.(value) ?? opaqueFunction
+      return state.options.functionRef?.(value as AnyFunction) ?? opaqueFunction
     case 'object':
       break
     case 'string':
-      return value.isWellFormed() ? value : opaquePrimitive
+      return (value as { isWellFormed: () => boolean } & string).isWellFormed()
+        ? value
+        : opaquePrimitive
     default:
       return opaquePrimitive
   }
