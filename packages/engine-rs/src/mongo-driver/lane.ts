@@ -49,6 +49,10 @@ export type DriverLane = {
   paginate: Any
   /** `entity key -> plan id | null`, per kind. */
   plans: Map<string, WeakMap<object, null | number>>
+  /** The replica set the client's topology names (`null`: none, transactions off). */
+  replicaSet: null | string
+  /** The adapter for the lane's own calls of upstream helpers (lazy.ts `createAdapterView`). */
+  view: Any
 }
 
 export type LaneMethod =
@@ -1188,14 +1192,14 @@ export const createLaneMethod = ({
       return fallback.call(this, args)
     }
     try {
-      const result = await implementation.call(this, lane, args)
+      const result = await implementation.call(lane.view, lane, args)
       laneStats.served[method] = (laneStats.served[method] ?? 0) + 1
       if (verifyMode() !== 'off') {
         await verifyResult({
           lane: result,
           method,
           reference: await fallback.call(this, args),
-          rerun: () => implementation.call(this, lane, args),
+          rerun: () => implementation.call(lane.view, lane, args),
         })
       }
       return result

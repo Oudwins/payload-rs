@@ -11,6 +11,7 @@ import { createRequire } from 'node:module'
 import { resolveDbMongodbMongoose } from '../mongo-live/host.js'
 import { getDriverBinding } from './binding.js'
 import { createLaneMethod, type DriverLane, laneMethods, laneStats } from './lane.js'
+import { connectLazily, createAdapterView, eagerReason, isMongooseUnopened } from './lazy.js'
 import { verifyMode, verifyStats } from './verify.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- adapter objects are untyped here */
@@ -28,6 +29,7 @@ export const getDriverLaneStats = () => {
   return {
     clientless: { ...clientless },
     clients: { bailed, calls, served },
+    connects: { ...connects },
     fallback: laneStats.fallback,
     served: laneStats.served,
     ...(verifyMode() !== 'off' ? { verify: verifyStats } : {}),
@@ -112,43 +114,52 @@ const clientSpec = (adapter: Any): { reason: string } | { spec: Record<string, u
   return { spec }
 }
 
+/** Connects the Rust client of `adapter`; `undefined` when it has none (the reason is counted). */
 const createLane = async (adapter: Any) => {
   const binding = getDriverBinding()
-  if (!binding || lanes.has(adapter)) {
-    return
+  const existing = lanes.get(adapter)
+  if (!binding || existing) {
+    return existing
   }
   const result = clientSpec(adapter)
   if ('reason' in result) {
     clientless[result.reason] = (clientless[result.reason] ?? 0) + 1
-    return
+    return undefined
   }
-  let info: { id: number }
+  let info: { id: number; replicaSet: null | string }
   try {
     info = JSON.parse(await binding.connect(adapter.url, JSON.stringify(result.spec)))
   } catch {
-    // the mongoose connection is up: its lane serves everything
+    // the mongoose lane serves everything (and reports upstream's connection errors)
     clientless['connect failed'] = (clientless['connect failed'] ?? 0) + 1
-    return
+    return undefined
   }
   const mongoose = resolveDbMongodbMongoose()
   const requireFromDbMongodb = createRequire(
     new URL('../../../db-mongodb/package.json', import.meta.url),
   )
-  lanes.set(adapter, {
+  const lane = {
     binding,
     BSON: mongoose.mongo.BSON,
     clientID: info.id,
     mongoose,
     paginate: requireFromDbMongodb('mongoose-paginate-v2').paginate,
     plans: new Map(),
-  })
+    replicaSet: info.replicaSet,
+    view: createAdapterView(adapter),
+  }
+  lanes.set(adapter, lane)
+  return lane
 }
+
+/** Adapters connected lazily / eagerly, and why eagerly (the stats file's `driverLane.connects`). */
+const connects: Record<string, number> = {}
 
 /**
  * Installs the driver lane on `adapter` (after the live engine's methods): its read methods try
- * the driver first and fall back to the methods installed before; `connect` also starts the Rust
- * client, `destroy` also closes it. No-op with `PAYLOAD_MONGO_DRIVER=node` or an addon without the
- * driver.
+ * the driver first and fall back to the methods installed before; `connect` starts the Rust client
+ * and leaves mongoose unopened until something touches it (lazy.ts), `destroy` closes both. No-op
+ * with `PAYLOAD_MONGO_DRIVER=node` or an addon without the driver.
  */
 export const installDriverLane = (adapter: Any): readonly string[] => {
   if (process.env.PAYLOAD_MONGO_DRIVER === 'node' || !getDriverBinding()) {
@@ -161,9 +172,26 @@ export const installDriverLane = (adapter: Any): readonly string[] => {
     }
   }
   const upstreamConnect = adapter.connect
-  adapter.connect = async function connect(this: Any, ...args: unknown[]) {
-    await upstreamConnect.apply(this, args)
-    await createLane(this)
+  adapter.connect = async function connect(this: Any, ...args: Any[]) {
+    const hotReload = Boolean(args[0]?.hotReload)
+    if (lanes.has(this)) {
+      // a reconnect (hot reload): mongoose only if it was opened
+      return isMongooseUnopened(this) ? undefined : upstreamConnect.apply(this, args)
+    }
+    const eager = eagerReason(this, resolveDbMongodbMongoose())
+    if (eager) {
+      connects[`eager: ${eager}`] = (connects[`eager: ${eager}`] ?? 0) + 1
+      await upstreamConnect.apply(this, args)
+      await createLane(this)
+      return
+    }
+    const lane = await createLane(this)
+    if (!lane) {
+      connects['eager: no driver client'] = (connects['eager: no driver client'] ?? 0) + 1
+      return upstreamConnect.apply(this, args)
+    }
+    connects.lazy = (connects.lazy ?? 0) + 1
+    await connectLazily({ adapter: this, hotReload, lane })
   }
   const upstreamDestroy = adapter.destroy
   adapter.destroy = async function destroy(this: Any, ...args: unknown[]) {
@@ -171,6 +199,8 @@ export const installDriverLane = (adapter: Any): readonly string[] => {
     if (lane) {
       lanes.delete(this)
       await lane.binding.close(lane.clientID)
+      // closes the (maybe never opened) mongoose connection without opening it
+      return upstreamDestroy.apply(lane.view, args)
     }
     return upstreamDestroy.apply(this, args)
   }

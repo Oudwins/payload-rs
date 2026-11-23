@@ -168,7 +168,7 @@ pub fn mongo_driver_aggregate<'env>(env: &'env Env, client: u32, plan: u32, args
 }
 
 /// A command (js-bson document) on the client's database (or `database`): resolves with the reply
-/// as js-bson bytes, rejects with the server's / driver's error message.
+/// as js-bson bytes, rejects with an Error whose message is `{ message, code?, codeName? }` JSON.
 #[napi]
 pub fn mongo_driver_command<'env>(
   env: &'env Env,
@@ -187,7 +187,7 @@ pub fn mongo_driver_command<'env>(
           Err(error) => deferred.reject(Error::new(Status::GenericFailure, error.to_string())),
         }
       }
-      Err(error) => deferred.reject(Error::new(Status::GenericFailure, error.to_string())),
+      Err(error) => deferred.reject(Error::new(Status::GenericFailure, error)),
     }
   });
   Ok(promise)

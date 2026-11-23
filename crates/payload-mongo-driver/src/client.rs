@@ -200,11 +200,15 @@ async fn run_count(coll: &Collection<RawDocumentBuf>, count: CountSpec) -> Resul
   })
 }
 
-/// Runs the find and writes its documents (transformed) as JSON array elements, as they arrive.
+/// Documents per transform task: larger results are transformed in parallel on the driver
+/// runtime, chunk by chunk as the cursor yields them (and joined in order).
+const TRANSFORM_CHUNK: usize = 32;
+
+/// Runs the find and writes its documents (transformed) as JSON array elements.
 async fn run_find(
   coll: &Collection<RawDocumentBuf>,
   find: FindSpec,
-  plan: &Plan,
+  plan: &Arc<Plan>,
   flags: Flags,
   shape: ReadShape,
 ) -> Result<String> {
@@ -216,14 +220,43 @@ async fn run_find(
   options.collation = find.collation;
   options.hint = find.hint;
   let mut cursor = coll.find(find.filter).with_options(options).await?;
-  let mut out = String::with_capacity(16 * 1024);
-  let mut first = true;
+  let mut tasks = Vec::new();
+  let mut chunk = Vec::with_capacity(TRANSFORM_CHUNK);
   while cursor.advance().await? {
-    if !first {
+    chunk.push(cursor.current().to_raw_document_buf());
+    if chunk.len() == TRANSFORM_CHUNK {
+      let docs = std::mem::replace(&mut chunk, Vec::with_capacity(TRANSFORM_CHUNK));
+      let plan = plan.clone();
+      tasks.push(tokio::spawn(async move { write_docs(&docs, &plan, flags, shape) }));
+    }
+  }
+  // the last chunk in this task, while the spawned ones run on the other workers
+  let tail = write_docs(&chunk, plan, flags, shape)?;
+  let mut out = String::new();
+  for task in tasks {
+    let part = task.await.map_err(|_| LaneError::Bail("transform task failed"))??;
+    if !out.is_empty() {
       out.push(',');
     }
-    first = false;
-    write_doc(&mut out, cursor.current(), plan, flags, shape)?;
+    out.push_str(&part);
+  }
+  if !tail.is_empty() {
+    if !out.is_empty() {
+      out.push(',');
+    }
+    out.push_str(&tail);
+  }
+  Ok(out)
+}
+
+/// `docs` transformed, as comma-separated JSON documents.
+fn write_docs(docs: &[RawDocumentBuf], plan: &Plan, flags: Flags, shape: ReadShape) -> Result<String> {
+  let mut out = String::with_capacity(docs.iter().map(|doc| doc.as_bytes().len()).sum::<usize>() + 16);
+  for (index, doc) in docs.iter().enumerate() {
+    if index > 0 {
+      out.push(',');
+    }
+    write_doc(&mut out, doc, plan, flags, shape)?;
   }
   Ok(out)
 }
@@ -345,8 +378,23 @@ pub async fn aggregate(
   Ok(out)
 }
 
-/// A command on the client's database (index builds, `dropDatabase`, ...), returning the raw reply.
-pub async fn command(client_id: u32, database: Option<String>, command: Document) -> Result<Document> {
-  let state = client(client_id)?;
-  Ok(state.client.database(database.as_deref().unwrap_or(&state.default_database)).run_command(command).await?)
+/// A command on the client's database (index builds, `create`, `dropDatabase`, ...), returning
+/// the raw reply, or the error as JSON `{ message, code?, codeName? }` (the server's code, which
+/// mongoose / db-mongodb branch on, e.g. 48 `NamespaceExists`).
+pub async fn command(
+  client_id: u32,
+  database: Option<String>,
+  command: Document,
+) -> std::result::Result<Document, String> {
+  let state = client(client_id).map_err(|e| serde_json::json!({ "message": e.to_string() }).to_string())?;
+  let database = state.client.database(database.as_deref().unwrap_or(&state.default_database));
+  database.run_command(command).await.map_err(|error| {
+    let mut out = serde_json::json!({ "message": error.to_string() });
+    if let mongodb::error::ErrorKind::Command(command_error) = error.kind.as_ref() {
+      out["code"] = serde_json::json!(command_error.code);
+      out["codeName"] = serde_json::json!(command_error.code_name);
+      out["message"] = serde_json::json!(command_error.message);
+    }
+    out.to_string()
+  })
 }
