@@ -1,3 +1,5 @@
+import type { MatchFunction } from 'path-to-regexp'
+
 import { match } from 'path-to-regexp'
 
 import type { Collection } from '../collections/config/types.js'
@@ -12,6 +14,23 @@ import { headersWithCors } from './headersWithCors.js'
 import { httpStatus } from './httpStatus.js'
 import { mergeHeaders } from './mergeHeaders.js'
 import { routeError } from './routeError.js'
+
+/**
+ * Endpoint path matchers per path string. `match` compiles the path into a regular expression
+ * without the `g` flag, so the returned function is pure and can serve every request.
+ */
+const pathMatchers = new Map<string, MatchFunction<Record<string, unknown>>>()
+
+const getPathMatcher = (path: string) => {
+  let pathMatcher = pathMatchers.get(path)
+
+  if (!pathMatcher) {
+    pathMatcher = match(path, { decode: decodeURIComponent })
+    pathMatchers.set(path, pathMatcher)
+  }
+
+  return pathMatcher
+}
 
 const notFoundResponse = (req: PayloadRequest, pathname?: string) => {
   return Response.json(
@@ -223,7 +242,10 @@ export const handleEndpoints = async ({
         return false
       }
 
-      const pathMatchFn = match(endpoint.path, { decode: decodeURIComponent })
+      const pathMatchFn =
+        typeof endpoint.path === 'string'
+          ? getPathMatcher(endpoint.path)
+          : match(endpoint.path, { decode: decodeURIComponent })
 
       const matchResult = pathMatchFn(adjustedPathname)
 
