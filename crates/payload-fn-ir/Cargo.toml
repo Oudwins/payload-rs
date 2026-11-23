@@ -1,0 +1,17 @@
+[package]
+name = "payload-fn-ir"
+description = "Compiles a pure subset of user JS functions (access control, simple hooks, validators) to an IR interpreted in Rust"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+oxc_allocator = "=0.146.0"
+oxc_ast = "=0.146.0"
+oxc_parser = "=0.146.0"
+oxc_span = "=0.146.0"
+oxc_syntax = "=0.146.0"
+regress = { version = "=0.11.1", features = ["utf16"] }
+ryu-js = "=1.0.3"
+serde_json.workspace = true

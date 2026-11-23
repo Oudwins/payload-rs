@@ -49,6 +49,11 @@
       "types": "./src/runtime/hooks.ts",
       "default": "./src/runtime/hooks.ts"
     },
+    "./compile": {
+      "import": "./src/compile/index.ts",
+      "types": "./src/compile/index.ts",
+      "default": "./src/compile/index.ts"
+    },
     "./ops": {
       "import": "./src/ops/index.ts",
       "types": "./src/ops/index.ts",
@@ -113,6 +118,10 @@
       "./runtime/hooks": {
         "import": "./dist/runtime/hooks.js",
         "default": "./dist/runtime/hooks.js"
+      },
+      "./compile": {
+        "import": "./dist/compile/index.js",
+        "default": "./dist/compile/index.js"
       },
       "./ops": {
         "import": "./dist/ops/index.js",

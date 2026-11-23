@@ -1,0 +1,198 @@
+import { types } from 'node:util'
+
+/**
+ * Snapshots of JS values for the function compiler (crates/payload-fn-ir): fresh plain objects,
+ * arrays and primitives only. Everything the interpreter does not model becomes one of the
+ * `opaque*` sentinels; reading a snapshot never runs user code (no getters, no proxy traps).
+ */
+/** Any JS function (the compiler accepts every kind). */
+// oxlint-disable-next-line typescript/no-explicit-any
+export type AnyFunction = (...args: any[]) => unknown
+
+export const opaqueObject = Object.freeze({ opaque: 'object' })
+export const opaqueFunction = Object.freeze({ opaque: 'function' })
+export const opaquePrimitive = Object.freeze({ opaque: 'primitive' })
+
+/** A compiled function inside a snapshot. */
+export class FnRef {
+  constructor(readonly id: number) {}
+}
+
+/** A partial object: only its listed properties are known (reading others bails). */
+export class Partial {
+  constructor(readonly value: Record<string, unknown>) {}
+}
+
+export const createNullProto = () => Object.create(null) as object
+
+/**
+ * The parts of `req` a compiled function can read: `true` leaves are snapshotted, objects are
+ * partial snapshots of the listed members. Reading anything else of `req` bails. The config
+ * paths are what Payload's own access wrappers read (`withBaseAccess`); the sanitized config is
+ * immutable, so a fused lane can provide them once.
+ */
+export const capturedRequest = {
+  context: true,
+  fallbackLocale: true,
+  locale: true,
+  payload: { config: { admin: { user: true }, baseAccess: true } },
+  query: true,
+  user: true,
+} as const
+
+type CaptureSpec = { readonly [key: string]: CaptureSpec | true }
+
+const maxNodes = 20_000
+
+type SnapshotOptions = {
+  /** Compile time: compiles functions found in captured values. Guard time: absent (opaque). */
+  functionRef?: (fn: AnyFunction) => FnRef | undefined
+}
+
+/** A snapshot of `value`. */
+export const snapshot = (value: unknown, options: SnapshotOptions = {}): unknown => {
+  const state = { nodes: 0, options, seen: new Set<object>() }
+  return copy(value, state)
+}
+
+type State = { nodes: number; options: SnapshotOptions; seen: Set<object> }
+
+const copy = (value: unknown, state: State): unknown => {
+  switch (typeof value) {
+    case 'boolean':
+    case 'number':
+    case 'undefined':
+      return value
+    case 'function':
+      return state.options.functionRef?.(value) ?? opaqueFunction
+    case 'object':
+      break
+    case 'string':
+      return value.isWellFormed() ? value : opaquePrimitive
+    default:
+      return opaquePrimitive
+  }
+  if (value === null) {
+    return null
+  }
+  if (++state.nodes > maxNodes || state.seen.has(value) || types.isProxy(value)) {
+    return opaqueObject
+  }
+  const proto = Object.getPrototypeOf(value)
+  const isArray = Array.isArray(value)
+  if (isArray ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) {
+    return opaqueObject
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const keys = Reflect.ownKeys(descriptors)
+  state.seen.add(value)
+  try {
+    if (isArray) {
+      const length = (value as unknown[]).length
+      // Exactly the indices and `length`: no holes, no extra properties.
+      if (keys.length !== length + 1) {
+        return opaqueObject
+      }
+      const out: unknown[] = new Array(length)
+      for (let i = 0; i < length; i++) {
+        const d = descriptors[i as unknown as string]
+        if (!d || !('value' in d)) {
+          return opaqueObject
+        }
+        out[i] = copy(d.value, state)
+      }
+      return out
+    }
+    const out: Record<string, unknown> = proto === null ? Object.create(null) : {}
+    for (const key of keys) {
+      const d = descriptors[key as string]!
+      if (typeof key === 'symbol' || !d.enumerable || !('value' in d)) {
+        return opaqueObject
+      }
+      out[key] = copy(d.value, state)
+    }
+    return out
+  } finally {
+    state.seen.delete(value)
+  }
+}
+
+/**
+ * A data property of `object` without running user code: `{ found, value }`, or `{ found:
+ * false }` for a missing one, `undefined` when it cannot be read safely (an accessor, a proxy,
+ * an inherited property).
+ */
+export const readDataProperty = (
+  object: object,
+  key: string,
+): { found: boolean; value?: unknown } | undefined => {
+  if (types.isProxy(object)) {
+    return undefined
+  }
+  const own = Object.getOwnPropertyDescriptor(object, key)
+  if (own) {
+    return 'value' in own ? { found: true, value: own.value } : undefined
+  }
+  for (let p = Object.getPrototypeOf(object); p; p = Object.getPrototypeOf(p)) {
+    if (types.isProxy(p) || Object.getOwnPropertyDescriptor(p, key)) {
+      return undefined
+    }
+  }
+  return { found: false }
+}
+
+/** `req` as a partial snapshot of the properties compiled functions may read. */
+export const snapshotRequest = (req: unknown): unknown => capture(req, capturedRequest)
+
+const capture = (value: unknown, spec: CaptureSpec): unknown => {
+  if (typeof value !== 'object' || value === null) {
+    return snapshot(value)
+  }
+  const out: Record<string, unknown> = {}
+  for (const [key, sub] of Object.entries(spec)) {
+    const read = readDataProperty(value, key)
+    if (!read) {
+      // Not safely readable: leave it out, reading it bails.
+      continue
+    }
+    out[key] = !read.found
+      ? undefined
+      : sub === true
+        ? snapshot(read.value)
+        : capture(read.value, sub)
+  }
+  return new Partial(out)
+}
+
+/**
+ * Snapshots of call arguments: for an args object (`{ req, data, ... }`), only `keys` when the
+ * function destructures exactly those, and `req` as a partial snapshot.
+ */
+export const snapshotArgs = (args: unknown[], argKeys: (null | string[])[]): unknown[] =>
+  args.map((arg, i) => {
+    if (typeof arg !== 'object' || arg === null || Array.isArray(arg) || types.isProxy(arg)) {
+      return snapshot(arg)
+    }
+    const proto = Object.getPrototypeOf(arg)
+    if (proto !== Object.prototype && proto !== null) {
+      return opaqueObject
+    }
+    const keys = argKeys[i] ?? Object.keys(arg)
+    const out: Record<string, unknown> = {}
+    let complete = true
+    for (const key of keys) {
+      const read = readDataProperty(arg, key)
+      if (!read) {
+        complete = false
+        continue
+      }
+      if (!read.found) {
+        // Absent own property: `undefined` unless the destructured key is on the prototype.
+        out[key] = undefined
+        continue
+      }
+      out[key] = key === 'req' ? snapshotRequest(read.value) : snapshot(read.value)
+    }
+    // With an explicit key list the function reads nothing else, so the object is closed.
+    return complete ? out : new Partial(out)
+  })

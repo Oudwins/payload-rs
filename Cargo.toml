@@ -27,6 +27,7 @@ members = [
   "crates/payload-mongo-live-write",
   "crates/payload-mongo-live-transform",
   "crates/payload-mongo-driver",
+  "crates/payload-fn-ir",
 ]
 
 [workspace.package]

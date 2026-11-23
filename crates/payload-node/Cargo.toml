@@ -21,6 +21,7 @@ payload-core-runtime = { path = "../payload-core-runtime" }
 payload-core-validate = { path = "../payload-core-validate" }
 payload-core-validate-live = { path = "../payload-core-validate/live" }
 payload-engine = { path = "../payload-engine" }
+payload-fn-ir = { path = "../payload-fn-ir" }
 payload-mongo-live = { path = "../payload-mongo-live" }
 payload-mongo-live-joins = { path = "../payload-mongo-live-joins" }
 payload-mongo-live-write = { path = "../payload-mongo-live-write" }
