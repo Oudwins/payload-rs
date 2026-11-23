@@ -66,7 +66,9 @@ A collection is eligible for reads when:
 ## 3. Guards (per call)
 
 - the arguments are inert: `args`, `req`, `where`, `sort`, `select`, `populate`, `joins` are plain
-  objects / arrays (prototype `Object.prototype`, `Array.prototype` or `null`, no accessors, no
+  objects / arrays (`req` may also be a `PayloadRequest` built from a web `Request`: a plain
+  `Request` whose `locale`, `fallbackLocale`, `payload`, `payloadAPI`, `transactionID`, `user`,
+  `query` are absent or own data properties) (prototype `Object.prototype`, `Array.prototype` or `null`, no accessors, no
   symbol keys, no proxies: `util.types.isProxy`), values are JSON-like (strings, finite numbers,
   booleans, null; `Date`s only where the encoder accepts them);
 - no `req.transactionID` (a transaction user code may share stays on the exact lane);
@@ -84,6 +86,11 @@ A collection is eligible for reads when:
   `'all'` with localized blocks.
 
 ## 4. Request (JS → native)
+
+Repeated query shapes reuse their statements: `crates/payload-fuse-sqlite/src/templates.rs` keys
+the `payload.db` arguments with `where` leaf values of safe classes as slots, builds the template
+from sentinels once, verifies that every sentinel comes back as one whole bound parameter, and
+binds the call's values (`PAYLOAD_RS_FUSE_TEMPLATES=off` disables it).
 
 `fuseBinding().run(backend, conn, requestJson) → string` (synchronous for SQLite).
 
@@ -118,6 +125,16 @@ A collection is eligible for reads when:
 back from `JSON.parse` identical to what upstream returns: no own `undefined` properties, no
 `NaN` / `Infinity`, no `bigint`, no `Date` objects, no `__proto__` keys. `-0` is written as `-0`.
 Integer-like keys are fine (JSON.parse orders them like any JS object).
+
+### Text results (RUST_HTTP_LANES.md 3.1 / 3.2)
+
+`fusedOperationText({ operation, operationArgs })` (exported from `src/fuse` and the `ops`
+entry) runs the same guards and core with `"canonical": true` in the request and returns the
+result text instead of materializing it, or `undefined` (nothing observable ran; the caller runs
+the exact operation). Canonical text is `JSON.stringify(JSON.parse(text))` byte for byte: `-0` is
+written as `0`, an integer-like key bails (JS would order it first), spliced json / rich text
+values must already be canonical (`scan::is_canonical`). In shadow mode it checks that invariant
+and returns `undefined`. `findGlobal` is not fused yet (`undefined`).
 
 ## 6. The FusedBackend trait
 
