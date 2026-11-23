@@ -13,6 +13,8 @@ import {
 } from 'payload'
 import { httpStatus } from 'payload/internal'
 
+import { concatRules, parseWithCache, validateWithCache } from './documentCache.js'
+
 const handleError = async ({
   err,
   payload,
@@ -95,6 +97,68 @@ export const getGraphql = async (config: Promise<SanitizedConfig> | SanitizedCon
   return cached.graphql
 }
 
+type GraphQLRequestState = {
+  context: { headers: Record<string, string>; req: PayloadRequest }
+  payload: Payload
+  req: PayloadRequest
+}
+
+/**
+ * Per-request state of the graphql-http handler, keyed on the `Request` the handler receives
+ * (graphql-http hands it back as `request.raw`), so one handler serves every request.
+ */
+const requestStates = new WeakMap<Request, GraphQLRequestState>()
+
+/** graphql-http handlers, built once per schema (`getGraphql`'s result). */
+const handlers = new WeakMap<
+  Awaited<ReturnType<typeof getGraphql>>,
+  (request: Request) => Promise<Response>
+>()
+
+const getHandler = (graphql: Awaited<ReturnType<typeof getGraphql>>) => {
+  let handler = handlers.get(graphql)
+
+  if (handler) {
+    return handler
+  }
+
+  const { schema, validationRules } = graphql
+
+  handler = createHandler<GraphQLRequestState['context']>({
+    context: (request) => requestStates.get(request.raw as Request)!.context,
+    onOperation: async (request, args, result) => {
+      const { payload, req } = requestStates.get(request.raw as Request)!
+      const response =
+        typeof payload.extensions === 'function'
+          ? await payload.extensions({
+              args,
+              req: request,
+              result,
+            })
+          : result
+      if (response.errors) {
+        const errors = (await Promise.all(
+          result.errors.map((error) => {
+            return handleError({ err: error, payload, req })
+          }),
+        )) as GraphQLError[]
+        // errors type should be FormattedGraphQLError[] but onOperation has a return type of ExecutionResult instead of FormattedExecutionResult
+        return { ...response, errors }
+      }
+      return response
+    },
+    parse: parseWithCache,
+    schema,
+    validate: validateWithCache,
+    validationRules: (_, args, defaultRules) =>
+      concatRules({ additionalRules: validationRules(args), defaultRules }),
+  })
+
+  handlers.set(graphql, handler)
+
+  return handler
+}
+
 export const POST =
   (config: Promise<SanitizedConfig> | SanitizedConfig) => async (request: Request) => {
     const originalRequest = request.clone()
@@ -115,34 +179,11 @@ export const POST =
     await addDataAndFileToRequest(req)
     addLocalesToRequestFromData(req)
 
-    const { schema, validationRules } = await getGraphql(config)
+    const graphql = await getGraphql(config)
 
     const headers = {}
-    const apiResponse = await createHandler({
-      context: { headers, req },
-      onOperation: async (request, args, result) => {
-        const response =
-          typeof payload.extensions === 'function'
-            ? await payload.extensions({
-                args,
-                req: request,
-                result,
-              })
-            : result
-        if (response.errors) {
-          const errors = (await Promise.all(
-            result.errors.map((error) => {
-              return handleError({ err: error, payload, req })
-            }),
-          )) as GraphQLError[]
-          // errors type should be FormattedGraphQLError[] but onOperation has a return type of ExecutionResult instead of FormattedExecutionResult
-          return { ...response, errors }
-        }
-        return response
-      },
-      schema,
-      validationRules: (_, args, defaultRules) => defaultRules.concat(validationRules(args)),
-    })(originalRequest)
+    requestStates.set(originalRequest, { context: { headers, req }, payload, req })
+    const apiResponse = await getHandler(graphql)(originalRequest)
 
     const resHeaders = headersWithCors({
       headers: new Headers(apiResponse.headers),
