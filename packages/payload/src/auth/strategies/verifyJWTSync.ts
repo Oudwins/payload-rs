@@ -5,11 +5,6 @@ import { decode as decodeBase64url } from 'jose/base64url'
 
 type DecodedJWTPayload = Record<string, unknown>
 
-type VerifiedJWT = {
-  payload: DecodedJWTPayload
-  protectedHeader: Record<string, unknown>
-}
-
 const base64urlSegment = /^[\w-]+$/
 const hs256SignatureLength = 43
 const strictDecoder = new TextDecoder('utf-8', { fatal: true })
@@ -30,23 +25,15 @@ const keysBySecret = new Map<string, KeyObject | null>()
  * when present, must be numbers with `nbf <= now < exp` (no clock tolerance). jose verifies the
  * signature through WebCrypto on the libuv thread pool; avoiding that hop is the point.
  */
-export const verifyJWTSync = ({
-  secret,
-  token,
-}: {
-  secret: string
-  token: string
-}): undefined | VerifiedJWT => {
+export const verifyJWTSync = ({ secret, token }: { secret: string; token: string }) => {
   try {
-    const segments = token.split('.')
-
-    if (segments.length !== 3) {
-      return undefined
-    }
-
-    const [encodedHeader, encodedPayload, signature] = segments as [string, string, string]
+    const [encodedHeader, encodedPayload, signature, ...rest] = token.split('.')
 
     if (
+      encodedHeader === undefined ||
+      encodedPayload === undefined ||
+      signature === undefined ||
+      rest.length > 0 ||
       signature.length !== hs256SignatureLength ||
       !base64urlSegment.test(encodedHeader) ||
       !base64urlSegment.test(encodedPayload) ||
@@ -111,7 +98,7 @@ const getKey = (secret: string) => {
   return key
 }
 
-const parseJSONSegment = (segment: string): DecodedJWTPayload | undefined => {
+const parseJSONSegment = (segment: string) => {
   let parsed: unknown
 
   try {

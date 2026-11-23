@@ -1,4 +1,4 @@
-import type { DocumentNode, GraphQLError, GraphQLSchema, ValidationRule } from 'graphql'
+import type { DocumentNode, GraphQLSchema, ValidationRule } from 'graphql'
 
 import { parse, validate } from 'graphql'
 
@@ -31,7 +31,7 @@ const defaultRulesResults = new WeakMap<
  * equal document, and graphql-js never mutates a document while validating or executing it.
  * Parse errors are not cached: every failing request runs `parse` again and gets its own error.
  */
-export const parseWithCache = (query: string): DocumentNode => {
+export const parseWithCache = (query: string) => {
   const cachedDocument = documentsByQuery.get(query)
 
   if (cachedDocument) {
@@ -59,7 +59,7 @@ export const concatRules = ({
 }: {
   additionalRules: readonly ValidationRule[]
   defaultRules: readonly ValidationRule[]
-}): ValidationRule[] => {
+}) => {
   const rules = defaultRules.concat(additionalRules)
 
   defaultRulesByRules.set(rules, defaultRules)
@@ -82,7 +82,7 @@ export const validateWithCache = (
   schema: GraphQLSchema,
   document: DocumentNode,
   rules: readonly ValidationRule[],
-): readonly GraphQLError[] => {
+) => {
   const defaultRules = defaultRulesByRules.get(rules)
 
   if (!defaultRules) {
