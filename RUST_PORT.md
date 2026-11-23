@@ -94,6 +94,22 @@ runs (interleaving of upstream's concurrent per-document work; to be settled aga
 Next: RUST_PERF_PLAN.md (fused lanes, Rust drivers, compiled functions) with the owner decisions in
 its section 0.
 
+MongoDB driver lane (WP B, 2026-11-23; `packages/engine-rs/MONGO_DRIVER_CONTRACT.md`): reads
+outside transactions run on a Rust `mongodb` client and mongoose is lazy. MongoDB, typical /
+complex / hooks at 1k posts, TS and Rust cells of the same run, TS median / Rust median, geometric
+means before (round 1) -> after: all 0.93x -> 1.21x (`--reuse` rerun 1.15x), read 0.95x -> 1.37x,
+globals 0.84x -> 1.22x, versions 0.86x -> 1.30x, create / update / partial-update / delete
+unchanged (0.94x / 0.94x / 0.97x / 0.89x: writes run in mongoose transactions; the Rust core on
+the TS adapter, `core-rs`, is 1.05x / 1.04x / 1.02x / 0.99x there). Typical: find limit 100 1.41x ->
+1.91x (2.44 ms), find limit 10 0.98x -> 1.68x, findByID depth 0 0.82x -> 2.90x (0.134 ms), count
+0.68x -> 1.41x, `GET /posts/:id` 0.78x -> 1.55x; hooks shape multi-document reads 1.23x -> 1.53-1.74x.
+`getPayload` (typical) 55.5 -> 41.0 ms (mongoose not connected at startup). Verified: MongoDB suite
+equal to the baseline (130/135 files clean; the others: cli's test title embeds the checkout path,
+hmr, storage / import-export emulators), shadow over fields / relationships / localization /
+versions / joins / hooks / auth 21,756 calls 0 divergences (the lane reports its driver operations
+to the shadow trace), cosmosdb variant over fields / relationships / joins / versions equal to TS,
+glue self-tests 33/33, parity goldens 503/503 in 3 of 3 runs (TS: 2 of 3, the bulk-update steps).
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).
