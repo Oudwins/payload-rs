@@ -39,6 +39,21 @@ pub fn should_verify(id: FnId) -> bool {
   n <= p.first || (p.sample_every > 0 && n % p.sample_every == 0)
 }
 
+/// For fused lanes: whether this call of `id` must run on the exact (JS-calling) lane so the JS
+/// side can verify it (the guard wrapper compares there). True until the function has
+/// [`Policy::first`] verified (or bailed) calls, then for one lane call in
+/// [`Policy::sample_every`]. Counts lane calls separately from the JS wrapper's calls.
+pub fn lane_should_verify(id: FnId) -> bool {
+  let Some(e) = registry::entry(id) else { return true };
+  let p = policy();
+  let checked = e.verified.load(Ordering::Relaxed) + e.bails.load(Ordering::Relaxed);
+  if checked < p.first {
+    return true;
+  }
+  let n = e.lane_calls.fetch_add(1, Ordering::Relaxed) + 1;
+  p.sample_every > 0 && n % p.sample_every == 0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
   /// Compiled and JS results are equal.

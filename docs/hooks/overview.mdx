@@ -160,6 +160,10 @@ When building hooks, combine together as many of these strategies as possible to
   documentation](../performance/overview).
 </Banner>
 
+### Compiled hooks
+
+Simple, pure hooks (for example a field hook that trims or slugifies its `value`) are compiled by Payload's Rust engine and evaluated without calling into JavaScript, and verified against the real function. To keep a hook in JavaScript, call `args.skipCompilation?.()` in it. See [Performance](../performance/overview#compiled-access-functions-hooks-and-validators).
+
 ### Writing efficient hooks
 
 Consider when hooks are run. One common pitfall is putting expensive logic in hooks that run very often.

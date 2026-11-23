@@ -29,6 +29,7 @@ pub mod compile;
 pub mod guard;
 pub(crate) mod interp;
 pub mod ir;
+pub mod lanes;
 pub mod registry;
 pub mod value;
 

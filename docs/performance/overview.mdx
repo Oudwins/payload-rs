@@ -200,6 +200,25 @@ import { Button } from '@payloadcms/ui'
   components that could be optimized.
 </Banner>
 
+## Compiled access functions, hooks and validators
+
+The Rust engine compiles simple, pure access functions, hooks and validators (for example `({ req: { user } }) => Boolean(user)`, role checks through an imported helper, owner constraints such as `{ customer: { equals: user.id } }`) into a small program it can evaluate without calling into JavaScript, so operations whose only custom code is such functions can run entirely in Rust. A function compiles when it only reads its arguments (`data`, `siblingData`, `doc`, `value`, and `req.user`, `req.locale`, `req.fallbackLocale`, `req.context`, `req.query`), constants and helpers it captures, and uses expressions, `if` / `switch` / `return`, and common string and array methods. Anything else (`await` of a query, `req.payload` calls, loops, assignments to captured variables or arguments, `new Date()`) keeps the function in JavaScript.
+
+Compilation assumes that the variables a function captures are not reassigned and the objects it captures are not mutated after startup, that the function returns the same result for the same arguments, and that built-in prototypes are not patched. The real function stays the authority: compiled results are verified against it, and a function whose compiled result ever differs is permanently run as JavaScript again.
+
+To keep a function in JavaScript, mention `skipCompilation` in it. Payload passes this no-op in the arguments of every access function and hook (`args.skipCompilation`) and in the options of every validator (`options.skipCompilation`):
+
+```ts
+import type { Access } from 'payload'
+
+export const readPosts: Access = (args) => {
+  // Never compile this function: it reads a value that changes at runtime.
+  args.skipCompilation?.()
+
+  return Boolean(args.req.user) && featureFlags.postsEnabled
+}
+```
+
 ## Optimizing local development
 
 Everything mentioned above applies to local development as well, but there are a few additional steps you can take to optimize your local development experience.

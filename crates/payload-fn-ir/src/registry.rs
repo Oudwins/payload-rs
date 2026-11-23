@@ -36,6 +36,7 @@ pub struct Entry {
   pub(crate) verified: AtomicU64,
   pub(crate) mismatches: AtomicU64,
   pub(crate) bails: AtomicU64,
+  pub(crate) lane_calls: AtomicU64,
 }
 
 static ENTRIES: RwLock<Vec<Arc<Entry>>> = RwLock::new(Vec::new());

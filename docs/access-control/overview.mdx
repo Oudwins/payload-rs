@@ -115,6 +115,10 @@ This is because Payload is executing your functions without referencing a specif
 
 If you use `id`, `data`, `siblingData`, `blockData` and `doc` within your access control functions, make sure to check that they are defined first. If they are not, then you can assume that your Access Control is being executed via the Access Operation to determine solely what the user can do within the Admin Panel.
 
+## Compiled Access Control
+
+Simple, pure access functions are compiled by Payload's Rust engine and evaluated without calling into JavaScript, and verified against the real function. To keep an access function in JavaScript, call `args.skipCompilation?.()` in it. See [Performance](../performance/overview#compiled-access-functions-hooks-and-validators).
+
 ## Locale Specific Access Control
 
 To implement locale-specific access control, you can use the `req.locale` argument in your access control functions. This argument allows you to evaluate the current locale of the request and determine access permissions accordingly.

@@ -139,3 +139,19 @@ fn closures_do_not_escape() {
   let v = run("() => (x) => x", &[]).unwrap();
   assert!(v.to_json().is_none());
 }
+
+#[test]
+fn lanes_access_args() {
+  use crate::lanes::{self, RequestSnapshot};
+  use payload_engine::js::JsVal;
+  let id = compile_standalone("({ req: { user } }) => user ? { owner: { equals: user.id } } : false").unwrap();
+  let user = Value::from_js_val(&JsVal::from_json(&serde_json::json!({ "id": 7 })));
+  let req = lanes::request(&RequestSnapshot { user, ..Default::default() });
+  let args = lanes::collection_access_args(Value::Undefined, "posts", Value::Undefined, req.clone());
+  let v = evaluate(id, &[args]).unwrap();
+  assert_eq!(v.to_js_val().unwrap().to_json(), serde_json::json!({ "owner": { "equals": 7 } }));
+  // Anything outside the captured request bails.
+  let id = compile_standalone("(args) => { const r = args.req; return r.headers }").unwrap();
+  let args = lanes::collection_access_args(Value::Undefined, "posts", Value::Undefined, req);
+  assert_eq!(evaluate(id, &[args]).unwrap_err(), Bail::Unknown);
+}
