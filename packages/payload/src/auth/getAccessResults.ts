@@ -1,6 +1,7 @@
 import type { AllOperations, PayloadRequest } from '../types/index.js'
 import type { Permissions, SanitizedPermissions } from './types.js'
 
+import { callUserFunction } from '../utilities/callUserFunction.js'
 import { getEntityPermissions } from '../utilities/getEntityPermissions/getEntityPermissions.js'
 import { sanitizePermissions } from '../utilities/sanitizePermissions.js'
 import { skipCompilation } from '../utilities/skipCompilation.js'
@@ -23,11 +24,18 @@ export async function getAccessResults({
 
   if (userCollectionConfig && payload.config.admin.user === user?.collection) {
     results.canAccessAdmin = userCollectionConfig.access.admin
-      ? await userCollectionConfig.access.admin({
-          slug: userCollectionConfig.slug,
-          req,
-          skipCompilation,
-        })
+      ? await callUserFunction(
+          userCollectionConfig.access.admin,
+          userCollectionConfig.access,
+          [
+            {
+              slug: userCollectionConfig.slug,
+              req,
+              skipCompilation,
+            },
+          ],
+          'userCollectionConfig.access.admin',
+        )
       : isLoggedIn
   } else {
     results.canAccessAdmin = false

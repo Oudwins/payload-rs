@@ -18,6 +18,7 @@ import {
 import { commitTransaction, Forbidden, initTransaction } from '../../index.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { killTransaction } from '../../utilities/killTransaction.js'
 import { sanitizeInternalFields } from '../../utilities/sanitizeInternalFields.js'
@@ -337,13 +338,20 @@ export const loginOperationTS = async <TSlug extends AuthCollectionSlug>(
     if (collectionConfig.hooks?.beforeLogin?.length) {
       for (const hook of collectionConfig.hooks.beforeLogin) {
         user =
-          (await hook({
-            collection: args.collection?.config,
-            context: args.req.context,
-            req: args.req,
-            skipCompilation,
-            user,
-          })) || user
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: args.collection?.config,
+                context: args.req.context,
+                req: args.req,
+                skipCompilation,
+                user,
+              },
+            ],
+            'hook',
+          )) || user
       }
     }
 
@@ -356,14 +364,21 @@ export const loginOperationTS = async <TSlug extends AuthCollectionSlug>(
     if (collectionConfig.hooks?.afterLogin?.length) {
       for (const hook of collectionConfig.hooks.afterLogin) {
         user =
-          (await hook({
-            collection: args.collection?.config,
-            context: args.req.context,
-            req: args.req,
-            skipCompilation,
-            token,
-            user,
-          })) || user
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: args.collection?.config,
+                context: args.req.context,
+                req: args.req,
+                skipCompilation,
+                token,
+                user,
+              },
+            ],
+            'hook',
+          )) || user
       }
     }
 

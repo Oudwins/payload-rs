@@ -15,6 +15,7 @@ import { promise as upstreamPromise } from '../../../payload/src/fields/hooks/af
 import { relationshipPopulationPromise } from '../../../payload/src/fields/hooks/afterRead/relationshipPopulationPromise.js'
 import { traverseFields as upstreamTraverseFields } from '../../../payload/src/fields/hooks/afterRead/traverseFields.js'
 import { virtualFieldPopulationPromise } from '../../../payload/src/fields/hooks/afterRead/virtualFieldPopulationPromise.js'
+import { callUserFunction } from '../../../payload/src/utilities/callUserFunction.js'
 import { deepCopyObjectSimple } from '../../../payload/src/utilities/deepCopyObject.js'
 import { getBlockSelect } from '../../../payload/src/utilities/getBlockSelect.js'
 import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
@@ -524,30 +525,37 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
       value: unknown,
     ) => {
       awaitValue(
-        hook({
-          blockData,
-          collection: c[ARG_COLLECTION],
-          context: c[ARG_CONTEXT],
-          currentDepth: c[ARG_CURRENT_DEPTH],
-          data: c[ARG_DOC],
-          depth: c[ARG_DEPTH],
-          draft: c[ARG_DRAFT],
-          field,
-          findMany: c[ARG_FIND_MANY],
-          global: c[ARG_GLOBAL],
-          indexPath: segments[2],
-          operation: 'read',
-          originalDoc: c[ARG_DOC],
-          overrideAccess: c[ARG_OVERRIDE_ACCESS],
-          path: segments[0],
-          req: c[ARG_REQ],
-          schemaPath: segments[1],
-          showHiddenFields: c[ARG_SHOW_HIDDEN_FIELDS],
-          siblingData,
-          siblingFields,
-          skipCompilation,
-          value,
-        }),
+        callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              blockData,
+              collection: c[ARG_COLLECTION],
+              context: c[ARG_CONTEXT],
+              currentDepth: c[ARG_CURRENT_DEPTH],
+              data: c[ARG_DOC],
+              depth: c[ARG_DEPTH],
+              draft: c[ARG_DRAFT],
+              field,
+              findMany: c[ARG_FIND_MANY],
+              global: c[ARG_GLOBAL],
+              indexPath: segments[2],
+              operation: 'read',
+              originalDoc: c[ARG_DOC],
+              overrideAccess: c[ARG_OVERRIDE_ACCESS],
+              path: segments[0],
+              req: c[ARG_REQ],
+              schemaPath: segments[1],
+              showHiddenFields: c[ARG_SHOW_HIDDEN_FIELDS],
+              siblingData,
+              siblingFields,
+              skipCompilation,
+              value,
+            },
+          ],
+          'hook',
+        ),
         token,
       )
     },
@@ -607,29 +615,34 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
     ) => {
       const doc = c[ARG_DOC]
       awaitValue(
-        reflectApply(read, access, [
-          c[ARG_COLLECTION]
-            ? {
-                id: doc.id,
-                blockData,
-                collection: c[ARG_COLLECTION],
-                data: doc,
-                doc,
-                req: c[ARG_REQ],
-                siblingData,
-                skipCompilation,
-              }
-            : {
-                id: doc.id,
-                blockData,
-                data: doc,
-                doc,
-                global: c[ARG_GLOBAL],
-                req: c[ARG_REQ],
-                siblingData,
-                skipCompilation,
-              },
-        ]),
+        callUserFunction(
+          read,
+          access,
+          [
+            c[ARG_COLLECTION]
+              ? {
+                  id: doc.id,
+                  blockData,
+                  collection: c[ARG_COLLECTION],
+                  data: doc,
+                  doc,
+                  req: c[ARG_REQ],
+                  siblingData,
+                  skipCompilation,
+                }
+              : {
+                  id: doc.id,
+                  blockData,
+                  data: doc,
+                  doc,
+                  global: c[ARG_GLOBAL],
+                  req: c[ARG_REQ],
+                  siblingData,
+                  skipCompilation,
+                },
+          ],
+          'field.access.read',
+        ),
         token,
       )
     },

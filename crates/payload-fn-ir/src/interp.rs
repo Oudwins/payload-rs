@@ -14,13 +14,15 @@ type R<T> = Result<T, Bail>;
 
 pub(crate) struct Interp {
   frames: Vec<Frame>,
+  /// The slots of every frame, one contiguous stack (a frame's start is `Frame::base`).
+  stack: Vec<Option<Value>>,
   next_frame: u64,
 }
 
 struct Frame {
   id: u64,
-  def: Arc<registry::Installed>,
-  slots: Vec<Option<Value>>,
+  def: &'static registry::Installed,
+  base: usize,
 }
 
 enum Flow {
@@ -31,13 +33,13 @@ enum Flow {
 
 impl Interp {
   pub(crate) fn new() -> Self {
-    Interp { frames: vec![], next_frame: 0 }
+    Interp { frames: Vec::with_capacity(8), stack: Vec::with_capacity(64), next_frame: 0 }
   }
 
   /// Calls compiled function `id` with `args`; a promise result (an async helper's, or an async
   /// function's own) is unwrapped: every Payload call site awaits the result.
-  pub(crate) fn call_top(&mut self, id: FnId, args: &[Value]) -> R<Value> {
-    let v = self.call_fn(id, args)?;
+  pub(crate) fn call_top(&mut self, installed: &'static registry::Installed, args: &[Value]) -> R<Value> {
+    let v = self.call_installed(installed, args)?;
     Ok(match v {
       Value::Promise(inner) => (*inner).clone(),
       other => other,
@@ -49,12 +51,22 @@ impl Interp {
       return Err(Bail::Limit);
     }
     let installed = registry::installed(id).ok_or(Bail::NotCompiled)?;
+    self.call_installed(installed, args)
+  }
+
+  fn call_installed(&mut self, installed: &'static registry::Installed, args: &[Value]) -> R<Value> {
+    if self.frames.len() >= MAX_DEPTH {
+      return Err(Bail::Limit);
+    }
     let def: &FnDef = &installed.def;
-    let frame = Frame { id: self.next_frame, slots: vec![None; def.slots as usize], def: installed.clone() };
+    let base = self.stack.len();
+    self.stack.resize(base + def.slots as usize, None);
+    let frame = Frame { id: self.next_frame, base, def: installed };
     self.next_frame += 1;
     self.frames.push(frame);
     let result = self.run_function(args);
     self.frames.pop();
+    self.stack.truncate(base);
     let value = result?;
     if installed.def.is_async {
       if let Value::Promise(_) = value {
@@ -66,8 +78,8 @@ impl Interp {
     Ok(value)
   }
 
-  fn def(&self) -> Arc<registry::Installed> {
-    self.frames.last().expect("frame").def.clone()
+  fn def(&self) -> &'static registry::Installed {
+    self.frames.last().expect("frame").def
   }
 
   fn run_function(&mut self, args: &[Value]) -> R<Value> {
@@ -97,7 +109,14 @@ impl Interp {
   }
 
   fn slot(&mut self, slot: u32) -> &mut Option<Value> {
-    &mut self.frames.last_mut().expect("frame").slots[slot as usize]
+    let base = self.frames.last().expect("frame").base;
+    &mut self.stack[base + slot as usize]
+  }
+
+  /// Ready for the next top-level evaluation (a reused interpreter).
+  pub(crate) fn reset(&mut self) {
+    self.frames.clear();
+    self.stack.clear();
   }
 
   fn bind(&mut self, pattern: &Pattern, value: Value) -> R<()> {
@@ -114,13 +133,29 @@ impl Interp {
         if value.is_nullish() {
           return Err(Bail::Throw);
         }
-        let mut used = vec![];
+        // The keys read are only kept when a rest element needs them.
+        let mut used = if rest.is_some() { Some(vec![]) } else { None };
         for (key, p) in props {
-          let k = self.key(key)?;
-          let v = builtins::get(&value, &k)?;
-          used.push(k);
+          let v = match key {
+            Key::Static(k) => {
+              let v = builtins::get(&value, k)?;
+              if let Some(used) = &mut used {
+                used.push(k.clone());
+              }
+              v
+            }
+            Key::Computed(_) => {
+              let k = self.key(key)?;
+              let v = builtins::get(&value, &k)?;
+              if let Some(used) = &mut used {
+                used.push(k);
+              }
+              v
+            }
+          };
           self.bind(p, v)?;
         }
+        let used = used.unwrap_or_default();
         if let Some(rest) = rest {
           let Value::Object(o) = &value else { return Err(Bail::Unsupported("object rest of a non-object")) };
           if !o.closed {
@@ -234,8 +269,13 @@ impl Interp {
         if *optional && o.is_nullish() {
           return Err(Bail::ShortCircuit);
         }
-        let k = self.key(key)?;
-        builtins::get(&o, &k)
+        match key {
+          Key::Static(k) => builtins::get(&o, k),
+          Key::Computed(_) => {
+            let k = self.key(key)?;
+            builtins::get(&o, &k)
+          }
+        }
       }
       Expr::Chain(inner) => match self.eval(inner) {
         Err(Bail::ShortCircuit) => Ok(Value::Undefined),
@@ -348,7 +388,7 @@ impl Interp {
         let v = self.eval(inner)?;
         match v {
           Value::Promise(inner) => Ok((*inner).clone()),
-          Value::Object(o) if o.props.contains_key("then") || !o.closed => Err(Bail::Unsupported("await of a thenable")),
+          Value::Object(o) if o.has("then") || !o.closed => Err(Bail::Unsupported("await of a thenable")),
           Value::Opaque(OpaqueKind::Object | OpaqueKind::Function) | Value::Func(_) => {
             Err(Bail::Unsupported("await of an opaque object"))
           }
@@ -390,7 +430,7 @@ impl Interp {
         if current.id != *frame {
           return Err(Bail::Unsupported("closure called outside its frame"));
         }
-        let installed = current.def.clone();
+        let installed = current.def;
         let Closure { params, body } = &installed.def.closures[*closure as usize];
         self.bind_params(params, args)?;
         self.run_body(body)
@@ -400,7 +440,7 @@ impl Interp {
 
   fn method(&mut self, receiver: &Value, name: &str, args: &[Value]) -> R<Value> {
     if let Value::Object(o) = receiver
-      && let Some(f) = o.props.get(name)
+      && let Some(f) = o.get(name)
     {
       let f = f.clone();
       return self.call_value(&f, args);

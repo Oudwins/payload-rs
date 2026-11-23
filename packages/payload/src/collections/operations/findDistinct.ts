@@ -16,6 +16,7 @@ import { Forbidden } from '../../errors/Forbidden.js'
 import { QueryError } from '../../errors/QueryError.js'
 import { relationshipPopulationPromise } from '../../fields/hooks/afterRead/relationshipPopulationPromise.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { getFieldByPath } from '../../utilities/getFieldByPath.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
@@ -146,11 +147,18 @@ export const findDistinctOperationTS = async (
   }
 
   if (fieldResult.field.access?.read) {
-    const hasAccess = await fieldResult.field.access.read({
-      collection: collectionConfig,
-      req,
-      skipCompilation,
-    })
+    const hasAccess = await callUserFunction(
+      fieldResult.field.access.read,
+      fieldResult.field.access,
+      [
+        {
+          collection: collectionConfig,
+          req,
+          skipCompilation,
+        },
+      ],
+      'fieldResult.field.access.read',
+    )
     if (!hasAccess) {
       throw new Forbidden(req.t)
     }

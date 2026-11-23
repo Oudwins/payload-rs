@@ -15,6 +15,7 @@ import { executeAccess } from '../../auth/executeAccess.js'
 import { NotFound } from '../../errors/NotFound.js'
 import { afterRead, type AfterReadArgs } from '../../fields/hooks/afterRead/index.js'
 import { lockedDocumentsCollectionSlug } from '../../locked-documents/config.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { getSelectMode } from '../../utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../utilities/getVersionsConfig.js'
@@ -71,15 +72,22 @@ export const findOneOperationTS = async <T extends Record<string, unknown>>(
   if (globalConfig.hooks?.beforeOperation?.length) {
     for (const hook of globalConfig.hooks.beforeOperation) {
       args =
-        (await hook({
-          args,
-          context: args.req.context,
-          global: globalConfig,
-          operation: 'read',
-          overrideAccess,
-          req: args.req,
-          skipCompilation,
-        })) || args
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              args,
+              context: args.req.context,
+              global: globalConfig,
+              operation: 'read',
+              overrideAccess,
+              req: args.req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || args
     }
   }
 
@@ -218,14 +226,21 @@ export const findOneOperationTS = async <T extends Record<string, unknown>>(
   if (globalConfig.hooks?.beforeRead?.length) {
     for (const hook of globalConfig.hooks.beforeRead) {
       doc =
-        (await hook({
-          context: req.context,
-          doc,
-          global: globalConfig,
-          overrideAccess,
-          req,
-          skipCompilation,
-        })) || doc
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              context: req.context,
+              doc,
+              global: globalConfig,
+              overrideAccess,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || doc
     }
   }
 
@@ -270,14 +285,21 @@ export const findOneOperationTS = async <T extends Record<string, unknown>>(
   if (globalConfig.hooks?.afterRead?.length) {
     for (const hook of globalConfig.hooks.afterRead) {
       doc =
-        (await hook({
-          context: req.context,
-          doc,
-          global: globalConfig,
-          overrideAccess,
-          req,
-          skipCompilation,
-        })) || doc
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              context: req.context,
+              doc,
+              global: globalConfig,
+              overrideAccess,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || doc
     }
   }
 

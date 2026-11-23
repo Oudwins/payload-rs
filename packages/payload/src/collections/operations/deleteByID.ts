@@ -26,6 +26,7 @@ import {
 } from '../../uploads/fileVersioning/fileOperationManager.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { checkDocumentLockStatus } from '../../utilities/checkDocumentLockStatus.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
@@ -147,13 +148,20 @@ export const deleteByIDOperationTS = async <
 
     if (collectionConfig.hooks?.beforeDelete?.length) {
       for (const hook of collectionConfig.hooks.beforeDelete) {
-        await hook({
-          id,
-          collection: collectionConfig,
-          context: req.context,
-          req,
-          skipCompilation,
-        })
+        await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              id,
+              collection: collectionConfig,
+              context: req.context,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )
       }
     }
 
@@ -294,14 +302,21 @@ export const deleteByIDOperationTS = async <
     if (collectionConfig.hooks?.afterRead?.length) {
       for (const hook of collectionConfig.hooks.afterRead) {
         result =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            doc: result,
-            overrideAccess,
-            req,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                doc: result,
+                overrideAccess,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 
@@ -312,14 +327,21 @@ export const deleteByIDOperationTS = async <
     if (collectionConfig.hooks?.afterDelete?.length) {
       for (const hook of collectionConfig.hooks.afterDelete) {
         result =
-          (await hook({
-            id,
-            collection: collectionConfig,
-            context: req.context,
-            doc: result,
-            req,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                id,
+                collection: collectionConfig,
+                context: req.context,
+                doc: result,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 

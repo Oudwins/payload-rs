@@ -11,6 +11,7 @@ import { validateSortQuery } from '../../database/queryValidation/validateSortQu
 import { sanitizeWhereQuery } from '../../database/sanitizeWhereQuery.js'
 import { NotFound } from '../../errors/index.js'
 import { afterRead } from '../../fields/hooks/afterRead/index.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { hasVersionsEnabled } from '../../utilities/getVersionsConfig.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
@@ -167,16 +168,23 @@ export const findVersionsOperationTS = async <T extends TypeWithVersion<T>>(
 
         for (const hook of globalConfig.hooks.afterRead) {
           docRef.version =
-            (await hook({
-              context: req.context,
-              doc: doc.version,
-              findMany: true,
-              global: globalConfig,
-              overrideAccess,
-              query: fullWhere,
-              req,
-              skipCompilation,
-            })) || doc.version
+            (await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
+                  context: req.context,
+                  doc: doc.version,
+                  findMany: true,
+                  global: globalConfig,
+                  overrideAccess,
+                  query: fullWhere,
+                  req,
+                  skipCompilation,
+                },
+              ],
+              'hook',
+            )) || doc.version
         }
 
         return docRef

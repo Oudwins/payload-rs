@@ -11,6 +11,7 @@ import type {
 import type { Block, Field, TabAsField } from '../../config/types.js'
 
 import { MissingEditorProp } from '../../../errors/index.js'
+import { callUserFunction } from '../../../utilities/callUserFunction.js'
 import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import { fieldAffectsData, tabHasName, valueIsValueWithRelation } from '../../config/types.js'
 import { getFieldPaths } from '../../getFieldPaths.js'
@@ -300,30 +301,37 @@ export const promise = async <T>({
     // Execute hooks
     if ('hooks' in field && field.hooks?.beforeValidate) {
       for (const hook of field.hooks.beforeValidate) {
-        const hookedValue = await hook({
-          blockData,
-          collection,
-          context,
-          data: data as Partial<T>,
-          field,
-          global,
-          indexPath: indexPathSegments,
-          operation,
-          originalDoc: policyDoc,
-          overrideAccess,
-          path: pathSegments,
-          previousSiblingDoc: policySiblingDoc,
-          previousValue: policySiblingDoc[field.name],
-          req,
-          schemaPath: schemaPathSegments,
-          siblingData,
-          siblingFields: siblingFields!,
-          skipCompilation,
-          value:
-            typeof siblingData[field.name] === 'undefined'
-              ? fallbackResult.value
-              : siblingData[field.name],
-        })
+        const hookedValue = await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              blockData,
+              collection,
+              context,
+              data: data as Partial<T>,
+              field,
+              global,
+              indexPath: indexPathSegments,
+              operation,
+              originalDoc: policyDoc,
+              overrideAccess,
+              path: pathSegments,
+              previousSiblingDoc: policySiblingDoc,
+              previousValue: policySiblingDoc[field.name],
+              req,
+              schemaPath: schemaPathSegments,
+              siblingData,
+              siblingFields: siblingFields!,
+              skipCompilation,
+              value:
+                typeof siblingData[field.name] === 'undefined'
+                  ? fallbackResult.value
+                  : siblingData[field.name],
+            },
+          ],
+          'hook',
+        )
 
         if (hookedValue !== undefined) {
           siblingData[field.name] = hookedValue
@@ -337,28 +345,33 @@ export const promise = async <T>({
     if (field.access && field.access[operation]) {
       accessResult = overrideAccess
         ? true
-        : await field.access[operation](
-            collection
-              ? {
-                  id,
-                  blockData,
-                  collection,
-                  data: data as Partial<T>,
-                  doc: policyDoc,
-                  req,
-                  siblingData,
-                  skipCompilation,
-                }
-              : {
-                  id,
-                  blockData,
-                  data: data as Partial<T>,
-                  doc: policyDoc,
-                  global: global!,
-                  req,
-                  siblingData,
-                  skipCompilation,
-                },
+        : await callUserFunction(
+            field.access[operation],
+            field.access,
+            [
+              collection
+                ? {
+                    id,
+                    blockData,
+                    collection,
+                    data: data as Partial<T>,
+                    doc: policyDoc,
+                    req,
+                    siblingData,
+                    skipCompilation,
+                  }
+                : {
+                    id,
+                    blockData,
+                    data: data as Partial<T>,
+                    doc: policyDoc,
+                    global: global!,
+                    req,
+                    siblingData,
+                    skipCompilation,
+                  },
+            ],
+            'field.access[operation]',
           )
 
       if (!accessResult) {
@@ -563,25 +576,32 @@ export const promise = async <T>({
 
       if (editor?.hooks?.beforeValidate?.length) {
         for (const hook of editor.hooks.beforeValidate) {
-          const hookedValue = await hook({
-            collection,
-            context,
-            data: data as Partial<T>,
-            field,
-            global,
-            indexPath: indexPathSegments,
-            operation,
-            originalDoc: doc,
-            overrideAccess,
-            parentIsLocalized,
-            path: pathSegments,
-            previousSiblingDoc: siblingDoc,
-            previousValue: siblingData[field.name],
-            req,
-            schemaPath: schemaPathSegments,
-            siblingData,
-            value: siblingData[field.name],
-          })
+          const hookedValue = await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection,
+                context,
+                data: data as Partial<T>,
+                field,
+                global,
+                indexPath: indexPathSegments,
+                operation,
+                originalDoc: doc,
+                overrideAccess,
+                parentIsLocalized,
+                path: pathSegments,
+                previousSiblingDoc: siblingDoc,
+                previousValue: siblingData[field.name],
+                req,
+                schemaPath: schemaPathSegments,
+                siblingData,
+                value: siblingData[field.name],
+              },
+            ],
+            'hook',
+          )
 
           if (hookedValue !== undefined) {
             siblingData[field.name] = hookedValue

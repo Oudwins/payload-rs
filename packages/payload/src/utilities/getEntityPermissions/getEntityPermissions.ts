@@ -12,6 +12,7 @@ import type { SanitizedGlobalConfig } from '../../globals/config/types.js'
 import type { BlockSlug, DefaultDocumentIDType } from '../../index.js'
 import type { AllOperations, JsonObject, PayloadRequest, Where } from '../../types/index.js'
 
+import { callUserFunction } from '../callUserFunction.js'
 import { getAccessOperationRequest } from '../getAccessOperationRequest.js'
 import { skipCompilation } from '../skipCompilation.js'
 import { entityDocExists } from './entityDocExists.js'
@@ -166,19 +167,26 @@ export async function getEntityPermissions<TEntityType extends 'collection' | 'g
         accessResults.push({
           operation,
           result: Promise.resolve(
-            accessFunction({
-              id,
-              slug: entity.slug,
-              data,
-              req:
-                _operation === 'readVersions' || _operation === 'unlock'
-                  ? req
-                  : getAccessOperationRequest({
-                      operation: _operation,
-                      req,
-                    }),
-              skipCompilation,
-            }),
+            callUserFunction(
+              accessFunction,
+              undefined,
+              [
+                {
+                  id,
+                  slug: entity.slug,
+                  data,
+                  req:
+                    _operation === 'readVersions' || _operation === 'unlock'
+                      ? req
+                      : getAccessOperationRequest({
+                          operation: _operation,
+                          req,
+                        }),
+                  skipCompilation,
+                },
+              ],
+              'accessFunction',
+            ),
           ),
         })
       } else {

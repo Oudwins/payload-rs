@@ -2,39 +2,49 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { inspect, types } from 'node:util'
 
-import type { ConfigFunction } from './configFunctions.js'
 import type { CompiledResult } from './native.js'
 import type { AnyFunction } from './snapshot.js'
 
-import { aliasCompiledFunction, compileFunction } from './compileFunction.js'
+import { setUserFunctionGuard } from '../../../payload/src/utilities/callUserFunction.js'
+import { compileFunction } from './compileFunction.js'
 import { configFunctions } from './configFunctions.js'
 import { getFnIr } from './native.js'
 import { snapshot, snapshotArgs } from './snapshot.js'
 
 /**
- * Guard mode: every compiled function of the config is replaced by a wrapper that calls the real
- * function (the authority: its result, errors and `this` are returned unchanged) and, for the calls
- * the policy selects (`fnIrShouldVerify`), evaluates the compiled IR on a snapshot of the
- * arguments taken before the call and compares it with the real result. A mismatch de-optimises
- * the function permanently and is logged.
+ * Guard mode: verification of compiled functions at their call sites. The config is not touched:
+ * Payload calls access functions, hooks and validators through `callUserFunction` (payload
+ * `utilities/callUserFunction.ts`, both engines' JS call sites) and the Rust core calls every JS
+ * function through `js::call`; with guards installed both go through `guardCall`, which looks the
+ * function up by identity. For a compiled function and the calls the policy selects
+ * (`fnIrShouldVerify`) it evaluates the IR on a snapshot of the arguments taken before the call,
+ * calls the real function (the authority: same `this`, arguments, result, errors, promise) and
+ * compares. A mismatch de-optimises the function permanently and is logged.
  *
  * `PAYLOAD_FN_COMPILE_GUARD=all` verifies every call; `=sample` the policy default (first 32
  * calls, then 1 in 256). `PAYLOAD_FN_COMPILE_STATS=<dir>` writes `<dir>/<pid>.json`: every
- * function seen, compiled or not (and why), with its counters and mismatches.
+ * function seen (once per function object, with all its config labels), compiled or not (and
+ * why), with its counters, bail reasons and mismatches.
  */
 type Tracked = {
+  bailReasons: Record<string, number>
   calls: number
   compiled: boolean
   id?: number
   kind: string
   label: string
+  labels: string[]
   mismatches: { args: string; compiled: string; js: string }[]
   reason?: string
 }
 
+type Guarded = { argKeys: (null | string[])[]; id: number; record: Tracked }
+
 const tracked: Tracked[] = []
+const trackedByFunction = new WeakMap<AnyFunction, Tracked>()
+const guarded = new WeakMap<AnyFunction, Guarded>()
 const guardedConfigs = new WeakSet<object>()
-let exitHookInstalled = false
+let installed = false
 let testFile: string | undefined
 
 export const installCompileGuards = (
@@ -49,94 +59,98 @@ export const installCompileGuards = (
   const fnIr = getFnIr()
   const mode = process.env.PAYLOAD_FN_COMPILE_GUARD
   fnIr.fnIrSetPolicy(mode === 'all' ? Infinity : 32, mode === 'all' ? 1 : 256)
-  installExitHook()
-  const wrapped = new Map<AnyFunction, AnyFunction>()
   let compiledCount = 0
   const entries = configFunctions(config)
   for (const entry of entries) {
+    const existing = trackedByFunction.get(entry.fn)
+    if (existing) {
+      existing.labels.push(entry.label)
+      compiledCount += existing.compiled ? 1 : 0
+      continue
+    }
     const result = compileFunction(entry.fn, entry.label)
     const record: Tracked = {
+      bailReasons: {},
       calls: 0,
       compiled: result.ok,
       kind: entry.kind,
       label: entry.label,
+      labels: [entry.label],
       mismatches: [],
       ...(result.ok ? { id: result.id } : { reason: result.reason }),
     }
     tracked.push(record)
-    if (!result.ok) {
-      continue
+    trackedByFunction.set(entry.fn, record)
+    if (result.ok) {
+      compiledCount++
+      guarded.set(entry.fn, { id: result.id, argKeys: result.argKeys, record })
     }
-    compiledCount++
-    // One wrapper per function object (shared functions appear under several labels).
-    let guard = wrapped.get(entry.fn)
-    if (!guard) {
-      guard = createGuard(entry, result.id, result.argKeys, record)
-      wrapped.set(entry.fn, guard)
-    }
-    entry.replace(guard)
+  }
+  if (!installed) {
+    installed = true
+    setUserFunctionGuard(guardCall)
+    fnIr.fnIrSetCallGuard(guardCall)
+    installStatsWriter()
   }
   return { compiled: compiledCount, total: entries.length }
 }
 
-const createGuard = (
-  entry: ConfigFunction,
-  id: number,
-  argKeys: (null | string[])[],
-  record: Tracked,
-): AnyFunction => {
+const bail = (record: Tracked, reason: string) => {
+  record.bailReasons[reason] = (record.bailReasons[reason] ?? 0) + 1
+}
+
+/** `Reflect.apply(fn, thisArg, args)`, verifying `fn` when it is a guarded compiled function. */
+const guardCall = (fn: AnyFunction, thisArg: unknown, args: unknown[]): unknown => {
+  const entry = guarded.get(fn)
+  if (!entry) {
+    return Reflect.apply(fn, thisArg, args)
+  }
+  const { id, record } = entry
   const fnIr = getFnIr()
-  const original = entry.fn
-  const compare = (compiled: CompiledResult, args: unknown[], jsResult: unknown) => {
-    const outcome = fnIr.fnIrCompare(compiled, snapshot(jsResult))
-    fnIr.fnIrRecord(id, outcome)
-    if (outcome === 1) {
-      logMismatch(record, args, fnIr.fnIrResultToJs(compiled), jsResult)
+  record.calls++
+  let compiled: CompiledResult | undefined
+  let snapArgs: undefined | unknown[]
+  if (fnIr.fnIrIsActive(id) && fnIr.fnIrShouldVerify(id)) {
+    snapArgs = snapshotArgs(args, entry.argKeys)
+    const evaluated = fnIr.fnIrEvaluate(id, snapArgs)
+    if (typeof evaluated === 'string') {
+      fnIr.fnIrRecord(id, 2)
+      bail(record, evaluated)
+    } else {
+      compiled = evaluated
     }
   }
-  const guard = function (this: unknown, ...args: unknown[]) {
-    record.calls++
-    let compiled: CompiledResult | undefined
-    let snapArgs: undefined | unknown[]
-    if (fnIr.fnIrIsActive(id) && fnIr.fnIrShouldVerify(id)) {
-      snapArgs = snapshotArgs(args, argKeys)
-      const evaluated = fnIr.fnIrEvaluate(id, snapArgs)
-      if (typeof evaluated === 'string') {
-        fnIr.fnIrRecord(id, 2)
-      } else {
-        compiled = evaluated
-      }
-    }
-    let result: unknown
-    try {
-      result = Reflect.apply(original, this, args)
-    } catch (error) {
-      if (compiled) {
-        fnIr.fnIrRecord(id, 1)
-        logMismatch(record, snapArgs!, fnIr.fnIrResultToJs(compiled), `threw ${String(error)}`)
-      }
-      throw error
-    }
+  let result: unknown
+  try {
+    result = Reflect.apply(fn, thisArg, args)
+  } catch (error) {
     if (compiled) {
-      const c = compiled
-      if (types.isPromise(result)) {
-        result.then(
-          (value) => compare(c, snapArgs!, value),
-          (error) => {
-            fnIr.fnIrRecord(id, 1)
-            logMismatch(record, snapArgs!, fnIr.fnIrResultToJs(c), `rejected ${String(error)}`)
-          },
-        )
-      } else {
-        compare(c, snapArgs!, result)
+      fnIr.fnIrRecord(id, 1)
+      logMismatch(record, snapArgs!, fnIr.fnIrResultToJs(compiled), `threw ${String(error)}`)
+    }
+    throw error
+  }
+  if (compiled) {
+    const c = compiled
+    const compare = (jsResult: unknown) => {
+      const outcome = fnIr.fnIrCompare(c, snapshot(jsResult))
+      fnIr.fnIrRecord(id, outcome)
+      if (outcome === 1) {
+        logMismatch(record, snapArgs!, fnIr.fnIrResultToJs(c), jsResult)
+      } else if (outcome === 2) {
+        bail(record, 'result not comparable')
       }
     }
-    return result
+    if (types.isPromise(result)) {
+      result.then(compare, (error) => {
+        fnIr.fnIrRecord(id, 1)
+        logMismatch(record, snapArgs!, fnIr.fnIrResultToJs(c), `rejected ${String(error)}`)
+      })
+    } else {
+      compare(result)
+    }
   }
-  Object.defineProperties(guard, Object.getOwnPropertyDescriptors(original))
-  Object.setPrototypeOf(guard, Object.getPrototypeOf(original))
-  aliasCompiledFunction(guard, original)
-  return guard
+  return result
 }
 
 const show = (value: unknown) => inspect(value, { breakLength: Infinity, depth: 6 })
@@ -158,11 +172,7 @@ const logMismatch = (record: Tracked, args: unknown[], compiled: unknown, js: un
  * Writes `<PAYLOAD_FN_COMPILE_STATS>/<pid>.json` (a directory) every second and at exit: test
  * workers are often terminated without an `exit` event.
  */
-const installExitHook = () => {
-  if (exitHookInstalled) {
-    return
-  }
-  exitHookInstalled = true
+const installStatsWriter = () => {
   const dir = process.env.PAYLOAD_FN_COMPILE_STATS
   if (!dir) {
     return

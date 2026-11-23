@@ -8,6 +8,7 @@ import { promise as upstreamAfterChangePromise } from '../../../../payload/src/f
 import { traverseFields as upstreamAfterChangeTraverseFields } from '../../../../payload/src/fields/hooks/afterChange/traverseFields.js'
 import { promise as upstreamBeforeDuplicatePromise } from '../../../../payload/src/fields/hooks/beforeDuplicate/promise.js'
 import { traverseFields as upstreamBeforeDuplicateTraverseFields } from '../../../../payload/src/fields/hooks/beforeDuplicate/traverseFields.js'
+import { callUserFunction } from '../../../../payload/src/utilities/callUserFunction.js'
 import { skipCompilation } from '../../../../payload/src/utilities/skipCompilation.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../../addon.js'
 import { getCoreRuntime } from '../index.js'
@@ -341,7 +342,7 @@ export const getCoreHooksAfter = (): CoreHooksAfterBinding => {
       skipCompilation,
       value,
     }),
-    callHook: (hook: any, args: unknown) => hook(args),
+    callHook: (hook: any, args: unknown) => callUserFunction(hook, undefined, [args], 'hook'),
     // The rich text editor afterChange hook args literal of afterChange/promise.ts.
     editorAfterChangeHookArgs: (
       collection: unknown,

@@ -36,6 +36,7 @@ import { deepCopyObjectSimple, saveVersion } from '../../../index.js'
 import { deleteAssociatedFiles } from '../../../uploads/deleteAssociatedFiles.js'
 import { runLocalFileUpdate } from '../../../uploads/fileVersioning/archive.js'
 import { uploadFiles } from '../../../uploads/uploadFiles.js'
+import { callUserFunction } from '../../../utilities/callUserFunction.js'
 import { checkDocumentLockStatus } from '../../../utilities/checkDocumentLockStatus.js'
 import { getTopLevelFieldNames } from '../../../utilities/getTopLevelFieldNames.js'
 import {
@@ -259,15 +260,22 @@ export const updateDocument = async <
   if (collectionConfig.hooks?.beforeValidate?.length) {
     for (const hook of collectionConfig.hooks.beforeValidate) {
       data =
-        (await hook({
-          collection: collectionConfig,
-          context: req.context,
-          data,
-          operation: 'update',
-          originalDoc: publicationHookDoc,
-          req,
-          skipCompilation,
-        })) || data
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              collection: collectionConfig,
+              context: req.context,
+              data,
+              operation: 'update',
+              originalDoc: publicationHookDoc,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || data
     }
   }
 
@@ -278,15 +286,22 @@ export const updateDocument = async <
   if (collectionConfig.hooks?.beforeChange?.length) {
     for (const hook of collectionConfig.hooks.beforeChange) {
       data =
-        (await hook({
-          collection: collectionConfig,
-          context: req.context,
-          data,
-          operation: 'update',
-          originalDoc: publicationHookDoc,
-          req,
-          skipCompilation,
-        })) || data
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              collection: collectionConfig,
+              context: req.context,
+              data,
+              operation: 'update',
+              originalDoc: publicationHookDoc,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || data
     }
   }
 
@@ -581,14 +596,21 @@ export const updateDocument = async <
     if (collectionConfig.hooks?.afterRead?.length) {
       for (const hook of collectionConfig.hooks.afterRead) {
         result =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            doc: result,
-            overrideAccess,
-            req,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                doc: result,
+                overrideAccess,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 
@@ -614,18 +636,25 @@ export const updateDocument = async <
     if (collectionConfig.hooks?.afterChange?.length) {
       for (const hook of collectionConfig.hooks.afterChange) {
         result =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            data,
-            doc: result,
-            operation: 'update',
-            overrideAccess,
-            previousDoc: originalDoc,
-            req,
-            select,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                data,
+                doc: result,
+                operation: 'update',
+                overrideAccess,
+                previousDoc: originalDoc,
+                req,
+                select,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 

@@ -4,6 +4,7 @@ import type { PayloadRequest } from '../types/index.js'
 
 import { APIError } from '../errors/APIError.js'
 import { getPayload } from '../index.js'
+import { callUserFunction } from './callUserFunction.js'
 import { formatErrors } from './formatErrors.js'
 import { headersWithCors } from './headersWithCors.js'
 import { httpStatus } from './httpStatus.js'
@@ -81,14 +82,21 @@ export const routeError = async ({
     await collection.config.hooks.afterError?.reduce(async (promise, hook) => {
       await promise
 
-      const result = await hook({
-        collection: collection.config,
-        context: req.context,
-        error: err,
-        req,
-        result: response,
-        skipCompilation,
-      })
+      const result = await callUserFunction(
+        hook,
+        undefined,
+        [
+          {
+            collection: collection.config,
+            context: req.context,
+            error: err,
+            req,
+            result: response,
+            skipCompilation,
+          },
+        ],
+        'hook',
+      )
 
       if (result) {
         response = (result.response as ErrorResult) || response
@@ -100,14 +108,21 @@ export const routeError = async ({
   await config.hooks.afterError?.reduce(async (promise, hook) => {
     await promise
 
-    const result = await hook({
-      collection: collection?.config,
-      context: req.context,
-      error: err,
-      req,
-      result: response,
-      skipCompilation,
-    })
+    const result = await callUserFunction(
+      hook,
+      undefined,
+      [
+        {
+          collection: collection?.config,
+          context: req.context,
+          error: err,
+          req,
+          result: response,
+          skipCompilation,
+        },
+      ],
+      'hook',
+    )
 
     if (result) {
       response = (result.response as ErrorResult) || response

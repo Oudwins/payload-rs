@@ -3,6 +3,7 @@ import type { Operation } from '../types/index.js'
 
 import { defaultAccess } from '../auth/defaultAccess.js'
 import { defaultUnlockAccess } from '../auth/defaultUnlockAccess.js'
+import { callUserFunction } from '../utilities/callUserFunction.js'
 
 type QueryPresetOperation = Exclude<Operation, 'validate'>
 
@@ -23,7 +24,12 @@ export const getAccess = (config: Config): Record<QueryPresetOperation, Access> 
         const { req } = args
 
         const collectionAccess = config?.queryPresets?.access?.[operation]
-          ? await config.queryPresets.access[operation](args)
+          ? await callUserFunction(
+              config.queryPresets.access[operation],
+              config.queryPresets.access,
+              [args],
+              'config.queryPresets.access[operation]',
+            )
           : defaultCollectionAccess?.[operation]
             ? defaultCollectionAccess[operation](args)
             : true

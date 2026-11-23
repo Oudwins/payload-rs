@@ -575,11 +575,42 @@ pub fn own_keys(obj: Local) -> JsResult<Local> {
 
 #[track_caller]
 pub fn call(func: Local, this: Local, args: &[Local]) -> JsResult<Local> {
+  if let Some(guard) = CALL_GUARD.with(|g| g.borrow().as_ref().map(Persist::get)) {
+    // Guard mode of the function compiler: `guard(func, this, args)` verifies compiled user
+    // functions at their call site and returns exactly what `func` returns (or rethrows).
+    let list = array();
+    for (i, a) in args.iter().enumerate() {
+      set_element(list, i as u32, *a)?;
+    }
+    return raw_call(guard, undefined(), &[func, this, list]);
+  }
+  raw_call(func, this, args)
+}
+
+#[track_caller]
+fn raw_call(func: Local, this: Local, args: &[Local]) -> JsResult<Local> {
   let mut out = ptr::null_mut();
   // `Local` is `repr(transparent)` over `napi_value`.
   let raw = args.as_ptr().cast::<sys::napi_value>();
   check(unsafe { sys::napi_call_function(env(), this.0, func.0, args.len(), raw, &mut out) })?;
   Ok(Local(out))
+}
+
+thread_local! {
+  /// `(fn, this, args) => fn.apply(this, args)` with verification of compiled user functions
+  /// (packages/engine-rs/src/compile/guard.ts), installed only in guard mode.
+  static CALL_GUARD: std::cell::RefCell<Option<Persist>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Installs (`Some`) or removes the call guard every [`call`] goes through.
+pub fn set_call_guard(env: sys::napi_env, guard: Option<sys::napi_value>) -> JsResult<()> {
+  set_env_uncounted(env);
+  let persisted = match guard {
+    Some(g) => Some(Persist::new(Local(g))?),
+    None => None,
+  };
+  CALL_GUARD.with(|g| *g.borrow_mut() = persisted);
+  Ok(())
 }
 
 /// `new ctor(...args)` (`ctor` must be a function; [[Construct]] with `newTarget === ctor`).

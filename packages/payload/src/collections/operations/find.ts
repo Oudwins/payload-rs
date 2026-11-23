@@ -24,6 +24,7 @@ import { sanitizeWhereQuery } from '../../database/sanitizeWhereQuery.js'
 import { afterRead } from '../../fields/hooks/afterRead/index.js'
 import { lockedDocumentsCollectionSlug } from '../../locked-documents/config.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { hasDraftsEnabled } from '../../utilities/getVersionsConfig.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
@@ -312,15 +313,22 @@ export const findOperationTS = async <
 
         for (const hook of collectionConfig.hooks.beforeRead) {
           docRef =
-            (await hook({
-              collection: collectionConfig,
-              context: req.context,
-              doc: docRef,
-              overrideAccess: overrideAccess!,
-              query: fullWhere,
-              req,
-              skipCompilation,
-            })) || docRef
+            (await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
+                  collection: collectionConfig,
+                  context: req.context,
+                  doc: docRef,
+                  overrideAccess: overrideAccess!,
+                  query: fullWhere,
+                  req,
+                  skipCompilation,
+                },
+              ],
+              'hook',
+            )) || docRef
         }
 
         return docRef
@@ -365,16 +373,23 @@ export const findOperationTS = async <
 
         for (const hook of collectionConfig.hooks.afterRead) {
           docRef =
-            (await hook({
-              collection: collectionConfig,
-              context: req.context,
-              doc: docRef,
-              findMany: true,
-              overrideAccess: overrideAccess!,
-              query: fullWhere,
-              req,
-              skipCompilation,
-            })) || docRef
+            (await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
+                  collection: collectionConfig,
+                  context: req.context,
+                  doc: docRef,
+                  findMany: true,
+                  overrideAccess: overrideAccess!,
+                  query: fullWhere,
+                  req,
+                  skipCompilation,
+                },
+              ],
+              'hook',
+            )) || docRef
         }
 
         return docRef

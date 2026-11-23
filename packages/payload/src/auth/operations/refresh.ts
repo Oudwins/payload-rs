@@ -7,6 +7,7 @@ import { buildBeforeOperation } from '../../collections/operations/utilities/bui
 import { APIError, Forbidden, NotFound } from '../../errors/index.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
@@ -117,7 +118,12 @@ export const refreshOperationTS = async (incomingArgs: Arguments): Promise<Resul
     // /////////////////////////////////////
 
     for (const refreshHook of args.collection.config.hooks.refresh) {
-      const hookResult = await refreshHook({ args, skipCompilation, user })
+      const hookResult = await callUserFunction(
+        refreshHook,
+        undefined,
+        [{ args, skipCompilation, user }],
+        'refreshHook',
+      )
 
       if (hookResult) {
         result = hookResult
@@ -163,14 +169,21 @@ export const refreshOperationTS = async (incomingArgs: Arguments): Promise<Resul
     if (collectionConfig.hooks?.afterRefresh?.length) {
       for (const hook of collectionConfig.hooks.afterRefresh) {
         result =
-          (await hook({
-            collection: args.collection?.config,
-            context: args.req.context,
-            exp: result.exp,
-            req: args.req,
-            skipCompilation,
-            token: result.refreshedToken,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: args.collection?.config,
+                context: args.req.context,
+                exp: result.exp,
+                req: args.req,
+                skipCompilation,
+                token: result.refreshedToken,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 

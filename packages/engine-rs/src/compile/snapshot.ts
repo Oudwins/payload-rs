@@ -23,7 +23,47 @@ export class Partial {
   constructor(readonly value: Record<string, unknown>) {}
 }
 
+/** A `Headers` object as its iterator yields it (`[name, value]` pairs, names lower-case). */
+export class HeadersSnapshot {
+  constructor(readonly entries: [string, string][]) {}
+}
+
 export const createNullProto = () => Object.create(null) as object
+
+const pristineHeaders = typeof Headers === 'function' ? Headers : undefined
+const pristineHeadersEntries = pristineHeaders?.prototype.entries
+const pristineRequest = typeof Request === 'function' ? Request : undefined
+/** `Request.prototype` getters a compiled function may read through `req` (REST requests). */
+const pristineRequestGetters = new Map<string, () => unknown>(
+  (['headers', 'method'] as const).flatMap((key) => {
+    const get = pristineRequest
+      ? Object.getOwnPropertyDescriptor(pristineRequest.prototype, key)?.get
+      : undefined
+    return get ? [[key, get] as [string, () => unknown]] : []
+  }),
+)
+
+/** A snapshot of a `Headers` object, or `undefined` when it is not a plain built-in one. */
+const snapshotHeaders = (value: unknown): HeadersSnapshot | undefined => {
+  if (
+    !pristineHeaders ||
+    !pristineHeadersEntries ||
+    typeof value !== 'object' ||
+    value === null ||
+    types.isProxy(value) ||
+    Object.getPrototypeOf(value) !== pristineHeaders.prototype ||
+    Reflect.ownKeys(value).length > 0
+  ) {
+    return undefined
+  }
+  const entries: [string, string][] = []
+  for (const [k, v] of Reflect.apply(pristineHeadersEntries, value, []) as Iterable<
+    [string, string]
+  >) {
+    entries.push([k, v])
+  }
+  return new HeadersSnapshot(entries)
+}
 
 /**
  * The parts of `req` a compiled function can read: `true` leaves are snapshotted, objects are
@@ -34,7 +74,10 @@ export const createNullProto = () => Object.create(null) as object
 export const capturedRequest = {
   context: true,
   fallbackLocale: true,
+  headers: true,
   locale: true,
+  method: true,
+  operation: true,
   payload: { config: { admin: { user: true }, baseAccess: true } },
   query: true,
   user: true,
@@ -143,6 +186,32 @@ export const readDataProperty = (
   return { found: false }
 }
 
+/**
+ * `req.headers` / `req.method` of a REST request (a Fetch `Request`): the pristine built-in
+ * `Request.prototype` getter, called when it is the one the property resolves to.
+ */
+const readRequestGetter = (
+  value: object,
+  key: string,
+): { found: boolean; value?: unknown } | undefined => {
+  const pristine = pristineRequestGetters.get(key)
+  if (!pristine || !pristineRequest || !(value instanceof pristineRequest)) {
+    return undefined
+  }
+  for (let p: null | object = value; p; p = Object.getPrototypeOf(p)) {
+    if (types.isProxy(p)) {
+      return undefined
+    }
+    const d = Object.getOwnPropertyDescriptor(p, key)
+    if (d) {
+      return d.get === pristine
+        ? { found: true, value: Reflect.apply(pristine, value, []) }
+        : undefined
+    }
+  }
+  return undefined
+}
+
 /** `req` as a partial snapshot of the properties compiled functions may read. */
 export const snapshotRequest = (req: unknown): unknown => capture(req, capturedRequest)
 
@@ -152,7 +221,7 @@ const capture = (value: unknown, spec: CaptureSpec): unknown => {
   }
   const out: Record<string, unknown> = {}
   for (const [key, sub] of Object.entries(spec)) {
-    const read = readDataProperty(value, key)
+    const read = readDataProperty(value, key) ?? readRequestGetter(value, key)
     if (!read) {
       // Not safely readable: leave it out, reading it bails.
       continue
@@ -160,7 +229,7 @@ const capture = (value: unknown, spec: CaptureSpec): unknown => {
     out[key] = !read.found
       ? undefined
       : sub === true
-        ? snapshot(read.value)
+        ? (snapshotHeaders(read.value) ?? snapshot(read.value))
         : capture(read.value, sub)
   }
   return new Partial(out)

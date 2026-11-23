@@ -14,6 +14,7 @@ import type { AllOperations, JsonObject, PayloadRequest } from '../../types/inde
 import type { BlockReferencesPermissions } from './getEntityPermissions.js'
 
 import { type Field, tabHasName } from '../../fields/config/types.js'
+import { callUserFunction } from '../callUserFunction.js'
 import { getAccessOperationRequest } from '../getAccessOperationRequest.js'
 import { skipCompilation } from '../skipCompilation.js'
 
@@ -102,34 +103,39 @@ export const populateFieldPermissions = ({
         const fieldPermissions: FieldPermissions = permissionsObject[field.name]!
 
         if ('access' in field && field.access && typeof field.access[operation] === 'function') {
-          const accessResult = field.access[operation](
-            collection
-              ? {
-                  id,
-                  collection,
-                  data,
-                  doc: data,
-                  req: getAccessOperationRequest({
-                    operation,
-                    req,
-                  }),
-                  // We cannot include siblingData or blockData here, as we do not have siblingData/blockData available once we reach block or array
-                  // rows, as we're calculating schema permissions, which do not include individual rows.
-                  // For consistency, it's thus better to never include the siblingData and blockData, skipCompilation
-                }
-              : {
-                  id,
-                  data,
-                  doc: data,
-                  global: global!,
-                  req: getAccessOperationRequest({
-                    operation,
-                    req,
-                  }),
-                  // We cannot include siblingData or blockData here, as we do not have siblingData/blockData available once we reach block or array
-                  // rows, as we're calculating schema permissions, which do not include individual rows.
-                  // For consistency, it's thus better to never include the siblingData and blockData, skipCompilation
-                },
+          const accessResult = callUserFunction(
+            field.access[operation],
+            field.access,
+            [
+              collection
+                ? {
+                    id,
+                    collection,
+                    data,
+                    doc: data,
+                    req: getAccessOperationRequest({
+                      operation,
+                      req,
+                    }),
+                    // We cannot include siblingData or blockData here, as we do not have siblingData/blockData available once we reach block or array
+                    // rows, as we're calculating schema permissions, which do not include individual rows.
+                    // For consistency, it's thus better to never include the siblingData and blockData, skipCompilation
+                  }
+                : {
+                    id,
+                    data,
+                    doc: data,
+                    global: global!,
+                    req: getAccessOperationRequest({
+                      operation,
+                      req,
+                    }),
+                    // We cannot include siblingData or blockData here, as we do not have siblingData/blockData available once we reach block or array
+                    // rows, as we're calculating schema permissions, which do not include individual rows.
+                    // For consistency, it's thus better to never include the siblingData and blockData, skipCompilation
+                  },
+            ],
+            'field.access[operation]',
           )
 
           // Handle both sync and async access results

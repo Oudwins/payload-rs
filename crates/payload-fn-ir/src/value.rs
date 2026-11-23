@@ -27,6 +27,8 @@ pub enum Value {
   RegExp(Arc<RegExpValue>),
   /// The promise an async compiled function returns (resolved with the value).
   Promise(Arc<Value>),
+  /// A read-only snapshot of a `Headers` object (`req.headers`): `get` / `has`, case-insensitive.
+  Headers(Arc<HeadersValue>),
   /// Something the interpreter does not model. Reading it, calling it or converting it bails.
   Opaque(OpaqueKind),
 }
@@ -54,6 +56,43 @@ pub enum Callable {
   Builtin(crate::ir::Builtin),
 }
 
+/// The entries of a `Headers` object as its iterator yields them: lower-case names, values combined
+/// per name (`set-cookie` entries separately).
+#[derive(Debug, Default)]
+pub struct HeadersValue {
+  pub entries: Vec<(Arc<str>, Arc<str>)>,
+}
+
+impl HeadersValue {
+  /// `Headers.prototype.get`: the values of `name` joined by `, `, or `None` (JS `null`).
+  pub fn get(&self, name: &str) -> Option<String> {
+    let name = name.to_ascii_lowercase();
+    let mut out: Option<String> = None;
+    for (k, v) in &self.entries {
+      if **k == *name {
+        match &mut out {
+          Some(s) => {
+            s.push_str(", ");
+            s.push_str(v);
+          }
+          None => out = Some(v.to_string()),
+        }
+      }
+    }
+    out
+  }
+
+  pub fn has(&self, name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    self.entries.iter().any(|(k, _)| **k == *name)
+  }
+}
+
+/// A valid header name (RFC 9110 token): `Headers.get` / `has` throw a `TypeError` otherwise.
+pub fn is_header_name(name: &str) -> bool {
+  !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+}
+
 #[derive(Debug)]
 pub struct RegExpValue {
   pub source: Arc<str>,
@@ -73,6 +112,21 @@ pub struct Object {
 }
 
 impl Object {
+  /// Own property `key` (a linear scan for small objects: cheaper than hashing the key).
+  #[inline]
+  pub fn get(&self, key: &str) -> Option<&Value> {
+    if self.props.len() <= 12 {
+      self.props.iter().find(|(k, _)| &***k == key).map(|(_, v)| v)
+    } else {
+      self.props.get(key)
+    }
+  }
+
+  #[inline]
+  pub fn has(&self, key: &str) -> bool {
+    self.get(key).is_some()
+  }
+
   pub fn closed() -> Self {
     Object { props: IndexMap::new(), closed: true, null_proto: false }
   }
@@ -145,7 +199,7 @@ impl Value {
       Value::Bool(b) => *b,
       Value::Number(n) => !(*n == 0.0 || n.is_nan()),
       Value::String(s) => !s.is_empty(),
-      Value::Array(_) | Value::Object(_) | Value::Func(_) | Value::RegExp(_) | Value::Promise(_) => true,
+      Value::Array(_) | Value::Object(_) | Value::Func(_) | Value::RegExp(_) | Value::Promise(_) | Value::Headers(_) => true,
       Value::Opaque(OpaqueKind::Object | OpaqueKind::Function) => true,
       Value::Opaque(OpaqueKind::Primitive) => return Err(crate::Bail::Opaque),
     })
@@ -159,7 +213,7 @@ impl Value {
       Value::Bool(_) => "boolean",
       Value::Number(_) => "number",
       Value::String(_) => "string",
-      Value::Array(_) | Value::Object(_) | Value::RegExp(_) | Value::Promise(_) => "object",
+      Value::Array(_) | Value::Object(_) | Value::RegExp(_) | Value::Promise(_) | Value::Headers(_) => "object",
       Value::Func(_) | Value::Opaque(OpaqueKind::Function) => "function",
       Value::Opaque(OpaqueKind::Object) => "object",
       Value::Opaque(OpaqueKind::Primitive) => return Err(crate::Bail::Opaque),
@@ -213,7 +267,12 @@ impl Value {
         }
         serde_json::Value::Object(map)
       }
-      Value::Undefined | Value::Func(_) | Value::RegExp(_) | Value::Promise(_) | Value::Opaque(_) => return None,
+      Value::Undefined
+      | Value::Func(_)
+      | Value::RegExp(_)
+      | Value::Promise(_)
+      | Value::Headers(_)
+      | Value::Opaque(_) => return None,
     })
   }
 

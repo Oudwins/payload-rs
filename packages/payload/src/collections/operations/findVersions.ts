@@ -15,6 +15,7 @@ import { afterRead } from '../../fields/hooks/afterRead/index.js'
 import { checkFileAccess } from '../../uploads/checkFileAccess.js'
 import { markHistoricalFileURLs } from '../../uploads/fileVersioning/markHistoricalFileURLs.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { hasVersionsEnabled } from '../../utilities/getVersionsConfig.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
@@ -178,15 +179,22 @@ export const findVersionsOperationTS = async <TData extends TypeWithVersion<TDat
       if (collectionConfig.hooks?.beforeRead?.length) {
         for (const hook of collectionConfig.hooks.beforeRead) {
           docRef.version =
-            (await hook({
-              collection: collectionConfig,
-              context: req.context,
-              doc: docRef.version,
-              overrideAccess,
-              query: fullWhere,
-              req,
-              skipCompilation,
-            })) || docRef.version
+            (await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
+                  collection: collectionConfig,
+                  context: req.context,
+                  doc: docRef.version,
+                  overrideAccess,
+                  query: fullWhere,
+                  req,
+                  skipCompilation,
+                },
+              ],
+              'hook',
+            )) || docRef.version
         }
       }
 
@@ -231,16 +239,23 @@ export const findVersionsOperationTS = async <TData extends TypeWithVersion<TDat
 
         for (const hook of collectionConfig.hooks.afterRead) {
           docRef.version =
-            (await hook({
-              collection: collectionConfig,
-              context: req.context,
-              doc: doc.version,
-              findMany: true,
-              overrideAccess,
-              query: fullWhere,
-              req,
-              skipCompilation,
-            })) || doc.version
+            (await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
+                  collection: collectionConfig,
+                  context: req.context,
+                  doc: doc.version,
+                  findMany: true,
+                  overrideAccess,
+                  query: fullWhere,
+                  req,
+                  skipCompilation,
+                },
+              ],
+              'hook',
+            )) || doc.version
         }
 
         return docRef

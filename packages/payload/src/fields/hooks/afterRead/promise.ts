@@ -13,6 +13,7 @@ import type { Block, Field, TabAsField } from '../../config/types.js'
 import type { AfterReadArgs } from './index.js'
 
 import { MissingEditorProp } from '../../../errors/index.js'
+import { callUserFunction } from '../../../utilities/callUserFunction.js'
 import { getBlockSelect } from '../../../utilities/getBlockSelect.js'
 import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import { stripUnselectedFields } from '../../../utilities/stripUnselectedFields.js'
@@ -288,7 +289,49 @@ export const promise = async ({
           const localesAndValues = Object.entries(siblingDoc[field.name])
           await Promise.all(
             localesAndValues.map(async ([localeKey, value]) => {
-              const hookedValue = await hook({
+              const hookedValue = await callUserFunction(
+                hook,
+                undefined,
+                [
+                  {
+                    blockData,
+                    collection,
+                    context,
+                    currentDepth,
+                    data: doc,
+                    depth,
+                    draft,
+                    field,
+                    findMany,
+                    global,
+                    indexPath: indexPathSegments,
+                    operation: 'read',
+                    originalDoc: doc,
+                    overrideAccess,
+                    path: pathSegments,
+                    req,
+                    schemaPath: schemaPathSegments,
+                    showHiddenFields,
+                    siblingData: siblingDoc,
+                    siblingFields: siblingFields!,
+                    skipCompilation,
+                    value,
+                  },
+                ],
+                'hook',
+              )
+
+              if (hookedValue !== undefined) {
+                siblingDoc[field.name][localeKey] = hookedValue
+              }
+            }),
+          )
+        } else {
+          const hookedValue = await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
                 blockData,
                 collection,
                 context,
@@ -310,39 +353,11 @@ export const promise = async ({
                 siblingData: siblingDoc,
                 siblingFields: siblingFields!,
                 skipCompilation,
-                value,
-              })
-
-              if (hookedValue !== undefined) {
-                siblingDoc[field.name][localeKey] = hookedValue
-              }
-            }),
+                value: siblingDoc[field.name],
+              },
+            ],
+            'hook',
           )
-        } else {
-          const hookedValue = await hook({
-            blockData,
-            collection,
-            context,
-            currentDepth,
-            data: doc,
-            depth,
-            draft,
-            field,
-            findMany,
-            global,
-            indexPath: indexPathSegments,
-            operation: 'read',
-            originalDoc: doc,
-            overrideAccess,
-            path: pathSegments,
-            req,
-            schemaPath: schemaPathSegments,
-            showHiddenFields,
-            siblingData: siblingDoc,
-            siblingFields: siblingFields!,
-            skipCompilation,
-            value: siblingDoc[field.name],
-          })
 
           if (hookedValue !== undefined) {
             siblingDoc[field.name] = hookedValue
@@ -378,28 +393,33 @@ export const promise = async ({
     if (triggerAccessControl && field.access && field.access.read) {
       const canReadField = overrideAccess
         ? true
-        : await field.access.read(
-            collection
-              ? {
-                  id: doc.id as number | string,
-                  blockData,
-                  collection,
-                  data: doc,
-                  doc,
-                  req,
-                  siblingData: siblingDoc,
-                  skipCompilation,
-                }
-              : {
-                  id: doc.id as number | string,
-                  blockData,
-                  data: doc,
-                  doc,
-                  global: global!,
-                  req,
-                  siblingData: siblingDoc,
-                  skipCompilation,
-                },
+        : await callUserFunction(
+            field.access.read,
+            field.access,
+            [
+              collection
+                ? {
+                    id: doc.id as number | string,
+                    blockData,
+                    collection,
+                    data: doc,
+                    doc,
+                    req,
+                    siblingData: siblingDoc,
+                    skipCompilation,
+                  }
+                : {
+                    id: doc.id as number | string,
+                    blockData,
+                    data: doc,
+                    doc,
+                    global: global!,
+                    req,
+                    siblingData: siblingDoc,
+                    skipCompilation,
+                  },
+            ],
+            'field.access.read',
           )
 
       if (!canReadField) {
@@ -812,7 +832,55 @@ export const promise = async ({
 
             await Promise.all(
               localesAndValues.map(async ([locale, value]) => {
-                const hookedValue = await hook({
+                const hookedValue = await callUserFunction(
+                  hook,
+                  undefined,
+                  [
+                    {
+                      collection,
+                      context,
+                      currentDepth,
+                      data: doc,
+                      depth,
+                      draft,
+                      fallbackLocale: fallbackLocale!,
+                      field,
+                      fieldPromises,
+                      findMany,
+                      flattenLocales,
+                      global,
+                      indexPath: indexPathSegments,
+                      locale,
+                      operation: 'read',
+                      originalDoc: doc,
+                      overrideAccess,
+                      parentIsLocalized: parentIsLocalized!,
+                      path: pathSegments,
+                      populate,
+                      populationPromises,
+                      req,
+                      schemaPath: schemaPathSegments,
+                      showHiddenFields,
+                      siblingData: siblingDoc,
+                      triggerAccessControl,
+                      triggerHooks,
+                      value,
+                    },
+                  ],
+                  'hook',
+                )
+
+                if (hookedValue !== undefined) {
+                  siblingDoc[field.name][locale] = hookedValue
+                }
+              }),
+            )
+          } else {
+            const hookedValue = await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
                   collection,
                   context,
                   currentDepth,
@@ -826,7 +894,7 @@ export const promise = async ({
                   flattenLocales,
                   global,
                   indexPath: indexPathSegments,
-                  locale,
+                  locale: locale!,
                   operation: 'read',
                   originalDoc: doc,
                   overrideAccess,
@@ -840,45 +908,11 @@ export const promise = async ({
                   siblingData: siblingDoc,
                   triggerAccessControl,
                   triggerHooks,
-                  value,
-                })
-
-                if (hookedValue !== undefined) {
-                  siblingDoc[field.name][locale] = hookedValue
-                }
-              }),
+                  value: siblingDoc[field.name],
+                },
+              ],
+              'hook',
             )
-          } else {
-            const hookedValue = await hook({
-              collection,
-              context,
-              currentDepth,
-              data: doc,
-              depth,
-              draft,
-              fallbackLocale: fallbackLocale!,
-              field,
-              fieldPromises,
-              findMany,
-              flattenLocales,
-              global,
-              indexPath: indexPathSegments,
-              locale: locale!,
-              operation: 'read',
-              originalDoc: doc,
-              overrideAccess,
-              parentIsLocalized: parentIsLocalized!,
-              path: pathSegments,
-              populate,
-              populationPromises,
-              req,
-              schemaPath: schemaPathSegments,
-              showHiddenFields,
-              siblingData: siblingDoc,
-              triggerAccessControl,
-              triggerHooks,
-              value: siblingDoc[field.name],
-            })
 
             if (hookedValue !== undefined) {
               siblingDoc[field.name] = hookedValue

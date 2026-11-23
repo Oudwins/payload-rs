@@ -81,12 +81,30 @@ impl Bail {
 /// partial object ([`Value::partial_object`]) holding only what was captured (`user`, `locale`,
 /// `fallbackLocale`, `context`, `query`): reading any other `req` property bails.
 pub fn evaluate(id: FnId, args: &[Value]) -> Result<Value, Bail> {
-  registry::check(id)?;
-  let mut interp = interp::Interp::new();
-  match interp.call_top(id, args) {
-    Err(Bail::ShortCircuit) => Err(Bail::Unsupported("short circuit outside a chain")),
-    other => other,
-  }
+  let installed = registry::installed(id).ok_or(Bail::NotCompiled)?;
+  // One interpreter per thread, reused (its frame and slot stacks keep their capacity).
+  // Evaluation never re-enters itself (no JS runs), so the borrow cannot conflict.
+  INTERP.with(|cell| {
+    let mut fresh;
+    let mut borrowed = cell.try_borrow_mut();
+    let interp = match &mut borrowed {
+      Ok(i) => &mut **i,
+      Err(_) => {
+        fresh = interp::Interp::new();
+        &mut fresh
+      }
+    };
+    let result = interp.call_top(installed, args);
+    interp.reset();
+    match result {
+      Err(Bail::ShortCircuit) => Err(Bail::Unsupported("short circuit outside a chain")),
+      other => other,
+    }
+  })
+}
+
+thread_local! {
+  static INTERP: std::cell::RefCell<interp::Interp> = std::cell::RefCell::new(interp::Interp::new());
 }
 
 /// Analyse + compile + install in one step, for Rust callers and tests whose functions have no

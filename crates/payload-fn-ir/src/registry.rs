@@ -3,11 +3,11 @@
 //! once. A reserved id that never gets installed (its compilation failed) evaluates to
 //! [`Bail::NotCompiled`].
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::ir::FnDef;
-use crate::{Bail, FnId};
+use crate::FnId;
 
 /// What callers need to know about a compiled function without looking at its IR.
 #[derive(Clone, Debug, Default)]
@@ -29,7 +29,7 @@ pub struct Installed {
 
 #[derive(Default)]
 pub struct Entry {
-  installed: OnceLock<Arc<Installed>>,
+  installed: OnceLock<Installed>,
   deoptimized: AtomicBool,
   /// Guard-mode counters (see [`crate::guard`]).
   pub(crate) calls: AtomicU64,
@@ -39,34 +39,51 @@ pub struct Entry {
   pub(crate) lane_calls: AtomicU64,
 }
 
-static ENTRIES: RwLock<Vec<Arc<Entry>>> = RwLock::new(Vec::new());
+/// Lock-free append-only table: segment `k` holds ids `2^k - 1 .. 2^(k+1) - 1`, allocated on first
+/// use. Entries are never freed (compiled functions live as long as the process), so lookups
+/// return `&'static` references without reference counting.
+const SEGMENTS: usize = 32;
+static TABLE: [OnceLock<Box<[OnceLock<&'static Entry>]>>; SEGMENTS] = [const { OnceLock::new() }; SEGMENTS];
+static NEXT: AtomicU32 = AtomicU32::new(0);
+
+fn locate(id: FnId) -> (usize, usize) {
+  let n = id as u64 + 1;
+  let segment = 63 - n.leading_zeros() as usize;
+  (segment, (n - (1u64 << segment)) as usize)
+}
 
 /// Reserves an id for a function about to be compiled.
 pub fn reserve() -> FnId {
-  let mut entries = ENTRIES.write().expect("registry");
-  entries.push(Arc::new(Entry::default()));
-  (entries.len() - 1) as FnId
+  let id = NEXT.fetch_add(1, Ordering::Relaxed);
+  let (segment, offset) = locate(id);
+  let slots = TABLE[segment].get_or_init(|| (0..1usize << segment).map(|_| OnceLock::new()).collect());
+  let entry: &'static Entry = Box::leak(Box::default());
+  let _ = slots[offset].set(entry);
+  id
 }
 
-pub(crate) fn entry(id: FnId) -> Option<Arc<Entry>> {
-  ENTRIES.read().expect("registry").get(id as usize).cloned()
+#[inline]
+pub(crate) fn entry(id: FnId) -> Option<&'static Entry> {
+  let (segment, offset) = locate(id);
+  TABLE.get(segment)?.get()?.get(offset)?.get().copied()
 }
 
 /// Installs the compiled function of a reserved id (once).
 pub fn install(id: FnId, def: FnDef, meta: FnMeta) -> bool {
   match entry(id) {
-    Some(e) => e.installed.set(Arc::new(Installed { def, meta })).is_ok(),
+    Some(e) => e.installed.set(Installed { def, meta }).is_ok(),
     None => false,
   }
 }
 
 /// The compiled function, if it is installed and not de-optimised.
-pub(crate) fn installed(id: FnId) -> Option<Arc<Installed>> {
+#[inline]
+pub(crate) fn installed(id: FnId) -> Option<&'static Installed> {
   let e = entry(id)?;
   if e.deoptimized.load(Ordering::Relaxed) {
     return None;
   }
-  e.installed.get().cloned()
+  e.installed.get()
 }
 
 /// `true` when `id` is compiled and has not been de-optimised: a fused lane may evaluate it.
@@ -95,9 +112,6 @@ pub fn describe(id: FnId) -> Option<String> {
 }
 
 pub fn len() -> usize {
-  ENTRIES.read().expect("registry").len()
+  NEXT.load(Ordering::Relaxed) as usize
 }
 
-pub(crate) fn check(id: FnId) -> Result<(), Bail> {
-  if installed(id).is_some() { Ok(()) } else { Err(Bail::NotCompiled) }
-}

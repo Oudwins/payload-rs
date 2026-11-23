@@ -5,6 +5,7 @@ import type { ValidationResult } from '../types/validation.js'
 
 import { beforeChange } from '../fields/hooks/beforeChange/index.js'
 import { beforeValidate } from '../fields/hooks/beforeValidate/index.js'
+import { callUserFunction } from './callUserFunction.js'
 import { deepCopyObjectSimple } from './deepCopyObject.js'
 import { deepMergeWithSourceArraysIgnoringUndefined } from './deepMerge.js'
 import { skipCompilation } from './skipCompilation.js'
@@ -86,28 +87,42 @@ export async function runValidationLifecycle(
       if (collection) {
         for (const hook of collection.hooks.beforeValidate ?? []) {
           data =
-            (await hook({
-              collection,
-              context: req.context,
-              data,
-              operation: validationOperation,
-              originalDoc,
-              req,
-              skipCompilation,
-            })) || data
+            (await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
+                  collection,
+                  context: req.context,
+                  data,
+                  operation: validationOperation,
+                  originalDoc,
+                  req,
+                  skipCompilation,
+                },
+              ],
+              'hook',
+            )) || data
         }
 
         for (const hook of collection.hooks.beforeChange ?? []) {
           data =
-            (await hook({
-              collection,
-              context: req.context,
-              data,
-              operation: validationOperation,
-              originalDoc,
-              req,
-              skipCompilation,
-            })) || data
+            (await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
+                  collection,
+                  context: req.context,
+                  data,
+                  operation: validationOperation,
+                  originalDoc,
+                  req,
+                  skipCompilation,
+                },
+              ],
+              'hook',
+            )) || data
         }
       } else {
         if (validationOperation === 'create') {
@@ -116,30 +131,44 @@ export async function runValidationLifecycle(
 
         for (const hook of global.hooks.beforeValidate ?? []) {
           data =
-            (await hook({
-              context: req.context,
-              data,
-              global,
-              operation: validationOperation,
-              originalDoc,
-              overrideAccess,
-              req,
-              skipCompilation,
-            })) || data
+            (await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
+                  context: req.context,
+                  data,
+                  global,
+                  operation: validationOperation,
+                  originalDoc,
+                  overrideAccess,
+                  req,
+                  skipCompilation,
+                },
+              ],
+              'hook',
+            )) || data
         }
 
         for (const hook of global.hooks.beforeChange ?? []) {
           data =
-            (await hook({
-              context: req.context,
-              data,
-              global,
-              operation: validationOperation,
-              originalDoc,
-              overrideAccess,
-              req,
-              skipCompilation,
-            })) || data
+            (await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
+                  context: req.context,
+                  data,
+                  global,
+                  operation: validationOperation,
+                  originalDoc,
+                  overrideAccess,
+                  req,
+                  skipCompilation,
+                },
+              ],
+              'hook',
+            )) || data
         }
       }
 

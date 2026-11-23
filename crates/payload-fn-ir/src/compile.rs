@@ -44,7 +44,10 @@ pub enum Captured {
 pub const CAPTURED_REQUEST: Captured = Captured::Node(&[
   ("context", Captured::Leaf),
   ("fallbackLocale", Captured::Leaf),
+  ("headers", Captured::Leaf),
   ("locale", Captured::Leaf),
+  ("method", Captured::Leaf),
+  ("operation", Captured::Leaf),
   (
     "payload",
     Captured::Node(&[(

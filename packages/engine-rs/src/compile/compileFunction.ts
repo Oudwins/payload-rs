@@ -108,6 +108,9 @@ const prototypeMethods: [object, PropertyKey[]][] = [
   [RegExp.prototype, ['test', 'exec', Symbol.replace, Symbol.split]],
   [Object.prototype, ['hasOwnProperty', 'toString', 'valueOf']],
   [Array.prototype, [Symbol.iterator]],
+  ...(typeof Headers === 'function'
+    ? [[Headers.prototype, ['get', 'has', 'entries']] as [object, PropertyKey[]]]
+    : []),
   [String.prototype, [Symbol.iterator]],
 ]
 const pristineMethods = prototypeMethods.map(
@@ -163,14 +166,6 @@ export const compileFunction = (
 export const getCompiledFunction = (fn: AnyFunction): CompiledFunction | undefined => {
   const entry = compiled.get(fn)
   return entry && 'ok' in entry ? entry : undefined
-}
-
-/** Registers `alias` (a guard wrapper) as the same compiled function as `fn`. */
-export const aliasCompiledFunction = (alias: AnyFunction, fn: AnyFunction): void => {
-  const entry = compiled.get(fn)
-  if (entry) {
-    compiled.set(alias, entry)
-  }
 }
 
 const compileInner = (fn: AnyFunction, label: string, depth: number): CompiledFunction => {

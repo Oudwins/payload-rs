@@ -4,6 +4,7 @@ import type { Collection } from '../../collections/config/types.js'
 import type { AuthenticatedUser } from '../../index.js'
 import type { JoinQuery, PayloadRequest, PopulateType, SelectType } from '../../types/index.js'
 
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { skipCompilation } from '../../utilities/skipCompilation.js'
 
@@ -65,7 +66,12 @@ export const meOperationTS = async (args: Arguments): Promise<MeOperationResult>
     // /////////////////////////////////////
 
     for (const meHook of collection.config.hooks.me) {
-      const hookResult = await meHook({ args, skipCompilation, user })
+      const hookResult = await callUserFunction(
+        meHook,
+        undefined,
+        [{ args, skipCompilation, user }],
+        'meHook',
+      )
 
       if (hookResult) {
         result.user = hookResult.user
@@ -99,13 +105,20 @@ export const meOperationTS = async (args: Arguments): Promise<MeOperationResult>
   if (collection.config.hooks?.afterMe?.length) {
     for (const hook of collection.config.hooks.afterMe) {
       result =
-        (await hook({
-          collection: collection?.config,
-          context: req.context,
-          req,
-          response: result,
-          skipCompilation,
-        })) || result
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              collection: collection?.config,
+              context: req.context,
+              req,
+              response: result,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || result
     }
   }
 

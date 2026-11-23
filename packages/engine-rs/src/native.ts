@@ -62,6 +62,7 @@ export const engineAddonExports = [
   'fnIrRecord',
   'fnIrReserve',
   'fnIrResultToJs',
+  'fnIrSetCallGuard',
   'fnIrSetPolicy',
   'fnIrShouldVerify',
   'fnIrStats',

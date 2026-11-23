@@ -8,8 +8,8 @@ import type { FunctionKind } from './configFunctions.js'
  *   JS. `getCompiledFunction(fn)` / `isCompiled(fn)` look the memo up without compiling.
  * - `compileConfig(config)`: compiles every access function, hook and validator of a sanitized
  *   config and reports the result per function.
- * - `installCompileGuards(config)`: guard mode (see guard.ts), installed by payload's `init` when
- *   `PAYLOAD_FN_COMPILE_GUARD` is set.
+ * - `installCompileGuards(config)`: guard mode (see guard.ts: verification at the call sites, the
+ *   config is not modified), installed by payload's `init` when `PAYLOAD_FN_COMPILE_GUARD` is set.
  *
  * Users opt a function out by mentioning `skipCompilation` in it: Payload passes a no-op
  * `skipCompilation` in the arguments of access functions, hooks and validators, so

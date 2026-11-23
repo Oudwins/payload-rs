@@ -14,6 +14,7 @@ import {
   installCompileGuards,
 } from '../../../packages/engine-rs/src/compile/index.js'
 import { getFnIr } from '../../../packages/engine-rs/src/compile/native.js'
+import { callUserFunction } from '../../../packages/payload/src/utilities/callUserFunction.js'
 import * as helpers from './helpers.js'
 import { asyncIsAdmin, checkRole, isAdmin, roles, slugify, tenantField } from './helpers.js'
 
@@ -296,6 +297,51 @@ const cases: Case[] = [
     },
     args: accessArgs,
   },
+  {
+    name: 'req.headers (Headers get / has) and req.method',
+    fn: ({ req }: any) =>
+      req.headers.get('X-Tenant') === 'a' ||
+      (req.headers.has('authorization') && req.method === 'POST'),
+    args: [
+      [{ req: req(null, { headers: new Headers({ 'x-tenant': 'a' }) }) }],
+      [{ req: req(null, { headers: new Headers({ Authorization: 'JWT 1' }), method: 'POST' }) }],
+      [{ req: req(null, { headers: new Headers() }) }],
+      // A REST request: `headers` / `method` are the Request.prototype getters.
+      [
+        {
+          req: Object.assign(
+            new Request('http://x/api', { headers: { authorization: 'a' }, method: 'POST' }),
+            { user: null },
+          ),
+        },
+      ],
+    ],
+  },
+  {
+    name: 'req.headers combined values',
+    fn: ({ req }: any) => req.headers.get('accept'),
+    args: [
+      [
+        {
+          req: req(null, {
+            headers: new Headers([
+              ['accept', 'a'],
+              ['Accept', 'b'],
+            ]),
+          }),
+        },
+      ],
+    ],
+  },
+  {
+    name: 'req.operation',
+    fn: ({ req }: any) => (req.operation === 'validate' ? Boolean(req.user) : true),
+    args: [
+      [{ req: req(null, { operation: 'validate' }) }],
+      [{ req: req(admin, { operation: 'validate' }) }],
+      [{ req: req(null) }],
+    ],
+  },
   // Rejected shapes.
   {
     name: 'req.payload call',
@@ -432,6 +478,8 @@ test.suite('fn-compile corpus', {}, () => {
       'bundled (webpack namespace)',
       'bundled (turbopack namespace)',
       'bundled (scope hoisting)',
+      'req.headers (Headers get / has) and req.method',
+      'req.operation',
     ]) {
       const c = cases.find((x) => x.name === name)!
       for (const args of c.args) {
@@ -441,28 +489,40 @@ test.suite('fn-compile corpus', {}, () => {
   })
 
   test('should de-optimise a function whose captured binding was reassigned (guard mode)', async () => {
+    const read = () => helpers.readsMutable() === 1
     const config = {
-      collections: [
-        { access: { read: () => helpers.readsMutable() === 1 }, fields: [], hooks: {}, slug: 'c' },
-      ],
+      collections: [{ access: { read }, fields: [], hooks: {}, slug: 'c' }],
       globals: [],
     }
     process.env.PAYLOAD_FN_COMPILE_GUARD ??= 'all'
     const result = installCompileGuards(config)
     expect(result).toEqual({ compiled: 1, total: 1 })
-    const read = config.collections[0]!.access.read
-    expect(read()).toBe(true)
+    // The config keeps the user's own function: verification happens at the call site.
+    expect(config.collections[0]!.access.read).toBe(read)
+    expect(callUserFunction(read, undefined, [], 'read')).toBe(true)
     helpers.bumpMutable()
     const errors: string[] = []
     const write = process.stderr.write
     process.stderr.write = ((chunk: string) => errors.push(String(chunk))) as typeof write
     try {
-      expect(read()).toBe(false)
+      expect(callUserFunction(read, undefined, [], 'read')).toBe(false)
     } finally {
       process.stderr.write = write
     }
     expect(errors.join('')).toContain('MISMATCH')
     const compiled = compileFunction(read)
     expect(compiled.ok && getFnIr().fnIrIsActive(compiled.id)).toBe(false)
+  })
+
+  test('should keep the call expression semantics of callUserFunction', () => {
+    const receiver = {
+      m(this: unknown, a: number) {
+        return [this, a]
+      },
+    }
+    expect(callUserFunction(receiver.m, receiver, [1], 'receiver.m')).toEqual([receiver, 1])
+    expect(() => callUserFunction(undefined as never, undefined, [], 'hook')).toThrow(
+      new TypeError('hook is not a function'),
+    )
   })
 })

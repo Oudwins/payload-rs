@@ -2,6 +2,7 @@ import { getNativeEngine } from '../native.js'
 import {
   createNullProto,
   FnRef,
+  HeadersSnapshot,
   opaqueFunction,
   opaqueObject,
   opaquePrimitive,
@@ -49,6 +50,10 @@ export type FnIrBinding = {
   fnIrRecord: (id: number, outcome: 0 | 1 | 2) => void
   fnIrReserve: () => number
   fnIrResultToJs: (result: CompiledResult) => unknown
+  /** The Rust core's call guard (`js::call`), or `undefined` to remove it. */
+  fnIrSetCallGuard: (
+    guard: ((fn: never, thisArg: unknown, args: unknown[]) => unknown) | undefined,
+  ) => void
   fnIrSetPolicy: (first: number, sampleEvery: number) => void
   fnIrShouldVerify: (id: number) => boolean
   fnIrStats: (id: number) => {
@@ -68,6 +73,7 @@ export const getFnIr = (): FnIrBinding => {
     native.fnIrInit({
       createNullProto,
       FnRef,
+      HeadersSnapshot,
       opaqueFunction,
       opaqueObject,
       opaquePrimitive,

@@ -112,7 +112,7 @@ fn rejects() {
     ("({ req }) => req.payload.find({})", "reads req.payload.find"),
     ("({ req }) => req.t('x')", "reads req.t"),
     ("({ req: { i18n } }) => i18n.t('x')", "reads req.i18n"),
-    ("(args) => { const { headers } = args.req; return headers }", "reads req.headers"),
+    ("(args) => { const { transactionID } = args.req; return transactionID }", "reads req.transactionID"),
   ] {
     assert_eq!(compile_standalone(src).unwrap_err().0, reason, "{src}");
   }
@@ -151,7 +151,30 @@ fn lanes_access_args() {
   let v = evaluate(id, &[args]).unwrap();
   assert_eq!(v.to_js_val().unwrap().to_json(), serde_json::json!({ "owner": { "equals": 7 } }));
   // Anything outside the captured request bails.
-  let id = compile_standalone("(args) => { const r = args.req; return r.headers }").unwrap();
+  let id = compile_standalone("(args) => { const r = args.req; return r.transactionID }").unwrap();
   let args = lanes::collection_access_args(Value::Undefined, "posts", Value::Undefined, req);
   assert_eq!(evaluate(id, &[args]).unwrap_err(), Bail::Unknown);
+}
+
+#[test]
+fn request_headers() {
+  use crate::lanes::{self, RequestSnapshot};
+  let f = "({ req }) => req.headers.get('X-Tenant') === 'a' && req.headers.has('authorization') && req.headers.get('missing') === null && req.method === 'GET'";
+  let id = compile_standalone(f).unwrap();
+  let headers = lanes::headers([("x-tenant", "a"), ("Authorization", "JWT x")]);
+  let req = lanes::request(&RequestSnapshot { headers, method: Value::str("GET"), ..Default::default() });
+  let args = lanes::collection_access_args(Value::Undefined, "posts", Value::Undefined, req.clone());
+  assert_json(evaluate(id, &[args]), "true");
+  // Combined values, invalid names throw (bail), other members bail.
+  let id = compile_standalone("({ req }) => req.headers.get('accept')").unwrap();
+  let headers = lanes::headers([("Accept", "a"), ("accept", "b")]);
+  let req2 = lanes::request(&RequestSnapshot { headers, ..Default::default() });
+  let args = lanes::collection_access_args(Value::Undefined, "posts", Value::Undefined, req2);
+  assert_json(evaluate(id, &[args]), r#""a, b""#);
+  let id = compile_standalone("({ req }) => req.headers.get('bad name')").unwrap();
+  let args = lanes::collection_access_args(Value::Undefined, "posts", Value::Undefined, req.clone());
+  assert_eq!(evaluate(id, &[args]).unwrap_err(), Bail::Throw);
+  let id = compile_standalone("({ req }) => req.headers.forEach").unwrap();
+  let args = lanes::collection_access_args(Value::Undefined, "posts", Value::Undefined, req);
+  assert!(evaluate(id, &[args]).is_err());
 }

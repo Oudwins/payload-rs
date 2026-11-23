@@ -48,6 +48,7 @@ import {
 import { unlinkTempFiles } from '../../uploads/unlinkTempFiles.js'
 import { uploadFiles } from '../../uploads/uploadFiles.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import {
@@ -326,15 +327,22 @@ export const createOperationTS = async <
     if (collectionConfig.hooks.beforeValidate?.length) {
       for (const hook of collectionConfig.hooks.beforeValidate) {
         data =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            data,
-            operation: 'create',
-            originalDoc: publicationHookDoc,
-            req,
-            skipCompilation,
-          })) || data
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                data,
+                operation: 'create',
+                originalDoc: publicationHookDoc,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || data
       }
     }
 
@@ -345,15 +353,22 @@ export const createOperationTS = async <
     if (collectionConfig.hooks?.beforeChange?.length) {
       for (const hook of collectionConfig.hooks.beforeChange) {
         data =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            data,
-            operation: 'create',
-            originalDoc: publicationHookDoc,
-            req,
-            skipCompilation,
-          })) || data
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                data,
+                operation: 'create',
+                originalDoc: publicationHookDoc,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || data
       }
     }
 
@@ -646,14 +661,21 @@ export const createOperationTS = async <
     if (collectionConfig.hooks?.afterRead?.length) {
       for (const hook of collectionConfig.hooks.afterRead) {
         result =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            doc: result,
-            overrideAccess,
-            req,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                doc: result,
+                overrideAccess,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 
@@ -679,18 +701,25 @@ export const createOperationTS = async <
     if (collectionConfig.hooks?.afterChange?.length) {
       for (const hook of collectionConfig.hooks.afterChange) {
         result =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            data,
-            doc: result,
-            operation: 'create',
-            overrideAccess,
-            previousDoc: {},
-            req: args.req,
-            select,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                data,
+                doc: result,
+                operation: 'create',
+                overrideAccess,
+                previousDoc: {},
+                req: args.req,
+                select,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 

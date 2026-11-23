@@ -4,6 +4,7 @@ import type { PayloadRequest } from '../../types/index.js'
 import { APIError } from '../../errors/index.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
@@ -41,12 +42,19 @@ export const logoutOperationTS = async (incomingArgs: Arguments): Promise<boolea
     if (collectionConfig.hooks?.afterLogout?.length) {
       for (const hook of collectionConfig.hooks.afterLogout) {
         args =
-          (await hook({
-            collection: args.collection?.config,
-            context: req.context,
-            req,
-            skipCompilation,
-          })) || args
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: args.collection?.config,
+                context: req.context,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || args
       }
     }
 

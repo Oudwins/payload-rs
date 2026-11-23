@@ -3,6 +3,7 @@ import type { PayloadHandler } from '../../config/types.js'
 import { combineQueries } from '../../database/combineQueries.js'
 import { UnauthorizedError } from '../../errors/UnauthorizedError.js'
 import { fieldAffectsData } from '../../fields/config/types.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { canAccessAdmin } from '../../utilities/canAccessAdmin.js'
 import { getRequestCollectionWithID } from '../../utilities/getRequestEntity.js'
 import { skipCompilation } from '../../utilities/skipCompilation.js'
@@ -74,15 +75,22 @@ export const revealAPIKeyHandler: PayloadHandler = async (req) => {
     return Response.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const canUpdateAPIKey = await apiKeyField.access.update({
-    id,
-    collection: collection.config,
-    data: {},
-    doc: userWithReadAccess,
-    req,
-    siblingData: {},
-    skipCompilation,
-  })
+  const canUpdateAPIKey = await callUserFunction(
+    apiKeyField.access.update,
+    apiKeyField.access,
+    [
+      {
+        id,
+        collection: collection.config,
+        data: {},
+        doc: userWithReadAccess,
+        req,
+        siblingData: {},
+        skipCompilation,
+      },
+    ],
+    'apiKeyField.access.update',
+  )
 
   if (!canUpdateAPIKey) {
     return Response.json({ error: 'Forbidden' }, { status: 403 })

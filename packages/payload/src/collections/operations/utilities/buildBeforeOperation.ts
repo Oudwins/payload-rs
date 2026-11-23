@@ -1,6 +1,7 @@
 import type { CollectionSlug } from '../../../index.js'
 import type { BeforeOperationArg, OperationArgs, OperationMap } from './types.js'
 
+import { callUserFunction } from '../../../utilities/callUserFunction.js'
 import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import { operationToHookOperation } from './types.js'
 // Specific overloads with TArgs (these take priority over the general overload)
@@ -91,15 +92,22 @@ export async function buildBeforeOperation<TOperationGeneric extends CollectionS
     const hookOperation = operationToHookOperation[operation]
 
     for (const hook of args.collection.config.hooks.beforeOperation) {
-      const hookResult = await hook({
-        args: newArgs,
-        collection,
-        context: args.req!.context,
-        operation: hookOperation,
-        overrideAccess,
-        req: args.req!,
-        skipCompilation,
-      } as BeforeOperationArg<TOperationGeneric>)
+      const hookResult = await callUserFunction(
+        hook,
+        undefined,
+        [
+          {
+            args: newArgs,
+            collection,
+            context: args.req!.context,
+            operation: hookOperation,
+            overrideAccess,
+            req: args.req!,
+            skipCompilation,
+          } as BeforeOperationArg<TOperationGeneric>,
+        ],
+        'hook',
+      )
 
       if (hookResult !== undefined) {
         newArgs = hookResult

@@ -2,6 +2,7 @@ import type { Access, AccessResult } from '../config/types.js'
 import type { PayloadRequest } from '../types/index.js'
 
 import { Forbidden } from '../errors/index.js'
+import { callUserFunction } from '../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../utilities/engineSelection.js'
 import { skipCompilation } from '../utilities/skipCompilation.js'
 
@@ -20,14 +21,21 @@ const upstream = {
     access?: Access,
   ): Promise<AccessResult> => {
     if (access) {
-      const resolvedConstraint = await access({
-        id,
-        slug,
-        data,
-        isReadingStaticFile,
-        req,
-        skipCompilation,
-      })
+      const resolvedConstraint = await callUserFunction(
+        access,
+        undefined,
+        [
+          {
+            id,
+            slug,
+            data,
+            isReadingStaticFile,
+            req,
+            skipCompilation,
+          },
+        ],
+        'access',
+      )
 
       if (!resolvedConstraint) {
         if (!disableErrors) {

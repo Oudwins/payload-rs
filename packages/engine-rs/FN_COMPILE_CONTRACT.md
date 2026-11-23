@@ -27,8 +27,7 @@ const compiled = compileFunction(collection.config.access.read, 'collections.pos
   `isCompiled(fn)` also checks the function was not de-optimised.
 - Identity is the guard: a lane must look the function up from the config **at call time**
   (`collection.config.access.read`). A spy or a replaced function is a different object and is not
-  compiled (until compiled itself). Guard-mode wrappers are registered as aliases of the function
-  they wrap.
+  compiled (until compiled itself). Guard mode never touches the config (section 3).
 - `id` is the `FnId` Rust evaluates. `argKeys[i]`: the top-level keys the function reads of
   argument `i` (`['req']` for `({ req: { user } }) => ...`), `null` when it may read any.
 - Collection / global access in a sanitized config is Payload's `withBaseAccess` wrapper (async,
@@ -71,33 +70,48 @@ if registry::is_active(id) && !guard::lane_should_verify(id) {
   falsy -> the exact lane throws `Forbidden` (bail), `true` -> no constraint, object -> where.
 - Inputs: documents and `req.user` as closed values (`Value::from_js_val` / `from_json`); `req` only
   through `lanes::request` (a partial object: reading any property other than `user`, `locale`,
-  `fallbackLocale`, `context`, `query`, `payload.config.baseAccess`, `payload.config.admin.user`
-  bails). Typed `JsVal`s (dates, bigints, BSON) are opaque: comparing or reading them bails.
+  `fallbackLocale`, `context`, `query`, `headers`, `method`, `operation`,
+  `payload.config.baseAccess`, `payload.config.admin.user` bails). Typed `JsVal`s (dates, bigints,
+  BSON) are opaque: comparing or reading them bails.
+- `req.headers` is a read-only snapshot (`lanes::headers(pairs)`: lower-case names, values of one
+  name combined with `, ` like the Fetch `Headers` iterator): only `get(name)` (string or `null`)
+  and `has(name)`, case-insensitive; an invalid header name throws in JS (bail), any other member
+  bails.
 - Argument shapes (`lanes.rs`) are upstream's object literals in key order, including
   `skipCompilation` (an opaque function): `collection_access_args` (`executeAccess`),
   `field_read_access_args` (afterRead field `access.read`, collection fields). The IR never sees
   `this`.
-- Thread safety: `evaluate` is `Send + Sync`-safe (immutable IR behind `Arc`, values are `Arc`ed);
-  it can run on tokio threads.
-- Speed (debug build numbers are not representative): tree-walking interpreter, ~tens of ns per
-  node in release builds; argument snapshots are the main cost, build them once per request
-  (`req` is shared by every access call of the request).
+- Thread safety: `evaluate` can run on any thread (the IR is immutable in a lock-free,
+  append-only registry; values are `Arc`ed; each thread reuses its own interpreter).
+- Speed (release, `cargo run --release -p payload-fn-ir --example bench`, one shared core):
+  `() => true` 48 ns, `({ req: { user } }) => Boolean(user)` 188 ns, `authenticatedOrPublished`
+  204 ns, an inline role check plus owner constraint 1.1 us. Build the argument values once per
+  request (`req` is shared by every access call of the request).
 
 ## 3. Guard mode
 
 The real function is the authority. Two places verify:
 
-- **JS wrapper** (`installCompileGuards(config)`, `compile/guard.ts`): replaces each compiled
-  function in the config by a wrapper that calls the real function (same `this`, arguments and
-  returned value / promise), evaluates the IR on a snapshot of the arguments taken before the call
-  for the calls `fnIrShouldVerify` selects, and compares (structural, key order, `-0`, `NaN`). A
-  mismatch de-optimises the id permanently (`registry::is_active` becomes false) and is logged.
-  Installed by payload's `init` when `PAYLOAD_FN_COMPILE_GUARD=all` (every call) or `=sample`
-  (first 32 calls, then 1 in 256); counters to `PAYLOAD_FN_COMPILE_STATS=<dir>`.
+- **Call sites** (`installCompileGuards(config)`, `compile/guard.ts`): the config is not modified.
+  Payload calls every access function, hook and validator through `callUserFunction(fn, this,
+  args, expr)` (payload `utilities/callUserFunction.ts`, the JS call sites of both engines), and the
+  Rust core calls every JS function through `js::call`. With guards installed
+  (`setUserFunctionGuard` / `fnIrSetCallGuard`) both route through `guardCall(fn, this, args)`,
+  which looks `fn` up by identity: for a compiled function and the calls `fnIrShouldVerify`
+  selects it evaluates the IR on a snapshot of the arguments taken before the call, calls the real
+  function (same `this`, arguments, returned value / promise, errors) and compares (structural,
+  key order, `-0`, `NaN`). A mismatch de-optimises the id permanently (`registry::is_active`
+  becomes false) and is logged; bails are counted per function with their reason. Without guards,
+  `callUserFunction` is `Reflect.apply` (with V8's `x is not a function` message for a
+  non-function) and `js::call` checks one thread-local. Installed by payload's `init` when
+  `PAYLOAD_FN_COMPILE_GUARD=all` (every call) or `=sample` (first 32 calls, then 1 in 256);
+  counters to `PAYLOAD_FN_COMPILE_STATS=<dir>`.
 - **Lanes**: `guard::lane_should_verify(id)` is true until the function has had `Policy::first`
-  verified calls, then for one lane call in `Policy::sample_every`. On true, run the exact lane for
-  this call (where the wrapper verifies). Without wrappers installed nothing verifies: the lanes
-  must only use compiled functions while guards are installed (decision pending, see section 5).
+  verified (or bailed) calls, then for one lane call in `Policy::sample_every`. On true, run the
+  exact lane for this call (where the call-site guard verifies). A lane may only use a compiled
+  function when guards are installed and `lane_should_verify` says false.
+- On the exact lane compiled functions are only verified, never substituted: tick counts there stay
+  upstream's.
 
 ## 4. Opt-out
 
@@ -108,9 +122,6 @@ property is optional in the types (`skipCompilation?: () => void`): `args.skipCo
 
 ## 5. Open points
 
-- Guard wrappers replace the config's function objects (`config.collections[i].access.read` is the
-  wrapper). Production guard mode therefore changes function identity in the config; the
-  alternative is verifying at the call sites (executeAccess, the field traversals) instead.
 - `new Date()` / `Date.now()` are rejected (the guard cannot compare a clock); hooks stamping dates
   stay JS.
 - Captured `let` bindings that are reassigned later, and captured objects mutated later, are the

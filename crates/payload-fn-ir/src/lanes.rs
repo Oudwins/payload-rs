@@ -92,6 +92,12 @@ fn from_js_val(v: &JsVal, shared: &mut HashMap<usize, Value>, depth: u32) -> Val
 #[derive(Clone, Debug)]
 pub struct RequestSnapshot {
   pub user: Value,
+  /// `req.headers` ([`headers`]).
+  pub headers: Value,
+  /// `req.method` (`GET`, ...; `undefined` for Local API requests).
+  pub method: Value,
+  /// `req.operation` (set by the validate operations).
+  pub operation: Value,
   pub locale: Value,
   pub fallback_locale: Value,
   pub context: Value,
@@ -106,6 +112,9 @@ impl Default for RequestSnapshot {
   fn default() -> Self {
     RequestSnapshot {
       user: Value::Null,
+      headers: headers(std::iter::empty::<(&str, &str)>()),
+      method: Value::Undefined,
+      operation: Value::Undefined,
       locale: Value::Undefined,
       fallback_locale: Value::Undefined,
       context: Value::object(vec![]),
@@ -125,11 +134,34 @@ pub fn request(r: &RequestSnapshot) -> Value {
   Value::partial_object(vec![
     ("context", r.context.clone()),
     ("fallbackLocale", r.fallback_locale.clone()),
+    ("headers", r.headers.clone()),
     ("locale", r.locale.clone()),
+    ("method", r.method.clone()),
+    ("operation", r.operation.clone()),
     ("payload", Value::partial_object(vec![("config", config)])),
     ("query", r.query.clone()),
     ("user", r.user.clone()),
   ])
+}
+
+/// A `Headers` snapshot from raw request header pairs, as the Fetch `Headers` iterator presents
+/// them: lower-case names sorted, values of one name combined with `, ` (`set-cookie` kept apart).
+pub fn headers<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Value {
+  let mut combined: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+  for (k, v) in pairs {
+    combined.entry(k.to_ascii_lowercase()).or_default().push(v.trim_matches(|c| c == ' ' || c == '\t').to_string());
+  }
+  let mut entries = vec![];
+  for (k, values) in combined {
+    if k == "set-cookie" {
+      for v in values {
+        entries.push((Arc::from(k.as_str()), Arc::from(v.as_str())));
+      }
+    } else {
+      entries.push((Arc::from(k.as_str()), Arc::from(values.join(", ").as_str())));
+    }
+  }
+  Value::Headers(Arc::new(crate::value::HeadersValue { entries }))
 }
 
 /// The no-op `skipCompilation` Payload passes (a function the IR does not look into).

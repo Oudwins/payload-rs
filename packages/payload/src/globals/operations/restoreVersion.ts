@@ -9,6 +9,7 @@ import { Forbidden, NotFound } from '../../errors/index.js'
 import { afterChange } from '../../fields/hooks/afterChange/index.js'
 import { afterRead } from '../../fields/hooks/afterRead/index.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { initTransaction } from '../../utilities/initTransaction.js'
@@ -48,15 +49,22 @@ export const restoreVersionOperationTS = async <T extends JsonObject = any>(
     if (globalConfig.hooks?.beforeOperation?.length) {
       for (const hook of globalConfig.hooks.beforeOperation) {
         args =
-          (await hook({
-            args,
-            context: req.context,
-            global: globalConfig,
-            operation: 'restoreVersion',
-            overrideAccess,
-            req,
-            skipCompilation,
-          })) || args
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                args,
+                context: req.context,
+                global: globalConfig,
+                operation: 'restoreVersion',
+                overrideAccess,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || args
       }
     }
 
@@ -222,14 +230,21 @@ export const restoreVersionOperationTS = async <T extends JsonObject = any>(
     if (globalConfig.hooks?.afterRead?.length) {
       for (const hook of globalConfig.hooks.afterRead) {
         result =
-          (await hook({
-            context: req.context,
-            doc: result,
-            global: globalConfig,
-            overrideAccess,
-            req,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                context: req.context,
+                doc: result,
+                global: globalConfig,
+                overrideAccess,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 
@@ -255,17 +270,24 @@ export const restoreVersionOperationTS = async <T extends JsonObject = any>(
     if (globalConfig.hooks?.afterChange?.length) {
       for (const hook of globalConfig.hooks.afterChange) {
         result =
-          (await hook({
-            context: req.context,
-            data: result,
-            doc: result,
-            global: globalConfig,
-            operation: 'update',
-            overrideAccess,
-            previousDoc,
-            req,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                context: req.context,
+                data: result,
+                doc: result,
+                global: globalConfig,
+                operation: 'update',
+                overrideAccess,
+                previousDoc,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 

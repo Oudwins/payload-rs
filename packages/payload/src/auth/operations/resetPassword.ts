@@ -12,6 +12,7 @@ import { buildBeforeOperation } from '../../collections/operations/utilities/bui
 import { APIError, Forbidden, ValidationError } from '../../errors/index.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
@@ -136,14 +137,21 @@ export const resetPasswordOperationTS = async <TSlug extends AuthCollectionSlug>
 
     if (collectionConfig.hooks?.beforeValidate?.length) {
       for (const hook of collectionConfig.hooks.beforeValidate) {
-        await hook({
-          collection: args.collection?.config,
-          context: req.context,
-          data: user,
-          operation: 'update',
-          req,
-          skipCompilation,
-        })
+        await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              collection: args.collection?.config,
+              context: req.context,
+              data: user,
+              operation: 'update',
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )
       }
     }
 
@@ -192,13 +200,20 @@ export const resetPasswordOperationTS = async <TSlug extends AuthCollectionSlug>
     if (collectionConfig.hooks?.beforeLogin?.length) {
       for (const hook of collectionConfig.hooks.beforeLogin) {
         user =
-          (await hook({
-            collection: args.collection?.config,
-            context: args.req.context,
-            req: args.req,
-            skipCompilation,
-            user,
-          })) || user
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: args.collection?.config,
+                context: args.req.context,
+                req: args.req,
+                skipCompilation,
+                user,
+              },
+            ] as Parameters<typeof hook>,
+            'hook',
+          )) || user
       }
     }
 
@@ -211,14 +226,21 @@ export const resetPasswordOperationTS = async <TSlug extends AuthCollectionSlug>
     if (collectionConfig.hooks?.afterLogin?.length) {
       for (const hook of collectionConfig.hooks.afterLogin) {
         user =
-          (await hook({
-            collection: args.collection?.config,
-            context: args.req.context,
-            req: args.req,
-            skipCompilation,
-            token,
-            user,
-          })) || user
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: args.collection?.config,
+                context: args.req.context,
+                req: args.req,
+                skipCompilation,
+                token,
+                user,
+              },
+            ],
+            'hook',
+          )) || user
       }
     }
 
@@ -298,21 +320,29 @@ async function validatePasswordField({
   const validate = passwordField.validate as Validate<string>
   const dataToValidate = { ...user, password }
 
-  const validationResult = await validate(password, {
-    ...passwordField,
-    id: user.id,
-    blockData: {},
-    collectionSlug: collectionConfig.slug,
-    data: dataToValidate,
-    event: 'submit',
-    operation: 'update',
-    overrideAccess,
-    path: ['password'],
-    preferences: { fields: {} },
-    req,
-    siblingData: dataToValidate,
-    skipCompilation,
-  })
+  const validationResult = await callUserFunction(
+    validate,
+    undefined,
+    [
+      password,
+      {
+        ...passwordField,
+        id: user.id,
+        blockData: {},
+        collectionSlug: collectionConfig.slug,
+        data: dataToValidate,
+        event: 'submit',
+        operation: 'update',
+        overrideAccess,
+        path: ['password'],
+        preferences: { fields: {} },
+        req,
+        siblingData: dataToValidate,
+        skipCompilation,
+      },
+    ],
+    'validate',
+  )
 
   if (typeof validationResult === 'string') {
     throw new ValidationError({

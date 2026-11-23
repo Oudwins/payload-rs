@@ -24,6 +24,7 @@ import { afterRead, type AfterReadArgs } from '../../fields/hooks/afterRead/inde
 import { validateQueryPaths } from '../../index.js'
 import { lockedDocumentsCollectionSlug } from '../../locked-documents/config.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { getSelectMode } from '../../utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../utilities/getVersionsConfig.js'
@@ -339,15 +340,22 @@ export const findByIDOperationTS = async <
   if (collectionConfig.hooks?.beforeRead?.length) {
     for (const hook of collectionConfig.hooks.beforeRead) {
       result =
-        (await hook({
-          collection: collectionConfig,
-          context: req.context,
-          doc: result,
-          overrideAccess,
-          query,
-          req,
-          skipCompilation,
-        })) || result
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              collection: collectionConfig,
+              context: req.context,
+              doc: result,
+              overrideAccess,
+              query,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || result
     }
   }
 
@@ -380,15 +388,22 @@ export const findByIDOperationTS = async <
   if (collectionConfig.hooks?.afterRead?.length) {
     for (const hook of collectionConfig.hooks.afterRead) {
       result =
-        (await hook({
-          collection: collectionConfig,
-          context: req.context,
-          doc: result,
-          overrideAccess,
-          query,
-          req,
-          skipCompilation,
-        })) || result
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              collection: collectionConfig,
+              context: req.context,
+              doc: result,
+              overrideAccess,
+              query,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || result
     }
   }
 

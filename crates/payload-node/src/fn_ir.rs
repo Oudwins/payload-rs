@@ -27,7 +27,7 @@ use napi::{Env, JsValue, Result, sys};
 use napi_derive::napi;
 use payload_fn_ir::compile::{self, PathTrie, Resolution};
 use payload_fn_ir::ir::Builtin;
-use payload_fn_ir::value::{Callable, Object as VObject, OpaqueKind, Value};
+use payload_fn_ir::value::{Callable, HeadersValue, Object as VObject, OpaqueKind, Value};
 use payload_fn_ir::{guard, registry};
 
 struct Deps {
@@ -36,6 +36,7 @@ struct Deps {
   opaque_primitive: sys::napi_ref,
   fn_ref: sys::napi_ref,
   partial: sys::napi_ref,
+  headers: sys::napi_ref,
   create_null_proto: sys::napi_ref,
 }
 
@@ -81,6 +82,7 @@ pub fn fn_ir_init(env: Env, deps: Object) -> Result<()> {
       opaque_primitive: make_ref(e, named(e, d, "opaquePrimitive")?)?,
       fn_ref: make_ref(e, named(e, d, "FnRef")?)?,
       partial: make_ref(e, named(e, d, "Partial")?)?,
+      headers: make_ref(e, named(e, d, "HeadersSnapshot")?)?,
       create_null_proto: make_ref(e, named(e, d, "createNullProto")?)?,
     };
     DEPS.with(|cell| *cell.borrow_mut() = Some(deps));
@@ -249,13 +251,14 @@ unsafe fn to_value(e: sys::napi_env, v: sys::napi_value, depth: u32) -> Result<V
     }
     sys::ValueType::napi_string => Value::String(Arc::from(unsafe { string_of(e, v)? }.unwrap_or_default().as_str())),
     sys::ValueType::napi_object => {
-      let (oo, of, op, fr, pa) = with_deps(|d| unsafe {
+      let (oo, of, op, fr, pa, hs) = with_deps(|d| unsafe {
         Ok((
           deref(e, d.opaque_object)?,
           deref(e, d.opaque_function)?,
           deref(e, d.opaque_primitive)?,
           deref(e, d.fn_ref)?,
           deref(e, d.partial)?,
+          deref(e, d.headers)?,
         ))
       })?;
       if unsafe { strict_eq(e, v, oo)? } {
@@ -271,6 +274,25 @@ unsafe fn to_value(e: sys::napi_env, v: sys::napi_value, depth: u32) -> Result<V
         let mut id = 0f64;
         ok(unsafe { sys::napi_get_value_double(e, named(e, v, "id")?, &mut id) })?;
         return Ok(Value::Func(Callable::Fn(id as u32)));
+      }
+      if unsafe { instance_of(e, v, hs)? } {
+        // `entries`: [name, value] pairs as the Headers iterator yields them.
+        let list = unsafe { named(e, v, "entries")? };
+        let mut len = 0u32;
+        ok(unsafe { sys::napi_get_array_length(e, list, &mut len) })?;
+        let mut entries = Vec::with_capacity(len as usize);
+        for i in 0..len {
+          let mut pair = ptr::null_mut();
+          ok(unsafe { sys::napi_get_element(e, list, i, &mut pair) })?;
+          let mut k = ptr::null_mut();
+          let mut val = ptr::null_mut();
+          ok(unsafe { sys::napi_get_element(e, pair, 0, &mut k) })?;
+          ok(unsafe { sys::napi_get_element(e, pair, 1, &mut val) })?;
+          let k = unsafe { string_of(e, k)? }.unwrap_or_default();
+          let val = unsafe { string_of(e, val)? }.unwrap_or_default();
+          entries.push((Arc::from(k.as_str()), Arc::from(val.as_str())));
+        }
+        return Ok(Value::Headers(Arc::new(HeadersValue { entries })));
       }
       let (target, closed) =
         if unsafe { instance_of(e, v, pa)? } { (unsafe { named(e, v, "value")? }, false) } else { (v, true) };
@@ -369,7 +391,7 @@ fn comparable(v: &Value) -> bool {
   match v {
     Value::Array(items) => items.iter().all(comparable),
     Value::Object(o) => o.closed && o.props.values().all(comparable),
-    Value::Opaque(_) | Value::Func(_) | Value::RegExp(_) | Value::Promise(_) => false,
+    Value::Opaque(_) | Value::Func(_) | Value::RegExp(_) | Value::Promise(_) | Value::Headers(_) => false,
     _ => true,
   }
 }
@@ -431,6 +453,16 @@ pub fn fn_ir_is_active(id: u32) -> bool {
 #[napi]
 pub fn fn_ir_deoptimize(id: u32) {
   registry::deoptimize(id)
+}
+
+/// Installs the call guard of the Rust core (`guard(fn, this, args)`), or removes it (`undefined`).
+#[napi]
+pub fn fn_ir_set_call_guard(env: Env, guard: Unknown) -> Result<()> {
+  let e = env.raw();
+  let g = guard.raw();
+  let is_fn = unsafe { type_of(e, g)? } == sys::ValueType::napi_function;
+  payload_core_runtime::js::set_call_guard(e, if is_fn { Some(g) } else { None })
+    .map_err(|_| err("fnIrSetCallGuard failed"))
 }
 
 #[napi]

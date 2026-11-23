@@ -36,7 +36,7 @@ fn s(v: &str) -> Value {
 pub fn get(o: &Value, key: &str) -> R<Value> {
   match o {
     Value::Undefined | Value::Null => Err(Bail::Throw),
-    Value::Object(obj) => match obj.props.get(key) {
+    Value::Object(obj) => match obj.get(key) {
       Some(v) => Ok(v.clone()),
       None if !obj.closed => Err(Bail::Unknown),
       None if !obj.null_proto && OBJECT_PROTOTYPE.contains(&key) => Err(Bail::Unsupported("prototype property")),
@@ -60,7 +60,7 @@ pub fn get(o: &Value, key: &str) -> R<Value> {
         None => Err(Bail::Unsupported("string property")),
       }
     }
-    Value::Promise(_) | Value::Func(_) | Value::RegExp(_) | Value::Number(_) | Value::Bool(_) => {
+    Value::Promise(_) | Value::Func(_) | Value::RegExp(_) | Value::Headers(_) | Value::Number(_) | Value::Bool(_) => {
       Err(Bail::Unsupported("property of a non-plain value"))
     }
     Value::Opaque(_) => Err(Bail::Opaque),
@@ -70,7 +70,7 @@ pub fn get(o: &Value, key: &str) -> R<Value> {
 /// Whether `receiver.name` is a callable the interpreter would call (for `receiver.name?.()`).
 pub fn has_method(receiver: &Value, name: &str) -> R<bool> {
   match receiver {
-    Value::Object(o) => match o.props.get(name) {
+    Value::Object(o) => match o.get(name) {
       Some(v) => Ok(!v.is_nullish()),
       None if !o.closed => Err(Bail::Unknown),
       None => Ok(OBJECT_PROTOTYPE.contains(&name) && !o.null_proto),
@@ -98,7 +98,7 @@ pub fn to_string(v: &Value) -> R<String> {
     Value::String(st) => st.to_string(),
     Value::Array(a) => join(a, ",")?,
     Value::Object(o) => {
-      if !o.closed || o.null_proto || o.props.contains_key("toString") || o.props.contains_key("valueOf") {
+      if !o.closed || o.null_proto || o.has("toString") || o.has("valueOf") {
         return Err(Bail::Unsupported("object to string"));
       }
       "[object Object]".into()
@@ -159,8 +159,8 @@ pub fn strict_equals(a: &Value, b: &Value) -> R<bool> {
     (Value::Func(crate::value::Callable::Builtin(x)), Value::Func(crate::value::Callable::Builtin(y))) => x == y,
     (Value::Opaque(OpaqueKind::Primitive), _) | (_, Value::Opaque(OpaqueKind::Primitive)) => return Err(Bail::Opaque),
     (Value::Opaque(_), Value::Opaque(_)) => return Err(Bail::Opaque),
-    (Value::Opaque(_) | Value::Func(_) | Value::Promise(_) | Value::RegExp(_), _)
-    | (_, Value::Opaque(_) | Value::Func(_) | Value::Promise(_) | Value::RegExp(_)) => {
+    (Value::Opaque(_) | Value::Func(_) | Value::Promise(_) | Value::RegExp(_) | Value::Headers(_), _)
+    | (_, Value::Opaque(_) | Value::Func(_) | Value::Promise(_) | Value::RegExp(_) | Value::Headers(_)) => {
       if is_object_like(a) && is_object_like(b) {
         return Err(Bail::Unsupported("object identity"));
       }
@@ -178,6 +178,7 @@ fn is_object_like(v: &Value) -> bool {
       | Value::Func(_)
       | Value::Promise(_)
       | Value::RegExp(_)
+      | Value::Headers(_)
       | Value::Opaque(OpaqueKind::Object | OpaqueKind::Function)
   )
 }
@@ -263,7 +264,7 @@ pub fn binary(op: BinaryOp, l: &Value, r: &Value) -> R<Value> {
     BinaryOp::In => {
       let key = to_property_key(l)?;
       Value::Bool(match r {
-        Value::Object(o) => match o.props.contains_key(&key) {
+        Value::Object(o) => match o.has(&key) {
           true => true,
           false if !o.closed => return Err(Bail::Unknown),
           false => !o.null_proto && OBJECT_PROTOTYPE.contains(&&*key),
@@ -387,7 +388,7 @@ pub fn call_builtin(b: Builtin, args: &[Value]) -> R<Value> {
     Builtin::ObjectHasOwn => {
       let key = to_property_key(&arg(args, 1))?;
       match &a0 {
-        Value::Object(o) => match o.props.contains_key(&key) {
+        Value::Object(o) => match o.has(&key) {
           true => Value::Bool(true),
           false if !o.closed => return Err(Bail::Unknown),
           false => Value::Bool(false),
@@ -534,6 +535,23 @@ pub(crate) fn method(interp: &mut Interp, receiver: &Value, name: &str, args: &[
       }
       _ => Err(Bail::Unsupported("number method")),
     },
+    Value::Headers(h) => match name {
+      "get" | "has" => {
+        if args.is_empty() {
+          return Err(Bail::Throw);
+        }
+        let key = to_string(&arg(args, 0))?;
+        if !value::is_header_name(&key) {
+          return Err(Bail::Throw);
+        }
+        Ok(if name == "get" {
+          h.get(&key).map(|v| s(&v)).unwrap_or(Value::Null)
+        } else {
+          Value::Bool(h.has(&key))
+        })
+      }
+      _ => Err(Bail::Unsupported("headers method")),
+    },
     Value::RegExp(re) => match name {
       "test" => {
         if re.flags.contains('g') || re.flags.contains('y') {
@@ -549,7 +567,7 @@ pub(crate) fn method(interp: &mut Interp, receiver: &Value, name: &str, args: &[
     Value::Object(o) => match name {
       "hasOwnProperty" if !o.null_proto => {
         let key = to_property_key(&arg(args, 0))?;
-        match o.props.contains_key(&key) {
+        match o.has(&key) {
           true => Ok(Value::Bool(true)),
           false if !o.closed => Err(Bail::Unknown),
           false => Ok(Value::Bool(false)),

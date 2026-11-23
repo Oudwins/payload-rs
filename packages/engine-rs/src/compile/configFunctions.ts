@@ -17,8 +17,6 @@ export type ConfigFunction = {
   kind: FunctionKind
   /** `collections.posts.access.read`, `collections.posts.fields.title.hooks.beforeChange.0`. */
   label: string
-  /** Replaces the function in the config (guard mode). */
-  replace: (next: AnyFunction) => void
 }
 
 type AnyRecord = Record<string, any>
@@ -36,9 +34,6 @@ const pushIfFunction = (
       fn,
       kind,
       label,
-      replace: (next) => {
-        holder[key] = next
-      },
     })
   }
 }

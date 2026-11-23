@@ -10,6 +10,7 @@ import {
   type GlobalSlug,
   type SanitizedGlobalConfig,
 } from '../../index.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { skipCompilation } from '../../utilities/skipCompilation.js'
 
@@ -36,15 +37,22 @@ export const countGlobalVersionsOperationTS = async <TSlug extends GlobalSlug>(
   if (global.hooks?.beforeOperation?.length) {
     for (const hook of global.hooks.beforeOperation) {
       args =
-        (await hook({
-          args,
-          context: req.context,
-          global,
-          operation: 'countVersions',
-          overrideAccess,
-          req,
-          skipCompilation,
-        })) || args
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              args,
+              context: req.context,
+              global,
+              operation: 'countVersions',
+              overrideAccess,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || args
     }
   }
 

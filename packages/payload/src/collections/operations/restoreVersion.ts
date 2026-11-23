@@ -26,6 +26,7 @@ import {
 import { runStoredFileRestore } from '../../uploads/fileVersioning/restore.js'
 import { restoreUploadDataFromDocument } from '../../uploads/sanitizeUploadData.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
 import { deepCopyObjectSimple } from '../../utilities/deepCopyObject.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
@@ -271,15 +272,22 @@ export const restoreVersionOperationTS = async <
     if (collectionConfig.hooks?.beforeValidate?.length) {
       for (const hook of collectionConfig.hooks.beforeValidate) {
         data =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            data,
-            operation: 'update',
-            originalDoc,
-            req: reqWithValidationLocale,
-            skipCompilation,
-          })) || data
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                data,
+                operation: 'update',
+                originalDoc,
+                req: reqWithValidationLocale,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || data
       }
     }
 
@@ -290,15 +298,22 @@ export const restoreVersionOperationTS = async <
     if (collectionConfig.hooks?.beforeChange?.length) {
       for (const hook of collectionConfig.hooks.beforeChange) {
         data =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            data,
-            operation: 'update',
-            originalDoc,
-            req: reqWithValidationLocale,
-            skipCompilation,
-          })) || data
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                data,
+                operation: 'update',
+                originalDoc,
+                req: reqWithValidationLocale,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || data
       }
     }
 
@@ -405,14 +420,21 @@ export const restoreVersionOperationTS = async <
     if (collectionConfig.hooks?.afterRead?.length) {
       for (const hook of collectionConfig.hooks.afterRead) {
         result =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            doc: result,
-            overrideAccess,
-            req,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                doc: result,
+                overrideAccess,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 
@@ -438,17 +460,24 @@ export const restoreVersionOperationTS = async <
     if (collectionConfig.hooks?.afterChange?.length) {
       for (const hook of collectionConfig.hooks.afterChange) {
         result =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            data: result,
-            doc: result,
-            operation: 'update',
-            overrideAccess,
-            previousDoc: prevDocWithLocales,
-            req,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                data: result,
+                doc: result,
+                operation: 'update',
+                overrideAccess,
+                previousDoc: prevDocWithLocales,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 

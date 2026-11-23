@@ -6,6 +6,7 @@ import type { JsonObject, PayloadRequest } from '../../../types/index.js'
 import type { Block, Field, TabAsField } from '../../config/types.js'
 
 import { MissingEditorProp } from '../../../errors/index.js'
+import { callUserFunction } from '../../../utilities/callUserFunction.js'
 import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import { fieldAffectsData, tabHasName } from '../../config/types.js'
 import { getFieldPaths } from '../../getFieldPaths.js'
@@ -82,28 +83,35 @@ export const promise = async ({
     // Execute hooks
     if ('hooks' in field && field.hooks?.afterChange) {
       for (const hook of field.hooks.afterChange) {
-        const hookedValue = await hook({
-          blockData,
-          collection,
-          context,
-          data,
-          field,
-          global,
-          indexPath: indexPathSegments,
-          operation,
-          originalDoc: doc,
-          path: pathSegments,
-          previousDoc,
-          previousSiblingDoc,
-          previousValue:
-            getNestedValue(previousValData, pathSegments) ?? previousValData?.[field.name],
-          req,
-          schemaPath: schemaPathSegments,
-          siblingData,
-          siblingFields: siblingFields!,
-          skipCompilation,
-          value: getNestedValue(siblingDoc, pathSegments) ?? siblingDoc?.[field.name],
-        })
+        const hookedValue = await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              blockData,
+              collection,
+              context,
+              data,
+              field,
+              global,
+              indexPath: indexPathSegments,
+              operation,
+              originalDoc: doc,
+              path: pathSegments,
+              previousDoc,
+              previousSiblingDoc,
+              previousValue:
+                getNestedValue(previousValData, pathSegments) ?? previousValData?.[field.name],
+              req,
+              schemaPath: schemaPathSegments,
+              siblingData,
+              siblingFields: siblingFields!,
+              skipCompilation,
+              value: getNestedValue(siblingDoc, pathSegments) ?? siblingDoc?.[field.name],
+            },
+          ],
+          'hook',
+        )
 
         if (hookedValue !== undefined) {
           siblingDoc[field.name] = hookedValue
@@ -278,26 +286,33 @@ export const promise = async ({
 
       if (editor?.hooks?.afterChange?.length) {
         for (const hook of editor.hooks.afterChange) {
-          const hookedValue = await hook({
-            collection,
-            context,
-            data,
-            field,
-            global,
-            indexPath: indexPathSegments,
-            operation,
-            originalDoc: doc,
-            parentIsLocalized,
-            path: pathSegments,
-            previousDoc,
-            previousSiblingDoc,
-            previousValue:
-              getNestedValue(previousValData, pathSegments) ?? previousValData?.[field.name],
-            req,
-            schemaPath: schemaPathSegments,
-            siblingData,
-            value: siblingDoc?.[field.name],
-          })
+          const hookedValue = await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection,
+                context,
+                data,
+                field,
+                global,
+                indexPath: indexPathSegments,
+                operation,
+                originalDoc: doc,
+                parentIsLocalized,
+                path: pathSegments,
+                previousDoc,
+                previousSiblingDoc,
+                previousValue:
+                  getNestedValue(previousValData, pathSegments) ?? previousValData?.[field.name],
+                req,
+                schemaPath: schemaPathSegments,
+                siblingData,
+                value: siblingDoc?.[field.name],
+              },
+            ],
+            'hook',
+          )
 
           if (hookedValue !== undefined) {
             siblingDoc[field.name] = hookedValue

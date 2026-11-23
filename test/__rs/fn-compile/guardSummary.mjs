@@ -43,6 +43,7 @@ const total = {
 const perFile = new Map()
 const mismatches = []
 const bailsByLabel = new Map()
+const bailReasons = new Map()
 for (const f of files) {
   const data = JSON.parse(fs.readFileSync(f, 'utf8'))
   const key = data.testFile ? path.relative(process.cwd(), data.testFile) : path.relative(dir, f)
@@ -74,6 +75,9 @@ for (const f of files) {
     total.bails += s.bails
     total.mismatches += s.mismatches
     total.deoptimized += s.deoptimized ? 1 : 0
+    for (const [reason, n] of Object.entries(fn.bailReasons ?? {})) {
+      bailReasons.set(reason, (bailReasons.get(reason) ?? 0) + n)
+    }
     if (s.bails) {
       bailsByLabel.set(fn.label, (bailsByLabel.get(fn.label) ?? 0) + s.bails)
     }
@@ -96,6 +100,10 @@ for (const [k, r] of [...perFile].sort()) {
 console.log(
   `\nprocesses: ${files.length}; functions seen: ${total.functions}, compiled: ${total.compiled}; guarded calls: ${total.calls}; compiled evaluations checked equal to JS: ${total.verified}; bails (JS result used): ${total.bails}; mismatches: ${total.mismatches} (de-optimised functions: ${total.deoptimized})`,
 )
+console.log('\nbail reasons (compiled evaluations that handed the call back to JS):')
+for (const [reason, n] of [...bailReasons].sort((a, b) => b[1] - a[1]).slice(0, 15)) {
+  console.log(`- ${n} ${reason}`)
+}
 if (argv.includes('--bails')) {
   console.log('\nbails by function:')
   for (const [label, n] of [...bailsByLabel].sort((a, b) => b[1] - a[1]).slice(0, 40)) {

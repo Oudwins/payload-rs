@@ -1,6 +1,7 @@
 import type { CollectionSlug } from '../../../index.js'
 import type { AfterOperationArg, OperationMap, OperationResult } from './types.js'
 
+import { callUserFunction } from '../../../utilities/callUserFunction.js'
 import { skipCompilation } from '../../../utilities/skipCompilation.js'
 
 export const buildAfterOperation = async <
@@ -15,15 +16,22 @@ export const buildAfterOperation = async <
 
   if (args.collection.config.hooks?.afterOperation?.length) {
     for (const hook of args.collection.config.hooks.afterOperation) {
-      const hookResult = await hook({
-        args,
-        collection,
-        operation,
-        overrideAccess,
-        req: args.req,
-        result: newResult,
-        skipCompilation,
-      } as AfterOperationArg<TOperationGeneric>)
+      const hookResult = await callUserFunction(
+        hook,
+        undefined,
+        [
+          {
+            args,
+            collection,
+            operation,
+            overrideAccess,
+            req: args.req,
+            result: newResult,
+            skipCompilation,
+          } as AfterOperationArg<TOperationGeneric>,
+        ],
+        'hook',
+      )
 
       if (hookResult !== undefined) {
         newResult = hookResult as OperationResult<TOperationGeneric, O>

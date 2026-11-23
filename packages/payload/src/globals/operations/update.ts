@@ -25,6 +25,7 @@ import { beforeChange } from '../../fields/hooks/beforeChange/index.js'
 import { beforeValidate } from '../../fields/hooks/beforeValidate/index.js'
 import { deepCopyObjectSimple } from '../../index.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { checkDocumentLockStatus } from '../../utilities/checkDocumentLockStatus.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
@@ -117,15 +118,22 @@ export const updateOperationTS = async <
     if (initialGlobalConfig.hooks?.beforeOperation?.length) {
       for (const hook of initialGlobalConfig.hooks.beforeOperation) {
         args =
-          (await hook({
-            args,
-            context: args.req.context,
-            global: initialGlobalConfig,
-            operation: 'update',
-            overrideAccess: args.overrideAccess,
-            req: args.req,
-            skipCompilation,
-          })) || args
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                args,
+                context: args.req.context,
+                global: initialGlobalConfig,
+                operation: 'update',
+                overrideAccess: args.overrideAccess,
+                req: args.req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || args
       }
     }
 
@@ -313,16 +321,23 @@ export const updateOperationTS = async <
     if (globalConfig.hooks?.beforeValidate?.length) {
       for (const hook of globalConfig.hooks.beforeValidate) {
         data =
-          (await hook({
-            context: req.context,
-            data,
-            global: globalConfig,
-            operation: 'update',
-            originalDoc: publicationHookDoc,
-            overrideAccess,
-            req,
-            skipCompilation,
-          })) || data
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                context: req.context,
+                data,
+                global: globalConfig,
+                operation: 'update',
+                originalDoc: publicationHookDoc,
+                overrideAccess,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || data
       }
     }
 
@@ -333,16 +348,23 @@ export const updateOperationTS = async <
     if (globalConfig.hooks?.beforeChange?.length) {
       for (const hook of globalConfig.hooks.beforeChange) {
         data =
-          (await hook({
-            context: req.context,
-            data,
-            global: globalConfig,
-            operation: 'update',
-            originalDoc: publicationHookDoc,
-            overrideAccess,
-            req,
-            skipCompilation,
-          })) || data
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                context: req.context,
+                data,
+                global: globalConfig,
+                operation: 'update',
+                originalDoc: publicationHookDoc,
+                overrideAccess,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || data
       }
     }
 
@@ -623,14 +645,21 @@ export const updateOperationTS = async <
     if (globalConfig.hooks?.afterRead?.length) {
       for (const hook of globalConfig.hooks.afterRead) {
         result =
-          (await hook({
-            context: req.context,
-            doc: result,
-            global: globalConfig,
-            overrideAccess,
-            req,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                context: req.context,
+                doc: result,
+                global: globalConfig,
+                overrideAccess,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 
@@ -656,17 +685,24 @@ export const updateOperationTS = async <
     if (globalConfig.hooks?.afterChange?.length) {
       for (const hook of globalConfig.hooks.afterChange) {
         result =
-          (await hook({
-            context: req.context,
-            data,
-            doc: result,
-            global: globalConfig,
-            operation: 'update',
-            overrideAccess,
-            previousDoc: originalDoc,
-            req,
-            skipCompilation,
-          })) || result
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                context: req.context,
+                data,
+                doc: result,
+                global: globalConfig,
+                operation: 'update',
+                overrideAccess,
+                previousDoc: originalDoc,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || result
       }
     }
 

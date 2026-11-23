@@ -13,6 +13,7 @@ import { APIError } from '../../errors/index.js'
 import { Forbidden } from '../../index.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
 import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { commitTransaction } from '../../utilities/commitTransaction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { formatAdminURL } from '../../utilities/formatAdminURL.js'
@@ -254,12 +255,19 @@ export const forgotPasswordOperationTS = async <TSlug extends AuthCollectionSlug
 
     if (collectionConfig.hooks?.afterForgotPassword?.length) {
       for (const hook of collectionConfig.hooks.afterForgotPassword) {
-        await hook({
-          args,
-          collection: args.collection?.config,
-          context: req.context,
-          skipCompilation,
-        })
+        await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              args,
+              collection: args.collection?.config,
+              context: req.context,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )
       }
     }
 

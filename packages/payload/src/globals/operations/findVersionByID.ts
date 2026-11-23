@@ -9,6 +9,7 @@ import { combineQueries } from '../../database/combineQueries.js'
 import { sanitizeWhereQuery } from '../../database/sanitizeWhereQuery.js'
 import { Forbidden, NotFound } from '../../errors/index.js'
 import { afterRead } from '../../fields/hooks/afterRead/index.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { deepCopyObjectSimple } from '../../utilities/deepCopyObject.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { hasVersionsEnabled } from '../../utilities/getVersionsConfig.js'
@@ -139,14 +140,21 @@ export const findVersionByIDOperationTS = async <T extends TypeWithVersion<T> = 
   if (globalConfig.hooks?.beforeRead?.length) {
     for (const hook of globalConfig.hooks.beforeRead) {
       result =
-        (await hook({
-          context: req.context,
-          doc: result.version,
-          global: globalConfig,
-          overrideAccess,
-          req,
-          skipCompilation,
-        })) || result.version
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              context: req.context,
+              doc: result.version,
+              global: globalConfig,
+              overrideAccess,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || result.version
     }
   }
 
@@ -178,15 +186,22 @@ export const findVersionByIDOperationTS = async <T extends TypeWithVersion<T> = 
   if (globalConfig.hooks?.afterRead?.length) {
     for (const hook of globalConfig.hooks.afterRead) {
       result.version =
-        (await hook({
-          context: req.context,
-          doc: result.version,
-          global: globalConfig,
-          overrideAccess,
-          query: findGlobalVersionsArgs.where,
-          req,
-          skipCompilation,
-        })) || result.version
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              context: req.context,
+              doc: result.version,
+              global: globalConfig,
+              overrideAccess,
+              query: findGlobalVersionsArgs.where,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || result.version
     }
   }
 

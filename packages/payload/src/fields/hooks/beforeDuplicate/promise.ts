@@ -3,6 +3,7 @@ import type { RequestContext } from '../../../index.js'
 import type { JsonObject, PayloadRequest } from '../../../types/index.js'
 import type { Block, Field, FieldHookArgs, TabAsField } from '../../config/types.js'
 
+import { callUserFunction } from '../../../utilities/callUserFunction.js'
 import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import { fieldAffectsData, fieldShouldBeLocalized } from '../../config/types.js'
 import { getFieldPaths } from '../../getFieldPaths.js'
@@ -99,7 +100,7 @@ export const promise = async <T>({
           let hookResult
           if ('hooks' in field && field.hooks?.beforeDuplicate) {
             for (const hook of field.hooks.beforeDuplicate) {
-              hookResult = await hook(beforeDuplicateArgs)
+              hookResult = await callUserFunction(hook, undefined, [beforeDuplicateArgs], 'hook')
             }
           }
 
@@ -133,7 +134,7 @@ export const promise = async <T>({
         let hookResult
         if ('hooks' in field && field.hooks?.beforeDuplicate) {
           for (const hook of field.hooks.beforeDuplicate) {
-            hookResult = await hook(beforeDuplicateArgs)
+            hookResult = await callUserFunction(hook, undefined, [beforeDuplicateArgs], 'hook')
           }
         }
 

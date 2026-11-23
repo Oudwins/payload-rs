@@ -11,6 +11,7 @@ import { afterRead } from '../../fields/hooks/afterRead/index.js'
 import { checkFileAccess } from '../../uploads/checkFileAccess.js'
 import { markHistoricalFileURLs } from '../../uploads/fileVersioning/markHistoricalFileURLs.js'
 import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.js'
+import { callUserFunction } from '../../utilities/callUserFunction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { hasVersionsEnabled } from '../../utilities/getVersionsConfig.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
@@ -120,8 +121,11 @@ export const findVersionByIDOperationTS = async <TData extends TypeWithID = any>
         },
         inheritsReadAccess
           ? (accessArgs) =>
-              collectionConfig.access.readVersions(
-                withInheritedReadVersionsParentID(accessArgs, prefetched?.parentID),
+              callUserFunction(
+                collectionConfig.access.readVersions,
+                collectionConfig.access,
+                [withInheritedReadVersionsParentID(accessArgs, prefetched?.parentID)],
+                'collectionConfig.access.readVersions',
               )
           : collectionConfig.access.readVersions,
       )
@@ -201,15 +205,22 @@ export const findVersionByIDOperationTS = async <TData extends TypeWithID = any>
   if (collectionConfig.hooks?.beforeRead?.length) {
     for (const hook of collectionConfig.hooks.beforeRead) {
       result.version =
-        (await hook({
-          collection: collectionConfig,
-          context: req.context,
-          doc: result.version,
-          overrideAccess,
-          query: fullWhere,
-          req,
-          skipCompilation,
-        })) || result.version
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              collection: collectionConfig,
+              context: req.context,
+              doc: result.version,
+              overrideAccess,
+              query: fullWhere,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || result.version
     }
   }
 
@@ -242,15 +253,22 @@ export const findVersionByIDOperationTS = async <TData extends TypeWithID = any>
   if (collectionConfig.hooks?.afterRead?.length) {
     for (const hook of collectionConfig.hooks.afterRead) {
       result.version =
-        (await hook({
-          collection: collectionConfig,
-          context: req.context,
-          doc: result.version,
-          overrideAccess,
-          query: fullWhere,
-          req,
-          skipCompilation,
-        })) || result.version
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              collection: collectionConfig,
+              context: req.context,
+              doc: result.version,
+              overrideAccess,
+              query: fullWhere,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || result.version
     }
   }
 

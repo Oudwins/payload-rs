@@ -8,6 +8,7 @@ use payload_fn_ir::{Value, compile_standalone, evaluate};
 
 fn main() {
   let cases = [
+    ("anyone", "() => true"),
     ("authenticated", "({ req: { user } }) => Boolean(user)"),
     (
       "adminOrOwner (inline checkRole)",
@@ -32,6 +33,11 @@ fn main() {
       std::hint::black_box(evaluate(id, std::hint::black_box(&args)).unwrap());
     }
     let ns = start.elapsed().as_nanos() as f64 / n as f64;
-    println!("{name}: {ns:.0} ns per evaluation");
+    let start = Instant::now();
+    for _ in 0..n {
+      std::hint::black_box(payload_fn_ir::registry::is_active(std::hint::black_box(id)));
+    }
+    let lookup = start.elapsed().as_nanos() as f64 / n as f64;
+    println!("{name}: {ns:.0} ns per evaluation (registry lookup {lookup:.0} ns)");
   }
 }

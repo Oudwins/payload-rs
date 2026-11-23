@@ -3,6 +3,7 @@ import type { AuthenticatedUser } from '../index.js'
 import type { PayloadRequest } from '../types/index.js'
 
 import { afterRead } from '../fields/hooks/afterRead/index.js'
+import { callUserFunction } from '../utilities/callUserFunction.js'
 import { deepCopyObjectSimple } from '../utilities/deepCopyObject.js'
 import { skipCompilation } from '../utilities/skipCompilation.js'
 
@@ -45,14 +46,21 @@ export const applyUserReadAccess = async ({
   if (collection.hooks?.afterRead?.length) {
     for (const hook of collection.hooks.afterRead) {
       userWithReadAccess =
-        (await hook({
-          collection,
-          context: req.context,
-          doc: userWithReadAccess,
-          overrideAccess,
-          req,
-          skipCompilation,
-        })) || userWithReadAccess
+        (await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              collection,
+              context: req.context,
+              doc: userWithReadAccess,
+              overrideAccess,
+              req,
+              skipCompilation,
+            },
+          ],
+          'hook',
+        )) || userWithReadAccess
     }
   }
 
