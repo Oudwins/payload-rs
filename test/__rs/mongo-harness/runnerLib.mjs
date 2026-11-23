@@ -29,10 +29,12 @@ export const testsOf = (fileResult) => {
 
 /**
  * Mongo engine stats of every process of one file (glue `PAYLOAD_RS_MONGO_ENGINE_STATS_DIR`):
- * live Rust engines created and the data-method calls they served (`calls` = `nativeCalls`).
+ * live Rust engines created and the data-method calls they served (`calls` = `nativeCalls`):
+ * calls of the live engine's methods plus reads served by the Rust driver lane (`driver`, which
+ * reach no live method).
  */
 export const readEngineStats = (dir) => {
-  const out = { calls: 0, files: 0, live: 0, nativeCalls: 0 }
+  const out = { calls: 0, driver: 0, files: 0, live: 0, nativeCalls: 0 }
   if (!dir || !fs.existsSync(dir)) {
     return out
   }
@@ -42,9 +44,11 @@ export const readEngineStats = (dir) => {
     if (!stats) continue
     out.files++
     const liveCalls = sum(stats.liveCalls)
-    out.calls += liveCalls
+    const driverCalls = sum(stats.driverLane?.served)
+    out.calls += liveCalls + driverCalls
+    out.driver += driverCalls
     out.live += stats.engines?.live ?? 0
-    out.nativeCalls += liveCalls
+    out.nativeCalls += liveCalls + driverCalls
   }
   return out
 }

@@ -27,6 +27,7 @@ payload-mongo-live-write = { path = "../payload-mongo-live-write" }
 payload-mongo-schema = { path = "../payload-mongo-schema" }
 payload-mongo-live-query = { path = "../payload-mongo-live-query" }
 payload-mongo-live-transform = { path = "../payload-mongo-live-transform" }
+payload-mongo-driver = { path = "../payload-mongo-driver" }
 payload-sql-engine = { path = "../payload-sql-engine" }
 payload-sqlite = { path = "../payload-sqlite" }
 serde_json.workspace = true

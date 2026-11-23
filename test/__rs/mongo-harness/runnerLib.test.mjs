@@ -37,11 +37,12 @@ test('testsOf keys duplicate full names by occurrence index', () => {
   assert.equal(testsOf(undefined).size, 0)
 })
 
-test('readEngineStats sums the live engine calls of per-process files', () => {
+test('readEngineStats sums the live engine and driver lane calls of per-process files', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-runnerlib-'))
   try {
     assert.deepEqual(readEngineStats(path.join(dir, 'missing')), {
       calls: 0,
+      driver: 0,
       files: 0,
       live: 0,
       nativeCalls: 0,
@@ -52,16 +53,21 @@ test('readEngineStats sums the live engine calls of per-process files', () => {
     )
     fs.writeFileSync(
       path.join(dir, 'mongo-engine-4.json'),
-      JSON.stringify({ engines: { live: 1 }, liveCalls: { create: 1, find: 6 } }),
+      JSON.stringify({
+        driverLane: { served: { find: 4, findOne: 1 } },
+        engines: { live: 1 },
+        liveCalls: { create: 1, find: 6 },
+      }),
     )
     // temporaries and foreign files are ignored
     fs.writeFileSync(path.join(dir, 'mongo-engine-3.json.3.tmp'), '{')
     fs.writeFileSync(path.join(dir, 'other.json'), JSON.stringify({ liveCalls: { find: 100 } }))
     assert.deepEqual(readEngineStats(dir), {
-      calls: 12,
+      calls: 17,
+      driver: 5,
       files: 2,
       live: 2,
-      nativeCalls: 12,
+      nativeCalls: 17,
     })
   } finally {
     fs.rmSync(dir, { force: true, recursive: true })

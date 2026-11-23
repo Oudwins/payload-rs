@@ -16,6 +16,7 @@ mod mongo_schema;
 #[path = "../../payload-mongo-live-transform/node/mod.rs"] mod mongo_live_transform;
 #[path = "../../payload-mongo-live-joins/node/mod.rs"] mod mongo_live_joins;
 #[path = "../../payload-mongo-schema/node/mod.rs"] mod mongo_live_schema;
+#[path = "../../payload-mongo-driver/node/mod.rs"] mod mongo_driver;
 mod schema;
 mod sqlite;
 mod validate;

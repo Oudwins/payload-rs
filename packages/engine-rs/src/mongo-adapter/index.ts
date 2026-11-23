@@ -12,6 +12,7 @@
 import { renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
+import { getDriverLaneStats, installDriverLane } from '../mongo-driver/index.js'
 import { registerFlushOnFileEnd } from './flushOnFileEnd.js'
 import { createLiveInit, getLiveDepsPorted, getLiveEngineCalls, installLiveEngine } from './live.js'
 
@@ -64,6 +65,10 @@ const stats = {
   liveMethods: [] as string[],
   /** Live dependencies (buildQuery, transform, joins, ...) running their Rust port. */
   livePorted: {} as Record<string, boolean>,
+  /** Reads served by the Rust driver lane / handed to the mongoose lane (mongo-driver). */
+  driverLane: undefined as ReturnType<typeof getDriverLaneStats> | undefined,
+  /** Methods served by the driver lane (union over adapters). */
+  driverMethods: [] as string[],
 }
 
 /**
@@ -134,6 +139,9 @@ const writeStatsFile = (file: string) => {
     stats.liveCalls = getLiveEngineCalls()
     stats.livePorted = getLiveDepsPorted()
   }
+  if (stats.driverMethods.length) {
+    stats.driverLane = getDriverLaneStats()
+  }
   const temporary = `${file}.${process.pid}.tmp`
   writeFileSync(temporary, JSON.stringify(stats))
   renameSync(temporary, file)
@@ -155,10 +163,12 @@ export const withRustMongoEngine = <TAdapterObj extends AdapterObj>(
     }
     rustAdapters.add(adapter)
     const live = installLiveEngine({ adapter, methods: mongoEngineMethods })
+    const driver = installDriverLane(adapter)
     adapter.init = createLiveInit()
     recordStats(() => {
       stats.engines.live++
       stats.liveMethods = [...new Set([...live, ...stats.liveMethods])].sort()
+      stats.driverMethods = [...new Set([...driver, ...stats.driverMethods])].sort()
       stats.liveInit++
     })
     flushStatsBeforeDestroy(adapter)

@@ -1,0 +1,18 @@
+[package]
+name = "payload-mongo-driver"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Rust MongoDB driver lane of the Payload MongoDB adapter: pool, commands, BSON -> Payload JSON transcoding"
+
+[dependencies]
+mongodb = { version = "=3.9.1", default-features = false, features = [
+  "compat-3-0-0",
+  "rustls-tls",
+  "dns-resolver",
+] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+serde_json.workspace = true
+ryu = "1"
+itoa = "1"
