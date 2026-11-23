@@ -1248,7 +1248,9 @@ export const createLaneMethod = ({
       fallbackTo(method, 'no driver client')
       return fallback.call(this, args)
     }
-    if (args?.req?.transactionID) {
+    // a session (mongoose's) exists only inside a transaction; a promise `transactionID` resolving
+    // to null (transactions disabled) is none: upstream's getSession decides, like upstream's call
+    if (args?.req?.transactionID && (await getSession(lane.view, args.req))) {
       fallbackTo(method, 'transaction')
       return fallback.call(this, args)
     }

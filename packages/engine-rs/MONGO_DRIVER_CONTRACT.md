@@ -69,7 +69,9 @@ The call is handed to the method installed before (the live engine, which runs o
 the same `this` and arguments, before any observable step, or re-run there after a Rust bail
 (reads are idempotent; the mongoose lane produces upstream's result or error):
 
-- `req.transactionID` is set (sessions are mongoose's, see "Transactions"),
+- the call runs inside a transaction: `getSession(adapter, req)` (upstream's, awaiting a promise
+  `req.transactionID`) returns a session (sessions are mongoose's, see "Transactions"); a
+  `transactionID` promise resolving to `null` (transactions disabled) is no transaction,
 - the model is not pristine: an own property shadows `aggregate` / `countDocuments` /
   `estimatedDocumentCount` / `find` / `findOne` (`vi.spyOn`), `paginate` is not
   mongoose-paginate-v2's, the collection has own `aggregate` / `countDocuments` /
@@ -163,7 +165,7 @@ missing until something has touched mongoose and the open has completed.
 ## Transactions
 
 Transactions stay on mongoose (owner decision). `beginTransaction` opens mongoose first (one
-await) and returns a mongoose `ClientSession` id; every read with `req.transactionID` runs on the
+await) and returns a mongoose `ClientSession` id; every read whose `req` has a session runs on the
 mongoose lane; `payload.db.sessions[id]` is the mongoose session users may pass to models. A
 process that writes inside transactions (every Payload write on a replica set, unless
 `disableTransaction`) therefore opens mongoose at its first write. Without a replica set (or with
