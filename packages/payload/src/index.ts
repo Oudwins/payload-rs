@@ -2084,7 +2084,6 @@ export {
   type BatchProcessingOptions,
   type BatchProcessorResult,
 } from './utilities/batchProcessing.js'
-export { callUserFunction } from './utilities/callUserFunction.js'
 export { canAccessAdmin } from './utilities/canAccessAdmin.js'
 export { commitTransaction } from './utilities/commitTransaction.js'
 export {
@@ -2175,7 +2174,6 @@ export { sanitizePopulateParam } from './utilities/sanitizePopulateParam.js'
 export { sanitizeSelectParam } from './utilities/sanitizeSelectParam.js'
 export { sanitizeSortParams } from './utilities/sanitizeSortParams.js'
 export { getConfigInfoInputSchema } from './utilities/sharedInputSchemas.js'
-export { skipCompilation } from './utilities/skipCompilation.js'
 export { stripUnselectedFields } from './utilities/stripUnselectedFields.js'
 export { transformPointDataToPayload } from './utilities/transformPointDataToPayload.js'
 export { traverseFields } from './utilities/traverseFields.js'

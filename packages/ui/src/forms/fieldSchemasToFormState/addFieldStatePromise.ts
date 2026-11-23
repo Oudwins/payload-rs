@@ -21,13 +21,8 @@ import type {
 } from 'payload'
 
 import ObjectIdImport from 'bson-objectid'
-import {
-  callUserFunction,
-  getBlockSelect,
-  skipCompilation,
-  stripUnselectedFields,
-  validateBlocksFilterOptions,
-} from 'payload'
+import { getBlockSelect, stripUnselectedFields, validateBlocksFilterOptions } from 'payload'
+import { callUserFunction, skipCompilation } from 'payload/internal'
 import {
   deepCopyObjectSimple,
   fieldAffectsData,

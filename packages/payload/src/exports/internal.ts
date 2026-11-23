@@ -49,9 +49,11 @@ export {
   type BatchProcessingOptions,
   type BatchProcessorResult,
 } from '../utilities/batchProcessing.js'
+export { callUserFunction } from '../utilities/callUserFunction.js'
 export { isRustCoreEngine, isRustDatabaseEngine } from '../utilities/engineSelection.js'
 export { getEntityPermissions } from '../utilities/getEntityPermissions/getEntityPermissions.js'
 export { httpStatus } from '../utilities/httpStatus.js'
 export { isURLAllowed } from '../utilities/isURLAllowed.js'
 export { sanitizePermissions } from '../utilities/sanitizePermissions.js'
+export { skipCompilation } from '../utilities/skipCompilation.js'
 export { sendTelemetryEvent } from '../utilities/telemetry/index.js'

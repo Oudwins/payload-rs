@@ -6,14 +6,12 @@ import { createHandler } from 'graphql-http/lib/use/fetch'
 import {
   addDataAndFileToRequest,
   addLocalesToRequestFromData,
-  callUserFunction,
   createPayloadRequestFromWebRequest,
   headersWithCors,
   logError,
   mergeHeaders,
-  skipCompilation,
 } from 'payload'
-import { httpStatus } from 'payload/internal'
+import { callUserFunction, httpStatus, skipCompilation } from 'payload/internal'
 
 import { concatRules, parseWithCache, validateWithCache } from './documentCache.js'
 
