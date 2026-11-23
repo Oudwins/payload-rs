@@ -6,10 +6,12 @@ import { createHandler } from 'graphql-http/lib/use/fetch'
 import {
   addDataAndFileToRequest,
   addLocalesToRequestFromData,
+  callUserFunction,
   createPayloadRequestFromWebRequest,
   headersWithCors,
   logError,
   mergeHeaders,
+  skipCompilation,
 } from 'payload'
 import { httpStatus } from 'payload/internal'
 
@@ -49,12 +51,20 @@ const handleError = async ({
   await payload.config.hooks.afterError?.reduce(async (promise, hook) => {
     await promise
 
-    const result = await hook({
-      context: req.context,
-      error: err,
-      graphqlResult: response,
-      req,
-    })
+    const result = await callUserFunction(
+      hook,
+      undefined,
+      [
+        {
+          context: req.context,
+          error: err,
+          graphqlResult: response,
+          req,
+          skipCompilation,
+        },
+      ],
+      'hook',
+    )
 
     if (result) {
       response = result.graphqlResult || response

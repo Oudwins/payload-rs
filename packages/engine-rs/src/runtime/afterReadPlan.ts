@@ -26,6 +26,8 @@
 import { getDefaultValue } from '../../../payload/src/fields/getDefaultValue.js'
 import { getFieldPaths } from '../../../payload/src/fields/getFieldPaths.js'
 import { relationshipPopulationPromise } from '../../../payload/src/fields/hooks/afterRead/relationshipPopulationPromise.js'
+import { callUserFunction } from '../../../payload/src/utilities/callUserFunction.js'
+import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.js'
 
 /** A fields array decoded by Rust (`FieldsDesc::js_plan`). */
 export type AfterReadPlan = {
@@ -269,29 +271,37 @@ export const createAfterReadTraverse = ({
         const schemaPathSegments = schemaPath ? schemaPath.split('.') : []
         const indexPathSegments = indexPath ? indexPath.split('-').filter(Boolean)?.map(Number) : []
         for (const hook of field.hooks.afterRead) {
-          const hookedValue = await hook({
-            blockData: t.blockData,
-            collection: c[ARG_COLLECTION],
-            context: c[ARG_CONTEXT],
-            currentDepth: c[ARG_CURRENT_DEPTH],
-            data: c[ARG_DOC],
-            depth: c[ARG_DEPTH],
-            draft: c[ARG_DRAFT],
-            field,
-            findMany: c[ARG_FIND_MANY],
-            global: c[ARG_GLOBAL],
-            indexPath: indexPathSegments,
-            operation: 'read',
-            originalDoc: c[ARG_DOC],
-            overrideAccess: c[ARG_OVERRIDE_ACCESS],
-            path: pathSegments,
-            req: c[ARG_REQ],
-            schemaPath: schemaPathSegments,
-            showHiddenFields: c[ARG_SHOW_HIDDEN_FIELDS],
-            siblingData: siblingDoc,
-            siblingFields: plan.fields,
-            value: siblingDoc[key],
-          })
+          const hookedValue = await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                blockData: t.blockData,
+                collection: c[ARG_COLLECTION],
+                context: c[ARG_CONTEXT],
+                currentDepth: c[ARG_CURRENT_DEPTH],
+                data: c[ARG_DOC],
+                depth: c[ARG_DEPTH],
+                draft: c[ARG_DRAFT],
+                field,
+                findMany: c[ARG_FIND_MANY],
+                global: c[ARG_GLOBAL],
+                indexPath: indexPathSegments,
+                operation: 'read',
+                originalDoc: c[ARG_DOC],
+                overrideAccess: c[ARG_OVERRIDE_ACCESS],
+                path: pathSegments,
+                req: c[ARG_REQ],
+                schemaPath: schemaPathSegments,
+                showHiddenFields: c[ARG_SHOW_HIDDEN_FIELDS],
+                siblingData: siblingDoc,
+                siblingFields: plan.fields,
+                skipCompilation,
+                value: siblingDoc[key],
+              },
+            ],
+            'hook',
+          )
 
           if (hookedValue !== undefined) {
             siblingDoc[key] = hookedValue

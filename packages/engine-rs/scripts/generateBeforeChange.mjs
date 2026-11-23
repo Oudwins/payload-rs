@@ -59,10 +59,10 @@ const patches = {
     ],
     [
       `      for (const hook of field.hooks.beforeChange) {
-        const hookedValue = await hook({`,
+        const hookedValue = await callUserFunction(`,
       `      for (const hook of field.hooks.beforeChange) {
         foreignCodeRan()
-        const hookedValue = await hook({`,
+        const hookedValue = await callUserFunction(`,
     ],
     [
       `    if (hasInvalidFieldValueShape({ field, value: siblingData[field.name!] })) {
@@ -92,8 +92,10 @@ const patches = {
 `,
     ],
     [
-      `        validationResult = await validateFn(value as never, {`,
-      `        validationResult = await (elidedValidate ?? validateFn)(value as never, {`,
+      `        validationResult = await callUserFunction(
+          validateFn,`,
+      `        validationResult = await callUserFunction(
+          (elidedValidate ?? validateFn) as typeof validateFn,`,
     ],
     [
       `        if (typeof validationResult === 'string') {
@@ -108,10 +110,10 @@ const patches = {
     ],
     [
       `        for (const hook of editor.hooks.beforeChange) {
-          const hookedValue = await hook({`,
+          const hookedValue = await callUserFunction(`,
       `        for (const hook of editor.hooks.beforeChange) {
           foreignCodeRan()
-          const hookedValue = await hook({`,
+          const hookedValue = await callUserFunction(`,
     ],
     [
       // \`parseFloat\` converts array elements, which the inertness check does not cover

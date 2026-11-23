@@ -25,9 +25,11 @@ import type {
 import { MissingEditorProp } from '../../../../../payload/src/errors/index.js'
 import type { RequestContext } from '../../../../../payload/src/index.js'
 import { validateBlocksFilterOptions } from '../../../../../payload/src/fields/validations.js'
+import { callUserFunction } from '../../../../../payload/src/utilities/callUserFunction.js'
 import { deepMergeWithSourceArrays } from '../../../../../payload/src/utilities/deepMerge.js'
 import { getTranslatedLabel } from '../mergeElision.js'
 import { isolateObjectProperty } from '../../../../../payload/src/utilities/isolateObjectProperty.js'
+import { skipCompilation } from '../../../../../payload/src/utilities/skipCompilation.js'
 import {
   fieldAffectsData,
   fieldShouldBeLocalized,
@@ -178,27 +180,35 @@ export const promise = async ({
     if (!skipHooks && 'hooks' in field && field.hooks?.beforeChange) {
       for (const hook of field.hooks.beforeChange) {
         foreignCodeRan()
-        const hookedValue = await hook({
-          blockData,
-          collection,
-          context,
-          data,
-          field,
-          global,
-          indexPath: indexPathSegments,
-          operation,
-          originalDoc: doc,
-          overrideAccess,
-          path: pathSegments,
-          previousSiblingDoc: siblingDoc,
-          previousValue: siblingDoc[field.name],
-          req,
-          schemaPath: schemaPathSegments,
-          siblingData,
-          siblingDocWithLocales,
-          siblingFields: siblingFields!,
-          value: siblingData[field.name],
-        })
+        const hookedValue = await callUserFunction(
+          hook,
+          undefined,
+          [
+            {
+              blockData,
+              collection,
+              context,
+              data,
+              field,
+              global,
+              indexPath: indexPathSegments,
+              operation,
+              originalDoc: doc,
+              overrideAccess,
+              path: pathSegments,
+              previousSiblingDoc: siblingDoc,
+              previousValue: siblingDoc[field.name],
+              req,
+              schemaPath: schemaPathSegments,
+              siblingData,
+              siblingDocWithLocales,
+              siblingFields: siblingFields!,
+              skipCompilation,
+              value: siblingData[field.name],
+            },
+          ],
+          'hook',
+        )
 
         if (hookedValue !== undefined) {
           siblingData[field.name] = hookedValue
@@ -315,25 +325,34 @@ export const promise = async ({
             }
           : { blockData, data: validationData, siblingData: validationSiblingData }
 
-        validationResult = await (elidedValidate ?? validateFn)(value as never, {
-          ...field,
-          id,
-          blockData: localeContext.blockData!,
-          collectionSlug: collection?.slug,
-          data: localeContext.data,
-          event: 'submit',
-          // @ts-expect-error generic validation options cannot infer JSON fields
-          jsonError,
-          operation,
-          overrideAccess,
-          path: pathSegments,
-          preferences: { fields: {} },
-          previousValue: locale
-            ? (siblingDoc[field.name] as JsonObject)?.[locale]
-            : siblingDoc[field.name],
-          req: validationReq,
-          siblingData: localeContext.siblingData,
-        })
+        validationResult = await callUserFunction(
+          (elidedValidate ?? validateFn) as typeof validateFn,
+          undefined,
+          [
+            value as never,
+            {
+              ...field,
+              id,
+              blockData: localeContext.blockData!,
+              collectionSlug: collection?.slug,
+              data: localeContext.data,
+              event: 'submit',
+              // @ts-expect-error generic validation options cannot infer JSON fields
+              jsonError,
+              operation,
+              overrideAccess,
+              path: pathSegments,
+              preferences: { fields: {} },
+              previousValue: locale
+                ? (siblingDoc[field.name] as JsonObject)?.[locale]
+                : siblingDoc[field.name],
+              req: validationReq,
+              siblingData: localeContext.siblingData,
+              skipCompilation,
+            },
+          ],
+          'validateFn',
+        )
 
         if (typeof validationResult === 'string') {
           foreignCodeRan()
@@ -722,37 +741,44 @@ export const promise = async ({
       if (!skipHooks && editor?.hooks?.beforeChange?.length) {
         for (const hook of editor.hooks.beforeChange) {
           foreignCodeRan()
-          const hookedValue = await hook({
-            collection,
-            context,
-            data,
-            docWithLocales,
-            errors,
-            field,
-            fieldLabelPath:
-              field?.label === false
-                ? fieldLabelPath
-                : buildFieldLabel(
-                    fieldLabelPath,
-                    getTranslatedLabel(field?.label || field?.name, req.i18n),
-                  ),
-            global,
-            indexPath: indexPathSegments,
-            mergeLocaleActions,
-            operation,
-            originalDoc: doc,
-            overrideAccess,
-            parentIsLocalized,
-            path: pathSegments,
-            previousSiblingDoc: siblingDoc,
-            previousValue: siblingDoc[field.name],
-            req,
-            schemaPath: schemaPathSegments,
-            siblingData,
-            siblingDocWithLocales,
-            skipValidation: skipValidationFromHere,
-            value: siblingData[field.name],
-          })
+          const hookedValue = await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection,
+                context,
+                data,
+                docWithLocales,
+                errors,
+                field,
+                fieldLabelPath:
+                  field?.label === false
+                    ? fieldLabelPath
+                    : buildFieldLabel(
+                        fieldLabelPath,
+                        getTranslatedLabel(field?.label || field?.name, req.i18n),
+                      ),
+                global,
+                indexPath: indexPathSegments,
+                mergeLocaleActions,
+                operation,
+                originalDoc: doc,
+                overrideAccess,
+                parentIsLocalized,
+                path: pathSegments,
+                previousSiblingDoc: siblingDoc,
+                previousValue: siblingDoc[field.name],
+                req,
+                schemaPath: schemaPathSegments,
+                siblingData,
+                siblingDocWithLocales,
+                skipValidation: skipValidationFromHere,
+                value: siblingData[field.name],
+              },
+            ],
+            'hook',
+          )
 
           if (hookedValue !== undefined) {
             siblingData[field.name] = hookedValue

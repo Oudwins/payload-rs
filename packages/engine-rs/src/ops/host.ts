@@ -29,6 +29,7 @@ import { relationshipPopulationPromise } from '../../../payload/src/fields/hooks
 import { lockedDocumentsCollectionSlug } from '../../../payload/src/locked-documents/config.js'
 import { checkFileAccess } from '../../../payload/src/uploads/checkFileAccess.js'
 import { markHistoricalFileURLs } from '../../../payload/src/uploads/fileVersioning/markHistoricalFileURLs.js'
+import { callUserFunction } from '../../../payload/src/utilities/callUserFunction.js'
 import { getEntityPermissions } from '../../../payload/src/utilities/getEntityPermissions/getEntityPermissions.js'
 import { httpStatus } from '../../../payload/src/utilities/httpStatus.js'
 import { resolveSelect } from '../../../payload/src/utilities/resolveSelect.js'
@@ -400,14 +401,22 @@ export const createOpsHost = (
 
       for (const hook of collectionConfig.hooks.beforeRead) {
         docRef =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            doc: docRef,
-            overrideAccess: overrideAccess!,
-            query: fullWhere,
-            req,
-          })) || docRef
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                doc: docRef,
+                overrideAccess: overrideAccess!,
+                query: fullWhere,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || docRef
       }
 
       return docRef
@@ -425,15 +434,23 @@ export const createOpsHost = (
 
       for (const hook of collectionConfig.hooks.afterRead) {
         docRef =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            doc: docRef,
-            findMany: true,
-            overrideAccess: overrideAccess!,
-            query: fullWhere,
-            req,
-          })) || docRef
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                doc: docRef,
+                findMany: true,
+                overrideAccess: overrideAccess!,
+                query: fullWhere,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || docRef
       }
 
       return docRef
@@ -1043,15 +1060,23 @@ export const createOpsHost = (
 
       for (const hook of collectionConfig.hooks.afterRead) {
         docRef.version =
-          (await hook({
-            collection: collectionConfig,
-            context: req.context,
-            doc: doc.version,
-            findMany: true,
-            overrideAccess,
-            query: fullWhere,
-            req,
-          })) || doc.version
+          (await callUserFunction(
+            hook,
+            undefined,
+            [
+              {
+                collection: collectionConfig,
+                context: req.context,
+                doc: doc.version,
+                findMany: true,
+                overrideAccess,
+                query: fullWhere,
+                req,
+                skipCompilation,
+              },
+            ],
+            'hook',
+          )) || doc.version
       }
 
       return docRef
@@ -1074,14 +1099,22 @@ export const createOpsHost = (
       if (collectionConfig.hooks?.beforeRead?.length) {
         for (const hook of collectionConfig.hooks.beforeRead) {
           docRef.version =
-            (await hook({
-              collection: collectionConfig,
-              context: req.context,
-              doc: docRef.version,
-              overrideAccess,
-              query: fullWhere,
-              req,
-            })) || docRef.version
+            (await callUserFunction(
+              hook,
+              undefined,
+              [
+                {
+                  collection: collectionConfig,
+                  context: req.context,
+                  doc: docRef.version,
+                  overrideAccess,
+                  query: fullWhere,
+                  req,
+                  skipCompilation,
+                },
+              ],
+              'hook',
+            )) || docRef.version
         }
       }
 
