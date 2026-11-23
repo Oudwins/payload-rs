@@ -35,6 +35,7 @@ import {
   getLiveEngineCalls,
   getMongoLiveWrite,
 } from '../../../packages/engine-rs/src/mongo-adapter/live.js'
+import { getDriverLaneStats } from '../../../packages/engine-rs/src/mongo-driver/index.js'
 import {
   createMongoShadowAdapter,
   getMongoShadowState,
@@ -211,10 +212,18 @@ describe('withRustMongoEngine (live engine)', () => {
     expect(stats.liveInit - liveInitBefore).toBe(1)
     expect(payload.db.init.toString()).toContain('getMongoLiveSchema()')
     expect(stats.liveMethods).toEqual([...mongoEngineMethods].sort())
+    // reads outside transactions are served by the Rust driver lane (mongo-driver), the others by
+    // the live engine's methods: both are Rust
     const before = getLiveEngineCalls()
+    const driverBefore = { ...getDriverLaneStats().served }
     await exercise(payload)
     const after = getLiveEngineCalls()
-    const served = (method: string) => (after[method] ?? 0) - (before[method] ?? 0)
+    const driverAfter = getDriverLaneStats().served
+    const served = (method: string) =>
+      (after[method] ?? 0) -
+      (before[method] ?? 0) +
+      (driverAfter[method] ?? 0) -
+      (driverBefore[method] ?? 0)
     for (const method of [
       'create',
       'find',

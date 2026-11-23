@@ -11,12 +11,22 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- results are arbitrary documents */
 type Any = any
 
-export const verifyMode = (): 'off' | 'record' | 'strict' => {
+const readVerifyMode = (): 'off' | 'record' | 'strict' => {
   const value = process.env.PAYLOAD_MONGO_DRIVER_VERIFY
   if (value === 'strict') {
     return 'strict'
   }
   return value === 'true' ? 'record' : 'off'
+}
+
+/** `PAYLOAD_MONGO_DRIVER_VERIFY`, read when this module loads (`process.env` reads are slow). */
+let currentVerifyMode = readVerifyMode()
+
+export const verifyMode = () => currentVerifyMode
+
+/** Re-reads `PAYLOAD_MONGO_DRIVER_VERIFY` (tests that change it at runtime). */
+export const refreshVerifyMode = () => {
+  currentVerifyMode = readVerifyMode()
 }
 
 export const verifyStats = {

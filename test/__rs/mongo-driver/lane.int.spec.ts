@@ -33,7 +33,10 @@ import {
   getDriverLaneStats,
 } from '../../../packages/engine-rs/src/mongo-driver/index.js'
 import { isMongooseUnopened } from '../../../packages/engine-rs/src/mongo-driver/lazy.js'
-import { verifyStats } from '../../../packages/engine-rs/src/mongo-driver/verify.js'
+import {
+  refreshVerifyMode,
+  verifyStats,
+} from '../../../packages/engine-rs/src/mongo-driver/verify.js'
 
 if (process.env.PAYLOAD_ENGINE) {
   throw new Error('lane.int.spec.ts runs the default engine: unset PAYLOAD_ENGINE')
@@ -92,6 +95,7 @@ const instances: Payload[] = []
 
 afterEach(async () => {
   delete process.env.PAYLOAD_MONGO_DRIVER_VERIFY
+  refreshVerifyMode()
   vi.restoreAllMocks()
   while (instances.length) {
     await instances.pop()!.destroy()
@@ -185,6 +189,7 @@ describe('driver lane', () => {
     expect(getDriverLane(payload.db)).toBeDefined()
     const { first } = await seed(payload)
     process.env.PAYLOAD_MONGO_DRIVER_VERIFY = 'strict'
+    refreshVerifyMode()
     const divergentBefore = Object.values(verifyStats.divergent).reduce((a, b) => a + b, 0)
     const before = served()
 
