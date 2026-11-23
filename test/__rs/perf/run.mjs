@@ -81,7 +81,6 @@ const options = {
   ),
   categories: list('--categories', ''),
   /** Prefix of the per-cell database names (shared servers: one prefix per user / agent). */
-  dbPrefix: option('--db-prefix', 'perf'),
   isSamplesKept: !argv.includes('--no-samples'),
   scenarioPattern: option('--scenarios', ''),
   surfaces: list('--surfaces', 'local,rest,graphql'),
