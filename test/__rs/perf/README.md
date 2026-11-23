@@ -14,7 +14,7 @@ node test/__rs/perf/run.mjs --reuse --databases mongodb --shapes typical --sizes
 
 ## What is measured
 
-`node test/__rs/perf/run.mjs --list` prints the full catalogue (138 scenarios). By category:
+`node test/__rs/perf/run.mjs --list` prints the full catalogue (146 scenarios). By category:
 
 | category         | Local API                                                                                                                                                                                                                                                                                                                                                                                                                                         | REST                                                                                                                                                                                                                           | GraphQL                                                             |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
@@ -32,6 +32,13 @@ node test/__rs/perf/run.mjs --reuse --databases mongodb --shapes typical --sizes
 | validation       | validate create data, validate an update of a stored document, validate invalid data                                                                                                                                                                                                                                                                                                                                                              |                                                                                                                                                                                                                                |                                                                     |
 | custom-endpoints |                                                                                                                                                                                                                                                                                                                                                                                                                                                   | root (`/perf/ping` without a payload call, `/perf/echo` JSON body, `/perf/latest-posts` find depth 1), collection (`/posts/perf-stats` count, `/posts/:id/touch` update), global (`/globals/settings/perf-summary` findGlobal) |                                                                     |
 | meta             |                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `GET /access`, `POST` / `GET /payload-preferences/:key`                                                                                                                                                                        |                                                                     |
+| throughput       | find limit 10, findByID, create; each with 8 and 64 concurrent callers (`--throughput-concurrency`)                                                                                                                                                                                                                                                                                                                                               | `GET /posts` limit 10, 8 and 64 concurrent callers                                                                                                                                                                             |                                                                     |
+
+**Throughput** scenarios issue their request back to back from every caller for the measuring
+time and report requests per second, the per-request latency under load (p50 / p95 / p99),
+process CPU time per request (all threads: JS, engine and database) and JS-thread time per
+request (event loop active time, including synchronous waits on native calls); their speedup is
+Rust req/s / TS req/s.
 
 Plus **startup** (fresh processes against an existing schema: import of payload + adapters,
 `buildConfig`, `getPayload`; median of `--startup-runs`; up to 200 collections) and **seeding**
@@ -59,16 +66,19 @@ database per cell; db-postgres itself is upstream TS, the core is Rust).
 
 - `report.html`: interactive (filters by database, shape, size, surface, category and scenario
   text; summary by surface / category; speedup per scenario; latency distributions per engine;
-  scaling with the collection size; CPU and GC; startup; a sortable table of every statistic)
-- `report.md`: the same numbers as tables
-- `scenarios.csv` (one row per database x shape x size x engine x scenario, every statistic),
+  scaling with the collection size; CPU and GC; startup; throughput; a sortable table of every
+  statistic)
+- `report.md`: the same numbers as tables, plus a throughput table per cell
+- `scenarios.csv` (one row per database x shape x size x engine x scenario, every statistic;
+  throughput rows add concurrency, requests per second, CPU / JS-thread ms per request),
   `samples.csv` (one row per timed iteration), `startup.csv`, `seed.csv`
 - `results.json` (everything) and the raw per-process results in `cells/`
 
 One engine alone works too (`--engines ts` or `--engines rs`: absolute numbers, no speedups);
 `--engines ts,rs,db-rs,core-rs` attributes a difference to the database engine or the core.
 `--categories`, `--scenarios <regex>`, `--surfaces`, `--shapes`, `--sizes`, `--databases` select a
-subset.
+subset. On shared servers, `--mongodb-server <url>` selects the MongoDB server and `--db-prefix
+<prefix>` (default `perf`) the name prefix of every database a run creates.
 
 ## Method
 

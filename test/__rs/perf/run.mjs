@@ -6,7 +6,8 @@
  * and databases.
  *
  *   node test/__rs/perf/run.mjs [--databases mongodb,sqlite,postgres] [--shapes minimal,typical,...]
- *     [--sizes 100,1000,10000] [--surfaces local,rest,graphql] [--categories read,partial-update,...]
+ *     [--sizes 100,1000,10000] [--surfaces local,rest,graphql,throughput]
+ *     [--throughput-concurrency 8,64] [--categories read,partial-update,...]
  *     [--scenarios <regex>] [--startup-shapes ...] [--startup-runs 5] [--engines ts,rs]
  *     [--addon file] [--out dir] [--reuse] [--quick] [--min-time-ms 1000] [--min-iterations 10]
  *     [--max-iterations 300] [--max-time-ms 5000] [--no-samples] [--no-startup] [--no-scenarios]
@@ -40,7 +41,7 @@ import { fileURLToPath } from 'node:url'
 import { packRelease } from '../../../packages/engine-rs/scripts/release/packRelease.mjs'
 import { rebuildStaleDist } from '../packaging/rebuildStale.mjs'
 import { writeReports } from './report.mjs'
-import { categories, scenarios as catalogue } from './scenarios.mjs'
+import { categories, scenarios, throughputScenarios } from './scenarios.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '../../..')
@@ -51,6 +52,8 @@ const option = (name, fallback) => {
 }
 const list = (name, fallback) => option(name, fallback).split(',').filter(Boolean)
 const isQuick = argv.includes('--quick')
+const throughputConcurrency = list('--throughput-concurrency', '8,64').map(Number)
+const catalogue = [...scenarios, ...throughputScenarios(throughputConcurrency)]
 
 if (process.argv.includes('--list')) {
   printCatalogue()
@@ -83,7 +86,9 @@ const options = {
   /** Prefix of the per-cell database names (shared servers: one prefix per user / agent). */
   isSamplesKept: !argv.includes('--no-samples'),
   scenarioPattern: option('--scenarios', ''),
-  surfaces: list('--surfaces', 'local,rest,graphql'),
+  surfaces: list('--surfaces', 'local,rest,graphql,throughput'),
+  /** Concurrent callers of each throughput scenario (one scenario per level). */
+  throughputConcurrency,
   warmup: Number(option('--warmup', 3)),
 }
 for (const category of options.categories) {
@@ -383,6 +388,7 @@ function runScenarios({ database, engine, shape, size }) {
         isSamplesKept: options.isSamplesKept,
         scenarioPattern: options.scenarioPattern,
         surfaces: options.surfaces,
+        throughputConcurrency: options.throughputConcurrency,
         verbose: isVerbose,
         warmup: options.warmup,
       },

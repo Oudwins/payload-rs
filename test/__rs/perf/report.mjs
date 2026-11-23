@@ -4,14 +4,17 @@
  * - `scenarios.csv`  one row per database x shape x size x engine x scenario: every latency
  *                    statistic (min, p25, median, p75, p90, p95, p99, max, mean, stddev, cv, n),
  *                    CPU per iteration, GC count / ms, heap delta, result bytes and documents, and
- *                    for ts / rs pairs the speedup (TS median / Rust median)
+ *                    for ts / rs pairs the speedup (TS median / Rust median); throughput scenarios
+ *                    add concurrency, requests per second, CPU and JS-thread ms per request, and
+ *                    their speedup is Rust req/s / TS req/s
  * - `samples.csv`    one row per timed iteration (wall ms and CPU ms), for any external tool
  * - `startup.csv`    one row per fresh startup process (import, buildConfig, getPayload, total)
  * - `seed.csv`       seeding throughput per cell
- * - `report.md`      summaries (by database x surface and database x category) and every table
+ * - `report.md`      summaries (by database x surface and database x category), every table and
+ *                    a throughput table per cell
  * - `report.html`    an interactive report (filters, speedups, latency distributions, scaling with
- *                    the collection size, CPU / GC, startup, a sortable table), rendered in the
- *                    browser from the data embedded in the page
+ *                    the collection size, CPU / GC, startup, throughput, a sortable table),
+ *                    rendered in the browser from the data embedded in the page
  *
  * Works for one engine as well (`--engines ts` or `rs`): speedups are then absent.
  */
@@ -77,6 +80,7 @@ function buildModel(results) {
         size: cell.size,
         stats: scenario.stats,
         surface: scenario.surface,
+        throughput: scenario.throughput,
       })
     }
   }
@@ -89,7 +93,13 @@ function buildModel(results) {
   }
   for (const pair of pairs.values()) {
     const { rs, ts } = pair.engines
-    pair.speedup = ts && rs && rs.stats.medianMs > 0 ? ts.stats.medianMs / rs.stats.medianMs : NaN
+    // throughput: Rust requests per second / TS requests per second
+    pair.speedup =
+      ts?.throughput && rs?.throughput
+        ? rs.throughput.requestsPerSecond / ts.throughput.requestsPerSecond
+        : ts && rs && rs.stats.medianMs > 0
+          ? ts.stats.medianMs / rs.stats.medianMs
+          : NaN
   }
   const summarize = (field) => {
     const groups = new Map()
@@ -192,6 +202,11 @@ function scenariosCsv(model) {
       'resultBytes',
       'resultDocs',
       'speedupTsOverRs',
+      'concurrency',
+      'requestsPerSecond',
+      'cpuMsPerRequest',
+      'jsThreadMsPerRequest',
+      'eventLoopUtilization',
       'error',
     ],
     model.rows.map((row) => [
@@ -211,6 +226,11 @@ function scenariosCsv(model) {
       row.bytes,
       row.docs,
       speedupOf.get([row.database, row.shape, row.size, row.surface, row.name].join('|')),
+      row.throughput?.concurrency,
+      row.throughput?.requestsPerSecond,
+      row.throughput?.cpuMsPerRequest,
+      row.throughput?.jsThreadMsPerRequest,
+      row.throughput?.eventLoopUtilization,
       row.error,
     ]),
   )
@@ -339,8 +359,82 @@ function markdown({ model, results }) {
       md += `| ${pair.surface} | ${pair.category} | ${pair.name} | ${engines.map(cell).join(' | ')} | ${engines.map((engine) => ms(pair.engines[engine]?.cpu?.medianMs)).join(' | ')} | ${pair.docs ?? '-'} | ${pair.bytes ?? '-'} | ${times(pair.speedup)} |\n`
     }
     md += '\n'
+    const throughputPairs = pairs.filter((pair) => pair.surface === 'throughput')
+    if (throughputPairs.length > 0) {
+      const { body, head } = throughputTable({ engines, pairs: throughputPairs })
+      md += `### Throughput, ${title}\n\n${THROUGHPUT_HINT}\n\n| ${head.join(' | ')} |\n|${head.map(() => '---').join('|')}|\n`
+      md += body.map((row) => `| ${row.join(' | ')} |\n`).join('')
+      md += '\n'
+    }
   }
   return md
+}
+
+const THROUGHPUT_HINT =
+  'Concurrent callers issuing the request back to back. Speedup = Rust req/s / TS req/s. Latency = per request under load. CPU = process CPU time (all threads) per request; JS thread = event loop active time per request (includes synchronous waits on native calls).'
+
+/** Throughput rows (one per scenario and concurrency) for report.md and report.html. */
+function throughputTable({ engines, pairs }) {
+  const perRequest = (value) => (Number.isFinite(value) ? value.toFixed(3) : '-')
+  const head = [
+    'scenario',
+    ...engines.map((engine) => `${engine} req/s`),
+    ...engines.map((engine) => `${engine} p50 / p95 / p99 ms`),
+    ...engines.map((engine) => `${engine} CPU ms/req`),
+    ...engines.map((engine) => `${engine} JS thread ms/req`),
+    'speedup',
+  ]
+  const body = pairs.map((pair) => {
+    const row = (engine) => pair.engines[engine]
+    const value = (engine, format) => {
+      const entry = row(engine)
+      return entry ? (entry.error ? `error: ${entry.error.slice(0, 60)}` : format(entry)) : '-'
+    }
+    return [
+      pair.name,
+      ...engines.map((engine) =>
+        value(engine, (entry) => entry.throughput?.requestsPerSecond?.toFixed(0) ?? '-'),
+      ),
+      ...engines.map((engine) =>
+        value(
+          engine,
+          (entry) =>
+            `${ms(entry.stats.medianMs)} / ${ms(entry.stats.p95Ms)} / ${ms(entry.stats.p99Ms)}`,
+        ),
+      ),
+      ...engines.map((engine) =>
+        value(engine, (entry) => perRequest(entry.throughput?.cpuMsPerRequest)),
+      ),
+      ...engines.map((engine) =>
+        value(engine, (entry) => perRequest(entry.throughput?.jsThreadMsPerRequest)),
+      ),
+      times(pair.speedup),
+    ]
+  })
+  return { body, head }
+}
+
+/** The throughput tables of every cell as static HTML. */
+function throughputHtml(model) {
+  const escape = (value) =>
+    String(value).replace(
+      /[&<>"]/g,
+      (char) => ({ '"': '&quot;', '&': '&amp;', '<': '&lt;', '>': '&gt;' })[char],
+    )
+  const cells = new Map()
+  for (const pair of model.pairs.filter((entry) => entry.surface === 'throughput')) {
+    const key = `${pair.database} / ${pair.shape} / ${pair.size} posts`
+    cells.set(key, [...(cells.get(key) ?? []), pair])
+  }
+  if (cells.size === 0) {
+    return '<p class="empty">No throughput scenarios in this run.</p>'
+  }
+  return [...cells]
+    .map(([title, pairs]) => {
+      const { body, head } = throughputTable({ engines: model.engines, pairs })
+      return `<h3>${escape(title)}</h3><div class="scroll"><table><thead><tr>${head.map((cell) => `<th>${escape(cell)}</th>`).join('')}</tr></thead><tbody>${body.map((row) => `<tr>${row.map((cell) => `<td>${escape(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`
+    })
+    .join('')
 }
 
 /** Compact data for the page: one entry per pair with per-engine statistics and quantiles. */
@@ -366,6 +460,7 @@ function pageData({ model, results }) {
       p95: round(row.stats.p95Ms),
       p99: round(row.stats.p99Ms),
       q: row.quantiles?.map(round),
+      rps: round(row.throughput?.requestsPerSecond),
       sd: round(row.stats.stddevMs),
     }
   return {
@@ -383,6 +478,9 @@ function pageData({ model, results }) {
       name: pair.name,
       shape: pair.shape,
       size: pair.size,
+      // throughput pairs: Rust req/s / TS req/s instead of the ratio of median latencies
+      speedup:
+        pair.surface === 'throughput' && Number.isFinite(pair.speedup) ? pair.speedup : undefined,
       surface: pair.surface,
     })),
     startup: results.cells
@@ -411,6 +509,7 @@ function html({ model, results }) {
 <section><h2>Scaling with collection size</h2><p class="hint">Median (line) and p25–p75 (band) per engine across collection sizes, for the chosen scenario.</p><div id="scaling-controls"></div><div id="scaling"></div></section>
 <section><h2>CPU and garbage collection</h2><p class="hint">CPU ms per iteration (user + system) and GC ms per 100 iterations, per engine.</p><div id="cpu"></div></section>
 <section><h2>Startup</h2><p class="hint">Fresh processes: import, buildConfig and getPayload (median of runs), per engine.</p><div id="startup"></div></section>
+<section><h2>Throughput</h2><p class="hint">${THROUGHPUT_HINT}</p>${throughputHtml(model)}</section>
 <section><h2>Table</h2><p class="hint">Every statistic of the filtered rows; click a header to sort.</p><div id="table" class="scroll"></div></section>
 <div id="tooltip" role="status" hidden></div>
 <script>const DATA = ${data};</script>
@@ -458,7 +557,7 @@ const SCRIPT = `
   const ENGINE_NAME = { ts: 'TypeScript', rs: 'Rust', 'db-rs': 'Rust db engine only', 'core-rs': 'Rust core only' }
   const engines = DATA.engines
   const isPaired = engines.includes('ts') && engines.includes('rs')
-  const speedupOf = (p) => isPaired && p.engines.ts && p.engines.rs && p.engines.rs.median > 0 ? p.engines.ts.median / p.engines.rs.median : NaN
+  const speedupOf = (p) => p.speedup ?? (isPaired && p.engines.ts && p.engines.rs && p.engines.rs.median > 0 ? p.engines.ts.median / p.engines.rs.median : NaN)
 
   // ---- header ---------------------------------------------------------------------------
   const env = DATA.environment

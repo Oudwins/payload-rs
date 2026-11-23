@@ -5,12 +5,13 @@
  *   node --expose-gc bench.mjs <spec.json>
  *
  * spec: { mode: 'scenarios' | 'startup' | 'prepare', database, location, shape, size, surfaces,
- *         out, minIterations, minTimeMs, maxIterations, maxTimeMs, warmup }
+ *         out, minIterations, minTimeMs, maxIterations, maxTimeMs, warmup, throughputConcurrency }
  *
  * - `scenarios`: getPayload, seed `size` posts (timed: the bulk create), then every scenario of the
  *   selected surfaces (scenarios.mjs): warmup, then iterations until both `minIterations` and
  *   `minTimeMs` are reached (capped by `maxIterations` / `maxTimeMs`); the first warmup iteration
- *   also records the result fingerprint and the hook calls it made.
+ *   also records the result fingerprint and the hook calls it made. The `throughput` surface
+ *   runs last, once per concurrency level (`measureThroughput`).
  * - `startup`: the phases of a cold start in this fresh process: importing payload and the
  *   adapters, `buildConfig` (sanitization), `getPayload` (adapter init, connect, models / schema).
  * - `prepare`: getPayload and, for SQL databases, push the schema (so `startup` runs measure a
@@ -25,7 +26,7 @@ import os from 'node:os'
 import { PerformanceObserver } from 'node:perf_hooks'
 
 import { authorCount, buildConfigInput, categoryCount, createRandom, postData } from './configs.mjs'
-import { fingerprint, scenarios } from './scenarios.mjs'
+import { fingerprint, scenarios, throughputScenarios } from './scenarios.mjs'
 
 const spec = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
 const now = () => Number(process.hrtime.bigint()) / 1e6
@@ -87,7 +88,7 @@ if (spec.mode === 'prepare' || spec.mode === 'scenarios') {
 if (spec.mode === 'scenarios') {
   const ctx = await seed()
   result.scenarios = []
-  for (const scenario of scenarios) {
+  for (const scenario of [...scenarios, ...throughputScenarios(spec.throughputConcurrency)]) {
     if (!spec.surfaces.includes(scenario.surface)) {
       continue
     }
@@ -100,11 +101,13 @@ if (spec.mode === 'scenarios') {
     if (spec.scenarioPattern && !new RegExp(spec.scenarioPattern, 'i').test(scenario.name)) {
       continue
     }
-    result.scenarios.push(await measure(ctx, scenario))
+    result.scenarios.push(
+      await (scenario.surface === 'throughput' ? measureThroughput : measure)(ctx, scenario),
+    )
     if (spec.verbose) {
       const last = result.scenarios.at(-1)
       console.log(
-        `${scenario.surface} ${scenario.name}: ${last.error ? `ERROR ${last.error.message}` : `${last.stats.medianMs.toFixed(3)} ms (n=${last.stats.n})`}`,
+        `${scenario.surface} ${scenario.name}: ${last.error ? `ERROR ${last.error.message}` : last.throughput ? `${last.throughput.requestsPerSecond.toFixed(0)} req/s, p50 ${last.stats.medianMs.toFixed(2)} ms` : `${last.stats.medianMs.toFixed(3)} ms (n=${last.stats.n})`}`,
       )
     }
   }
@@ -382,6 +385,91 @@ async function measure(ctx, scenario) {
   if (spec.isSamplesKept) {
     entry.samples = durations.map((value) => Math.round(value * 1000) / 1000)
     entry.cpuSamples = cpuMicros.map((micros) => Math.round(micros) / 1000)
+  }
+  return entry
+}
+
+/**
+ * `scenario.concurrency` callers issue `scenario.run` back to back until at least
+ * `minIterations` requests per caller and `minTimeMs` (capped by `maxTimeMs`), after a warmup burst
+ * of two requests per caller. The first request (alone) records the fingerprint and hook calls.
+ * Reported (`throughput`): requests per second over the wall time, process CPU time per request
+ * (`process.cpuUsage`: every thread, JS, engine and database threads) and JS-thread time per
+ * request (the event loop's active time, `performance.eventLoopUtilization`, which includes the
+ * time the JS thread waits synchronously on a native call); `stats` / `samples` are the
+ * per-request latencies under load. Posts a request created are deleted afterwards (untimed).
+ */
+async function measureThroughput(ctx, scenario) {
+  const entry = { category: scenario.category, name: scenario.name, surface: scenario.surface }
+  ctx.startScenario(++scenarioNumber)
+  const { concurrency } = scenario
+  const created = []
+  let next = 0
+  const request = async () => {
+    const value = await scenario.run(ctx, next++)
+    if (scenario.created) {
+      created.push(scenario.created(value))
+    }
+    return value
+  }
+  const latencies = []
+  try {
+    for (const key of Object.keys(hookCounter)) {
+      delete hookCounter[key]
+    }
+    const first = await request()
+    entry.fingerprint = fingerprint(first, 0)
+    entry.hookCalls = { ...hookCounter }
+    entry.result = describeResult(first)
+    await Promise.all(
+      Array.from({ length: concurrency }, async () => [await request(), await request()]),
+    )
+    globalThis.gc?.()
+    const cpu0 = process.cpuUsage()
+    const loop0 = performance.eventLoopUtilization()
+    const started = now()
+    let isDone = false
+    await Promise.all(
+      Array.from({ length: concurrency }, async () => {
+        while (!isDone) {
+          const t0 = now()
+          await request()
+          latencies.push(now() - t0)
+          const elapsed = now() - started
+          if (
+            elapsed >= spec.maxTimeMs ||
+            (latencies.length >= spec.minIterations * concurrency && elapsed >= spec.minTimeMs)
+          ) {
+            isDone = true
+          }
+        }
+      }),
+    )
+    entry.wallMs = now() - started
+    const cpu = process.cpuUsage(cpu0)
+    const loop = performance.eventLoopUtilization(loop0)
+    entry.throughput = {
+      concurrency,
+      cpuMsPerRequest: (cpu.user + cpu.system) / 1000 / latencies.length,
+      eventLoopUtilization: loop.utilization,
+      jsThreadMsPerRequest: loop.active / latencies.length,
+      requests: latencies.length,
+      requestsPerSecond: latencies.length / (entry.wallMs / 1000),
+    }
+  } catch (error) {
+    entry.error = {
+      message: String(error?.message ?? error).slice(0, 1000),
+      name: error?.name,
+      stack: String(error?.stack ?? '').slice(0, 2000),
+    }
+  } finally {
+    for (const id of created) {
+      await ctx.payload.delete({ collection: 'posts', id, overrideAccess: true })
+    }
+  }
+  entry.stats = summarize(latencies)
+  if (spec.isSamplesKept) {
+    entry.samples = latencies.map((value) => Math.round(value * 1000) / 1000)
   }
   return entry
 }

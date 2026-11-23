@@ -12,11 +12,12 @@
  *
  * Surfaces: `local` (the Local API, `payload.*`), `rest` (the REST endpoints through
  * `@payloadcms/next/routes`, the handlers a Next app mounts under /api, called in-process with
- * Fetch `Request`s, authenticated with a JWT), `graphql` (`GRAPHQL_POST`, in-process).
+ * Fetch `Request`s, authenticated with a JWT), `graphql` (`GRAPHQL_POST`, in-process),
+ * `throughput` (`throughputScenarios`: concurrent callers of a Local / REST operation).
  *
  * Categories: read, create, update (whole documents and bulk), partial-update (one field or one
  * part of a document), locale, versions (drafts, publishing, version history), delete, globals,
- * auth, uploads, jobs, validation, custom-endpoints, meta (access, preferences).
+ * auth, uploads, jobs, validation, custom-endpoints, meta (access, preferences), throughput.
  *
  * Hooks, validation and access control run inside these operations: the `hooks` shape adds every
  * collection hook and four field hooks on every field, `complex` adds query-constraint access,
@@ -1209,6 +1210,47 @@ const all = [
 
 export const scenarios = [...all.filter((s) => !s.isMutating), ...all.filter((s) => s.isMutating)]
 
+/**
+ * Throughput (bench.mjs `measureThroughput`, surface and category `throughput`): `concurrency`
+ * callers issue the operation back to back for the measuring time. `run(ctx, index)` is one
+ * request (`index` counts the requests of the scenario); `created(result)` returns the id of a
+ * post a request created, deleted after the measurement (untimed), so the collection size stays
+ * the measured size.
+ */
+const throughputOperations = [
+  { name: 'find limit 10', run: (ctx) => find(ctx, { depth: 0, limit: 10 }) },
+  {
+    name: 'findByID',
+    run: (ctx, index) =>
+      ctx.payload.findByID({
+        collection: 'posts',
+        depth: 0,
+        id: by(ctx, index),
+        overrideAccess: true,
+      }),
+  },
+  {
+    name: 'REST GET /posts limit 10',
+    run: (ctx) => ctx.rest('GET', ['posts'], { query: { depth: 0, limit: 10 } }),
+  },
+  { created: (doc) => doc.id, name: 'create', run: (ctx) => createPost(ctx) },
+]
+
+/** Concurrency levels of the throughput scenarios (run.mjs `--throughput-concurrency`). */
+export const defaultThroughputConcurrency = [8, 64]
+
+export const throughputScenarios = (concurrencies = defaultThroughputConcurrency) =>
+  concurrencies.flatMap((concurrency) =>
+    throughputOperations.map((operation) => ({
+      ...operation,
+      category: 'throughput',
+      concurrency,
+      isMutating: Boolean(operation.created),
+      name: `${operation.name} x${concurrency}`,
+      surface: 'throughput',
+    })),
+  )
+
 export const categories = [
   'read',
   'create',
@@ -1224,6 +1266,7 @@ export const categories = [
   'validation',
   'custom-endpoints',
   'meta',
+  'throughput',
 ]
 
 /**
