@@ -110,6 +110,27 @@ versions / joins / hooks / auth 21,756 calls 0 divergences (the lane reports its
 to the shadow trace), cosmosdb variant over fields / relationships / joins / versions equal to TS,
 glue self-tests 33/33, parity goldens 503/503 in 3 of 3 runs (TS: 2 of 3, the bulk-update steps).
 
+Optimization round 2 (2026-11-23), merged and verified together: WP-B's driver lane (mongoose
+now opens at `connect` next to the Rust client by default; lazy mongoose is opt-in with
+`PAYLOAD_MONGO_DRIVER=lazy`, because `connection.db`, `getClient()` and `readyState` are missing
+until mongoose has opened), WP-C's HTTP lanes (`RUST_HTTP_LANES.md`: GraphQL handler built once per
+schema, cached parse / specified-rule validation, synchronous HS256 check for Payload-issued
+tokens with jose as the authority, cached endpoint path matchers; shared code, so TS gains as
+much as Rust), WP-D's function compiler (`packages/engine-rs/FN_COMPILE_CONTRACT.md`; every user
+function is called through `callUserFunction`, gets `skipCompilation` as its opt-out; compiled
+functions are only verified so far, used once the fused lanes land), WP-E's lazy imports of
+modules a production start does not use and SQLite results as JSON with patches, and the perf
+suite's throughput scenarios. Verification on the merged tree: MongoDB suite 3330 / 164 / 422 (=
+baseline), SQLite 134/135 identical, PostgreSQL 131/135 clean (= baseline), shadow 8/8 files
+22,519 calls 0 divergences (after fixing the driver lane's transaction check, which had delayed
+`queryDrafts`' synchronous sort mutation by a tick), parity goldens 503/503 in 3 of 3 runs, glue
+33/33, driver lane 4/4, HTTP lanes 11/11, fn-compile corpus and call sites 39/39, packaging and
+default-path check OK. Perf (`.rs-runs/perf/round2`, typical / complex / hooks at 1k posts, every
+surface; TS median / Rust median, geometric means): MongoDB 1.11x (throughput 2.23x), SQLite
+1.10x (REST 1.22x, globals 1.53x, multi-document reads 0.96x), PostgreSQL 1.04x. Against the TS
+engine of pass 1 (before the shared HTTP gains): MongoDB GraphQL 1.52x, REST 1.21x, SQLite REST
+1.40x.
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).
