@@ -515,7 +515,7 @@ fn write_num(n: f64, out: &mut String) -> Decoded<()> {
     return Err(Unsupported("value:non-finite").into());
   }
   if n == 0.0 && n.is_sign_negative() {
-    out.push_str("-0");
+    out.push_str(if payload_fuse::write::canonical() { "0" } else { "-0" });
   } else if n.fract() == 0.0 && n.abs() < 1e15 {
     use std::fmt::Write;
     let _ = write!(out, "{}", n as i64);
@@ -535,7 +535,12 @@ fn write(value: &Out, out: &mut String, depth: usize) -> Decoded<()> {
     Out::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
     Out::Num(n) => write_num(*n, out)?,
     Out::Str(s) => write_json_string(s, out),
-    Out::Raw(text) => out.push_str(text),
+    Out::Raw(text) => {
+      if payload_fuse::write::canonical() && !crate::scan::is_canonical(text) {
+        return Err(Unsupported("value:raw-not-canonical").into());
+      }
+      out.push_str(text)
+    }
     Out::Obj(obj) => write_obj(obj, out, depth)?,
     Out::Arr(items) => {
       out.push('[');
@@ -560,6 +565,9 @@ fn write_obj(obj: &OutObj, out: &mut String, depth: usize) -> Decoded<()> {
     }
     if &**key == "__proto__" {
       return Err(Unsupported("value:__proto__").into());
+    }
+    if payload_fuse::write::canonical() && payload_fuse::write::is_array_index_key(key) {
+      return Err(Unsupported("value:index-key").into());
     }
     if !first {
       out.push(',');

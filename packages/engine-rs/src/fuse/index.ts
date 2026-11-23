@@ -1,3 +1,5 @@
+import { types } from 'node:util'
+
 /**
  * Fused read lanes (packages/engine-rs/FUSE_CONTRACT.md): `find`, `findByID` and `count` of a
  * collection whose read path holds no user JS run as one native call (crates/payload-fuse) and
@@ -43,6 +45,9 @@ const mode: FuseMode =
 
 type Exact = () => Promise<Any>
 type Op = 'count' | 'find' | 'findByID'
+
+/** A call the fused lane serves: its request (FUSE_CONTRACT.md section 4) and backend. */
+type Fused = { op: Op; request: string; target: FusedTarget }
 
 type NativeFuse = { fuseRegisterPlan: (json: string) => number }
 
@@ -92,6 +97,37 @@ const argKeys: Record<Op, readonly string[]> = {
 /** `req` properties the lanes read. */
 const reqKeys = ['fallbackLocale', 'locale', 'payload', 'payloadAPI', 'transactionID'] as const
 
+/**
+ * A `PayloadRequest` built from a web `Request` (`createPayloadRequestFromWebRequest`): a real
+ * `Request` (not a subclass, not a proxy) whose Payload properties the lanes and the HTTP handlers
+ * read are own data properties (RUST_HTTP_LANES.md 3.2). Reading them runs no code.
+ */
+const isPayloadWebRequest = (req: unknown): boolean =>
+  typeof Request === 'function' &&
+  req instanceof Request &&
+  Object.getPrototypeOf(req) === Request.prototype &&
+  !types.isProxy(req) &&
+  hasOwnDataProperties(req, [
+    'locale',
+    'fallbackLocale',
+    'payload',
+    'payloadAPI',
+    'transactionID',
+    'user',
+    'query',
+  ])
+
+/** Each key is absent or an own data property (no accessor anywhere on the prototype chain). */
+const hasOwnDataProperties = (object: object, keys: readonly string[]): boolean => {
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key)
+    if (descriptor ? !('value' in descriptor) : key in object) {
+      return false
+    }
+  }
+  return true
+}
+
 const guard = (reason: string): undefined => {
   count(stats.guards, reason)
   return undefined
@@ -119,7 +155,7 @@ const prepare = (op: Op, args: Any): Prepared | undefined => {
   if (typeof collection !== 'object' || collection === null) {
     return guard('args:collection')
   }
-  if (!isPlainObject(req)) {
+  if (!isPlainObject(req) && !isPayloadWebRequest(req)) {
     return guard('req:object')
   }
   if (!hasDataProperties(req, reqKeys)) {
@@ -235,10 +271,7 @@ const isRequestValue = (value: unknown) =>
   value === false ||
   (Array.isArray(value) && value.every((item) => typeof item === 'string'))
 
-export const fuseFind = (args: Any, exact: Exact): Promise<Any> | undefined => {
-  if (mode === 'off') {
-    return undefined
-  }
+const buildFindRequest = (args: Any): Fused | undefined => {
   const prepared = prepare('find', args)
   if (!prepared) {
     return undefined
@@ -333,13 +366,18 @@ export const fuseFind = (args: Any, exact: Exact): Promise<Any> | undefined => {
     select,
     showHiddenFields: Boolean(showHiddenFields),
   })}`
-  return runFused('find', args, target, request, exact)
+  return { op: 'find', request, target }
 }
 
-export const fuseFindByID = (args: Any, exact: Exact): Promise<Any> | undefined => {
+export const fuseFind = (args: Any, exact: Exact): Promise<Any> | undefined => {
   if (mode === 'off') {
     return undefined
   }
+  const fused = buildFindRequest(args)
+  return fused && runFused(fused.op, args, fused.target, fused.request, exact)
+}
+
+const buildFindByIDRequest = (args: Any): Fused | undefined => {
   const prepared = prepare('findByID', args)
   if (!prepared) {
     return undefined
@@ -423,13 +461,18 @@ export const fuseFindByID = (args: Any, exact: Exact): Promise<Any> | undefined 
     select,
     showHiddenFields: Boolean(showHiddenFields),
   })}`
-  return runFused('findByID', args, target, request, exact)
+  return { op: 'findByID', request, target }
 }
 
-export const fuseCount = (args: Any, exact: Exact): Promise<Any> | undefined => {
+export const fuseFindByID = (args: Any, exact: Exact): Promise<Any> | undefined => {
   if (mode === 'off') {
     return undefined
   }
+  const fused = buildFindByIDRequest(args)
+  return fused && runFused(fused.op, args, fused.target, fused.request, exact)
+}
+
+const buildCountRequest = (args: Any): Fused | undefined => {
   const prepared = prepare('count', args)
   if (!prepared) {
     return undefined
@@ -458,7 +501,15 @@ export const fuseCount = (args: Any, exact: Exact): Promise<Any> | undefined => 
   }
   void plan
   const request = `{"op":"count","plan":${planID},"db":${db}}`
-  return runFused('count', args, target, request, exact)
+  return { op: 'count', request, target }
+}
+
+export const fuseCount = (args: Any, exact: Exact): Promise<Any> | undefined => {
+  if (mode === 'off') {
+    return undefined
+  }
+  const fused = buildCountRequest(args)
+  return fused && runFused(fused.op, args, fused.target, fused.request, exact)
 }
 
 const runNative = (target: FusedTarget, request: string): Promise<string> | string => {
@@ -542,4 +593,62 @@ const shadow = async (
     }
   }
   return result
+}
+
+const requestBuilders: Record<Op, (args: Any) => Fused | undefined> = {
+  count: buildCountRequest,
+  find: buildFindRequest,
+  findByID: buildFindByIDRequest,
+}
+
+/**
+ * The final JSON text of the operation's result when the fused lane serves the call, else
+ * `undefined` (RUST_HTTP_LANES.md 3.2): the same guards and core as the materialized lane, with
+ * the text canonical (`text === JSON.stringify(JSON.parse(text))`, section 3.1) so a response can
+ * send it as its body. `undefined` has run nothing observable; the caller then runs the exact
+ * operation. In shadow mode the text is checked against `JSON.stringify(JSON.parse(text))` and
+ * `undefined` is returned (the exact operation serves the call; the materialized lane's shadow
+ * compares the core's results with the exact lane).
+ */
+export const fusedOperationText = ({
+  operation,
+  operationArgs,
+}: {
+  operation: 'count' | 'find' | 'findByID' | 'findGlobal'
+  operationArgs: Any
+}): Promise<string | undefined> | string | undefined => {
+  if (mode === 'off' || operation === 'findGlobal') {
+    return undefined
+  }
+  let fused: Fused | undefined
+  try {
+    fused = requestBuilders[operation](operationArgs)
+  } catch {
+    return guard('error')
+  }
+  if (!fused) {
+    return undefined
+  }
+  const request = `${fused.request.slice(0, -1)},"canonical":true}`
+  const finish = (text: string): string | undefined => {
+    if (text.charCodeAt(0) === 33 /* ! */) {
+      count(stats.bails, text.slice(1))
+      return undefined
+    }
+    count(stats.hits, `${operation}:text`)
+    if (mode === 'shadow') {
+      if (JSON.stringify(JSON.parse(text)) !== text) {
+        recordDiff({
+          kind: 'text',
+          op: operation,
+          request,
+          ...firstDifference(JSON.stringify(JSON.parse(text)), text),
+        })
+      }
+      return undefined
+    }
+    return text
+  }
+  const text = runNative(fused.target, request)
+  return typeof text === 'string' ? finish(text) : text.then(finish)
 }

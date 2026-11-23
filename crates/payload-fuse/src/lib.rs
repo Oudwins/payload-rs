@@ -60,6 +60,8 @@ struct Request {
   select: Option<JsVal>,
   select_mode: Option<SelectMode>,
   auth: bool,
+  /// RUST_HTTP_LANES.md 3.1: the result as canonical text.
+  canonical: bool,
 }
 
 fn decode_request(text: &str) -> FuseResult<Request> {
@@ -128,6 +130,7 @@ fn decode_request_value(request: &JsVal, db: Option<JsVal>) -> FuseResult<Reques
     select,
     select_mode,
     auth: flag("auth"),
+    canonical: flag("canonical"),
   })
 }
 
@@ -142,6 +145,10 @@ pub fn run(backend: &dyn FusedBackend, conn: u32, request_json: &str) -> String 
 }
 
 fn execute(request: Request, session: &mut dyn ReadSession) -> FuseResult<String> {
+  write::with_canonical(request.canonical, || execute_in(&request, session))
+}
+
+fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<String> {
   let args = ReadArgs {
     plan: &request.plan,
     locale: request.locale.clone(),

@@ -363,3 +363,152 @@ mod tests {
     assert_eq!(scan(r#""text""#, Some(&active)), Scan::Inert);
   }
 }
+
+/// Whether valid JSON `text` is exactly `JSON.stringify(JSON.parse(text))`: no whitespace, numbers
+/// as `Number::toString` (no `-0`), strings with only the escapes `JSON.stringify` writes, objects
+/// without repeated or integer-like keys.
+pub fn is_canonical(text: &str) -> bool {
+  let mut c = Canonical { b: text.as_bytes(), s: text, i: 0 };
+  c.value(0).is_some() && c.i == c.b.len()
+}
+
+struct Canonical<'a> {
+  b: &'a [u8],
+  s: &'a str,
+  i: usize,
+}
+
+impl Canonical<'_> {
+  fn value(&mut self, depth: usize) -> Option<()> {
+    if depth > MAX_DEPTH {
+      return None;
+    }
+    match *self.b.get(self.i)? {
+      b'{' => {
+        self.i += 1;
+        if self.b.get(self.i) == Some(&b'}') {
+          self.i += 1;
+          return Some(());
+        }
+        let mut keys: Vec<&str> = Vec::new();
+        loop {
+          let start = self.i;
+          self.string()?;
+          let key = &self.s[start + 1..self.i - 1];
+          if key.contains('\\') || payload_fuse::write::is_array_index_key(key) || keys.contains(&key) {
+            return None;
+          }
+          keys.push(key);
+          if self.b.get(self.i) != Some(&b':') {
+            return None;
+          }
+          self.i += 1;
+          self.value(depth + 1)?;
+          match *self.b.get(self.i)? {
+            b',' => self.i += 1,
+            b'}' => {
+              self.i += 1;
+              return Some(());
+            }
+            _ => return None,
+          }
+        }
+      }
+      b'[' => {
+        self.i += 1;
+        if self.b.get(self.i) == Some(&b']') {
+          self.i += 1;
+          return Some(());
+        }
+        loop {
+          self.value(depth + 1)?;
+          match *self.b.get(self.i)? {
+            b',' => self.i += 1,
+            b']' => {
+              self.i += 1;
+              return Some(());
+            }
+            _ => return None,
+          }
+        }
+      }
+      b'"' => self.string(),
+      b't' => self.word("true"),
+      b'f' => self.word("false"),
+      b'n' => self.word("null"),
+      _ => self.number(),
+    }
+  }
+
+  fn word(&mut self, word: &str) -> Option<()> {
+    self.s[self.i..].starts_with(word).then(|| self.i += word.len())
+  }
+
+  fn number(&mut self) -> Option<()> {
+    let start = self.i;
+    while self.b.get(self.i).is_some_and(|c| matches!(c, b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')) {
+      self.i += 1;
+    }
+    let literal = &self.s[start..self.i];
+    // JSON grammar (a bare `1e+21` is valid JSON; `.5`, `01`, `1.` are not)
+    let mut probe = Scanner { b: literal.as_bytes(), i: 0, active: None, found: false };
+    if probe.number().is_err() || probe.i != literal.len() {
+      return None;
+    }
+    let n = literal.parse::<f64>().ok()?;
+    if !n.is_finite() || (n == 0.0 && n.is_sign_negative()) {
+      return None;
+    }
+    (payload_engine::js::num_to_js_string(n) == literal).then_some(())
+  }
+
+  /// A string with `JSON.stringify`'s escaping only.
+  fn string(&mut self) -> Option<()> {
+    if self.b.get(self.i) != Some(&b'"') {
+      return None;
+    }
+    self.i += 1;
+    loop {
+      match *self.b.get(self.i)? {
+        b'"' => {
+          self.i += 1;
+          return Some(());
+        }
+        b'\\' => {
+          self.i += 1;
+          match *self.b.get(self.i)? {
+            b'"' | b'\\' | b'b' | b'f' | b'n' | b'r' | b't' => self.i += 1,
+            b'u' => {
+              let hex = self.s.get(self.i + 1..self.i + 5)?;
+              // `\u00xx` (lowercase) for the other control characters only
+              let unit = u32::from_str_radix(hex, 16).ok()?;
+              let control = unit < 0x20 && !matches!(unit, 0x08 | 0x09 | 0x0a | 0x0c | 0x0d);
+              if !control || hex.bytes().any(|b| b.is_ascii_uppercase()) {
+                return None;
+              }
+              self.i += 5;
+            }
+            _ => return None,
+          }
+        }
+        0..=0x1f => return None,
+        _ => self.i += 1,
+      }
+    }
+  }
+}
+
+#[cfg(test)]
+mod canonical_tests {
+  use super::is_canonical;
+
+  #[test]
+  fn canonical_texts() {
+    for ok in ["{}", "[]", "0", "-1.5", "1e+21", "1e-7", r#"{"a":[1,"x\n\u001f",null,true]}"#, r#""é/""#] {
+      assert!(is_canonical(ok), "{ok}");
+    }
+    for bad in [" {}", "{ }", "-0", "1.0", "1E21", "100000000000000000000000", r#""\/""#, "\"\\u0041\"",r#""\u001F""#, r#"{"a":1,"a":2}"#, r#"{"1":1}"#, "[1, 2]"] {
+      assert!(!is_canonical(bad), "{bad}");
+    }
+  }
+}

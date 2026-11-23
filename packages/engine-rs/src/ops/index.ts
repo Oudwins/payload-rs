@@ -24,6 +24,8 @@ import type { Access, AccessResult } from '../../../payload/src/config/types.js'
 import { afterRead as tsAfterRead } from '../../../payload/src/fields/hooks/afterRead/index.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 import { fuseCount, fuseFind, fuseFindByID } from '../fuse/index.js'
+
+export { fusedOperationText } from '../fuse/index.js'
 import { getCoreQueryBinding } from '../query/index.js'
 import { getCoreRuntime } from '../runtime/index.js'
 import { createOpsHost } from './host.js'
