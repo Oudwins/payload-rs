@@ -5,11 +5,13 @@
  *   node test/__rs/http-lanes/summarize.mjs <report.jsonl>...
  *
  * Prints the count per event and every divergence; exits 1 when there is a divergence or when a
- * fast path never ran (no `jwt:hit`, no `parse:hit`, no `validate:laneRepeat`).
+ * fast path never ran (no `jwt:hit`, no `parse:hit`, no `validate:laneRepeat`; with `--bytes`,
+ * no `bytes:hit:*`).
  */
 import fs from 'node:fs'
 
-const files = process.argv.slice(2)
+const isBytes = process.argv.includes('--bytes')
+const files = process.argv.slice(2).filter((arg) => arg !== '--bytes')
 if (!files.length) {
   console.error('usage: summarize.mjs <report.jsonl>...')
   process.exit(2)
@@ -38,6 +40,9 @@ for (const divergence of divergences.slice(0, 50)) {
 }
 
 const missing = ['jwt:hit', 'parse:hit', 'validate:laneRepeat'].filter((event) => !counts[event])
+if (isBytes && !Object.keys(counts).some((event) => event.startsWith('bytes:hit:'))) {
+  missing.push('bytes:hit:*')
+}
 if (missing.length) {
   console.log(`fast path never ran: ${missing.join(', ')}`)
 }

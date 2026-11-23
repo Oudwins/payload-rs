@@ -1,5 +1,6 @@
 /**
- * Differential of the GraphQL document cache (packages/next/src/routes/graphql/documentCache.ts)
+ * Differential of the GraphQL document caches (packages/next/src/routes/graphql/documentCache.ts
+ * and the tanstack-start factory, packages/tanstack-start/src/routes/graphql/documentCache.ts)
  * against uncached graphql-js: for every (query, variables) case, run twice (memo miss, then hit)
  * and interleaved with other variables, `validateWithCache(schema, parseWithCache(query), rules)`
  * must serialize exactly like `validate(schema, parse(query), rules)`, with the rules built the way
@@ -29,11 +30,8 @@ import {
   fieldExtensionsEstimator,
   simpleEstimator,
 } from '../../../packages/graphql/src/packages/graphql-query-complexity/index.js'
-import {
-  concatRules,
-  parseWithCache,
-  validateWithCache,
-} from '../../../packages/next/src/routes/graphql/documentCache.js'
+import * as nextDocumentCache from '../../../packages/next/src/routes/graphql/documentCache.js'
+import { createDocumentCache } from '../../../packages/tanstack-start/src/routes/graphql/documentCache.js'
 
 const Author: GraphQLObjectType = new GraphQLObjectType({
   name: 'Author',
@@ -148,93 +146,101 @@ const outcome = (validateRun: () => readonly GraphQLError[]) => {
   }
 }
 
-describe('GraphQL document cache vs uncached graphql-js', () => {
-  it('should validate like uncached graphql-js for every query, variables and rule set', () => {
-    let compared = 0
-    for (let round = 0; round < 3; round++) {
-      for (const isCustomRule of [false, true]) {
-        for (const variables of variableSets) {
-          for (const query of queries) {
-            const cached = outcome(() =>
-              validateWithCache(
-                schema,
-                parseWithCache(query),
-                concatRules({
-                  additionalRules: additionalRules({ isCustomRule, variables }),
-                  defaultRules: specifiedRules,
-                }),
-              ),
-            )
-            const reference = outcome(() =>
-              validate(
-                schema,
-                parse(query),
-                specifiedRules.concat(additionalRules({ isCustomRule, variables })),
-              ),
-            )
+const implementations = {
+  next: nextDocumentCache,
+  'tanstack-start': createDocumentCache({ parse, validate }),
+}
 
-            expect(cached).toBe(reference)
-            compared++
+describe.each(Object.entries(implementations))(
+  'GraphQL document cache (%s) vs uncached graphql-js',
+  (_, { concatRules, parseWithCache, validateWithCache }) => {
+    it('should validate like uncached graphql-js for every query, variables and rule set', () => {
+      let compared = 0
+      for (let round = 0; round < 3; round++) {
+        for (const isCustomRule of [false, true]) {
+          for (const variables of variableSets) {
+            for (const query of queries) {
+              const cached = outcome(() =>
+                validateWithCache(
+                  schema,
+                  parseWithCache(query),
+                  concatRules({
+                    additionalRules: additionalRules({ isCustomRule, variables }),
+                    defaultRules: specifiedRules,
+                  }),
+                ),
+              )
+              const reference = outcome(() =>
+                validate(
+                  schema,
+                  parse(query),
+                  specifiedRules.concat(additionalRules({ isCustomRule, variables })),
+                ),
+              )
+
+              expect(cached).toBe(reference)
+              compared++
+            }
           }
         }
       }
-    }
 
-    expect(compared).toBe(3 * 2 * variableSets.length * queries.length)
-  })
-
-  it('should report complexity errors that depend on the variables', () => {
-    const query = 'query ($limit: Int) { Posts(limit: $limit) { id title } }'
-    const errorsFor = (limit: number) =>
-      validateWithCache(
-        schema,
-        parseWithCache(query),
-        concatRules({
-          additionalRules: additionalRules({ isCustomRule: false, variables: { limit } }),
-          defaultRules: specifiedRules,
-        }),
-      ).map((error) => error.message)
-
-    expect(errorsFor(5)).toEqual([])
-    expect(errorsFor(500)).toEqual([
-      'The query exceeds the maximum complexity of 200. Actual complexity is 1000',
-    ])
-    expect(errorsFor(5)).toEqual([])
-  })
-
-  it('should validate rule lists not built by concatRules with every rule', () => {
-    const query = '{ Posts { id unknownField } }'
-    const rules = specifiedRules.concat(additionalRules({ isCustomRule: true }))
-
-    expect(serialize(validateWithCache(schema, parseWithCache(query), rules))).toBe(
-      serialize(validate(schema, parse(query), rules)),
-    )
-  })
-
-  it('should return one document per query string and parse failing queries every time', () => {
-    const query = '{ Posts { id } }'
-
-    expect(parseWithCache(query)).toBe(parseWithCache(query))
-    expect(JSON.stringify(parseWithCache(query))).toBe(JSON.stringify(parse(query)))
-
-    const failures = [0, 1].map(() => {
-      try {
-        parseWithCache('{ Posts { id }')
-      } catch (error) {
-        return error as GraphQLError
-      }
-      return undefined
+      expect(compared).toBe(3 * 2 * variableSets.length * queries.length)
     })
 
-    expect(failures[0]).toBeInstanceOf(GraphQLError)
-    expect(failures[0]).not.toBe(failures[1])
-    expect(failures[0]?.message).toBe(failures[1]?.message)
-  })
+    it('should report complexity errors that depend on the variables', () => {
+      const query = 'query ($limit: Int) { Posts(limit: $limit) { id title } }'
+      const errorsFor = (limit: number) =>
+        validateWithCache(
+          schema,
+          parseWithCache(query),
+          concatRules({
+            additionalRules: additionalRules({ isCustomRule: false, variables: { limit } }),
+            defaultRules: specifiedRules,
+          }),
+        ).map((error) => error.message)
 
-  it('should keep documents equal to a fresh parse past the cache bound', () => {
-    const many = Array.from({ length: 1500 }, (_, index) => `{ Posts(limit: ${index}) { id } }`)
-    for (const query of [...many, ...many]) {
+      expect(errorsFor(5)).toEqual([])
+      expect(errorsFor(500)).toEqual([
+        'The query exceeds the maximum complexity of 200. Actual complexity is 1000',
+      ])
+      expect(errorsFor(5)).toEqual([])
+    })
+
+    it('should validate rule lists not built by concatRules with every rule', () => {
+      const query = '{ Posts { id unknownField } }'
+      const rules = specifiedRules.concat(additionalRules({ isCustomRule: true }))
+
+      expect(serialize(validateWithCache(schema, parseWithCache(query), rules))).toBe(
+        serialize(validate(schema, parse(query), rules)),
+      )
+    })
+
+    it('should return one document per query string and parse failing queries every time', () => {
+      const query = '{ Posts { id } }'
+
+      expect(parseWithCache(query)).toBe(parseWithCache(query))
       expect(JSON.stringify(parseWithCache(query))).toBe(JSON.stringify(parse(query)))
-    }
-  })
-})
+
+      const failures = [0, 1].map(() => {
+        try {
+          parseWithCache('{ Posts { id }')
+        } catch (error) {
+          return error as GraphQLError
+        }
+        return undefined
+      })
+
+      expect(failures[0]).toBeInstanceOf(GraphQLError)
+      expect(failures[0]).not.toBe(failures[1])
+      expect(failures[0]?.message).toBe(failures[1]?.message)
+    })
+
+    it('should keep documents equal to a fresh parse past the cache bound', () => {
+      const many = Array.from({ length: 1500 }, (_, index) => `{ Posts(limit: ${index}) { id } }`)
+      for (const query of [...many, ...many]) {
+        expect(JSON.stringify(parseWithCache(query))).toBe(JSON.stringify(parse(query)))
+      }
+    })
+  },
+)

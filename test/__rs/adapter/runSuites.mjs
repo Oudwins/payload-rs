@@ -24,6 +24,8 @@
  *              listed as `reference flaky`.
  * --write-baseline f  merges this run's per-file results into one vitest JSON (a baseline for
  *              --baseline, e.g. a variant's TS run)
+ * --config f  vitest config (default test/__rs/harness/vitest.config.ts); a replacement must keep
+ *              its databaseAdapter.js resolution (e.g. test/__rs/http-lanes/vitest.sqlite.config.ts)
  * --fuse m     PAYLOAD_RS_FUSE=m for the fused read lanes (packages/engine-rs/FUSE_CONTRACT.md):
  *              `shadow` compares every fused call with the exact lane (a file with a difference
  *              fails); `off` disables them. Every Rust run records the lanes' counters per file
@@ -58,6 +60,7 @@ const options = {
   variant: 'default',
   writeBaseline: undefined,
   fuse: undefined,
+  config: 'test/__rs/harness/vitest.config.ts',
 }
 const files = []
 for (let i = 0; i < argv.length; i++) {
@@ -84,6 +87,8 @@ for (let i = 0; i < argv.length; i++) {
     options.writeBaseline = path.resolve(argv[++i])
   } else if (arg === '--fuse') {
     options.fuse = argv[++i]
+  } else if (arg === '--config') {
+    options.config = path.relative(root, path.resolve(argv[++i]))
   } else {
     files.push(path.relative(root, path.resolve(root, arg)))
   }
@@ -192,14 +197,7 @@ const runFile = (file, index) =>
     const started = Date.now()
     const child = spawn(
       'pnpm',
-      [
-        'test:int',
-        '--config',
-        'test/__rs/harness/vitest.config.ts',
-        '--reporter=json',
-        `--outputFile=${jsonFile}`,
-        file,
-      ],
+      ['test:int', '--config', options.config, '--reporter=json', `--outputFile=${jsonFile}`, file],
       { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] },
     )
     let log = ''

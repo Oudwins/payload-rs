@@ -10,6 +10,10 @@
  * - `validateWithCache`: the returned errors must serialize like `validate(schema, document, rules)`
  *   with every rule uncached; `lane` counts rule lists built by `concatRules` (the memoized path),
  *   `laneRepeat` those whose (schema, document) was validated before (a memo hit).
+ * - `fusedResponse` (byte lanes of the default read handlers): when the lane serves a request,
+ *   the exact path runs too and the responses must have the same status, header list (name, value,
+ *   in order) and body bytes; the exact response is returned. `bytes:hit:<operation>` counts served
+ *   requests, `bytes:exact:<operation>` the others.
  *
  * One JSON line per event goes to PAYLOAD_RS_HTTP_SHADOW_REPORT (appended; unset: counted in
  * memory only, `shadowCounters()`); ./summarize.mjs adds them up.
@@ -53,7 +57,47 @@ const seenDocuments = new WeakSet<DocumentNode>()
 const laneRules = new WeakSet<readonly ValidationRule[]>()
 const validatedDocuments = new WeakMap<GraphQLSchema, WeakSet<DocumentNode>>()
 
+const describeResponse = async (response: Response) => ({
+  body: await response.text(),
+  headers: JSON.stringify([...response.headers]),
+  status: response.status,
+})
+
+type FusedResponseArgs = {
+  exact: () => Promise<Response>
+  headers: () => Headers
+  operation: string
+  operationArgs: Record<string, unknown>
+}
+
 const wrappers: Record<string, (upstream: any) => any> = {
+  fusedResponse: (upstream) => async (args: FusedResponseArgs) => {
+    const notServed = new Response(null, { status: 599 })
+    const runLane = (): Promise<Response> => upstream({ ...args, exact: async () => notServed })
+    const lane = await runLane()
+    if (lane === notServed) {
+      record(`bytes:exact:${args.operation}`)
+      return args.exact()
+    }
+    const exact = await args.exact()
+    const expected = await describeResponse(exact.clone())
+    let actual = await describeResponse(lane)
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      // a concurrent write between the two reads: compare with a lane response made now
+      const again = await runLane()
+      actual = again === notServed ? actual : await describeResponse(again)
+    }
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      record('bytes:divergence', {
+        actual: JSON.stringify(actual).slice(0, 2000),
+        expected: JSON.stringify(expected).slice(0, 2000),
+        operation: args.operation,
+      })
+    } else {
+      record(`bytes:hit:${args.operation}`)
+    }
+    return exact
+  },
   concatRules: (upstream) => (args: unknown) => {
     const rules = upstream(args)
     laneRules.add(rules)
