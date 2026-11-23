@@ -13,4 +13,5 @@ payload-sql-read = { path = "../payload-sql-read" }
 payload-sql-upsert = { path = "../payload-sql-upsert" }
 payload-sql-write = { path = "../payload-sql-write" }
 payload-sqlite = { path = "../payload-sqlite" }
+serde.workspace = true
 serde_json.workspace = true

@@ -11,7 +11,7 @@
 use indexmap::IndexMap;
 use payload_engine::error::{EngineError, Result};
 use payload_engine::js::{JsVal, decode_graph_typed, encode_value};
-use serde_json::Value as Json;
+use serde_json::{Map, Value as Json};
 
 /// `column.mapFromDriverValue` of the drizzle `sqlite-core` column classes
 /// (drizzle-orm 0.45 `sqlite-core/columns/*.js`). Payload's own tables only
@@ -296,15 +296,25 @@ impl DrizzleSchema {
   /// Builds the schema from Payload's `rawTables` and `rawRelations`
   /// (`buildDrizzleTable.ts` for SQLite + `buildDrizzleRelations.ts`).
   pub fn from_raw(raw_tables: &Json, raw_relations: &Json) -> Result<Self> {
+    Self::from_raw_parts(
+      raw_tables.as_object().into_iter().flatten().filter(|(_, raw)| !raw.is_null()).map(|(key, raw)| {
+        (key.as_str(), raw.get("name").and_then(|n| n.as_str()), raw.get("columns").and_then(|c| c.as_object()))
+      }),
+      raw_relations.as_object().into_iter().flatten().map(|(table, rels)| (table.as_str(), rels.as_object())),
+    )
+  }
+
+  /// [`DrizzleSchema::from_raw`] from the parts of the raw schema it reads, without a JSON copy of
+  /// it: every table as `(key, name, columns)` (`name` defaults to the key) and every table's
+  /// relations as `(table key, relations)`.
+  pub fn from_raw_parts<'a>(
+    raw_tables: impl IntoIterator<Item = (&'a str, Option<&'a str>, Option<&'a Map<String, Json>>)>,
+    raw_relations: impl IntoIterator<Item = (&'a str, Option<&'a Map<String, Json>>)>,
+  ) -> Result<Self> {
     let mut tables: IndexMap<String, Table> = IndexMap::new();
-    for (key, raw) in raw_tables.as_object().into_iter().flatten() {
-      if raw.is_null() {
-        continue;
-      }
-      let db_name = raw.get("name").and_then(|n| n.as_str()).unwrap_or(key).to_string();
-      let columns = raw
-        .get("columns")
-        .and_then(|c| c.as_object())
+    for (key, name, raw_columns) in raw_tables {
+      let db_name = name.unwrap_or(key).to_string();
+      let columns = raw_columns
         .into_iter()
         .flatten()
         .map(|(col_key, col)| {
@@ -329,7 +339,7 @@ impl DrizzleSchema {
           (col_key.clone(), column)
         })
         .collect();
-      tables.insert(key.clone(), Table { ts_name: key.clone(), db_name, columns, relations: IndexMap::new() });
+      tables.insert(key.to_string(), Table { ts_name: key.to_string(), db_name, columns, relations: IndexMap::new() });
     }
 
     let column_name = |tables: &IndexMap<String, Table>, table: &str, key: &str| -> Result<String> {
@@ -340,9 +350,9 @@ impl DrizzleSchema {
         .ok_or_else(|| EngineError::internal(format!("Column \"{table}\".\"{key}\" not found for relation")))
     };
 
-    for (table_name, rels) in raw_relations.as_object().into_iter().flatten() {
+    for (table_name, rels) in raw_relations {
       let mut relations = IndexMap::new();
-      for (key, rel) in rels.as_object().into_iter().flatten() {
+      for (key, rel) in rels.into_iter().flatten() {
         let to = rel.get("to").and_then(|t| t.as_str()).unwrap_or("").to_string();
         let relation_name = rel.get("relationName").and_then(|n| n.as_str()).map(str::to_string);
         if rel.get("type").and_then(|t| t.as_str()) == Some("one") {
@@ -370,7 +380,7 @@ impl DrizzleSchema {
             key.clone(),
             Relation {
               kind: RelationKind::One { fields, references },
-              source_table: table_name.clone(),
+              source_table: table_name.to_string(),
               referenced_table: to,
               relation_name,
             },
@@ -378,7 +388,7 @@ impl DrizzleSchema {
         } else if tables.contains_key(&to) {
           relations.insert(
             key.clone(),
-            Relation { kind: RelationKind::Many, source_table: table_name.clone(), referenced_table: to, relation_name },
+            Relation { kind: RelationKind::Many, source_table: table_name.to_string(), referenced_table: to, relation_name },
           );
         }
       }

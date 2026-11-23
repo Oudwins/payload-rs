@@ -1254,6 +1254,144 @@ pub fn write_encoded(v: &JsVal, out: &mut String) {
   }
 }
 
+/// The value of [`write_encoded`] split in two, for decoding with one `JSON.parse` and no walk:
+/// `out` gets plain JSON whose `JSON.parse` is the decoded value except at the values JSON cannot
+/// hold (`undefined`, non-finite numbers, functions, `Date`s, `bigint`s, BSON values, and a
+/// reference to an object from inside itself), which are written as `null`; `patches` gets one
+/// `[path, tree]` entry per such value, comma-separated, in document order, where `path` lists
+/// the object keys (strings) and array indexes (numbers) from the root (`[]`: the root itself)
+/// and `tree` is the value's [`write_encoded`] text. Objects with a single reserved key are
+/// written as they are (no `$obj` escape: plain JSON has no markers). Returns the number of
+/// patches. Built without recursion (values of any depth).
+///
+/// `JSON.parse(out)`, then every patch's decoded tree assigned at its path, equals
+/// `deserializeFromEngine` of the [`write_encoded`] text: key order, `__proto__` keys (an own data
+/// property in both) and `-0` included.
+pub fn write_patched(v: &JsVal, out: &mut String, patches: &mut String) -> usize {
+  enum Segment<'a> {
+    Key(&'a str),
+    Index(usize),
+  }
+  enum Work<'a> {
+    Value(&'a JsVal),
+    Text(&'static str),
+    Key(&'a str, bool),
+    Enter(Segment<'a>),
+    Exit,
+    /// leaves the container whose identity was pushed onto `ancestors`
+    Leave,
+  }
+  let mut count = 0;
+  let mut ancestors: std::collections::HashSet<usize> = std::collections::HashSet::new();
+  let mut containers: Vec<usize> = Vec::new();
+  let mut path: Vec<Segment<'_>> = Vec::new();
+  let mut work = vec![Work::Value(v)];
+  let mut patch = |path: &[Segment<'_>], value: Option<&JsVal>, out: &mut String, patches: &mut String| {
+    out.push_str("null");
+    if count > 0 {
+      patches.push(',');
+    }
+    count += 1;
+    patches.push_str("[[");
+    for (i, segment) in path.iter().enumerate() {
+      if i > 0 {
+        patches.push(',');
+      }
+      match segment {
+        Segment::Key(key) => write_json_string(key, patches),
+        Segment::Index(index) => patches.push_str(&index.to_string()),
+      }
+    }
+    patches.push_str("],");
+    match value {
+      Some(value) => write_encoded(value, patches),
+      None => patches.push_str(r#"{"$undefined":true}"#),
+    }
+    patches.push(']');
+  };
+  while let Some(item) = work.pop() {
+    let value = match item {
+      Work::Text(text) => {
+        out.push_str(text);
+        continue;
+      }
+      Work::Key(key, first) => {
+        if !first {
+          out.push(',');
+        }
+        write_json_string(key, out);
+        out.push(':');
+        continue;
+      }
+      Work::Enter(segment) => {
+        path.push(segment);
+        continue;
+      }
+      Work::Exit => {
+        path.pop();
+        continue;
+      }
+      Work::Leave => {
+        if let Some(id) = containers.pop() {
+          ancestors.remove(&id);
+        }
+        continue;
+      }
+      Work::Value(value) => value,
+    };
+    let id = value.identity();
+    if id.is_some_and(|id| ancestors.contains(&id)) {
+      patch(&path, None, out, patches);
+      continue;
+    }
+    match value {
+      JsVal::Undefined | JsVal::Fn(_) => patch(&path, Some(value), out, patches),
+      JsVal::Num(n) if !n.is_finite() => patch(&path, Some(value), out, patches),
+      JsVal::Null => out.push_str("null"),
+      JsVal::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+      JsVal::Num(n) => write_json_number(*n, out),
+      JsVal::Str(s) => write_json_string(s, out),
+      JsVal::Arr(a) => {
+        if let Some(id) = id {
+          ancestors.insert(id);
+          containers.push(id);
+        }
+        out.push('[');
+        work.push(Work::Leave);
+        work.push(Work::Text("]"));
+        for (i, item) in a.iter().enumerate().rev() {
+          work.push(Work::Exit);
+          work.push(Work::Value(item));
+          work.push(Work::Enter(Segment::Index(i)));
+          if i > 0 {
+            work.push(Work::Text(","));
+          }
+        }
+      }
+      JsVal::Obj(o) => {
+        if o.is_empty() && (value.typed().is_some() || value.bson_encoding().is_some()) {
+          patch(&path, Some(value), out, patches);
+          continue;
+        }
+        if let Some(id) = id {
+          ancestors.insert(id);
+          containers.push(id);
+        }
+        out.push('{');
+        work.push(Work::Leave);
+        work.push(Work::Text("}"));
+        for (i, (key, item)) in o.iter().enumerate().rev() {
+          work.push(Work::Exit);
+          work.push(Work::Value(item));
+          work.push(Work::Enter(Segment::Key(key)));
+          work.push(Work::Key(key, i == 0));
+        }
+      }
+    }
+  }
+  count
+}
+
 /// A finite number as JSON text that `JSON.parse` reads back exactly (`-0` included).
 fn write_json_number(n: f64, out: &mut String) {
   if n == 0.0 && n.is_sign_negative() {
@@ -1511,5 +1649,65 @@ mod tests {
     assert_eq!(legacy.get("a").as_str(), Some("2020-01-02T03:04:05.006Z"));
     assert!(legacy.get("bad").is_null());
     assert_eq!(legacy.get("big").as_num(), Some(12_345_678_901_234_567_890.0));
+  }
+
+  /// `write_patched` = `write_encoded` decoded: the plain JSON with every patch's tree at its path
+  /// equals the tree encoding with `$obj` escapes removed and every typed value marked.
+  #[test]
+  fn patched_encoding_equals_the_tree_encoding() {
+    let graph = serde_json::json!({
+      "objects": [{ "name": "cyclic", "self": { "$ref": 0 }, "list": [1, { "$ref": 0 }] }],
+      "root": {
+        "docs": [
+          { "id": 1, "title": "a", "missing": { "$undefined": true }, "negZero": -0.0, "big": { "$bigint": "9007199254740993" } },
+          { "id": 2, "nan": { "$num": "NaN" }, "inf": { "$num": "-Infinity" }, "fn": { "$fn": 3 }, "at": { "$date": "2020-01-02T03:04:05.006Z" }, "bad": { "$date": null } },
+          [{ "$undefined": true }, null, [{ "$undefined": true }]],
+          { "$obj": { "$date": "not a marker" } },
+          { "__proto__": { "$undefined": true }, "quote\"key": "line\nbreak" },
+          {},
+          [],
+        ],
+        "cyclic": { "$ref": 0 },
+        "limit": { "$undefined": true },
+      },
+    });
+    let value = decode_graph_typed(&graph).expect("decode");
+    for v in [value.clone(), JsVal::Undefined, value.get("docs").items().nth(1).expect("doc").get("at").clone(), JsVal::Null] {
+      let tree: Json = serde_json::from_str(&encode_value_text(&v)).expect("tree");
+      let mut plain = String::new();
+      let mut patches = String::new();
+      let count = write_patched(&v, &mut plain, &mut patches);
+      let mut plain: Json = serde_json::from_str(&plain).expect("plain");
+      let patches: Vec<(Vec<Json>, Json)> = serde_json::from_str(&format!("[{patches}]")).expect("patches");
+      assert_eq!(patches.len(), count);
+      for (path, tree) in patches {
+        let mut target = &mut plain;
+        for segment in &path {
+          target = match segment {
+            Json::String(key) => target.get_mut(key.as_str()).expect("object key"),
+            Json::Number(index) => target.get_mut(index.as_u64().expect("index") as usize).expect("array index"),
+            _ => panic!("path segment {segment}"),
+          };
+        }
+        assert!(target.is_null(), "a patched value is written as null");
+        *target = serde_json::json!({ "special": tree });
+      }
+      assert_eq!(plain.to_string(), decoded_tree(&tree).to_string());
+    }
+  }
+
+  /// A tree encoding as `deserializeFromEngine` reads it: `$obj` unescaped, typed values marked.
+  fn decoded_tree(tree: &Json) -> Json {
+    match tree {
+      Json::Array(items) => Json::Array(items.iter().map(decoded_tree).collect()),
+      Json::Object(o) if o.len() == 1 && o.contains_key("$obj") => {
+        Json::Object(o["$obj"].as_object().expect("$obj").iter().map(|(k, v)| (k.clone(), decoded_tree(v))).collect())
+      }
+      Json::Object(o) if o.len() == 1 && RESERVED_KEYS.contains(&o.keys().next().expect("key").as_str()) => {
+        serde_json::json!({ "special": tree })
+      }
+      Json::Object(o) => Json::Object(o.iter().map(|(k, v)| (k.clone(), decoded_tree(v))).collect()),
+      _ => tree.clone(),
+    }
   }
 }

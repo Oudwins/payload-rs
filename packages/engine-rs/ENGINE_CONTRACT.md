@@ -129,6 +129,18 @@ interleave statement by statement in microtask order. `call` reproduces this
   promise resolves. Reported: `updateGlobal` without a global row (`upsertRow({ operation:
   'create' })`) sets `data.createdAt` when it is falsy: `[["data", "createdAt"], "<ISO now>"]`.
   Without the flag the result is the bare tree (mutations dropped).
+- `resultPatches: true` (with `withMutations`): `result` is plain JSON instead of the tree, and the
+  values JSON cannot hold are listed by path: `{ "result": <json>, "patches": [[path, <tree>],
+  ...], "mutations": [...] }`. Each such value (`undefined`, non-finite numbers, functions,
+  `Date`s, `bigint`s, BSON values, a reference to an object from inside itself) is written as
+  `null` in `result` and has one patch, in document order: `path` lists object keys (strings)
+  and array indexes (numbers) from the root (`[]` is the root itself), `<tree>` is the value's
+  tree encoding. Objects with a single reserved key are not `$obj`-escaped. The glue decodes with
+  the one `JSON.parse` of the reply and assigns each patch's `deserializeFromEngine(tree)` at its
+  path; the result equals `deserializeFromEngine` of the tree encoding (`JSON.parse` keeps key
+  order and creates own data properties, `__proto__` keys included; `-0` is written as `-0`).
+  `payload_engine::js::write_patched`, tested against the tree encoding in
+  `patched_encoding_equals_the_tree_encoding`.
 - Caller-visible `data` mutations the glue makes before the call are not repeated:
   `createGlobal` does not set `data.createdAt` (`create` only sets it when falsy, `updateJobs`'
   `delete data.log` is idempotent).

@@ -415,8 +415,14 @@ const callEngine = async ({
       state.hostErrors.length = 0
     }
   }
-  const { mutations, result: resultTree } = JSON.parse(resultJson) as {
+  const {
+    mutations,
+    patches,
+    result: resultTree,
+  } = JSON.parse(resultJson) as {
     mutations: [string[], unknown][]
+    /** `resultPatches` (native engine): `result` is plain JSON, these are its non-JSON values */
+    patches?: [(number | string)[], unknown][]
     result: unknown
   }
   for (const [path, value] of mutations) {
@@ -427,13 +433,15 @@ const callEngine = async ({
   }
   if (isDeleteWithoutResult) {
     // whether a document was deleted is all that is needed: no decoding (the tree of `null` is
-    // `null`)
-    if (resultTree !== null) {
+    // `null`; a patched result is `null` only when no patch replaces the root)
+    if (resultTree !== null || patches?.some(([path]) => path.length === 0)) {
       markWrite(adapter)
     }
     return null
   }
-  const result = deserializeFromEngine(resultTree, state.registry)
+  const result = patches
+    ? applyResultPatches({ patches, registry: state.registry, result: resultTree })
+    : deserializeFromEngine(resultTree, state.registry)
   if (isMarkedWrite({ args, method, result })) {
     markWrite(adapter)
   }
@@ -495,8 +503,36 @@ const isThenable = (value: unknown) =>
   value !== null &&
   typeof (value as { then?: unknown }).then === 'function'
 
-const resolvePath = (root: unknown, path: string[]): any =>
+const resolvePath = (root: unknown, path: (number | string)[]): any =>
   path.reduce<any>((value, key) => value[key], root)
+
+/**
+ * The decoded result of a `resultPatches` reply: `result` as `JSON.parse` returned it, with each
+ * value JSON cannot hold (`undefined`, `Date`, `bigint`, non-finite numbers, functions) decoded
+ * from its tree and assigned at its path (written as `null` in `result`). Equal to
+ * `deserializeFromEngine` of the tree encoding: `JSON.parse` keeps key order and creates own data
+ * properties (`__proto__` included, so the assignment hits that own property).
+ */
+const applyResultPatches = ({
+  patches,
+  registry,
+  result,
+}: {
+  patches: [(number | string)[], unknown][]
+  registry: FunctionRegistry
+  result: unknown
+}): unknown => {
+  let root = result
+  for (const [path, tree] of patches) {
+    const value = deserializeFromEngine(tree, registry)
+    if (path.length === 0) {
+      root = value
+    } else {
+      resolvePath(root, path.slice(0, -1))[path.at(-1)!] = value
+    }
+  }
+  return root
+}
 
 /** The error a JS function threw when the engine reports `JS function <id> threw`. */
 const takeHostError = ({
@@ -841,6 +877,7 @@ const callContextJson = (adapter: AnyObject) =>
     blocksAsJSON: adapter.blocksAsJSON,
     limitedBoundParameters: adapter.limitedBoundParameters,
     now: Date.now(),
+    resultPatches: true,
     withMutations: true,
   })
 

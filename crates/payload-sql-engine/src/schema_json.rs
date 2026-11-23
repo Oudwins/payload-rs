@@ -9,10 +9,7 @@ use serde_json::{Value as Json, json};
 
 pub fn raw_schema_output(root: &JsVal, schema: &RawSchema) -> Json {
   let mut out = schema.to_json();
-  let block_indexes: Vec<Json> = find_identity_paths(root, &schema.block_table_name_index)
-    .into_iter()
-    .map(|(path, index)| json!([path, index]))
-    .collect();
+  let block_indexes = block_table_name_indexes(root, schema);
   if let Some(o) = out.as_object_mut() {
     // `Map` entries as pairs: a JSON object would reorder integer-like keys when parsed in JS.
     let table_name_map = schema.table_name_map.iter().map(|(k, v)| json!([k, v])).collect();
@@ -23,6 +20,60 @@ pub fn raw_schema_output(root: &JsVal, schema: &RawSchema) -> Json {
     o.insert("undefinedProperties".into(), Json::Array(undefined_properties(schema)));
   }
   out
+}
+
+/// `raw_schema_output(root, schema).to_string()`, written straight from the schema (no JSON copy
+/// of its tables).
+pub fn raw_schema_text(root: &JsVal, schema: &RawSchema) -> String {
+  fn write<T: serde::Serialize + ?Sized>(out: &mut Vec<u8>, value: &T) {
+    serde_json::to_writer(&mut *out, value).expect("JSON values serialize");
+  }
+  let mut out: Vec<u8> = Vec::with_capacity(64 * 1024);
+  out.extend_from_slice(br#"{"rawTables":{"#);
+  // keys still holding `undefined` are dropped, like `JSON.stringify`
+  for (i, (key, table)) in schema.raw_tables.iter().filter_map(|(k, t)| t.as_ref().map(|t| (k, t))).enumerate() {
+    if i > 0 {
+      out.push(b',');
+    }
+    write(&mut out, key);
+    out.extend_from_slice(br#":{"name":"#);
+    write(&mut out, &table.name);
+    out.extend_from_slice(br#","columns":"#);
+    write(&mut out, &table.columns);
+    out.extend_from_slice(br#","foreignKeys":"#);
+    write(&mut out, &table.foreign_keys);
+    out.extend_from_slice(br#","indexes":"#);
+    write(&mut out, &table.indexes);
+    out.push(b'}');
+  }
+  out.extend_from_slice(br#"},"rawRelations":"#);
+  write(&mut out, &schema.raw_relations);
+  out.extend_from_slice(br#","tableNameMap":"#);
+  // `Map` entries as pairs: a JSON object would reorder integer-like keys when parsed in JS.
+  write(&mut out, &schema.table_name_map.iter().collect::<Vec<_>>());
+  out.extend_from_slice(br#","indexes":"#);
+  write(&mut out, &schema.indexes);
+  out.extend_from_slice(br#","foreignKeys":"#);
+  write(&mut out, &schema.foreign_keys);
+  out.extend_from_slice(br#","fieldConstraints":"#);
+  write(&mut out, &schema.field_constraints);
+  out.extend_from_slice(br#","blockTableNameIndexes":"#);
+  write(&mut out, &block_table_name_indexes(root, schema));
+  out.extend_from_slice(br#","rawTableKeys":"#);
+  write(&mut out, &schema.raw_tables.keys().collect::<Vec<_>>());
+  out.extend_from_slice(br#","columnDefaults":"#);
+  write(&mut out, &column_defaults(root, schema));
+  out.extend_from_slice(br#","undefinedProperties":"#);
+  write(&mut out, &undefined_properties(schema));
+  out.push(b'}');
+  String::from_utf8(out).expect("serde_json writes UTF-8")
+}
+
+fn block_table_name_indexes(root: &JsVal, schema: &RawSchema) -> Vec<Json> {
+  find_identity_paths(root, &schema.block_table_name_index)
+    .into_iter()
+    .map(|(path, index)| json!([path, index]))
+    .collect()
 }
 
 /// Paths (below `rawTables`) of the own properties holding `undefined` that JSON drops: the

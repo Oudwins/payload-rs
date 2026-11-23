@@ -104,7 +104,7 @@ impl SqliteEngineJs {
   /// Same JSON as `buildRawSchema` (rawTables, rawRelations, tableNameMap, ...).
   #[napi]
   pub fn raw_schema(&self) -> String {
-    self.engine.raw_schema_json().to_string()
+    self.engine.raw_schema_text()
   }
 
   /// The live schema after the schema hooks (`{ drizzle, rawTables? }`, see

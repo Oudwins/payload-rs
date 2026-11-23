@@ -73,7 +73,7 @@ stand-in that speaks the same wire format (Rust raw schema, upstream TS data met
   a call between init and connect, `connect({ hotReload: true })` while another call is still
   inside the engine, a call started right then, and the engine serving the next call.
 - `call(method, argsJson, connId, contextJson)`: 4th argument
-  `contextJson = { allowIDOnCreate, blocksAsJSON, limitedBoundParameters, now, withMutations: true }`. `now = Date.now()` is the JS
+  `contextJson = { allowIDOnCreate, blocksAsJSON, limitedBoundParameters, now, resultPatches: true, withMutations: true }`. `now = Date.now()` is the JS
   clock (so `vi.setSystemTime` / fake timers apply); **the engine must use it for every "now"
   stamp** (`updatedAt` default in transformForWrite, `updateJobs` claim `now`, upsertRow
   `createdAt`). `allowIDOnCreate` / `blocksAsJSON` / `limitedBoundParameters` are the live adapter properties
@@ -93,8 +93,10 @@ stand-in that speaks the same wire format (Rust raw schema, upstream TS data met
   objects when the call resolves: `updateGlobal` without a global row sets `data.createdAt`.
   When `req.transactionID` is not a promise, the transaction's connection is checked for an
   upstream fallback (below) before these mutations.
-- Result: `{ result, mutations }`, `result` in the tree encoding, decoded with
-  `deserializeFromEngine`. `deleteOne` with `returning: false` is sent with `returning: true`
+- Result: `{ result, patches, mutations }` (`resultPatches`, ENGINE_CONTRACT.md): `result` is plain
+  JSON, decoded by the reply's `JSON.parse`, with the patches (`undefined`, `Date`s, ...) assigned
+  at their paths (`applyResultPatches`). An engine that answers without `patches` (the loopback
+  engine) sends the tree encoding, decoded with `deserializeFromEngine`. `deleteOne` with `returning: false` is sent with `returning: true`
   (upstream only skips `transform` then) so the glue knows whether a document was deleted
   (`markWrite`); it returns `null` without decoding the document (only `tree !== null` is read).
   The engine still transforms and encodes it (open item 18).

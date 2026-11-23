@@ -63,7 +63,9 @@ const encodeBson = (value: object, bson: BsonBoundary): unknown => {
       return { $oid: (value as { toHexString: () => string }).toHexString() }
   }
   if (value instanceof Uint8Array) {
-    return { $buffer: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64') }
+    return {
+      $buffer: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64'),
+    }
   }
   return undefined
 }
@@ -229,6 +231,7 @@ export const engineReadKeys: ReadonlySet<string> = new Set([
   'req',
   'required',
   'result',
+  'resultPatches',
   'returning',
   'root',
   'sanitizedIndexes',

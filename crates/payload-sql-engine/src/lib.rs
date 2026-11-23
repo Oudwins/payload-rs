@@ -30,7 +30,7 @@ use std::collections::HashMap;
 
 use payload_engine::error::{EngineError, Result};
 use payload_engine::host::Host;
-use payload_engine::js::{JsVal, decode_graph_typed, encode_value_text, write_encoded, write_json_string};
+use payload_engine::js::{JsVal, decode_graph_typed, encode_value_text, write_encoded, write_json_string, write_patched};
 use payload_engine::sql::schema::{RawSchema, SchemaInput, SchemaOptions, build_raw_schema, resolve_path};
 use payload_sql_find::exec::{Executor, LibsqlConn};
 use payload_sql_find::schema::DrizzleSchema;
@@ -148,9 +148,22 @@ impl SqliteEngine {
       },
       options.schema.clone(),
     )?;
-    let schema_json = schema.to_json();
-    let drizzle = DrizzleSchema::from_raw(&schema_json["rawTables"], &schema_json["rawRelations"])?;
+    // the drizzle schema the raw tables describe (`DrizzleSchema::from_raw` of `schema.to_json()`,
+    // read from the schema without that copy)
+    let drizzle = DrizzleSchema::from_raw_parts(
+      schema
+        .raw_tables
+        .iter()
+        .filter_map(|(key, table)| table.as_ref().map(|t| (key.as_str(), Some(t.name.as_str()), Some(&t.columns)))),
+      schema.raw_relations.iter().map(|(table, relations)| (table.as_str(), Some(relations))),
+    )?;
     Ok(Self { root, schema, drizzle, options })
+  }
+
+  /// [`SqliteEngine::raw_schema_json`] as JSON text (napi `rawSchema()`), written without building
+  /// the JSON value.
+  pub fn raw_schema_text(&self) -> String {
+    schema_json::raw_schema_text(&self.root, &self.schema)
   }
 
   /// The JSON napi `buildRawSchema` returns (`rawTables`, `rawTableKeys`, `rawRelations`,
@@ -272,16 +285,33 @@ impl SqliteEngine {
 
   /// The result string of a call: the tree encoding of the return value, or with
   /// `withMutations: true` in the context `{ "result": <tree>, "mutations": [[path, <tree>], ...] }`.
+  ///
+  /// With `resultPatches: true` as well, `result` is plain JSON and the values JSON cannot hold are
+  /// listed by path: `{ "result": <json>, "patches": [[path, <tree>], ...], "mutations": [...] }`
+  /// ([`write_patched`]), so the glue decodes the result with its one `JSON.parse` and assigns the
+  /// patches, instead of walking the whole tree.
   pub(crate) fn encode_result(&self, output: CallOutput, context_json: Option<&str>) -> Result<String> {
-    let with_mutations = match context_json {
-      Some(text) => parse_context(text)?.get("withMutations").and_then(Json::as_bool) == Some(true),
-      None => false,
+    let (with_mutations, with_patches) = match context_json {
+      Some(text) => {
+        let context = parse_context(text)?;
+        let flag = |name: &str| context.get(name).and_then(Json::as_bool) == Some(true);
+        (flag("withMutations"), flag("resultPatches"))
+      }
+      None => (false, false),
     };
     if !with_mutations {
       return Ok(encode_value_text(&output.result));
     }
     let mut out = String::from(r#"{"result":"#);
-    write_encoded(&output.result, &mut out);
+    if with_patches {
+      let mut patches = String::new();
+      write_patched(&output.result, &mut out, &mut patches);
+      out.push_str(r#","patches":["#);
+      out.push_str(&patches);
+      out.push(']');
+    } else {
+      write_encoded(&output.result, &mut out);
+    }
     out.push_str(r#","mutations":["#);
     for (i, (path, value)) in output.mutations.iter().enumerate() {
       if i > 0 {

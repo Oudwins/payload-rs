@@ -1582,6 +1582,7 @@ dependencies = [
  "payload-sql-upsert",
  "payload-sql-write",
  "payload-sqlite",
+ "serde",
  "serde_json",
 ]
 

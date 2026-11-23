@@ -61,12 +61,13 @@ pub struct RawTable {
 
 impl RawTable {
   pub fn to_json(&self) -> Json {
-    json!({
-      "name": self.name,
-      "columns": self.columns,
-      "foreignKeys": self.foreign_keys,
-      "indexes": self.indexes,
-    })
+    // cloned, not `json!` (which copies every value through serde's serializer)
+    let mut out = Map::with_capacity(4);
+    out.insert("name".into(), Json::String(self.name.clone()));
+    out.insert("columns".into(), Json::Object(self.columns.clone()));
+    out.insert("foreignKeys".into(), Json::Object(self.foreign_keys.clone()));
+    out.insert("indexes".into(), Json::Object(self.indexes.clone()));
+    Json::Object(out)
   }
 }
 
@@ -96,15 +97,37 @@ pub struct RawSchema {
 
 impl RawSchema {
   pub fn to_json(&self) -> Json {
-    json!({
-      // keys still holding `undefined` are dropped, like `JSON.stringify`
-      "rawTables": self.raw_tables.iter().filter_map(|(k, v)| v.as_ref().map(|t| (k.clone(), t.to_json()))).collect::<Map<_, _>>(),
-      "rawRelations": self.raw_relations.iter().map(|(k, v)| (k.clone(), Json::Object(v.clone()))).collect::<Map<_, _>>(),
-      "tableNameMap": self.table_name_map.iter().map(|(k, v)| (k.clone(), Json::String(v.clone()))).collect::<Map<_, _>>(),
-      "indexes": self.indexes.iter().collect::<Vec<_>>(),
-      "foreignKeys": self.foreign_keys.iter().collect::<Vec<_>>(),
-      "fieldConstraints": self.field_constraints.iter().map(|(k, v)| (k.clone(), json!(v))).collect::<Map<_, _>>(),
-    })
+    // built from clones, not `json!` (which copies every value through serde's serializer)
+    let strings = |values: &IndexSet<String>| Json::Array(values.iter().cloned().map(Json::String).collect());
+    let mut out = Map::with_capacity(6);
+    // keys still holding `undefined` are dropped, like `JSON.stringify`
+    out.insert(
+      "rawTables".into(),
+      Json::Object(self.raw_tables.iter().filter_map(|(k, v)| v.as_ref().map(|t| (k.clone(), t.to_json()))).collect()),
+    );
+    out.insert(
+      "rawRelations".into(),
+      Json::Object(self.raw_relations.iter().map(|(k, v)| (k.clone(), Json::Object(v.clone()))).collect()),
+    );
+    out.insert(
+      "tableNameMap".into(),
+      Json::Object(self.table_name_map.iter().map(|(k, v)| (k.clone(), Json::String(v.clone()))).collect()),
+    );
+    out.insert("indexes".into(), strings(&self.indexes));
+    out.insert("foreignKeys".into(), strings(&self.foreign_keys));
+    out.insert(
+      "fieldConstraints".into(),
+      Json::Object(
+        self
+          .field_constraints
+          .iter()
+          .map(|(k, v)| {
+            (k.clone(), Json::Object(v.iter().map(|(name, path)| (name.clone(), Json::String(path.clone()))).collect()))
+          })
+          .collect(),
+      ),
+    );
+    Json::Object(out)
   }
 }
 

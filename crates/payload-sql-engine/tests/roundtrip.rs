@@ -190,6 +190,8 @@ fn schema_is_retained_and_matches_the_ts_output() {
       let options = json!({ "idType": variant, "autoIncrement": variant == "number" });
       let engine = SqliteEngine::create(&NoHost, &fixture["graph"], &options).expect("create");
       let out = engine.raw_schema_json();
+      // napi `rawSchema()` writes the same JSON without building the value
+      assert_eq!(engine.raw_schema_text(), out.to_string(), "{name} [{variant}] raw schema text");
       for key in ["rawTables", "rawRelations", "indexes", "foreignKeys", "fieldConstraints"] {
         assert_eq!(out[key].to_string(), expected["result"][key].to_string(), "{name} [{variant}] {key}");
       }
@@ -308,6 +310,7 @@ fn unique_violation_is_a_validation_error_and_bad_queries_fail_like_ts() {
     name: err["name"].as_str().unwrap_or("").to_string(),
     message: err["message"].as_str().unwrap_or("").to_string(),
     data: Some(err["data"].clone()),
+    thrown: None,
   });
   assert_eq!(boundary["name"], "DrizzleQueryError", "{boundary}");
   assert_eq!(boundary["cause"]["kind"], "sqlite", "{boundary}");
@@ -321,6 +324,7 @@ fn unique_violation_is_a_validation_error_and_bad_queries_fail_like_ts() {
     name: err["name"].as_str().unwrap_or("").to_string(),
     message: err["message"].as_str().unwrap_or("").to_string(),
     data: Some(err["data"].clone()),
+    thrown: None,
   });
   assert_eq!(boundary["name"], "DrizzleQueryError", "{boundary}");
   assert!(boundary["query"].as_str().is_some_and(|q| q.starts_with("insert into \"chained\"")), "{boundary}");
@@ -553,6 +557,7 @@ fn failed_write_statements_have_libsqls_error_kind() {
     name: err["name"].as_str().expect("name").to_string(),
     message: err["message"].as_str().expect("message").to_string(),
     data: err.get("data").cloned(),
+    thrown: None,
   });
   assert_eq!(boundary["name"], "DrizzleQueryError", "{boundary}");
   assert!(boundary["query"].as_str().is_some_and(|q| q.starts_with("insert into \"text\"") && q.contains(" returning ")), "{boundary}");
