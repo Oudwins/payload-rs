@@ -1232,6 +1232,18 @@ const implementations: Record<
  * `undefined`), `fallback` is the method of the mongoose lane (called with the same `this` and
  * arguments whenever the call cannot be served by the driver).
  */
+/** Whether `req` runs in a transaction with a live session; a promise only for a pending `transactionID`. */
+const hasTransactionSession = (lane: DriverLane, req: Any) => {
+  const transactionID = req?.transactionID
+  if (!transactionID) {
+    return false
+  }
+  if (transactionID instanceof Promise) {
+    return getSession(lane.view, req).then(Boolean)
+  }
+  return Boolean(lane.view.sessions[transactionID]?.inTransaction())
+}
+
 export const createLaneMethod = ({
   fallback,
   lane: laneOf,
@@ -1249,8 +1261,11 @@ export const createLaneMethod = ({
       return fallback.call(this, args)
     }
     // a session (mongoose's) exists only inside a transaction; a promise `transactionID` resolving
-    // to null (transactions disabled) is none: upstream's getSession decides, like upstream's call
-    if (args?.req?.transactionID && (await getSession(lane.view, args.req))) {
+    // to null (transactions disabled) is none: upstream's getSession decides, like upstream's call.
+    // A settled `transactionID` is decided synchronously, so the method's synchronous prefix (its
+    // argument mutations before the first await) runs in the same tick as upstream's.
+    const inTransaction = hasTransactionSession(lane, args?.req)
+    if (inTransaction instanceof Promise ? await inTransaction : inTransaction) {
       fallbackTo(method, 'transaction')
       return fallback.call(this, args)
     }
