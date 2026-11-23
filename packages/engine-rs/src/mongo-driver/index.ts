@@ -158,7 +158,8 @@ const connects: Record<string, number> = {}
 /**
  * Installs the driver lane on `adapter` (after the live engine's methods): its read methods try
  * the driver first and fall back to the methods installed before; `connect` starts the Rust client
- * and leaves mongoose unopened until something touches it (lazy.ts), `destroy` closes both. No-op
+ * next to mongoose (or, with `PAYLOAD_MONGO_DRIVER=lazy`, leaves mongoose unopened until something
+ * touches it: lazy.ts), `destroy` closes both. No-op
  * with `PAYLOAD_MONGO_DRIVER=node` or an addon without the driver.
  */
 export const installDriverLane = (adapter: Any): readonly string[] => {
@@ -181,8 +182,7 @@ export const installDriverLane = (adapter: Any): readonly string[] => {
     const eager = eagerReason(this, resolveDbMongodbMongoose())
     if (eager) {
       connects[`eager: ${eager}`] = (connects[`eager: ${eager}`] ?? 0) + 1
-      await upstreamConnect.apply(this, args)
-      await createLane(this)
+      await Promise.all([upstreamConnect.apply(this, args), createLane(this)])
       return
     }
     const lane = await createLane(this)

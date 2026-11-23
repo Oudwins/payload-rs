@@ -23,8 +23,8 @@ then `installDriverLane(adapter)`. `PAYLOAD_ENGINE=ts` runs upstream (nothing of
 
 | `PAYLOAD_MONGO_DRIVER` | behaviour                                                                  |
 | ---------------------- | -------------------------------------------------------------------------- |
-| unset                  | driver lane, mongoose lazy (opened on first touch)                         |
-| `eager`                | driver lane, mongoose connected at `connect` like upstream                 |
+| unset                  | driver lane, mongoose connected at `connect` next to the Rust client       |
+| `lazy`                 | driver lane, mongoose lazy (opened on first touch)                         |
 | `node`                 | no driver lane: everything on the live engine / mongoose (the Node driver) |
 
 `PAYLOAD_MONGO_DRIVER_VERIFY=true|strict` runs the lane differential (below);
@@ -154,10 +154,12 @@ so specs, names and discriminator partial filters are mongoose's. When mongoose 
 its own `Model.init()` again (idempotent). Errors are reported like upstream
 (`Error: cannot connect to MongoDB: ...`).
 
-Eager instead (mongoose connected by upstream's `connect`): `afterOpenConnection`,
-`mongoMemoryServer`, `bufferCommands: false`, no Rust client, `PAYLOAD_MONGO_DRIVER=eager`.
+The lazy mode is opt-in (`PAYLOAD_MONGO_DRIVER=lazy`). By default `connect` runs upstream's
+`connect` (mongoose) and starts the Rust client at the same time, so every mongoose object is open
+as upstream's and reads are still served by the driver lane. Eager even in lazy mode:
+`afterOpenConnection`, `mongoMemoryServer`, `bufferCommands: false`, no Rust client.
 
-Observable differences of the lazy mode (owner decision D8): the five properties are accessors
+Observable differences of the lazy mode, the reason it is not the default: the five properties are accessors
 (`Object.getOwnPropertyDescriptor`); state that exists only on an open connection
 (`connection.db`, `connection.getClient()`, `readyState`, `Model.collection.collection`) is
 missing until something has touched mongoose and the open has completed.

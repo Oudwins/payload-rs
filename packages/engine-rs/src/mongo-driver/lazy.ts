@@ -18,9 +18,11 @@
  *   Rust client as the Node driver's commands (`create`, `createIndexes`), so index specs and
  *   names are mongoose's.
  *
- * `beginTransaction` waits for the mongoose connection (sessions are mongoose's). Configurations the
- * lazy mode cannot reproduce (`afterOpenConnection`, `mongoMemoryServer`, `bufferCommands: false`)
- * connect mongoose eagerly, as does `PAYLOAD_MONGO_DRIVER=eager`.
+ * `beginTransaction` waits for the mongoose connection (sessions are mongoose's). The lazy mode is
+ * opt-in (`PAYLOAD_MONGO_DRIVER=lazy`): state that exists only on an open connection
+ * (`connection.db`, `getClient()`, `readyState`) is missing until mongoose has opened, so by default
+ * `connect` opens mongoose next to the Rust client. Configurations the lazy mode cannot reproduce
+ * (`afterOpenConnection`, `mongoMemoryServer`, `bufferCommands: false`) are eager even with it.
  */
 import { defaultBeginTransaction } from '../../../payload/src/database/defaultBeginTransaction.js'
 import { type DriverLane } from './lane.js'
@@ -43,8 +45,8 @@ const states = new WeakMap<object, LazyState>()
 
 /** Why `adapter` must connect mongoose eagerly, or `undefined`. */
 export const eagerReason = (adapter: Any, mongoose: Any): string | undefined => {
-  if (process.env.PAYLOAD_MONGO_DRIVER === 'eager') {
-    return 'PAYLOAD_MONGO_DRIVER=eager'
+  if (process.env.PAYLOAD_MONGO_DRIVER !== 'lazy') {
+    return 'default'
   }
   if (typeof adapter.url !== 'string') {
     return 'no url'

@@ -298,7 +298,8 @@ describe('driver lane', () => {
   })
 
   it('keeps mongoose unopened until it is touched, with indexes built through the driver', async () => {
-    const payload = await start()
+    process.env.PAYLOAD_MONGO_DRIVER = 'lazy'
+    const payload = await start().finally(() => delete process.env.PAYLOAD_MONGO_DRIVER)
     const adapter = payload.db as unknown as Record<string, any>
     expect(getDriverLaneStats().connects.lazy).toBeGreaterThan(0)
     expect(isMongooseUnopened(adapter)).toBe(true)
