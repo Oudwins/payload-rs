@@ -55,6 +55,28 @@ const bundledAccess = new Function(
   '_access_checkRole__WEBPACK_IMPORTED_MODULE_0__',
   `return ({ req: { user } }) => { if (user) return (0, _access_checkRole__WEBPACK_IMPORTED_MODULE_0__.checkRole)(['admin'], user); return false }`,
 )(webpackNamespace) as Function
+// Turbopack: a null-prototype namespace with getters, members read with string keys.
+const turbopackNamespace = (() => {
+  const ns = Object.create(null) as Record<string, unknown>
+  Object.defineProperty(ns, Symbol.toStringTag, { value: 'Module' })
+  Object.defineProperty(ns, 'checkRole', { enumerable: true, get: () => checkRole })
+  Object.defineProperty(ns, 'roles', { enumerable: true, get: () => roles })
+  return ns
+})()
+// eslint-disable-next-line no-new-func
+const turbopackAccess = new Function(
+  '__TURBOPACK__imported__module__access__',
+  `return ({ req }) => (0, __TURBOPACK__imported__module__access__["checkRole"])([__TURBOPACK__imported__module__access__["roles"].editor], req.user)`,
+)(turbopackNamespace) as Function
+// esbuild / rollup scope hoisting: helpers are plain variables of the bundle's scope.
+// eslint-disable-next-line no-new-func
+const hoistedAccess = new Function(`
+  function checkRole2(allRoles = [], user) {
+    return Boolean(user && allRoles.some((role) => user.roles?.includes(role)))
+  }
+  var isAdmin2 = (user) => checkRole2(["admin"], user);
+  return ({ req: { user } }) => isAdmin2(user) || (user ? { owner: { equals: user.id } } : false)
+`)() as Function
 
 const factory =
   (field: string) =>
@@ -106,6 +128,8 @@ const cases: Case[] = [
     args: accessArgs,
   },
   { name: 'bundled (webpack namespace)', fn: bundledAccess, args: accessArgs },
+  { name: 'bundled (turbopack namespace)', fn: turbopackAccess, args: accessArgs },
+  { name: 'bundled (scope hoisting)', fn: hoistedAccess, args: accessArgs },
   { name: 'closure factory', fn: factory(tenantField), args: accessArgs },
   {
     name: 'function declaration helper',
@@ -406,6 +430,8 @@ test.suite('fn-compile corpus', {}, () => {
       'authenticated',
       'adminOrSelf (imported helper)',
       'bundled (webpack namespace)',
+      'bundled (turbopack namespace)',
+      'bundled (scope hoisting)',
     ]) {
       const c = cases.find((x) => x.name === name)!
       for (const args of c.args) {
