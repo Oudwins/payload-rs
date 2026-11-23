@@ -20,6 +20,7 @@ import { getSelectMode } from '../../utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../utilities/getVersionsConfig.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeSelect } from '../../utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { replaceWithDraftIfAvailable } from '../../versions/drafts/replaceWithDraftIfAvailable.js'
 
 export type GlobalFindOneArgs = {
@@ -77,6 +78,7 @@ export const findOneOperationTS = async <T extends Record<string, unknown>>(
           operation: 'read',
           overrideAccess,
           req: args.req,
+          skipCompilation,
         })) || args
     }
   }
@@ -222,6 +224,7 @@ export const findOneOperationTS = async <T extends Record<string, unknown>>(
           global: globalConfig,
           overrideAccess,
           req,
+          skipCompilation,
         })) || doc
     }
   }
@@ -273,6 +276,7 @@ export const findOneOperationTS = async <T extends Record<string, unknown>>(
           global: globalConfig,
           overrideAccess,
           req,
+          skipCompilation,
         })) || doc
     }
   }

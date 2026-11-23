@@ -16,6 +16,7 @@ import { hasVersionsEnabled } from '../../utilities/getVersionsConfig.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeSelect } from '../../utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { buildVersionCollectionFields } from '../../versions/buildCollectionFields.js'
 import {
   isInheritedReadVersionsAccess,
@@ -207,6 +208,7 @@ export const findVersionByIDOperationTS = async <TData extends TypeWithID = any>
           overrideAccess,
           query: fullWhere,
           req,
+          skipCompilation,
         })) || result.version
     }
   }
@@ -247,6 +249,7 @@ export const findVersionByIDOperationTS = async <TData extends TypeWithID = any>
           overrideAccess,
           query: fullWhere,
           req,
+          skipCompilation,
         })) || result.version
     }
   }

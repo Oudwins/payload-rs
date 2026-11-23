@@ -5,6 +5,7 @@ import type { AuthenticatedUser } from '../../index.js'
 import type { JoinQuery, PayloadRequest, PopulateType, SelectType } from '../../types/index.js'
 
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 
 export type MeOperationResult = {
   collection?: string
@@ -64,7 +65,7 @@ export const meOperationTS = async (args: Arguments): Promise<MeOperationResult>
     // /////////////////////////////////////
 
     for (const meHook of collection.config.hooks.me) {
-      const hookResult = await meHook({ args, user })
+      const hookResult = await meHook({ args, skipCompilation, user })
 
       if (hookResult) {
         result.user = hookResult.user
@@ -103,6 +104,7 @@ export const meOperationTS = async (args: Arguments): Promise<MeOperationResult>
           context: req.context,
           req,
           response: result,
+          skipCompilation,
         })) || result
     }
   }

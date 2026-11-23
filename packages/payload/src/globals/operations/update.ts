@@ -40,6 +40,7 @@ import { killTransaction } from '../../utilities/killTransaction.js'
 import { resolvePublishAllLocales } from '../../utilities/resolvePublishAllLocales.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeSelect } from '../../utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import {
   buildAllLocalesPublicationHookDoc,
   getAllLocalesPublicationStatus,
@@ -123,6 +124,7 @@ export const updateOperationTS = async <
             operation: 'update',
             overrideAccess: args.overrideAccess,
             req: args.req,
+            skipCompilation,
           })) || args
       }
     }
@@ -319,6 +321,7 @@ export const updateOperationTS = async <
             originalDoc: publicationHookDoc,
             overrideAccess,
             req,
+            skipCompilation,
           })) || data
       }
     }
@@ -338,6 +341,7 @@ export const updateOperationTS = async <
             originalDoc: publicationHookDoc,
             overrideAccess,
             req,
+            skipCompilation,
           })) || data
       }
     }
@@ -625,6 +629,7 @@ export const updateOperationTS = async <
             global: globalConfig,
             overrideAccess,
             req,
+            skipCompilation,
           })) || result
       }
     }
@@ -660,6 +665,7 @@ export const updateOperationTS = async <
             overrideAccess,
             previousDoc: originalDoc,
             req,
+            skipCompilation,
           })) || result
       }
     }

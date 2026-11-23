@@ -9,6 +9,7 @@ import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
 import { initTransaction } from '../../utilities/initTransaction.js'
 import { killTransaction } from '../../utilities/killTransaction.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 
 export type Arguments = {
   allSessions?: boolean
@@ -44,6 +45,7 @@ export const logoutOperationTS = async (incomingArgs: Arguments): Promise<boolea
             collection: args.collection?.config,
             context: req.context,
             req,
+            skipCompilation,
           })) || args
       }
     }

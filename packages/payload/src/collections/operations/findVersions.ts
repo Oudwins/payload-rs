@@ -20,6 +20,7 @@ import { hasVersionsEnabled } from '../../utilities/getVersionsConfig.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeInternalFields } from '../../utilities/sanitizeInternalFields.js'
 import { sanitizeSelect } from '../../utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { buildVersionCollectionFields } from '../../versions/buildCollectionFields.js'
 import { buildAfterOperation } from './utilities/buildAfterOperation.js'
 import { buildBeforeOperation } from './utilities/buildBeforeOperation.js'
@@ -184,6 +185,7 @@ export const findVersionsOperationTS = async <TData extends TypeWithVersion<TDat
               overrideAccess,
               query: fullWhere,
               req,
+              skipCompilation,
             })) || docRef.version
         }
       }
@@ -237,6 +239,7 @@ export const findVersionsOperationTS = async <TData extends TypeWithVersion<TDat
               overrideAccess,
               query: fullWhere,
               req,
+              skipCompilation,
             })) || doc.version
         }
 

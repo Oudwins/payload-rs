@@ -10,6 +10,7 @@ import { type RequestContext, validateBlocksFilterOptions } from '../../../index
 import { deepMergeWithSourceArrays } from '../../../utilities/deepMerge.js'
 import { getTranslatedLabel } from '../../../utilities/getTranslatedLabel.js'
 import { isolateObjectProperty } from '../../../utilities/isolateObjectProperty.js'
+import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import { fieldAffectsData, fieldShouldBeLocalized, tabHasName } from '../../config/types.js'
 import { getFieldPaths } from '../../getFieldPaths.js'
 import { flattenValidationData } from './flattenValidationData.js'
@@ -172,6 +173,7 @@ export const promise = async ({
           siblingData,
           siblingDocWithLocales,
           siblingFields: siblingFields!,
+          skipCompilation,
           value: siblingData[field.name],
         })
 
@@ -295,6 +297,7 @@ export const promise = async ({
             : siblingDoc[field.name],
           req: validationReq,
           siblingData: localeContext.siblingData,
+          skipCompilation,
         })
 
         if (typeof validationResult === 'string') {

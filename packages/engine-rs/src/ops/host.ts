@@ -34,6 +34,7 @@ import { httpStatus } from '../../../payload/src/utilities/httpStatus.js'
 import { resolveSelect } from '../../../payload/src/utilities/resolveSelect.js'
 import { sanitizePermissions } from '../../../payload/src/utilities/sanitizePermissions.js'
 import { sanitizeSelect } from '../../../payload/src/utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
 import { replaceWithDraftIfAvailable } from '../../../payload/src/versions/drafts/replaceWithDraftIfAvailable.js'
 import {
@@ -170,6 +171,7 @@ export const createOpsHost = (
     data,
     isReadingStaticFile,
     req,
+    skipCompilation,
   }),
   afterOperationArgs: (
     args: Any,
@@ -178,7 +180,7 @@ export const createOpsHost = (
     overrideAccess: Any,
     req: Any,
     result: Any,
-  ) => ({ args, collection, operation, overrideAccess, req, result }),
+  ) => ({ args, collection, operation, overrideAccess, req, result, skipCompilation }),
   beforeOperationArgs: (
     args: Any,
     collection: Any,
@@ -186,7 +188,7 @@ export const createOpsHost = (
     operation: Any,
     overrideAccess: Any,
     req: Any,
-  ) => ({ args, collection, context, operation, overrideAccess, req }),
+  ) => ({ args, collection, context, operation, overrideAccess, req, skipCompilation }),
   executeAccessArgs: ({ id, slug, data, disableErrors, isReadingStaticFile = false, req }: Any) => [
     id,
     slug,
@@ -209,6 +211,7 @@ export const createOpsHost = (
     overrideAccess,
     query,
     req,
+    skipCompilation,
   }),
   readManyHookArgs: (
     collection: Any,
@@ -217,7 +220,7 @@ export const createOpsHost = (
     overrideAccess: Any,
     query: Any,
     req: Any,
-  ) => ({ collection, context, doc, findMany: true, overrideAccess, query, req }),
+  ) => ({ collection, context, doc, findMany: true, overrideAccess, query, req, skipCompilation }),
 
   // ---------------------------------------------------------------- sanitizeSortQuery
   findByName: (fields: Any, segment: string) => fields.find((each: Any) => each.name === segment),
@@ -786,6 +789,7 @@ export const createOpsHost = (
   fieldReadAccessArgs: (collectionConfig: Any, req: Any) => ({
     collection: collectionConfig,
     req,
+    skipCompilation,
   }),
   findDistinctArgs: (args: Any) => {
     const {

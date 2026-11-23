@@ -61,6 +61,7 @@ import { resolvePublishAllLocales } from '../../utilities/resolvePublishAllLocal
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeInternalFields } from '../../utilities/sanitizeInternalFields.js'
 import { sanitizeSelect } from '../../utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import {
   buildAllLocalesPublicationHookDoc,
   getAllLocalesPublicationStatus,
@@ -332,6 +333,7 @@ export const createOperationTS = async <
             operation: 'create',
             originalDoc: publicationHookDoc,
             req,
+            skipCompilation,
           })) || data
       }
     }
@@ -350,6 +352,7 @@ export const createOperationTS = async <
             operation: 'create',
             originalDoc: publicationHookDoc,
             req,
+            skipCompilation,
           })) || data
       }
     }
@@ -649,6 +652,7 @@ export const createOperationTS = async <
             doc: result,
             overrideAccess,
             req,
+            skipCompilation,
           })) || result
       }
     }
@@ -685,6 +689,7 @@ export const createOperationTS = async <
             previousDoc: {},
             req: args.req,
             select,
+            skipCompilation,
           })) || result
       }
     }

@@ -13,6 +13,7 @@ import { commitTransaction } from '../../utilities/commitTransaction.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { initTransaction } from '../../utilities/initTransaction.js'
 import { killTransaction } from '../../utilities/killTransaction.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { buildVersionGlobalFields } from '../../versions/buildGlobalFields.js'
 import { getRestoredStatusesToAuthorize } from '../../versions/getRestoredStatusesToAuthorize.js'
 import { saveVersion } from '../../versions/saveVersion.js'
@@ -54,6 +55,7 @@ export const restoreVersionOperationTS = async <T extends JsonObject = any>(
             operation: 'restoreVersion',
             overrideAccess,
             req,
+            skipCompilation,
           })) || args
       }
     }
@@ -226,6 +228,7 @@ export const restoreVersionOperationTS = async <T extends JsonObject = any>(
             global: globalConfig,
             overrideAccess,
             req,
+            skipCompilation,
           })) || result
       }
     }
@@ -261,6 +264,7 @@ export const restoreVersionOperationTS = async <T extends JsonObject = any>(
             overrideAccess,
             previousDoc,
             req,
+            skipCompilation,
           })) || result
       }
     }

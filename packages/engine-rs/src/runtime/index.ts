@@ -18,6 +18,7 @@ import { virtualFieldPopulationPromise } from '../../../payload/src/fields/hooks
 import { deepCopyObjectSimple } from '../../../payload/src/utilities/deepCopyObject.js'
 import { getBlockSelect } from '../../../payload/src/utilities/getBlockSelect.js'
 import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
+import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 import { type AfterReadPlan, createAfterReadTraverse } from './afterReadPlan.js'
 
@@ -544,6 +545,7 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
           showHiddenFields: c[ARG_SHOW_HIDDEN_FIELDS],
           siblingData,
           siblingFields,
+          skipCompilation,
           value,
         }),
         token,
@@ -615,6 +617,7 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
                 doc,
                 req: c[ARG_REQ],
                 siblingData,
+                skipCompilation,
               }
             : {
                 id: doc.id,
@@ -624,6 +627,7 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
                 global: c[ARG_GLOBAL],
                 req: c[ARG_REQ],
                 siblingData,
+                skipCompilation,
               },
         ]),
         token,
@@ -729,6 +733,7 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
       showHiddenFields,
       siblingData,
       siblingFields,
+      skipCompilation,
       value,
     }),
     missingEditorProp: (field: any) => new MissingEditorProp(field),

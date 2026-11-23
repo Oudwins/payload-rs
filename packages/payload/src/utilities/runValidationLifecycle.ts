@@ -7,6 +7,7 @@ import { beforeChange } from '../fields/hooks/beforeChange/index.js'
 import { beforeValidate } from '../fields/hooks/beforeValidate/index.js'
 import { deepCopyObjectSimple } from './deepCopyObject.js'
 import { deepMergeWithSourceArraysIgnoringUndefined } from './deepMerge.js'
+import { skipCompilation } from './skipCompilation.js'
 import { toValidationResult } from './toValidationResult.js'
 
 type EntityArgs =
@@ -92,6 +93,7 @@ export async function runValidationLifecycle(
               operation: validationOperation,
               originalDoc,
               req,
+              skipCompilation,
             })) || data
         }
 
@@ -104,6 +106,7 @@ export async function runValidationLifecycle(
               operation: validationOperation,
               originalDoc,
               req,
+              skipCompilation,
             })) || data
         }
       } else {
@@ -121,6 +124,7 @@ export async function runValidationLifecycle(
               originalDoc,
               overrideAccess,
               req,
+              skipCompilation,
             })) || data
         }
 
@@ -134,6 +138,7 @@ export async function runValidationLifecycle(
               originalDoc,
               overrideAccess,
               req,
+              skipCompilation,
             })) || data
         }
       }

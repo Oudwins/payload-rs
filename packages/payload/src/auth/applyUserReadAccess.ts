@@ -4,6 +4,7 @@ import type { PayloadRequest } from '../types/index.js'
 
 import { afterRead } from '../fields/hooks/afterRead/index.js'
 import { deepCopyObjectSimple } from '../utilities/deepCopyObject.js'
+import { skipCompilation } from '../utilities/skipCompilation.js'
 
 /** Runs an authenticated user through the collection's read pipeline. */
 export const applyUserReadAccess = async ({
@@ -50,6 +51,7 @@ export const applyUserReadAccess = async ({
           doc: userWithReadAccess,
           overrideAccess,
           req,
+          skipCompilation,
         })) || userWithReadAccess
     }
   }

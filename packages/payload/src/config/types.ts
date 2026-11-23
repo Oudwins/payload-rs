@@ -470,6 +470,11 @@ export type AccessArgs<TData = any> = {
   isReadingStaticFile?: boolean
   /** The original request that requires an access check */
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
   /** The slug of the Collection or Global document being accessed */
   slug: string
 }
@@ -913,6 +918,11 @@ export type AfterErrorHookArgs = {
   req: PayloadRequest
   /** The formatted error result object, available if the hook is executed from a REST context. */
   result?: ErrorResult
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }
 
 export type ImportMapGenerators = Array<

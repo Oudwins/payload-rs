@@ -19,6 +19,7 @@ import { appendNonTrashedFilter } from '../../utilities/appendNonTrashedFilter.j
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { getFieldByPath } from '../../utilities/getFieldByPath.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { buildAfterOperation } from './utilities/buildAfterOperation.js'
 import { buildBeforeOperation } from './utilities/buildBeforeOperation.js'
 
@@ -148,6 +149,7 @@ export const findDistinctOperationTS = async (
     const hasAccess = await fieldResult.field.access.read({
       collection: collectionConfig,
       req,
+      skipCompilation,
     })
     if (!hasAccess) {
       throw new Forbidden(req.t)

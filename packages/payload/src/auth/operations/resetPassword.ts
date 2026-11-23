@@ -17,6 +17,7 @@ import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
 import { initTransaction } from '../../utilities/initTransaction.js'
 import { killTransaction } from '../../utilities/killTransaction.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { applyUserReadAccess } from '../applyUserReadAccess.js'
 import { createAuthToken } from '../createAuthToken.js'
 import { revokeSession } from '../sessions.js'
@@ -141,6 +142,7 @@ export const resetPasswordOperationTS = async <TSlug extends AuthCollectionSlug>
           data: user,
           operation: 'update',
           req,
+          skipCompilation,
         })
       }
     }
@@ -194,6 +196,7 @@ export const resetPasswordOperationTS = async <TSlug extends AuthCollectionSlug>
             collection: args.collection?.config,
             context: args.req.context,
             req: args.req,
+            skipCompilation,
             user,
           })) || user
       }
@@ -212,6 +215,7 @@ export const resetPasswordOperationTS = async <TSlug extends AuthCollectionSlug>
             collection: args.collection?.config,
             context: args.req.context,
             req: args.req,
+            skipCompilation,
             token,
             user,
           })) || user
@@ -307,6 +311,7 @@ async function validatePasswordField({
     preferences: { fields: {} },
     req,
     siblingData: dataToValidate,
+    skipCompilation,
   })
 
   if (typeof validationResult === 'string') {

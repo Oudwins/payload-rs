@@ -102,6 +102,7 @@ import { resolvePublishAllLocales } from '../../../payload/src/utilities/resolve
 import { resolveSelect } from '../../../payload/src/utilities/resolveSelect.js'
 import { sanitizeInternalFields } from '../../../payload/src/utilities/sanitizeInternalFields.js'
 import { sanitizeSelect } from '../../../payload/src/utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.js'
 import { toValidationResult } from '../../../payload/src/utilities/toValidationResult.js'
 import {
   buildAllLocalesPublicationHookDoc,
@@ -262,6 +263,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
     context: req.context,
     doc,
     req,
+    skipCompilation,
   }),
   afterReadHookArgs: (collection: Any, req: Any, doc: Any, overrideAccess: Any) => ({
     collection,
@@ -269,12 +271,14 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
     doc,
     overrideAccess,
     req,
+    skipCompilation,
   }),
   beforeDeleteHookArgs: (id: Any, collection: Any, req: Any) => ({
     id,
     collection,
     context: req.context,
     req,
+    skipCompilation,
   }),
   createAfterChangeHookArgs: (
     collection: Any,
@@ -294,6 +298,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
     previousDoc: {},
     req: args.req,
     select,
+    skipCompilation,
   }),
   dataHookArgs: (collection: Any, req: Any, data: Any, operation: Any, originalDoc: Any) => ({
     collection,
@@ -302,6 +307,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
     operation,
     originalDoc,
     req,
+    skipCompilation,
   }),
   updateAfterChangeHookArgs: (
     collection: Any,
@@ -321,6 +327,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
     previousDoc,
     req,
     select,
+    skipCompilation,
   }),
   /** afterRead fields with `draft: undefined` (delete, deleteByID, restoreVersion) */
   afterReadArgsWithoutDraft: (
@@ -2138,6 +2145,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
     overrideAccess,
     previousDoc,
     req,
+    skipCompilation,
   }),
   restoreBeforeChangeArgs: (
     parentDocID: Any,
@@ -2202,6 +2210,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
     operation: 'update',
     originalDoc,
     req: reqWithValidationLocale,
+    skipCompilation,
   }),
   restoredStatuses: (draftArg: Any, versionToRestoreWithLocales: Any) =>
     draftArg ? ['draft'] : getRestoredStatusesToAuthorize(versionToRestoreWithLocales?._status),
@@ -2434,6 +2443,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
     operation: validationOperation,
     originalDoc,
     req,
+    skipCompilation,
   }),
   lifecycleGlobalCreateError: () =>
     new Error('Global validation does not support the create operation.'),
@@ -2452,6 +2462,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
     originalDoc,
     overrideAccess,
     req,
+    skipCompilation,
   }),
   /** The `beforeChange({...})` args; `onDataProcessed` stores into `processed[0]`. */
   lifecycleBeforeChangeArgs: (

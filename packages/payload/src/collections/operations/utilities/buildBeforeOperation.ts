@@ -1,6 +1,7 @@
 import type { CollectionSlug } from '../../../index.js'
 import type { BeforeOperationArg, OperationArgs, OperationMap } from './types.js'
 
+import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import { operationToHookOperation } from './types.js'
 // Specific overloads with TArgs (these take priority over the general overload)
 // Overload for 'read' operation (deprecated, backward compatibility)
@@ -97,6 +98,7 @@ export async function buildBeforeOperation<TOperationGeneric extends CollectionS
         operation: hookOperation,
         overrideAccess,
         req: args.req!,
+        skipCompilation,
       } as BeforeOperationArg<TOperationGeneric>)
 
       if (hookResult !== undefined) {

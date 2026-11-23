@@ -58,6 +58,11 @@ export type AfterOperationArg<TOperationGeneric extends CollectionSlug> = {
    */
   overrideAccess?: boolean
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 } & (
   | {
       args: Parameters<OperationMap<TOperationGeneric>['count']>[0]
@@ -194,6 +199,11 @@ export type BeforeOperationArg<TOperationGeneric extends CollectionSlug> = {
    */
   overrideAccess?: boolean
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 } & (
   | {
       args:

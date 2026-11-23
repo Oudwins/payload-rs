@@ -99,6 +99,7 @@ import { saveVersion } from '../../../payload/src/versions/saveVersion.js'
 // payload's own `jose` (`import { decodeJwt } from 'jose/jwt/decode'` in me.ts): engine-rs does not
 // depend on jose, so the same file is imported by path (one module instance, same error classes).
 import { decodeJwt } from '../../../payload/node_modules/jose/dist/webapi/util/decode_jwt.js'
+import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- the helpers mirror untyped TS expressions */
 type Any = any
@@ -172,6 +173,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     overrideAccess,
     previousDoc,
     req,
+    skipCompilation,
   }),
   globalBeforeOperationArgs: (args: Any, global: Any, operation: Any, overrideAccess: Any) => ({
     args,
@@ -180,6 +182,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     operation,
     overrideAccess,
     req: args.req,
+    skipCompilation,
   }),
   globalBeforeOperationArgsUpdate: (args: Any, global: Any, operation: Any) => ({
     args,
@@ -210,6 +213,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     originalDoc,
     overrideAccess,
     req,
+    skipCompilation,
   }),
   globalReadHookArgs: (req: Any, doc: Any, global: Any, overrideAccess: Any) => ({
     context: req.context,
@@ -217,6 +221,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     global,
     overrideAccess,
     req,
+    skipCompilation,
   }),
   globalVersionHookArgs: (
     context: Any,
@@ -228,8 +233,8 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     req: Any,
   ) =>
     hasQuery
-      ? { context, doc, global, overrideAccess, query, req }
-      : { context, doc, global, overrideAccess, req },
+      ? { context, doc, global, overrideAccess, query, req, skipCompilation }
+      : { context, doc, global, overrideAccess, req, skipCompilation },
   globalVersionsHookArgs: (
     context: Any,
     doc: Any,
@@ -237,7 +242,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     overrideAccess: Any,
     query: Any,
     req: Any,
-  ) => ({ context, doc, findMany: true, global, overrideAccess, query, req }),
+  ) => ({ context, doc, findMany: true, global, overrideAccess, query, req, skipCompilation }),
 
   // ---------------------------------------------------------------- global select / query
   globalSelectVersionsFresh: (payload: Any, globalConfig: Any, req: Any, incomingSelect: Any) =>
@@ -1405,6 +1410,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
           collection: args.collection?.config,
           context: args.req.context,
           req: args.req,
+          skipCompilation,
           token,
           user,
         }
@@ -1412,6 +1418,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
           collection: args.collection?.config,
           context: args.req.context,
           req: args.req,
+          skipCompilation,
           user,
         },
   loginResult: (exp: Any, token: Any, user: Any) => ({ exp, token, user }),
@@ -1457,6 +1464,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     doc,
     overrideAccess,
     req,
+    skipCompilation,
   }),
   userFindOneArgs: (collectionConfig: Any, req: Any, where: Any) => ({
     collection: collectionConfig.slug,
@@ -1515,6 +1523,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     collection: args.collection?.config,
     context: req.context,
     req,
+    skipCompilation,
   }),
   logoutArgs: (incomingArgs: Any) => {
     const {
@@ -1564,6 +1573,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     context: req.context,
     req,
     response: result,
+    skipCompilation,
   }),
   meApplyHookResult: (result: Any, hookResult: Any) => {
     result.user = hookResult.user
@@ -1612,7 +1622,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
       showHiddenFields: false,
     })
   },
-  meHookArgs: (args: Any, user: Any) => ({ args, user }),
+  meHookArgs: (args: Any, user: Any) => ({ args, skipCompilation, user }),
   meUserMetadata: (user: Any, collection: Any, req: Any) => {
     user.collection = collection.config.slug
     user._strategy = req.user._strategy
@@ -1816,6 +1826,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     context: args.req.context,
     exp: result.exp,
     req: args.req,
+    skipCompilation,
     token: result.refreshedToken,
   }),
   extendSession: (collectionConfig: Any, req: Any, sid: Any, user: Any) =>
@@ -1858,7 +1869,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
       where: { id: { equals: user.id } },
     }),
   }),
-  refreshHookArgs: (args: Any, user: Any) => ({ args, user }),
+  refreshHookArgs: (args: Any, user: Any) => ({ args, skipCompilation, user }),
   refreshIsGraphQL: (args: Any, config: Any) => {
     const pathname = new URL(args.req.url!).pathname
 
@@ -1878,6 +1889,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     args,
     collection: args.collection?.config,
     context: req.context,
+    skipCompilation,
   }),
   emailHookArgs: (req: Any, token: Any, user: Any) => ({ req, token, user }),
   forgotPasswordHTML: (config: Any, req: Any, token: Any) => {
@@ -2113,6 +2125,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
       preferences: { fields: {} },
       req,
       siblingData: dataToValidate,
+      skipCompilation,
     }
   },
   passwordValidationError: (collectionConfig: Any, validationResult: Any) =>
@@ -2173,6 +2186,7 @@ export const createOpsGlobalHost = (): Record<string, unknown> => ({
     data: user,
     operation: 'update',
     req,
+    skipCompilation,
   }),
   resetPasswordUpdateArgs: (user: Any, collectionConfig: Any, req: Any) => ({
     id: user.id,

@@ -21,6 +21,7 @@ import { httpStatus } from '../../utilities/httpStatus.js'
 import { initTransaction } from '../../utilities/initTransaction.js'
 import { isolateObjectProperty } from '../../utilities/isolateObjectProperty.js'
 import { killTransaction } from '../../utilities/killTransaction.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { getLoginOptions } from '../getLoginOptions.js'
 
 export type Arguments<TSlug extends AuthCollectionSlug> = {
@@ -253,7 +254,12 @@ export const forgotPasswordOperationTS = async <TSlug extends AuthCollectionSlug
 
     if (collectionConfig.hooks?.afterForgotPassword?.length) {
       for (const hook of collectionConfig.hooks.afterForgotPassword) {
-        await hook({ args, collection: args.collection?.config, context: req.context })
+        await hook({
+          args,
+          collection: args.collection?.config,
+          context: req.context,
+          skipCompilation,
+        })
       }
     }
 

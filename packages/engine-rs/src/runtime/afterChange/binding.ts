@@ -8,6 +8,7 @@ import { promise as upstreamAfterChangePromise } from '../../../../payload/src/f
 import { traverseFields as upstreamAfterChangeTraverseFields } from '../../../../payload/src/fields/hooks/afterChange/traverseFields.js'
 import { promise as upstreamBeforeDuplicatePromise } from '../../../../payload/src/fields/hooks/beforeDuplicate/promise.js'
 import { traverseFields as upstreamBeforeDuplicateTraverseFields } from '../../../../payload/src/fields/hooks/beforeDuplicate/traverseFields.js'
+import { skipCompilation } from '../../../../payload/src/utilities/skipCompilation.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../../addon.js'
 import { getCoreRuntime } from '../index.js'
 
@@ -303,6 +304,7 @@ export const getCoreHooksAfter = (): CoreHooksAfterBinding => {
       schemaPath,
       siblingData,
       siblingFields,
+      skipCompilation,
       value,
     }),
     // The beforeDuplicateArgs literal of beforeDuplicate/promise.ts (same key order).
@@ -336,6 +338,7 @@ export const getCoreHooksAfter = (): CoreHooksAfterBinding => {
       siblingData: siblingDoc,
       siblingDocWithLocales: siblingDoc,
       siblingFields,
+      skipCompilation,
       value,
     }),
     callHook: (hook: any, args: unknown) => hook(args),

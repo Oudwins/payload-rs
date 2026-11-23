@@ -239,6 +239,11 @@ export type FieldHookArgs<TData extends TypeWithID = any, TValue = any, TSibling
    * The sibling fields of the field which the hook is running against.
    */
   siblingFields: (Field | TabAsField)[]
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
   /** The value of the field. */
   value?: TValue
 }
@@ -270,6 +275,11 @@ type SharedFieldAccessArgs<TData extends TypeWithID = any, TSiblingData = any> =
    * Immediately adjacent data to this field. For example, if this is a `group` field, then `siblingData` will be the other fields within the group.
    */
   siblingData?: Partial<TSiblingData>
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }
 
 export type FieldAccessArgs<TData extends TypeWithID = any, TSiblingData = any> =
@@ -457,6 +467,11 @@ export type BaseValidateOptions<TData, TSiblingData, TValue> = {
   req: PayloadRequest
   required?: boolean
   siblingData: Partial<TSiblingData>
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }
 
 export type ValidateOptions<

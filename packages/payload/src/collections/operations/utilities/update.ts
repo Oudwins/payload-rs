@@ -44,6 +44,7 @@ import {
   hasLocalizeStatusEnabled,
 } from '../../../utilities/getVersionsConfig.js'
 import { resolvePublishAllLocales } from '../../../utilities/resolvePublishAllLocales.js'
+import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import {
   buildAllLocalesPublicationHookDoc,
   getAllLocalesPublicationStatus,
@@ -265,6 +266,7 @@ export const updateDocument = async <
           operation: 'update',
           originalDoc: publicationHookDoc,
           req,
+          skipCompilation,
         })) || data
     }
   }
@@ -283,6 +285,7 @@ export const updateDocument = async <
           operation: 'update',
           originalDoc: publicationHookDoc,
           req,
+          skipCompilation,
         })) || data
     }
   }
@@ -584,6 +587,7 @@ export const updateDocument = async <
             doc: result,
             overrideAccess,
             req,
+            skipCompilation,
           })) || result
       }
     }
@@ -620,6 +624,7 @@ export const updateDocument = async <
             previousDoc: originalDoc,
             req,
             select,
+            skipCompilation,
           })) || result
       }
     }

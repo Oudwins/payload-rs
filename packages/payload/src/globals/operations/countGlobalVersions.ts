@@ -11,6 +11,7 @@ import {
   type SanitizedGlobalConfig,
 } from '../../index.js'
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 
 export type Arguments = {
   disableErrors?: boolean
@@ -42,6 +43,7 @@ export const countGlobalVersionsOperationTS = async <TSlug extends GlobalSlug>(
           operation: 'countVersions',
           overrideAccess,
           req,
+          skipCompilation,
         })) || args
     }
   }

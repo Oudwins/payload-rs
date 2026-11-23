@@ -12,6 +12,7 @@ import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
 import { initTransaction } from '../../utilities/initTransaction.js'
 import { killTransaction } from '../../utilities/killTransaction.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { applyUserReadAccess } from '../applyUserReadAccess.js'
 import { getFieldsToSign } from '../getFieldsToSign.js'
 import { jwtSign } from '../jwt.js'
@@ -116,7 +117,7 @@ export const refreshOperationTS = async (incomingArgs: Arguments): Promise<Resul
     // /////////////////////////////////////
 
     for (const refreshHook of args.collection.config.hooks.refresh) {
-      const hookResult = await refreshHook({ args, user })
+      const hookResult = await refreshHook({ args, skipCompilation, user })
 
       if (hookResult) {
         result = hookResult
@@ -167,6 +168,7 @@ export const refreshOperationTS = async (incomingArgs: Arguments): Promise<Resul
             context: args.req.context,
             exp: result.exp,
             req: args.req,
+            skipCompilation,
             token: result.refreshedToken,
           })) || result
       }

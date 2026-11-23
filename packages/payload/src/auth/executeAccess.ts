@@ -3,6 +3,7 @@ import type { PayloadRequest } from '../types/index.js'
 
 import { Forbidden } from '../errors/index.js'
 import { isRustCoreEngine } from '../utilities/engineSelection.js'
+import { skipCompilation } from '../utilities/skipCompilation.js'
 
 type OperationArgs = {
   data?: any
@@ -25,6 +26,7 @@ const upstream = {
         data,
         isReadingStaticFile,
         req,
+        skipCompilation,
       })
 
       if (!resolvedConstraint) {

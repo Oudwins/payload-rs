@@ -29,6 +29,7 @@ import { getSelectMode } from '../../utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../utilities/getVersionsConfig.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeSelect } from '../../utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { buildVersionCollectionFields } from '../../versions/buildCollectionFields.js'
 import { appendVersionToQueryKey } from '../../versions/drafts/appendVersionToQueryKey.js'
 import { getQueryDraftsSelect } from '../../versions/drafts/getQueryDraftsSelect.js'
@@ -345,6 +346,7 @@ export const findByIDOperationTS = async <
           overrideAccess,
           query,
           req,
+          skipCompilation,
         })) || result
     }
   }
@@ -385,6 +387,7 @@ export const findByIDOperationTS = async <
           overrideAccess,
           query,
           req,
+          skipCompilation,
         })) || result
     }
   }

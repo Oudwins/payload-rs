@@ -1,6 +1,8 @@
 import type { CollectionSlug } from '../../../index.js'
 import type { AfterOperationArg, OperationMap, OperationResult } from './types.js'
 
+import { skipCompilation } from '../../../utilities/skipCompilation.js'
+
 export const buildAfterOperation = async <
   TOperationGeneric extends CollectionSlug,
   O extends keyof OperationMap<TOperationGeneric> = keyof OperationMap<TOperationGeneric>,
@@ -20,6 +22,7 @@ export const buildAfterOperation = async <
         overrideAccess,
         req: args.req,
         result: newResult,
+        skipCompilation,
       } as AfterOperationArg<TOperationGeneric>)
 
       if (hookResult !== undefined) {

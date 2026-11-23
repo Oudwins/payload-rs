@@ -36,6 +36,7 @@ import { isolateObjectProperty } from '../../utilities/isolateObjectProperty.js'
 import { killTransaction } from '../../utilities/killTransaction.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeSelect } from '../../utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { getLatestCollectionVersion } from '../../versions/getLatestCollectionVersion.js'
 import { getRestoredStatusesToAuthorize } from '../../versions/getRestoredStatusesToAuthorize.js'
 import { saveVersion } from '../../versions/saveVersion.js'
@@ -277,6 +278,7 @@ export const restoreVersionOperationTS = async <
             operation: 'update',
             originalDoc,
             req: reqWithValidationLocale,
+            skipCompilation,
           })) || data
       }
     }
@@ -295,6 +297,7 @@ export const restoreVersionOperationTS = async <
             operation: 'update',
             originalDoc,
             req: reqWithValidationLocale,
+            skipCompilation,
           })) || data
       }
     }
@@ -408,6 +411,7 @@ export const restoreVersionOperationTS = async <
             doc: result,
             overrideAccess,
             req,
+            skipCompilation,
           })) || result
       }
     }
@@ -443,6 +447,7 @@ export const restoreVersionOperationTS = async <
             overrideAccess,
             previousDoc: prevDocWithLocales,
             req,
+            skipCompilation,
           })) || result
       }
     }

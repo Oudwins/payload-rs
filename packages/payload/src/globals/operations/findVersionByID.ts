@@ -14,6 +14,7 @@ import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { hasVersionsEnabled } from '../../utilities/getVersionsConfig.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeSelect } from '../../utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { buildVersionGlobalFields } from '../../versions/buildGlobalFields.js'
 
 export type Arguments = {
@@ -144,6 +145,7 @@ export const findVersionByIDOperationTS = async <T extends TypeWithVersion<T> = 
           global: globalConfig,
           overrideAccess,
           req,
+          skipCompilation,
         })) || result.version
     }
   }
@@ -183,6 +185,7 @@ export const findVersionByIDOperationTS = async <T extends TypeWithVersion<T> = 
           overrideAccess,
           query: findGlobalVersionsArgs.where,
           req,
+          skipCompilation,
         })) || result.version
     }
   }

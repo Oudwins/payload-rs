@@ -10,6 +10,7 @@ import { httpStatus } from './httpStatus.js'
 import { isErrorPublic } from './isErrorPublic.js'
 import { logError } from './logError.js'
 import { mergeHeaders } from './mergeHeaders.js'
+import { skipCompilation } from './skipCompilation.js'
 
 export const routeError = async ({
   collection,
@@ -86,6 +87,7 @@ export const routeError = async ({
         error: err,
         req,
         result: response,
+        skipCompilation,
       })
 
       if (result) {
@@ -104,6 +106,7 @@ export const routeError = async ({
       error: err,
       req,
       result: response,
+      skipCompilation,
     })
 
     if (result) {

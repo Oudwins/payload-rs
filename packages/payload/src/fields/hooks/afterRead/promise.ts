@@ -14,6 +14,7 @@ import type { AfterReadArgs } from './index.js'
 
 import { MissingEditorProp } from '../../../errors/index.js'
 import { getBlockSelect } from '../../../utilities/getBlockSelect.js'
+import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import { stripUnselectedFields } from '../../../utilities/stripUnselectedFields.js'
 import { fieldAffectsData, fieldShouldBeLocalized, tabHasName } from '../../config/types.js'
 import { getDefaultValue } from '../../getDefaultValue.js'
@@ -308,6 +309,7 @@ export const promise = async ({
                 showHiddenFields,
                 siblingData: siblingDoc,
                 siblingFields: siblingFields!,
+                skipCompilation,
                 value,
               })
 
@@ -338,6 +340,7 @@ export const promise = async ({
             showHiddenFields,
             siblingData: siblingDoc,
             siblingFields: siblingFields!,
+            skipCompilation,
             value: siblingDoc[field.name],
           })
 
@@ -385,6 +388,7 @@ export const promise = async ({
                   doc,
                   req,
                   siblingData: siblingDoc,
+                  skipCompilation,
                 }
               : {
                   id: doc.id as number | string,
@@ -394,6 +398,7 @@ export const promise = async ({
                   global: global!,
                   req,
                   siblingData: siblingDoc,
+                  skipCompilation,
                 },
           )
 

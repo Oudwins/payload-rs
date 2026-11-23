@@ -101,6 +101,11 @@ export type BeforeValidateHook = (args: {
    */
   overrideAccess?: boolean
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type BeforeChangeHook = (args: {
@@ -116,6 +121,11 @@ export type BeforeChangeHook = (args: {
    */
   overrideAccess?: boolean
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type AfterChangeHook = (args: {
@@ -132,6 +142,11 @@ export type AfterChangeHook = (args: {
   overrideAccess?: boolean
   previousDoc: any
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type BeforeReadHook = (args: {
@@ -144,6 +159,11 @@ export type BeforeReadHook = (args: {
    */
   overrideAccess?: boolean
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type AfterReadHook = (args: {
@@ -158,6 +178,11 @@ export type AfterReadHook = (args: {
   overrideAccess?: boolean
   query?: Where
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type HookOperationType = 'countVersions' | 'read' | 'restoreVersion' | 'update'
@@ -178,6 +203,11 @@ export type BeforeOperationHook = (args: {
    */
   overrideAccess?: boolean
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type GlobalAdminOptions = {

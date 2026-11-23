@@ -11,6 +11,7 @@ import type {
 import type { Block, Field, TabAsField } from '../../config/types.js'
 
 import { MissingEditorProp } from '../../../errors/index.js'
+import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import { fieldAffectsData, tabHasName, valueIsValueWithRelation } from '../../config/types.js'
 import { getFieldPaths } from '../../getFieldPaths.js'
 import { getExistingRowDoc } from '../beforeChange/getExistingRowDoc.js'
@@ -317,6 +318,7 @@ export const promise = async <T>({
           schemaPath: schemaPathSegments,
           siblingData,
           siblingFields: siblingFields!,
+          skipCompilation,
           value:
             typeof siblingData[field.name] === 'undefined'
               ? fallbackResult.value
@@ -345,6 +347,7 @@ export const promise = async <T>({
                   doc: policyDoc,
                   req,
                   siblingData,
+                  skipCompilation,
                 }
               : {
                   id,
@@ -354,6 +357,7 @@ export const promise = async <T>({
                   global: global!,
                   req,
                   siblingData,
+                  skipCompilation,
                 },
           )
 

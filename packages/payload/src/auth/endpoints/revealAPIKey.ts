@@ -5,6 +5,7 @@ import { UnauthorizedError } from '../../errors/UnauthorizedError.js'
 import { fieldAffectsData } from '../../fields/config/types.js'
 import { canAccessAdmin } from '../../utilities/canAccessAdmin.js'
 import { getRequestCollectionWithID } from '../../utilities/getRequestEntity.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { executeAccess } from '../executeAccess.js'
 
 /**
@@ -80,6 +81,7 @@ export const revealAPIKeyHandler: PayloadHandler = async (req) => {
     doc: userWithReadAccess,
     req,
     siblingData: {},
+    skipCompilation,
   })
 
   if (!canUpdateAPIKey) {

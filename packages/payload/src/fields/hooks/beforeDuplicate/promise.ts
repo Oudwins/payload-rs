@@ -3,6 +3,7 @@ import type { RequestContext } from '../../../index.js'
 import type { JsonObject, PayloadRequest } from '../../../types/index.js'
 import type { Block, Field, FieldHookArgs, TabAsField } from '../../config/types.js'
 
+import { skipCompilation } from '../../../utilities/skipCompilation.js'
 import { fieldAffectsData, fieldShouldBeLocalized } from '../../config/types.js'
 import { getFieldPaths } from '../../getFieldPaths.js'
 import { traverseFields } from './traverseFields.js'
@@ -91,6 +92,7 @@ export const promise = async <T>({
             siblingData: siblingDoc,
             siblingDocWithLocales: siblingDoc,
             siblingFields: siblingFields!,
+            skipCompilation,
             value: siblingDoc[field.name!]?.[locale],
           }
 
@@ -124,6 +126,7 @@ export const promise = async <T>({
           siblingData: siblingDoc,
           siblingDocWithLocales: siblingDoc,
           siblingFields: siblingFields!,
+          skipCompilation,
           value: siblingDoc[field.name!]!,
         }
 

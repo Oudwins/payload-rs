@@ -43,6 +43,7 @@ import { isErrorPublic } from '../../utilities/isErrorPublic.js'
 import { killTransaction } from '../../utilities/killTransaction.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeSelect } from '../../utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { deleteCollectionVersions } from '../../versions/deleteCollectionVersions.js'
 import { deleteScheduledPublishJobs } from '../../versions/deleteScheduledPublishJobs.js'
 import { buildAfterOperation } from './utilities/buildAfterOperation.js'
@@ -206,6 +207,7 @@ export const deleteOperationTS = async <
             collection: collectionConfig,
             context: req.context,
             req,
+            skipCompilation,
           })
         }
       }
@@ -269,6 +271,7 @@ export const deleteOperationTS = async <
               doc: result || doc,
               overrideAccess,
               req,
+              skipCompilation,
             })) || result
         }
       }
@@ -282,6 +285,7 @@ export const deleteOperationTS = async <
               context: req.context,
               doc: result,
               req,
+              skipCompilation,
             })) || result
         }
       }

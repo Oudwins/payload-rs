@@ -21,6 +21,7 @@ import { assertNoValidationWrite } from '../../utilities/assertNoValidationWrite
 import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { killTransaction } from '../../utilities/killTransaction.js'
 import { sanitizeInternalFields } from '../../utilities/sanitizeInternalFields.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { applyUserReadAccess } from '../applyUserReadAccess.js'
 import { createAuthToken } from '../createAuthToken.js'
 import { getLoginOptions } from '../getLoginOptions.js'
@@ -340,6 +341,7 @@ export const loginOperationTS = async <TSlug extends AuthCollectionSlug>(
             collection: args.collection?.config,
             context: args.req.context,
             req: args.req,
+            skipCompilation,
             user,
           })) || user
       }
@@ -358,6 +360,7 @@ export const loginOperationTS = async <TSlug extends AuthCollectionSlug>(
             collection: args.collection?.config,
             context: args.req.context,
             req: args.req,
+            skipCompilation,
             token,
             user,
           })) || user

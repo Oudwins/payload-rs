@@ -22,6 +22,7 @@ import { getExistingRowDoc } from '../../../../payload/src/fields/hooks/beforeCh
 import { promise as upstreamPromise } from '../../../../payload/src/fields/hooks/beforeValidate/promise.js'
 import { stripNullRows } from '../../../../payload/src/fields/hooks/beforeValidate/stripNullRows.js'
 import { traverseFields as upstreamTraverseFields } from '../../../../payload/src/fields/hooks/beforeValidate/traverseFields.js'
+import { skipCompilation } from '../../../../payload/src/utilities/skipCompilation.js'
 import { unflattenData } from '../../../../payload/src/utilities/unflattenData.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../../addon.js'
 import { getCoreRuntime } from '../index.js'
@@ -233,6 +234,7 @@ export const getBeforeValidateBinding = (): BeforeValidateBinding => {
       value,
     }),
     getExistingRowDoc,
+    skipCompilation,
     // The args object literal of the field hooks in `promise.ts` (same key order).
     hookArgs: (
       blockData: unknown,
@@ -271,6 +273,7 @@ export const getBeforeValidateBinding = (): BeforeValidateBinding => {
       schemaPath,
       siblingData,
       siblingFields,
+      skipCompilation,
       value,
     }),
     jsonParse: (text: string) => JSON.parse(text),

@@ -663,6 +663,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
       } else {
         let access = host::get_named(field_js.get(), "access")?;
         let access_fn = host::get(access, ctx.operation.get())?;
+        let skip_compilation = bv_host()?.skip_compilation.get();
         let args = if js::truthy(ctx.collection.get()) {
           object(&[
             ("id", ctx.id.get()),
@@ -672,6 +673,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
             ("doc", policy_doc.get()),
             ("req", ctx.req.get()),
             ("siblingData", sd()),
+            ("skipCompilation", skip_compilation),
           ])?
         } else {
           object(&[
@@ -682,6 +684,7 @@ async fn field_promise(ctx: Rc<Ctx>, t: Rc<Trav>, f: Rc<FieldDesc>, field_js: Va
             ("global", ctx.global.get()),
             ("req", ctx.req.get()),
             ("siblingData", sd()),
+            ("skipCompilation", skip_compilation),
           ])?
         };
         let this = if mutant("M5") { js::undefined() } else { access };

@@ -13,6 +13,7 @@ import type { BlockSlug, DefaultDocumentIDType } from '../../index.js'
 import type { AllOperations, JsonObject, PayloadRequest, Where } from '../../types/index.js'
 
 import { getAccessOperationRequest } from '../getAccessOperationRequest.js'
+import { skipCompilation } from '../skipCompilation.js'
 import { entityDocExists } from './entityDocExists.js'
 import { populateFieldPermissions } from './populateFieldPermissions.js'
 
@@ -176,6 +177,7 @@ export async function getEntityPermissions<TEntityType extends 'collection' | 'g
                       operation: _operation,
                       req,
                     }),
+              skipCompilation,
             }),
           ),
         })

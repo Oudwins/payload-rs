@@ -3,6 +3,7 @@ import type { Permissions, SanitizedPermissions } from './types.js'
 
 import { getEntityPermissions } from '../utilities/getEntityPermissions/getEntityPermissions.js'
 import { sanitizePermissions } from '../utilities/sanitizePermissions.js'
+import { skipCompilation } from '../utilities/skipCompilation.js'
 
 type GetAccessResultsArgs = {
   req: PayloadRequest
@@ -22,7 +23,11 @@ export async function getAccessResults({
 
   if (userCollectionConfig && payload.config.admin.user === user?.collection) {
     results.canAccessAdmin = userCollectionConfig.access.admin
-      ? await userCollectionConfig.access.admin({ slug: userCollectionConfig.slug, req })
+      ? await userCollectionConfig.access.admin({
+          slug: userCollectionConfig.slug,
+          req,
+          skipCompilation,
+        })
       : isLoggedIn
   } else {
     results.canAccessAdmin = false

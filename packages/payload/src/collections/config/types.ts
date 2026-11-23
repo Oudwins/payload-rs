@@ -201,6 +201,11 @@ export type BeforeValidateHook<T extends TypeWithID = any> = (args: {
    */
   originalDoc?: T
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type BeforeChangeHook<T extends TypeWithID = any> = (args: {
@@ -219,6 +224,11 @@ export type BeforeChangeHook<T extends TypeWithID = any> = (args: {
    */
   originalDoc?: T
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type AfterChangeHook<T extends TypeWithID = any> = (args: {
@@ -239,6 +249,11 @@ export type AfterChangeHook<T extends TypeWithID = any> = (args: {
   req: PayloadRequest
   /** Resolved field selection for the operation's response. */
   select?: SelectType
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type BeforeReadHook<T extends TypeWithID = any> = (args: {
@@ -252,6 +267,11 @@ export type BeforeReadHook<T extends TypeWithID = any> = (args: {
   overrideAccess?: boolean
   query: { [key: string]: any }
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type AfterReadHook<T extends TypeWithID = any> = (args: {
@@ -266,6 +286,11 @@ export type AfterReadHook<T extends TypeWithID = any> = (args: {
   overrideAccess?: boolean
   query?: { [key: string]: any }
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type BeforeDeleteHook = (args: {
@@ -274,6 +299,11 @@ export type BeforeDeleteHook = (args: {
   context: RequestContext
   id: number | string
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type AfterDeleteHook<T extends TypeWithID = any> = (args: {
@@ -283,6 +313,11 @@ export type AfterDeleteHook<T extends TypeWithID = any> = (args: {
   doc: T
   id: number | string
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type AfterOperationHook<TOperationGeneric extends CollectionSlug = string> = (
@@ -298,6 +333,11 @@ export type BeforeLoginHook<T extends TypeWithID = any> = (args: {
   collection: SanitizedCollectionConfig
   context: RequestContext
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
   user: T
 }) => any
 
@@ -306,6 +346,11 @@ export type AfterLoginHook<T extends TypeWithID = any> = (args: {
   collection: SanitizedCollectionConfig
   context: RequestContext
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
   token: string
   user: T
 }) => any
@@ -316,6 +361,11 @@ export type AfterLogoutHook<T extends TypeWithID = any> = (args: {
   collection: SanitizedCollectionConfig
   context: RequestContext
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -325,15 +375,30 @@ export type AfterMeHook<T extends TypeWithID = any> = (args: {
   context: RequestContext
   req: PayloadRequest
   response: unknown
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type RefreshHook<T extends TypeWithID = any> = (args: {
   args: RefreshArguments
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
   user: T
 }) => Promise<RefreshResult | void> | (RefreshResult | void)
 
 export type MeHook<T extends TypeWithID = any> = (args: {
   args: MeArguments
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
   user: T
 }) => ({ exp: number; user: T } | void) | Promise<{ exp: number; user: T } | void>
 
@@ -344,6 +409,11 @@ export type AfterRefreshHook<T extends TypeWithID = any> = (args: {
   context: RequestContext
   exp: number
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
   token: string
 }) => any
 
@@ -356,6 +426,11 @@ export type AfterForgotPasswordHook = (args: {
   /** The collection which this hook is being run on */
   collection: SanitizedCollectionConfig
   context: RequestContext
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
 }) => any
 
 export type EnableFoldersOptions = {
@@ -402,6 +477,11 @@ export type BaseFilter = (args: {
   locale?: TypedLocale
   page: number
   req: PayloadRequest
+  /**
+   * Opts this function out of compilation by the Rust engine: mentioning it anywhere in the
+   * function (e.g. `args.skipCompilation?.()`) keeps the function in JS. Does nothing at run time.
+   */
+  skipCompilation?: () => void
   sort: string
 }) => null | Promise<null | Where> | Where
 
@@ -544,7 +624,14 @@ export type CollectionAdminOptions = {
 }
 
 export type CollectionAccess<TData = any> = {
-  admin?: ({ slug, req }: { req: PayloadRequest; slug: string }) => boolean | Promise<boolean>
+  admin?: ({
+    slug,
+    req,
+  }: {
+    req: PayloadRequest
+    skipCompilation?: () => void
+    slug: string
+  }) => boolean | Promise<boolean>
   create?: Access<TData>
   delete?: Access<TData>
   read?: Access<TData>

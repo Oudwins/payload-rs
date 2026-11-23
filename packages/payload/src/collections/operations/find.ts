@@ -28,6 +28,7 @@ import { isRustCoreEngine } from '../../utilities/engineSelection.js'
 import { hasDraftsEnabled } from '../../utilities/getVersionsConfig.js'
 import { resolveSelect } from '../../utilities/resolveSelect.js'
 import { sanitizeSelect } from '../../utilities/sanitizeSelect.js'
+import { skipCompilation } from '../../utilities/skipCompilation.js'
 import { buildVersionCollectionFields } from '../../versions/buildCollectionFields.js'
 import { appendVersionToQueryKey } from '../../versions/drafts/appendVersionToQueryKey.js'
 import { getQueryDraftsSelect } from '../../versions/drafts/getQueryDraftsSelect.js'
@@ -318,6 +319,7 @@ export const findOperationTS = async <
               overrideAccess: overrideAccess!,
               query: fullWhere,
               req,
+              skipCompilation,
             })) || docRef
         }
 
@@ -371,6 +373,7 @@ export const findOperationTS = async <
               overrideAccess: overrideAccess!,
               query: fullWhere,
               req,
+              skipCompilation,
             })) || docRef
         }
 

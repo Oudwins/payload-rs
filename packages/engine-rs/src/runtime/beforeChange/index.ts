@@ -20,6 +20,7 @@ import { validateBlocksFilterOptions } from '../../../../payload/src/fields/vali
 import { deepMergeWithSourceArrays } from '../../../../payload/src/utilities/deepMerge.js'
 import { getTranslatedLabel } from '../../../../payload/src/utilities/getTranslatedLabel.js'
 import { isolateObjectProperty } from '../../../../payload/src/utilities/isolateObjectProperty.js'
+import { skipCompilation } from '../../../../payload/src/utilities/skipCompilation.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../../addon.js'
 import { getCoreRuntime } from '../index.js'
 import { promise as generatedPromise } from './generated/promise.js'
@@ -392,6 +393,7 @@ export const getBeforeChangeBinding = (): BeforeChangeBinding => {
       siblingData,
       siblingDocWithLocales,
       siblingFields,
+      skipCompilation,
       value,
     }),
     inOp: (key: PropertyKey, target: any) => key in target,
@@ -542,6 +544,7 @@ export const getBeforeChangeBinding = (): BeforeChangeBinding => {
         : siblingDoc[field.name],
       req,
       siblingData,
+      skipCompilation,
     }),
     validationError: (id: any, collection: any, errors: any[], global: any, req: any) =>
       new ValidationError(
