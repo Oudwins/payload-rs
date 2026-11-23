@@ -1,6 +1,8 @@
 import type { PayloadRequest } from '../types/index.js'
 
 import { UnauthorizedError } from '../errors/UnauthorizedError.js'
+import { callUserFunction } from './callUserFunction.js'
+import { skipCompilation } from './skipCompilation.js'
 
 /**
  * Protects admin-only routes, server functions, etc.
@@ -18,7 +20,12 @@ export const canAccessAdmin = async ({ req }: { req: PayloadRequest }) => {
     const adminAccessFn = req.payload.collections[incomingUserSlug]?.config.access?.admin
 
     if (adminAccessFn) {
-      const canAccess = await adminAccessFn({ slug: incomingUserSlug, req })
+      const canAccess = await callUserFunction(
+        adminAccessFn,
+        undefined,
+        [{ slug: incomingUserSlug, req, skipCompilation }],
+        'adminAccessFn',
+      )
 
       if (!canAccess) {
         throw new UnauthorizedError()

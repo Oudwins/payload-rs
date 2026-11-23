@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { setTimeout as setTimeoutReal } from 'node:timers'
 import { inspect, types } from 'node:util'
 
 import type { CompiledResult } from './native.js'
@@ -45,6 +46,8 @@ const trackedByFunction = new WeakMap<AnyFunction, Tracked>()
 const guarded = new WeakMap<AnyFunction, Guarded>()
 const guardedConfigs = new WeakSet<object>()
 let installed = false
+let scheduleFlush: () => void = () => {}
+let flushTimer: ReturnType<typeof setTimeoutReal> | undefined
 let testFile: string | undefined
 
 export const installCompileGuards = (
@@ -95,6 +98,21 @@ export const installCompileGuards = (
   return { compiled: compiledCount, total: entries.length }
 }
 
+/** Guard counters of one config function (tests): `undefined` when guards never saw it. */
+export const guardStats = (fn: AnyFunction) => {
+  const record = trackedByFunction.get(fn)
+  if (!record) {
+    return undefined
+  }
+  return {
+    bailReasons: record.bailReasons,
+    calls: record.calls,
+    compiled: record.compiled,
+    mismatches: record.mismatches.length,
+    ...(record.id !== undefined ? getFnIr().fnIrStats(record.id) : {}),
+  }
+}
+
 const bail = (record: Tracked, reason: string) => {
   record.bailReasons[reason] = (record.bailReasons[reason] ?? 0) + 1
 }
@@ -108,6 +126,7 @@ const guardCall = (fn: AnyFunction, thisArg: unknown, args: unknown[]): unknown 
   const { id, record } = entry
   const fnIr = getFnIr()
   record.calls++
+  scheduleFlush()
   let compiled: CompiledResult | undefined
   let snapArgs: undefined | unknown[]
   if (fnIr.fnIrIsActive(id) && fnIr.fnIrShouldVerify(id)) {
@@ -180,6 +199,7 @@ const installStatsWriter = () => {
   mkdirSync(dir, { recursive: true })
   const file = path.join(dir, `${process.pid}.json`)
   const flush = () => {
+    flushTimer = undefined
     const fnIr = getFnIr()
     const functions = tracked.map((t) => ({
       ...t,
@@ -187,6 +207,10 @@ const installStatsWriter = () => {
     }))
     writeFileSync(file, JSON.stringify({ functions, pid: process.pid, testFile: testFile ?? null }))
   }
-  setInterval(flush, 1000).unref()
+  // Debounced after every guarded call (node:timers: not affected by a test's fake timers).
+  scheduleFlush = () => {
+    flushTimer ??= setTimeoutReal(flush, 20).unref()
+  }
+  flush()
   process.on('exit', flush)
 }

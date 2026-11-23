@@ -21,7 +21,13 @@ import type {
 } from 'payload'
 
 import ObjectIdImport from 'bson-objectid'
-import { getBlockSelect, stripUnselectedFields, validateBlocksFilterOptions } from 'payload'
+import {
+  callUserFunction,
+  getBlockSelect,
+  skipCompilation,
+  stripUnselectedFields,
+  validateBlocksFilterOptions,
+} from 'payload'
 import {
   deepCopyObjectSimple,
   fieldAffectsData,
@@ -223,14 +229,22 @@ export const addFieldStatePromise = async (args: AddFieldStatePromiseArgs): Prom
         ? (req.payload.globals.config.find((g) => g.slug === globalSlug) ?? null)
         : null
 
-      hasPermission = await field.access.read({
-        id,
-        blockData,
-        data: fullData,
-        req,
-        siblingData: data,
-        ...(collection ? { collection } : { global }),
-      })
+      hasPermission = await callUserFunction(
+        field.access.read,
+        field.access,
+        [
+          {
+            id,
+            blockData,
+            data: fullData,
+            req,
+            siblingData: data,
+            skipCompilation,
+            ...(collection ? { collection } : { global }),
+          },
+        ],
+        'field.access.read',
+      )
     } else {
       hasPermission = true
     }
@@ -255,22 +269,31 @@ export const addFieldStatePromise = async (args: AddFieldStatePromiseArgs): Prom
       }
 
       try {
-        validationResult = await validate(data?.[field.name], {
-          ...field,
-          id,
-          blockData,
-          collectionSlug,
-          data: fullData,
-          event: 'onChange',
-          // @AlessioGr added `jsonError` in https://github.com/payloadcms/payload/commit/c7ea62a39473408c3ea912c4fbf73e11be4b538d
-          // @ts-expect-error-next-line
-          jsonError,
-          operation,
-          preferences,
-          previousValue: previousFormState?.[path]?.initialValue,
-          req,
-          siblingData: data,
-        })
+        validationResult = await callUserFunction(
+          validate,
+          undefined,
+          [
+            data?.[field.name],
+            {
+              ...field,
+              id,
+              blockData,
+              collectionSlug,
+              data: fullData,
+              event: 'onChange',
+              // @AlessioGr added `jsonError` in https://github.com/payloadcms/payload/commit/c7ea62a39473408c3ea912c4fbf73e11be4b538d
+              // @ts-expect-error-next-line
+              jsonError,
+              operation,
+              preferences,
+              previousValue: previousFormState?.[path]?.initialValue,
+              req,
+              siblingData: data,
+              skipCompilation,
+            },
+          ],
+          'validate',
+        )
       } catch (err) {
         validationResult = `Error validating field at path: ${path}`
 
