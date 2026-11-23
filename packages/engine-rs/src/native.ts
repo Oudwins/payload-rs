@@ -59,6 +59,7 @@ export const engineAddonExports = [
   'fnIrEvaluate',
   'fnIrInit',
   'fnIrIsActive',
+  'fnIrLaneShouldVerify',
   'fnIrRecord',
   'fnIrReserve',
   'fnIrResultToJs',

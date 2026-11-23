@@ -415,6 +415,13 @@ pub fn fn_ir_should_verify(id: u32) -> bool {
   guard::should_verify(id)
 }
 
+/// `guard::lane_should_verify`: whether a fused lane must leave this call to the exact lane (where
+/// the call-site guard verifies it). Counts a lane call.
+#[napi]
+pub fn fn_ir_lane_should_verify(id: u32) -> bool {
+  guard::lane_should_verify(id)
+}
+
 #[napi]
 pub fn fn_ir_record(id: u32, outcome: u32) {
   guard::record(

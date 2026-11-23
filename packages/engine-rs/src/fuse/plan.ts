@@ -1,4 +1,3 @@
-import { isCompiledAccess } from './compiled.js'
 import { isInertTree } from './inert.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- sanitized config shapes */
@@ -354,7 +353,3 @@ export const getCollectionPlan = (collection: Any, payload: unknown): Collection
   plans.set(collection, plan)
   return plan
 }
-
-/** Whether the collection read access lets a call without `overrideAccess` stay fused. */
-export const isFusableAccess = (plan: { eligible: true } & CollectionPlan): boolean =>
-  isCompiledAccess(plan.access)

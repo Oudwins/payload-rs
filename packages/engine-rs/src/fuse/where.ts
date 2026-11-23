@@ -18,10 +18,13 @@ type Any = any
  */
 export const isAcceptedWhere = ({
   fields,
+  idOnly = false,
   payload,
   where,
 }: {
   fields: Any[]
+  /** Only `id` paths (`validateSearchParam` checks no field permissions for them). */
+  idOnly?: boolean
   payload: Any
   where: unknown
 }): boolean => {
@@ -39,7 +42,7 @@ export const isAcceptedWhere = ({
         return false
       }
       for (const item of value) {
-        if (item === undefined || !isAcceptedWhere({ fields, payload, where: item })) {
+        if (item === undefined || !isAcceptedWhere({ fields, idOnly, payload, where: item })) {
           return false
         }
       }
@@ -55,7 +58,11 @@ export const isAcceptedWhere = ({
         return false
       }
     }
-    if (!hasOperator || !isAcceptedPath({ fields, path: key, payload })) {
+    if (
+      !hasOperator ||
+      (idOnly && key !== 'id') ||
+      !isAcceptedPath({ fields, path: key, payload })
+    ) {
       return false
     }
   }

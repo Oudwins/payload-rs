@@ -98,6 +98,12 @@ export const installCompileGuards = (
   return { compiled: compiledCount, total: entries.length }
 }
 
+/**
+ * Whether call-site guards are installed: a fused lane may only substitute a compiled function
+ * then (FN_COMPILE_CONTRACT.md section 3).
+ */
+export const compileGuardsInstalled = (): boolean => installed
+
 /** Guard counters of one config function (tests): `undefined` when guards never saw it. */
 export const guardStats = (fn: AnyFunction) => {
   const record = trackedByFunction.get(fn)

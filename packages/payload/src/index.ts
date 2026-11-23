@@ -1034,9 +1034,11 @@ export class BasePayload {
       {} as Record<string, FlattenedBlock>,
     )
 
-    // Verification mode of the Rust engine's function compiler (engine-rs `compile/guard.ts`):
-    // every compiled access function, hook and validator is checked against the real function.
-    if (process.env.PAYLOAD_FN_COMPILE_GUARD && isRustCoreEngine()) {
+    // Guard mode of the Rust engine's function compiler (engine-rs `compile/guard.ts`, owner
+    // decision D5): access functions, hooks and validators are compiled and their compiled results
+    // verified against the real functions (`PAYLOAD_FN_COMPILE_GUARD`: unset / `sample` the first
+    // 32 calls of each, then 1 in 256; `all` every call; `off` no compilation).
+    if (process.env.PAYLOAD_FN_COMPILE_GUARD !== 'off' && isRustCoreEngine()) {
       const { importRustEngine } = await import('./utilities/importRustEngine.js')
       const { installCompileGuards } = await importRustEngine('@payloadcms/engine-rs/compile')
       installCompileGuards(this.config)

@@ -25,7 +25,7 @@ import { snapshotArgs } from './snapshot.js'
 export type { CompiledFunction } from './compileFunction.js'
 export { compileFunction, getCompiledFunction } from './compileFunction.js'
 export { configFunctions } from './configFunctions.js'
-export { guardStats, installCompileGuards } from './guard.js'
+export { compileGuardsInstalled, guardStats, installCompileGuards } from './guard.js'
 export { capturedRequest } from './snapshot.js'
 
 /** Whether `fn` was compiled and is still active (not de-optimised by guard mode). */

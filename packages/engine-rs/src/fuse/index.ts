@@ -18,10 +18,15 @@ import { combineQueries } from '../../../payload/src/database/combineQueries.js'
 import { appendNonTrashedFilter } from '../../../payload/src/utilities/appendNonTrashedFilter.js'
 import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../../payload/src/utilities/getVersionsConfig.js'
+import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.js'
+import { getCompiledFunction } from '../compile/compileFunction.js'
+import { compileGuardsInstalled } from '../compile/guard.js'
+import { getFnIr } from '../compile/native.js'
+import { snapshotArgs } from '../compile/snapshot.js'
 import { getNativeEngine } from '../native.js'
 import { createFunctionRegistry, serializeForEngine } from '../serialize.js'
-import { hasDataProperties, isInertTree, isPlainObject } from './inert.js'
-import { getCollectionPlan, isFusableAccess } from './plan.js'
+import { hasDataProperties, isInertTree, isPlainDataObject, isPlainObject } from './inert.js'
+import { getCollectionPlan } from './plan.js'
 import { canonical, firstDifference } from './shadow.js'
 import { count, recordDiff, stats } from './stats.js'
 import { getFusedTarget } from './targets.js'
@@ -117,6 +122,38 @@ const isPayloadWebRequest = (req: unknown): boolean =>
     'query',
   ])
 
+/** What `isolateObjectProperty` (payload) recorded for each proxy it created. */
+const isolatedObjects = ((globalThis as Record<symbol, unknown>)[
+  Symbol.for('payload.isolateObjectProperty')
+] ??= new WeakMap()) as WeakMap<object, { delegate: object; keys: PropertyKey[]; target: object }>
+
+/**
+ * How a `req` can be read without running unknown code: a plain object, a web `Request` carrying
+ * Payload's properties, or Payload's own `isolateObjectProperty` proxy of such a request (its
+ * handler reads the isolated keys from a plain delegate and the rest from the target).
+ */
+const acceptedRequest = (req: unknown, depth: number): 'isolated' | 'plain' | 'web' | undefined => {
+  if (isPlainObject(req)) {
+    return 'plain'
+  }
+  if (isPayloadWebRequest(req)) {
+    return 'web'
+  }
+  const isolated = typeof req === 'object' && req !== null ? isolatedObjects.get(req) : undefined
+  if (!isolated || depth > 4 || !isPlainDataObject(isolated.delegate)) {
+    return undefined
+  }
+  const inner = acceptedRequest(isolated.target, depth + 1)
+  if (inner === undefined) {
+    return undefined
+  }
+  const forwarded = reqKeys.filter((key) => !isolated.keys.includes(key))
+  if (inner !== 'isolated' && !hasDataProperties(isolated.target, forwarded)) {
+    return undefined
+  }
+  return 'isolated'
+}
+
 /** Each key is absent or an own data property (no accessor anywhere on the prototype chain). */
 const hasOwnDataProperties = (object: object, keys: readonly string[]): boolean => {
   for (const key of keys) {
@@ -134,6 +171,8 @@ const guard = (reason: string): undefined => {
 }
 
 type Prepared = {
+  /** The collection read access result (`undefined` with `overrideAccess`). */
+  accessResult: unknown
   config: Any
   overrideAccess: boolean
   payload: Any
@@ -155,10 +194,11 @@ const prepare = (op: Op, args: Any): Prepared | undefined => {
   if (typeof collection !== 'object' || collection === null) {
     return guard('args:collection')
   }
-  if (!isPlainObject(req) && !isPayloadWebRequest(req)) {
+  const requestKind = acceptedRequest(req, 0)
+  if (requestKind === undefined) {
     return guard('req:object')
   }
-  if (!hasDataProperties(req, reqKeys)) {
+  if (requestKind !== 'isolated' && !hasDataProperties(req, reqKeys)) {
     return guard('req')
   }
   if (req.transactionID) {
@@ -174,8 +214,21 @@ const prepare = (op: Op, args: Any): Prepared | undefined => {
     return undefined
   }
   const overrideAccess = Boolean(args.overrideAccess)
-  if (!overrideAccess && (plan.hasFieldAccess || !isFusableAccess(plan))) {
-    return guard('access')
+  let accessResult: unknown
+  if (!overrideAccess) {
+    if (plan.hasFieldAccess) {
+      return guard('access:fields')
+    }
+    const evaluated = compiledAccess(
+      plan.access,
+      op === 'findByID' ? args.id : undefined,
+      config(collection),
+      req,
+    )
+    if (evaluated.reason !== undefined) {
+      return guard(evaluated.reason)
+    }
+    accessResult = evaluated.value
   }
   const target = getFusedTarget(payload.db)
   if (typeof target === 'string') {
@@ -184,7 +237,72 @@ const prepare = (op: Op, args: Any): Prepared | undefined => {
   if (plan.id === undefined) {
     plan.id = (getNativeEngine() as unknown as NativeFuse).fuseRegisterPlan(plan.json)
   }
-  return { config: collection.config, overrideAccess, payload, plan, planID: plan.id, req, target }
+  return {
+    accessResult,
+    config: collection.config,
+    overrideAccess,
+    payload,
+    plan,
+    planID: plan.id,
+    req,
+    target,
+  }
+}
+
+const config = (collection: Any): Any => collection.config
+
+/**
+ * `executeAccess({ id, slug, req }, collectionConfig.access.read)` by the function compiler
+ * (FN_COMPILE_CONTRACT.md): only with call-site guards installed, for an active compiled function
+ * whose calls the guard does not need to see now (`lane_should_verify`). The result: `true` (no
+ * constraint) or a where constraint; anything else (falsy: `Forbidden` or empty results, a bail,
+ * no access function: the default `Boolean(req.user)` wrapper's absence) runs the exact lane.
+ */
+const compiledAccess = (
+  access: unknown,
+  id: unknown,
+  collectionConfig: Any,
+  req: Any,
+): { reason: string; value?: undefined } | { reason?: undefined; value: unknown } => {
+  if (typeof access !== 'function') {
+    return { reason: 'access:none' }
+  }
+  if (!compileGuardsInstalled()) {
+    return { reason: 'access:no-guards' }
+  }
+  const compiled = getCompiledFunction(access as never)
+  if (!compiled?.ok) {
+    return { reason: 'access:not-compiled' }
+  }
+  const fnIr = getFnIr()
+  if (!fnIr.fnIrIsActive(compiled.id)) {
+    return { reason: 'access:deoptimized' }
+  }
+  if (fnIr.fnIrLaneShouldVerify(compiled.id)) {
+    return { reason: 'access:verify' }
+  }
+  const accessArgs = [
+    {
+      id,
+      slug: collectionConfig.slug,
+      data: undefined,
+      isReadingStaticFile: false,
+      req,
+      skipCompilation,
+    },
+  ]
+  const result = fnIr.fnIrEvaluate(compiled.id, snapshotArgs(accessArgs, compiled.argKeys))
+  if (typeof result === 'string') {
+    return { reason: `access:bail:${result}` }
+  }
+  const value = fnIr.fnIrResultToJs(result)
+  if (!value) {
+    return { reason: 'access:denied' }
+  }
+  if (typeof value === 'object' && !isInertTree(value, true)) {
+    return { reason: 'access:where' }
+  }
+  return { value }
 }
 
 /** `afterRead`'s `depth` (`parseInt(String(depth))`, `defaultDepth`, capped at `maxDepth`). */
@@ -276,7 +394,7 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   if (!prepared) {
     return undefined
   }
-  const { config, overrideAccess, payload, plan, planID, req, target } = prepared
+  const { accessResult, config, overrideAccess, payload, plan, planID, req, target } = prepared
   const {
     currentDepth: incomingCurrentDepth,
     depth: incomingDepth,
@@ -320,7 +438,14 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   if (!isSort(rawSort)) {
     return guard('sort')
   }
-  if (!isAcceptedWhere({ fields: config.flattenedFields, payload, where })) {
+  // without overrideAccess `validateSortQuery` / `validateQueryPaths` check field permissions
+  // (more access calls): only queries they do not check
+  if (!overrideAccess && rawSort) {
+    return guard('access:sort')
+  }
+  if (
+    !isAcceptedWhere({ fields: config.flattenedFields, idOnly: !overrideAccess, payload, where })
+  ) {
     return guard('where')
   }
   const depth = afterReadDepth(incomingDepth, payload.config)
@@ -336,7 +461,7 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   const fullWhere = appendNonTrashedFilter({
     enableTrash: config.trash,
     trash,
-    where: combineQueries(where, undefined as never),
+    where: combineQueries(where, accessResult as never),
   })
   const sort = sanitizeSortQuery({ fields: config.flattenedFields, sort: rawSort })
   const db = serializeDbArgs({
@@ -355,7 +480,6 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   if (db === undefined) {
     return guard('db:functions')
   }
-  void overrideAccess
   const request = `{"op":"find","plan":${planID},"db":${db},${readRequest({
     currentDepth,
     depth,
@@ -382,7 +506,7 @@ const buildFindByIDRequest = (args: Any): Fused | undefined => {
   if (!prepared) {
     return undefined
   }
-  const { config, payload, plan, planID, req, target } = prepared
+  const { accessResult, config, overrideAccess, payload, plan, planID, req, target } = prepared
   const {
     id,
     currentDepth: incomingCurrentDepth,
@@ -437,7 +561,7 @@ const buildFindByIDRequest = (args: Any): Fused | undefined => {
   const fullWhere = appendNonTrashedFilter({
     enableTrash: config.trash,
     trash,
-    where: combineQueries({ id: { equals: id } }, true),
+    where: combineQueries({ id: { equals: id } }, overrideAccess ? true : (accessResult as never)),
   })
   const db = serializeDbArgs({
     collection: config.slug,
@@ -477,18 +601,20 @@ const buildCountRequest = (args: Any): Fused | undefined => {
   if (!prepared) {
     return undefined
   }
-  const { config, payload, plan, planID, req, target } = prepared
+  const { accessResult, config, overrideAccess, payload, plan, planID, req, target } = prepared
   const { trash = false, where } = args
   if (!isOptionalBoolean(trash) || !isRequestValue(req.locale)) {
     return guard('args:values')
   }
-  if (!isAcceptedWhere({ fields: config.flattenedFields, payload, where })) {
+  if (
+    !isAcceptedWhere({ fields: config.flattenedFields, idOnly: !overrideAccess, payload, where })
+  ) {
     return guard('where')
   }
   const fullWhere = appendNonTrashedFilter({
     enableTrash: config.trash,
     trash,
-    where: combineQueries(where, undefined as never),
+    where: combineQueries(where, accessResult as never),
   })
   const db = serializeDbArgs({
     collection: config.slug,

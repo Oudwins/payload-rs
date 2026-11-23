@@ -35,5 +35,16 @@ export function isolateObjectProperty<T extends object>(object: T, key: (keyof T
       return Reflect.set(target, p, newValue, target)
     },
   }
-  return new Proxy(object, handler)
+  const proxy = new Proxy(object, handler)
+  isolatedObjects.set(proxy, { delegate, keys, target: object })
+  return proxy
 }
+
+/**
+ * The proxies `isolateObjectProperty` created, with what they forward to (a `WeakMap` on
+ * `globalThis`, shared by every copy of this module). Used by the Rust engine's fused lanes to
+ * read a request through Payload's own proxy without running unknown code.
+ */
+const isolatedObjects = ((globalThis as Record<symbol, unknown>)[
+  Symbol.for('payload.isolateObjectProperty')
+] ??= new WeakMap()) as WeakMap<object, { delegate: object; keys: PropertyKey[]; target: object }>
