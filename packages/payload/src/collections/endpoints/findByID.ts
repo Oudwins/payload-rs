@@ -5,6 +5,7 @@ import { headersWithCors } from '../../utilities/headersWithCors.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
 import { parseParams } from '../../utilities/parseParams/index.js'
 import { findByIDOperation } from '../operations/findByID.js'
+import { fusedResponse } from './fusedResponse.js'
 
 export const findByIDHandler: PayloadHandler = async (req) => {
   const { data: dataArg } = req
@@ -15,7 +16,7 @@ export const findByIDHandler: PayloadHandler = async (req) => {
     ...dataArg,
   })
 
-  const result = await findByIDOperation({
+  const operationArgs = {
     id,
     collection,
     data,
@@ -27,13 +28,24 @@ export const findByIDHandler: PayloadHandler = async (req) => {
     req,
     select,
     trash,
-  })
-
-  return Response.json(result, {
-    headers: headersWithCors({
+  }
+  const headers = () =>
+    headersWithCors({
       headers: new Headers(),
       req,
-    }),
-    status: httpStatus.OK,
+    })
+
+  return fusedResponse({
+    exact: async () => {
+      const result = await findByIDOperation(operationArgs)
+
+      return Response.json(result, {
+        headers: headers(),
+        status: httpStatus.OK,
+      })
+    },
+    headers,
+    operation: 'findByID',
+    operationArgs,
   })
 }
