@@ -24,6 +24,10 @@
  *              listed as `reference flaky`.
  * --write-baseline f  merges this run's per-file results into one vitest JSON (a baseline for
  *              --baseline, e.g. a variant's TS run)
+ * --fuse m     PAYLOAD_RS_FUSE=m for the fused read lanes (packages/engine-rs/FUSE_CONTRACT.md):
+ *              `shadow` compares every fused call with the exact lane (a file with a difference
+ *              fails); `off` disables them. Every Rust run records the lanes' counters per file
+ *              (fused hits, bails, shadow differences; columns of the summary).
  *
  * Files of one test/<suite> directory never run concurrently. Every file gets its own SQLite file under /tmp (deleted afterwards) and an engine stats file, so
  * the summary shows that the engine served the data methods (and how many calls ran the upstream
@@ -53,6 +57,7 @@ const options = {
   timeout: 1_200_000,
   variant: 'default',
   writeBaseline: undefined,
+  fuse: undefined,
 }
 const files = []
 for (let i = 0; i < argv.length; i++) {
@@ -77,6 +82,8 @@ for (let i = 0; i < argv.length; i++) {
     options.baselines.push(path.resolve(argv[++i]))
   } else if (arg === '--write-baseline') {
     options.writeBaseline = path.resolve(argv[++i])
+  } else if (arg === '--fuse') {
+    options.fuse = argv[++i]
   } else {
     files.push(path.relative(root, path.resolve(root, arg)))
   }
@@ -139,12 +146,17 @@ const runFile = (file, index) =>
     const jsonFile = path.join(options.out, `${slug}.json`)
     const statsFile = path.join(options.out, `${slug}.stats.json`)
     const logFile = path.join(options.out, `${slug}.log`)
+    const fuseDir = path.join(options.out, `${slug}.fuse`)
     rmSync(jsonFile, { force: true })
     rmSync(statsFile, { force: true })
+    rmSync(fuseDir, { force: true, recursive: true })
+    mkdirSync(fuseDir, { recursive: true })
     const env = {
       ...process.env,
       PAYLOAD_ENGINE: 'rs',
       PAYLOAD_RS_ENGINE_STATS_FILE: statsFile,
+      PAYLOAD_RS_FUSE_STATS_DIR: fuseDir,
+      PAYLOAD_RS_OPS_STATS_DIR: fuseDir,
       SQLITE_URL: `file:${dbFile}`,
       TZ: 'UTC',
       ...variants[options.variant],
@@ -165,6 +177,11 @@ const runFile = (file, index) =>
     }
     if (options.engine === 'default') {
       delete env.PAYLOAD_ENGINE
+    }
+    if (options.fuse) {
+      env.PAYLOAD_RS_FUSE = options.fuse
+    } else {
+      delete env.PAYLOAD_RS_FUSE
     }
     if (!isRs) {
       env.PAYLOAD_ENGINE = 'ts'
@@ -197,7 +214,7 @@ const runFile = (file, index) =>
           rmSync(path.join('/tmp', entry), { force: true, recursive: true })
         }
       }
-      resolve({ code, durationMs: Date.now() - started, file, jsonFile, statsFile })
+      resolve({ code, durationMs: Date.now() - started, file, fuseDir, jsonFile, statsFile })
     })
   })
 
@@ -221,7 +238,32 @@ const readJSON = (file) => {
   }
 }
 
-const compare = ({ code, durationMs, file, jsonFile, statsFile }) => {
+/** The fused lanes' counters of every process of one file, and the Rust read operations served. */
+const readFuseStats = (dir) => {
+  const total = { bails: 0, diffs: 0, hits: 0, opsCalls: 0, reasons: {} }
+  if (!dir || !existsSync(dir)) {
+    return total
+  }
+  for (const entry of readdirSync(dir)) {
+    const stats = readJSON(path.join(dir, entry))
+    if (!stats) {
+      continue
+    }
+    if (/^fuse-\d+\.json$/.test(entry)) {
+      total.hits += Object.values(stats.hits ?? {}).reduce((a, b) => a + b, 0)
+      total.bails += Object.values(stats.bails ?? {}).reduce((a, b) => a + b, 0)
+      total.diffs += stats.diffs ?? 0
+      for (const [reason, n] of Object.entries(stats.bails ?? {})) {
+        total.reasons[reason] = (total.reasons[reason] ?? 0) + n
+      }
+    } else if (/^ops-\d+\.json$/.test(entry)) {
+      total.opsCalls += Object.values(stats.calls ?? {}).reduce((a, b) => a + b, 0)
+    }
+  }
+  return total
+}
+
+const compare = ({ code, durationMs, file, fuseDir, jsonFile, statsFile }) => {
   const result = readJSON(jsonFile)
   const fileResult = result?.testResults?.[0]
   const stats = readJSON(statsFile)
@@ -264,9 +306,11 @@ const compare = ({ code, durationMs, file, jsonFile, statsFile }) => {
   const upstreamCalls = stats?.upstream
     ? Object.values(stats.upstream).reduce((a, b) => a + b, 0)
     : 0
+  const fuse = readFuseStats(fuseDir)
   return {
     baseline: baseCounts,
     calls,
+    fuse,
     isEngineBypassed: isRs && calls === 0 && upstreamCalls > 0,
     referenceFlaky,
     hasBaseline: baselineByFile.has(file),
@@ -308,7 +352,7 @@ const worker = async () => {
     const merged = [...previous.filter((p) => !results.some((r) => r.file === p.file)), ...results]
     writeFileSync(summaryFile, JSON.stringify(merged, null, 2))
     process.stdout.write(
-      `${entry.file}: ${entry.counts.passed}/${entry.baseline.passed} passed, ${entry.counts.failed} failed (baseline ${entry.baseline.failed}), ${entry.differences.length} diffs, ${entry.calls} engine calls, ${entry.upstreamCalls} upstream, ${Math.round(entry.durationMs / 1000)}s${entry.loadError ? ` LOAD ERROR ${String(entry.loadError).slice(0, 200)}` : ''}\n`,
+      `${entry.file}: ${entry.counts.passed}/${entry.baseline.passed} passed, ${entry.counts.failed} failed (baseline ${entry.baseline.failed}), ${entry.differences.length} diffs, ${entry.calls} engine calls, ${entry.upstreamCalls} upstream, fused ${entry.fuse.hits} hits / ${entry.fuse.bails} bails / ${entry.fuse.diffs} lane diffs, ${Math.round(entry.durationMs / 1000)}s${entry.loadError ? ` LOAD ERROR ${String(entry.loadError).slice(0, 200)}` : ''}\n`,
     )
   }
 }
@@ -328,28 +372,35 @@ if (options.writeBaseline) {
     JSON.stringify({ engine: options.engine, testResults, variant: options.variant }),
   )
 }
-let md = `engine ${options.engine}, variant ${options.variant}, baselines ${options.baselines.map((file) => path.relative(root, file)).join(', ')}\n\n| suite | baseline pass/fail/skip | ${options.engine} pass/fail/skip | diffs | engine calls | upstream calls |\n|---|---|---|---|---|---|\n`
+let md = `engine ${options.engine}, variant ${options.variant}, baselines ${options.baselines.map((file) => path.relative(root, file)).join(', ')}\n\n| suite | baseline pass/fail/skip | ${options.engine} pass/fail/skip | diffs | engine calls | upstream calls | fused hits / bails / lane diffs | Rust read ops |\n|---|---|---|---|---|---|---|---|\n`
 for (const r of results) {
-  md += `| ${r.file} | ${r.baseline.passed}/${r.baseline.failed}/${r.baseline.skipped} | ${r.counts.passed}/${r.counts.failed}/${r.counts.skipped} | ${r.differences.length}${r.loadError ? ' (load error)' : ''}${r.hasBaseline ? '' : ' (no baseline)'} | ${r.calls}${r.isEngineBypassed ? ' (engine bypassed)' : r.upstreamCalls > r.calls ? ' (mostly upstream)' : ''} | ${r.upstreamCalls}${r.upstreamCalls ? ` (${Object.keys(r.upstreamReasons ?? {}).join(', ')})` : ''} |\n`
+  md += `| ${r.file} | ${r.baseline.passed}/${r.baseline.failed}/${r.baseline.skipped} | ${r.counts.passed}/${r.counts.failed}/${r.counts.skipped} | ${r.differences.length}${r.loadError ? ' (load error)' : ''}${r.hasBaseline ? '' : ' (no baseline)'} | ${r.calls}${r.isEngineBypassed ? ' (engine bypassed)' : r.upstreamCalls > r.calls ? ' (mostly upstream)' : ''} | ${r.upstreamCalls}${r.upstreamCalls ? ` (${Object.keys(r.upstreamReasons ?? {}).join(', ')})` : ''} | ${r.fuse.hits} / ${r.fuse.bails} / ${r.fuse.diffs} | ${r.fuse.opsCalls} |\n`
 }
 const totals = results.reduce(
   (sum, r) => ({
     calls: sum.calls + r.calls,
     differing:
       sum.differing +
-      (r.differences.length || r.loadError || !r.hasBaseline || r.isEngineBypassed ? 1 : 0),
+      (r.differences.length || r.loadError || !r.hasBaseline || r.isEngineBypassed || r.fuse.diffs
+        ? 1
+        : 0),
+    fuseHits: sum.fuseHits + r.fuse.hits,
+    fuseDiffs: sum.fuseDiffs + r.fuse.diffs,
     tests: sum.tests + r.counts.passed + r.counts.failed + r.counts.skipped,
     upstream: sum.upstream + r.upstreamCalls,
   }),
-  { calls: 0, differing: 0, tests: 0, upstream: 0 },
+  { calls: 0, differing: 0, fuseDiffs: 0, fuseHits: 0, tests: 0, upstream: 0 },
 )
-md += `\n**${results.length - totals.differing}/${results.length} files identical to the baseline**, ${totals.tests} tests, ${totals.calls} engine calls, ${totals.upstream} upstream calls\n`
+md += `\n**${results.length - totals.differing}/${results.length} files identical to the baseline**, ${totals.tests} tests, ${totals.calls} engine calls, ${totals.upstream} upstream calls, ${totals.fuseHits} fused read hits, ${totals.fuseDiffs} lane-shadow differences\n`
 for (const r of results) {
   if (r.referenceFlaky.length) {
     md += `\n### ${r.file}: reference flaky\n`
     for (const f of r.referenceFlaky) {
       md += `- ${f.name}: reference ${f.reference.join(' / ')}, this run ${f.status}\n`
     }
+  }
+  if (r.fuse.diffs) {
+    md += `\n### ${r.file}: ${r.fuse.diffs} lane-shadow differences (see ${path.relative(root, path.join(options.out, `${slugOf(r.file)}.fuse`))})\n`
   }
   if (r.differences.length || r.loadError) {
     md += `\n### ${r.file}\n`
