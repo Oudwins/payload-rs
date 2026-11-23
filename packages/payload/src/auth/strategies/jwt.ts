@@ -5,6 +5,7 @@ import type { AuthStrategyFunction, AuthStrategyResult } from '../index.js'
 
 import { extractJWT } from '../extractJWT.js'
 import { JWT_AUTH_VERSION } from '../jwtAuth.js'
+import { verifyJWTSync } from './verifyJWTSync.js'
 
 type DecodedJWTPayload = Record<string, unknown>
 
@@ -42,6 +43,12 @@ const getJWTAuthenticationReference = (
 async function verifyWithKeyring({ payload, token }: { payload: Payload; token: string }) {
   let lastError: unknown
   for (const key of payload.encryptionKeyring.all) {
+    const verified = verifyJWTSync({ secret: key.legacyKey, token })
+
+    if (verified) {
+      return verified
+    }
+
     try {
       return await jwtVerify<DecodedJWTPayload>(token, new TextEncoder().encode(key.legacyKey))
     } catch (error) {
