@@ -84,6 +84,15 @@ traversals of RUST_CORE_DESIGN.md section 3): PostgreSQL 0.89x -> 0.93x (validat
 10-15% of a write's CPU time in TS; the rest is the database adapter and I/O, which bounds what
 any core change can gain end to end.
 
+Optimization round 1 (2026-11-23: Mongo transform fast path, afterRead plans, write-path merge
+elision and JS traversals; see the read / write path paragraphs above) merged and verified on all
+three databases: MongoDB suite 3330 / 164 / 422 (= baseline), SQLite 134/135 identical (the other
+file: create-payload-app failed -> passed), PostgreSQL = baseline, shadow 0 divergences over 22,508
+calls, packaging OK. Open: the MongoDB parity goldens' bulk-update trace steps fail in about 2 of 3
+runs (interleaving of upstream's concurrent per-document work; to be settled against TS runs).
+Next: RUST_PERF_PLAN.md (fused lanes, Rust drivers, compiled functions) with the owner decisions in
+its section 0.
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).

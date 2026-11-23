@@ -4,6 +4,16 @@
 
 Scope: ideation only, nothing in the repo was changed. Numbers marked "measured here" come from read-only experiments run for this plan (scratch in `/tmp/fable-ideas/`, MongoDB on :27028, PostgreSQL on :5433, E-cores 16-31, shared with other jobs, so absolute values are 10-30% noisier than the perf suite's).
 
+## 0. Owner decisions (2026-11-23), binding for every work package
+
+- **Must not change:** user-facing TypeScript types and the behaviour users observe through Payload's APIs (Local API, REST, GraphQL, hooks / access / validation semantics, results, errors). Existing tests keep passing unmodified.
+- **Storage:** only additive, non-user-facing changes (extra indexes; internal auxiliary collections / tables Payload maintains itself, never inside existing documents or rows). Existing documents and rows keep exactly their shape and meaning. Any such addition is proposed to the owner with its measured extra gain before it is built (A1-A4 of section 4 are not approved yet; neither is the SQLite WAL default).
+- **D1 accepted:** fused lanes may settle after a different number of microtask ticks than upstream. Results, errors, database effects and the order of everything inside one operation (incl. its hooks) stay identical; only the interleaving of other concurrent async code may differ. The tick-exact engine stays the fallback.
+- **D5 accepted, on by default:** user functions (access, hooks, validators) may be compiled to the Rust-interpreted IR under the stated assumptions, with guard-mode verification (first N calls, then sampled). Owner requirement: a per-function opt-out, done "by calling something passed through": an extra argument passed to the function (e.g. `args.noCompile()` or similar; a call to it anywhere in the function's source makes the analyzer skip that function; at runtime it is a no-op). The extra argument is an additive type change.
+- **mongoose (D3 / D4):** every Payload operation (Local API, REST, GraphQL) runs through Rust talking to MongoDB directly (Rust driver). `payload.db.collections` / `versions` / `globals` / `connection` stay real mongoose objects, made **lazy**: mongoose connects and builds models only when one of them is touched, so a normal app runs a single (Rust) pool. Transactions that user code can share stay on mongoose. A Rust-backed mongoose-compatible facade is a possible later step. An env switch forces the Node drivers.
+- **D6 / D9 accepted:** no transaction around single-statement writes; pipelining / merging SQL statements; coalescing identical concurrent reads.
+- Every work package must keep: the full upstream suite on MongoDB / SQLite / PostgreSQL equal to the TS baselines, shadow mode at 0 divergences, and add lane-specific differential checks (fast lane vs exact lane) with hit counters proving the fast lane ran.
+
 ## 1. Bottom line
 
 - **10x sequential latency is not reachable on MongoDB or PostgreSQL** for most operations: the database round trip is 25-50% of upstream's time today. The ceiling there is about 2-4x for Local API reads, 5-8x for REST and GraphQL reads, and 3-4x for writes (6-8x for PostgreSQL writes on a server with cheap commits).
