@@ -124,6 +124,11 @@ impl SqliteEngineJs {
     }
   }
 
+  /// The engine and the attached client id, for the fused read lanes (`fuse.rs`).
+  pub(crate) fn fused_target(&self) -> (Arc<Engine>, Option<u32>) {
+    (Arc::clone(&self.engine), self.client_id)
+  }
+
   /// Tells the engine which payload-sqlite client belongs to this adapter: `call` then rejects
   /// connection ids of another database file.
   #[napi]

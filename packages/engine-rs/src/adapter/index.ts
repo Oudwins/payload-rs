@@ -11,6 +11,7 @@ import type { FunctionRegistry } from '../serialize.js'
 import type { DrizzleQueryErrorClass } from './errors.js'
 import type { LoopbackEngine } from './loopback.js'
 
+import { registerFusedTarget } from '../fuse/targets.js'
 import { getNativeEngine } from '../native.js'
 import { createEngineError } from '../schema.js'
 import { createFunctionRegistry, deserializeFromEngine, serializeForEngine } from '../serialize.js'
@@ -227,6 +228,7 @@ export const withRustEngine = <TAdapterObj extends AdapterObj>(
       upstream,
       wrappers,
     })
+    registerFusedTarget(adapter, fusedSqliteTarget)
 
     adapter.init = async function (this: AnyObject) {
       await initWithEngineSchema({
@@ -910,5 +912,68 @@ const reduceArgs = (args: AnyObject | undefined): unknown => {
   return {
     ...args,
     req: { fallbackLocale: req.fallbackLocale, locale: req.locale, payloadAPI: req.payloadAPI },
+  }
+}
+
+type NativeFuseSqlite = {
+  fuseRunSqlite: (
+    engine: NativeSqliteEngine,
+    connId: number,
+    blocksAsJSON: boolean | undefined,
+    limitedBoundParameters: boolean | undefined,
+    requestJson: string,
+  ) => string
+}
+
+/** A `callContextJson` flag as the engine reads it: left out when JSON drops it, else its truthiness. */
+const contextFlag = (value: unknown): boolean | undefined =>
+  value === undefined || typeof value === 'function' || typeof value === 'symbol'
+    ? undefined
+    : Boolean(value)
+
+/**
+ * The fused read lanes' target lookup (packages/engine-rs/FUSE_CONTRACT.md section 6): how a
+ * fused call made now on `adapter` runs (the native engine on the connection `callEngine` would
+ * use outside a transaction, with the adapter flags read at call time), or why it would not run on
+ * the engine: the checks `callEngine` makes before running the engine, for the read methods the
+ * lanes replace (`find`, `findOne`, `count`), which must also be the engine-backed methods. The
+ * caller checks `req.transactionID` itself.
+ */
+const fusedSqliteTarget = (adapter: AnyObject) => {
+  const state = states.get(adapter) ?? states.get(Object.getPrototypeOf(adapter))
+  const glue = glues.get(adapter) ?? glues.get(Object.getPrototypeOf(adapter))
+  if (!state || !glue) {
+    return 'sqlite:not-initialized'
+  }
+  if ('registerConnection' in state.engine) {
+    return 'sqlite:loopback'
+  }
+  for (const method of ['find', 'findOne', 'count'] as const) {
+    if (adapter[method] !== glue.wrappers[method]) {
+      return `adapter.${method}`
+    }
+  }
+  const reason =
+    findUpstreamReason({ adapter, glue, method: 'find' }) ?? sendLiveSchema({ adapter, state })
+  if (reason) {
+    return reason
+  }
+  const db = adapter.drizzle
+  if (db.session.tx) {
+    return 'sqlite:transaction'
+  }
+  const connId = getSqliteConnId(db.session.client)
+  if (state.attachedClientId !== connId) {
+    state.engine.attachClient(connId)
+    state.attachedClientId = connId
+  }
+  const engine = state.engine as NativeSqliteEngine
+  const blocksAsJSON = contextFlag(adapter.blocksAsJSON)
+  const limitedBoundParameters = contextFlag(adapter.limitedBoundParameters)
+  const native = getNativeEngine() as unknown as NativeFuseSqlite
+  return {
+    backend: 'sqlite',
+    run: (requestJson: string) =>
+      native.fuseRunSqlite(engine, connId, blocksAsJSON, limitedBoundParameters, requestJson),
   }
 }

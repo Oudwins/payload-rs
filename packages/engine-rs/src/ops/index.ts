@@ -23,6 +23,7 @@ import type { Access, AccessResult } from '../../../payload/src/config/types.js'
 
 import { afterRead as tsAfterRead } from '../../../payload/src/fields/hooks/afterRead/index.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
+import { fuseCount, fuseFind, fuseFindByID } from '../fuse/index.js'
 import { getCoreQueryBinding } from '../query/index.js'
 import { getCoreRuntime } from '../runtime/index.js'
 import { createOpsHost } from './host.js'
@@ -142,9 +143,39 @@ const operation =
     return ops[name](args) as Promise<Any>
   }
 
-export const findOperation = operation('find')
-export const findByIDOperation = operation('findByID')
-export const countOperation = operation('count') as (args: Any) => Promise<{ totalDocs: number }>
+/**
+ * A read operation that first tries its fused lane (`../fuse`, FUSE_CONTRACT.md): the lane returns
+ * the result's promise, or `undefined` when the call runs on the exact lane (the Rust operation).
+ */
+const fusedOperation =
+  (name: 'count' | 'find' | 'findByID', fuse: typeof fuseFind) =>
+  (args: Any): Promise<Any> => {
+    let ops: CoreOpsBinding
+    try {
+      ops = getCoreOps()
+    } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- the caught value, unchanged
+      return Promise.reject(error)
+    }
+    const exact = () => {
+      recordCall(name)
+      return ops[name](args) as Promise<Any>
+    }
+    let fused: Promise<Any> | undefined
+    try {
+      fused = fuse(args, exact)
+    } catch {
+      // a defect of the lane's guards must not change the operation: run the exact lane
+      fused = undefined
+    }
+    return fused ?? exact()
+  }
+
+export const findOperation = fusedOperation('find', fuseFind)
+export const findByIDOperation = fusedOperation('findByID', fuseFindByID)
+export const countOperation = fusedOperation('count', fuseCount) as (
+  args: Any,
+) => Promise<{ totalDocs: number }>
 export const countVersionsOperation = operation('countVersions') as (
   args: Any,
 ) => Promise<{ totalDocs: number }>

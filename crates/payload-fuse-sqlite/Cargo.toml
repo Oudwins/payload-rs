@@ -1,0 +1,16 @@
+[package]
+name = "payload-fuse-sqlite"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+payload-engine = { path = "../payload-engine" }
+payload-fuse = { path = "../payload-fuse" }
+payload-sql-engine = { path = "../payload-sql-engine" }
+payload-sql-find = { path = "../payload-sql-find" }
+payload-sql-query = { path = "../payload-sql-query" }
+payload-sql-read = { path = "../payload-sql-read" }
+payload-sqlite = { path = "../payload-sqlite" }
+serde_json.workspace = true

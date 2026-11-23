@@ -85,6 +85,21 @@ const afterReadTraverseFields: typeof upstreamAfterReadTraverseFields = isRustCo
     }
   : upstreamAfterReadTraverseFields
 
+type EditorAfterReadHook = NonNullable<RichTextHooks['afterRead']>[number]
+
+/**
+ * Marks lexical's editor `afterRead` hook for the Rust engine's fused read lanes
+ * (packages/engine-rs/FUSE_CONTRACT.md): a non-enumerable symbol property holding the editor
+ * config, from which the engine reads which node types make the hook do work. Nothing else changes.
+ */
+const markLexicalAfterRead = (
+  editorConfig: SanitizedServerEditorConfig,
+  hook: EditorAfterReadHook,
+): EditorAfterReadHook =>
+  Object.defineProperty(hook, Symbol.for('payload.engine-rs.lexicalAfterRead'), {
+    value: editorConfig,
+  })
+
 export const getLexicalHooks: (args: {
   editorConfig: SanitizedServerEditorConfig
 }) => RichTextHooks = ({ editorConfig }) => {
@@ -223,7 +238,7 @@ export const getLexicalHooks: (args: {
       /**
        * afterRead hooks do not receive the originalNode. Thus, they can run on all nodes, not just nodes with an ID.
        */
-      async (args) => {
+      markLexicalAfterRead(editorConfig, async (args) => {
         const {
           collection,
           context: context,
@@ -341,7 +356,7 @@ export const getLexicalHooks: (args: {
         }
 
         return value
-      },
+      }),
     ],
     beforeChange: [
       async (args) => {

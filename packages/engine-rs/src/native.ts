@@ -66,6 +66,8 @@ export const engineAddonExports = [
   'fnIrSetPolicy',
   'fnIrShouldVerify',
   'fnIrStats',
+  'fuseRegisterPlan',
+  'fuseRunSqlite',
   'hooksBeforeChangeBinding',
   'hooksBeforeValidateBinding',
   'mongoDriverAggregate',

@@ -177,6 +177,11 @@ impl SqliteEngine {
     &self.schema
   }
 
+  /// The decoded config graph (`{ config, collections, blocks }`, see [`SqliteEngine::create`]).
+  pub fn root(&self) -> &JsVal {
+    &self.root
+  }
+
   /// The schema the write path builds statements from: the raw tables and the live drizzle
   /// tables (columns added or replaced by `afterSchemaInit` are written like drizzle writes them).
   pub fn write_schema(&self) -> payload_sql_upsert::sql::Schema<'_> {

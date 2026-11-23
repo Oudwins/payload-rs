@@ -28,6 +28,8 @@ members = [
   "crates/payload-mongo-live-transform",
   "crates/payload-mongo-driver",
   "crates/payload-fn-ir",
+  "crates/payload-fuse",
+  "crates/payload-fuse-sqlite",
 ]
 
 [workspace.package]
