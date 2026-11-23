@@ -1,4 +1,3 @@
-import { fileTypeFromFile } from 'file-type'
 import fs from 'fs/promises'
 import path from 'path'
 
@@ -19,7 +18,7 @@ export const getFileByPath = async (filePath: string): Promise<PayloadRequest['f
   const [data, stat, type] = await Promise.all([
     fs.readFile(filePath),
     fs.stat(filePath),
-    fileTypeFromFile(filePath),
+    import('file-type').then(({ fileTypeFromFile }) => fileTypeFromFile(filePath)),
   ])
 
   return {

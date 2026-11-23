@@ -1,5 +1,3 @@
-import { Table } from 'console-table-printer'
-
 import type { BaseDatabaseAdapter, MigrationStatus } from '../types.js'
 
 import { getMigrations } from './getMigrations.js'
@@ -30,6 +28,7 @@ export async function migrateStatus(this: BaseDatabaseAdapter): Promise<Migratio
     }
   })
 
+  const { Table } = await import('console-table-printer')
   const p = new Table()
 
   statuses.forEach((s) => {

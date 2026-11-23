@@ -1,4 +1,3 @@
-import { fileTypeFromBuffer, fileTypeFromFile } from 'file-type'
 import fs from 'fs/promises'
 
 import type { checkFileRestrictionsParams, FileAllowList } from './types.js'
@@ -155,8 +154,8 @@ export const checkFileRestrictions = async ({
   try {
     detected =
       isTempFile && tempFilePath
-        ? await fileTypeFromFile(tempFilePath)
-        : await fileTypeFromBuffer(file.data)
+        ? await (await import('file-type')).fileTypeFromFile(tempFilePath)
+        : await (await import('file-type')).fileTypeFromBuffer(file.data)
   } catch {
     if (configMimeTypes.length > 0) {
       throw new ValidationError({

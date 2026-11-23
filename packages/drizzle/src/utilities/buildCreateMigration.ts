@@ -4,7 +4,6 @@ import type { CreateMigration } from 'payload'
 import fs from 'fs'
 import path from 'path'
 import { getPredefinedMigration, writeMigrationIndex } from 'payload'
-import prompts from 'prompts'
 
 import type { DrizzleAdapter } from '../types.js'
 
@@ -120,7 +119,9 @@ export const buildCreateMigration = ({
           return { created: false }
         }
 
-        const { confirm: shouldCreateBlankMigration } = await prompts({
+        const { confirm: shouldCreateBlankMigration } = await (
+          await import('prompts')
+        ).default({
           name: 'confirm',
           type: 'confirm',
           initial: false,

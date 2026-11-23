@@ -166,6 +166,7 @@ import { consoleEmailAdapter } from './email/consoleEmailAdapter.js'
 import { fieldAffectsData, type FlattenedBlock } from './fields/config/types.js'
 import { getJobsLocalAPI } from './queues/localAPI.js'
 import { _internal_jobSystemGlobals } from './queues/utilities/getCurrentDate.js'
+import { enableCompileCache } from './utilities/enableCompileCache.js'
 import { formatAdminURL } from './utilities/formatAdminURL.js'
 import { isNextBuild } from './utilities/isNextBuild.js'
 import { getLogger } from './utilities/logger.js'
@@ -490,6 +491,8 @@ export type Job<TWorkflowSlugOrInput extends keyof TypedJobs['workflows'] | obje
     : TWorkflowSlugOrInput
   taskStatus: JobTaskStatus
 } & Omit<JobDocument, 'input' | 'taskStatus'>
+
+enableCompileCache()
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)

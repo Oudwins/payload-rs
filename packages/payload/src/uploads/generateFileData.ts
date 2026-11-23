@@ -1,4 +1,3 @@
-import { fileTypeFromBuffer } from 'file-type'
 import fs from 'fs/promises'
 import { randomUUID } from 'node:crypto'
 import { openAsBlob } from 'node:fs'
@@ -453,7 +452,7 @@ export const generateFileData = async <T>({
       // Detected bytes win for binary formats (Sharp keeps the input's name and type on a
       // converted output), but text-like output such as CSV has no signature to detect, so
       // fall back to the type and extension the transformer declared on the returned File.
-      const typeResult = await fileTypeFromBuffer(mainBuffer)
+      const typeResult = await (await import('file-type')).fileTypeFromBuffer(mainBuffer)
       ext =
         typeResult?.ext ?? (getFileExtension(getSanitizedUploadFilename(outputName)) || undefined)
       mimeType = typeResult?.mime ?? (mainWebFile!.type || file.mimetype)
@@ -683,7 +682,7 @@ export const generateFileData = async <T>({
         }
 
         const sizeBuffer = Buffer.from(await result.file.arrayBuffer())
-        const sizeTypeResult = await fileTypeFromBuffer(sizeBuffer)
+        const sizeTypeResult = await (await import('file-type')).fileTypeFromBuffer(sizeBuffer)
         const sizeExt = sizeTypeResult?.ext || baseExt
         const sizeMimeType = sizeTypeResult?.mime || result.mimeType || fileData.mimeType
 

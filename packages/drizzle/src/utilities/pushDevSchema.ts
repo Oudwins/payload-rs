@@ -1,5 +1,4 @@
 import { dequal } from 'dequal'
-import prompts from 'prompts'
 
 import type { BasePostgresAdapter } from '../postgres/types.js'
 import type { DrizzleAdapter, PostgresDB, RawTable } from '../types.js'
@@ -64,7 +63,9 @@ export const pushDevSchema = async (adapter: DrizzleAdapter) => {
 
     message += `Accept warnings and push schema to database?`
 
-    const { confirm: acceptWarnings } = await prompts(
+    const { confirm: acceptWarnings } = await (
+      await import('prompts')
+    ).default(
       {
         name: 'confirm',
         type: 'confirm',

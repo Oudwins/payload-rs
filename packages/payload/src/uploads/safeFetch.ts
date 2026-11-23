@@ -1,8 +1,8 @@
 import type { LookupFunction } from 'net'
+import type { Agent, fetch as undiciFetch } from 'undici'
 
 import { lookup } from 'dns'
 import ipaddr from 'ipaddr.js'
-import { Agent, fetch as undiciFetch } from 'undici'
 
 /**
  * @internal this is used to mock the IP `lookup` function in integration tests
@@ -63,9 +63,9 @@ const ssrfFilterInterceptor: LookupFunction = (hostname, options, callback) => {
 
 let safeDispatcher: Agent | undefined
 
-const getSafeDispatcher = (): Agent => {
+const getSafeDispatcher = (AgentClass: typeof Agent): Agent => {
   if (!safeDispatcher) {
-    safeDispatcher = new Agent({ connect: { lookup: ssrfFilterInterceptor } })
+    safeDispatcher = new AgentClass({ connect: { lookup: ssrfFilterInterceptor } })
   }
   return safeDispatcher
 }
@@ -95,9 +95,11 @@ export const safeFetch = async (...args: Parameters<typeof undiciFetch>): Promis
         throw buildBlockedFetchError(hostname)
       }
     }
-    return await undiciFetch(url, {
+    // loaded on first use: undici is large and only URL uploads fetch through it
+    const undici = await import('undici')
+    return await undici.fetch(url, {
       ...options,
-      dispatcher: getSafeDispatcher(),
+      dispatcher: getSafeDispatcher(undici.Agent),
       redirect: 'manual', // Prevent automatic redirects
     })
   } catch (error) {

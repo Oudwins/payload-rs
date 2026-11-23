@@ -7,7 +7,6 @@ import {
   killTransaction,
   readMigrationFiles,
 } from 'payload'
-import prompts from 'prompts'
 
 import type { DrizzleAdapter } from './types.js'
 
@@ -28,7 +27,9 @@ export async function migrateFresh(
       return { cancelled: true, migrated: [], rolledBack: [] }
     }
 
-    const { confirm: acceptWarning } = await prompts({
+    const { confirm: acceptWarning } = await (
+      await import('prompts')
+    ).default({
       name: 'confirm',
       type: 'confirm',
       initial: false,

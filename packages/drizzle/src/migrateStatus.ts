@@ -1,6 +1,5 @@
 import type { MigrationStatus } from 'payload'
 
-import { Table } from 'console-table-printer'
 import { getMigrations, readMigrationFiles } from 'payload'
 
 import type { DrizzleAdapter } from './types.js'
@@ -37,6 +36,7 @@ export async function migrateStatus(this: DrizzleAdapter): Promise<MigrationStat
     }
   })
 
+  const { Table } = await import('console-table-printer')
   const p = new Table()
 
   statuses.forEach((s) => {

@@ -1,6 +1,5 @@
 import type { Stats } from 'fs'
 
-import { fileTypeFromFile } from 'file-type'
 import fsPromises from 'fs/promises'
 import path from 'path'
 
@@ -166,7 +165,8 @@ export async function retrieveFileResponse({
     throw err
   }
 
-  const fileTypeResult = (await fileTypeFromFile(filePath)) || getFileTypeFallback(filePath)
+  const fileTypeResult =
+    (await (await import('file-type')).fileTypeFromFile(filePath)) || getFileTypeFallback(filePath)
   let mimeType = fileTypeResult.mime
 
   if (

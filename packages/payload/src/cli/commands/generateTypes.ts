@@ -1,6 +1,5 @@
 import { initI18n } from '@payloadcms/translations'
 import fs from 'fs/promises'
-import { compile } from 'json-schema-to-typescript'
 
 import type { SanitizedConfig } from '../../config/types.js'
 
@@ -41,6 +40,10 @@ export async function generateTypes(
 
   const declare = `declare module 'payload' {\n  export interface GeneratedTypes extends Config {}\n}`
   const declareWithTSIgnoreError = `declare module 'payload' {\n  // @ts-ignore \n  export interface GeneratedTypes extends Config {}\n}`
+
+  // loaded on first use: json-schema-to-typescript (with prettier, lodash, js-yaml) is large and
+  // only type generation needs it
+  const { compile } = await import('json-schema-to-typescript')
 
   let compiled = await compile(jsonSchema, 'Config', {
     bannerComment:
