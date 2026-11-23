@@ -310,7 +310,7 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   ) {
     return guard('args:values')
   }
-  if (select !== undefined && !isSelectTree(select)) {
+  if (select !== undefined && select !== null && !isSelectTree(select)) {
     return guard('select')
   }
   if (joins !== undefined && joins !== false && joins !== null && !isInertTree(joins, false)) {
@@ -420,7 +420,7 @@ const buildFindByIDRequest = (args: Any): Fused | undefined => {
   ) {
     return guard('args:values')
   }
-  if (select !== undefined && !isSelectTree(select)) {
+  if (select !== undefined && select !== null && !isSelectTree(select)) {
     return guard('select')
   }
   if (joins !== undefined && joins !== false && joins !== null && !isInertTree(joins, false)) {
