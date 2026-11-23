@@ -6,6 +6,7 @@
 
 pub mod after_read;
 pub mod backend;
+pub mod json;
 pub mod plan;
 pub mod write;
 
@@ -61,33 +62,54 @@ struct Request {
   auth: bool,
 }
 
-fn decode_request(json: &str) -> FuseResult<Request> {
-  let json: Json = serde_json::from_str(json).map_err(|_| Bail::new("request:json"))?;
-  let op = match json.get("op").and_then(Json::as_str) {
+fn decode_request(text: &str) -> FuseResult<Request> {
+  match json::parse(text) {
+    Some(request) => decode_request_value(&request, None),
+    None => {
+      // the general decoder (shared objects, escaped keys, ...)
+      let json: Json = serde_json::from_str(text).map_err(|_| Bail::new("request:json"))?;
+      let db = decode_graph_typed(json.get("db").unwrap_or(&Json::Null)).map_err(|_| Bail::new("request:db"))?;
+      decode_request_value(&JsVal::from_json(&json), Some(db))
+    }
+  }
+}
+
+/// The request from its decoded value; `db` decoded separately by the general decoder, or (with
+/// `None`) the `{ objects: [], root }` of `request.db` decoded directly.
+fn decode_request_value(request: &JsVal, db: Option<JsVal>) -> FuseResult<Request> {
+  let op = match request.get("op").as_str() {
     Some("find") => Op::Find,
     Some("findByID") => Op::FindByID,
     Some("count") => Op::Count,
     _ => return Err(Bail::new("request:op")),
   };
-  let plan_id = json.get("plan").and_then(Json::as_u64).ok_or_else(|| Bail::new("request:plan"))?;
+  let plan_id = request.get("plan").as_num().filter(|n| *n >= 0.0 && n.fract() == 0.0).ok_or_else(|| Bail::new("request:plan"))?;
   let plan = plan::plan(plan_id as u32).ok_or_else(|| Bail::new("request:plan"))?;
-  let db = decode_graph_typed(json.get("db").unwrap_or(&Json::Null)).map_err(|_| Bail::new("request:db"))?;
-  let fallback = match json.get("fallbackLocale") {
-    Some(Json::String(s)) if !s.is_empty() => Fallback::One(s.clone()),
-    Some(Json::Array(items)) => {
-      Fallback::Many(items.iter().map(|s| s.as_str().map(str::to_string).ok_or_else(|| Bail::new("request:fallback"))).collect::<FuseResult<_>>()?)
+  let db = match db {
+    Some(db) => db,
+    None => {
+      let wrapper = request.get("db");
+      if wrapper.get("objects").as_arr().is_none_or(|objects| !objects.is_empty()) {
+        return Err(Bail::new("request:db"));
+      }
+      wrapper.get("root").clone()
     }
-    None | Some(Json::Null | Json::Bool(false)) => Fallback::None,
-    Some(Json::String(_)) => Fallback::None,
-    Some(_) => return Err(Bail::new("request:fallback")),
   };
-  let num = |key: &str, default: f64| json.get(key).and_then(Json::as_f64).unwrap_or(default);
-  let flag = |key: &str| json.get(key).and_then(Json::as_bool).unwrap_or(false);
-  let select = match json.get("select") {
-    None | Some(Json::Null) => None,
-    Some(value) => Some(JsVal::from_json(value)),
+  let fallback = match request.get("fallbackLocale") {
+    JsVal::Str(s) if !s.is_empty() => Fallback::One(s.to_string()),
+    JsVal::Arr(items) => Fallback::Many(
+      items.iter().map(|s| s.as_str().map(str::to_string).ok_or_else(|| Bail::new("request:fallback"))).collect::<FuseResult<_>>()?,
+    ),
+    JsVal::Undefined | JsVal::Null | JsVal::Bool(false) | JsVal::Str(_) => Fallback::None,
+    _ => return Err(Bail::new("request:fallback")),
   };
-  let select_mode = match json.get("selectMode").and_then(Json::as_str) {
+  let num = |key: &str, default: f64| request.get(key).as_num().unwrap_or(default);
+  let flag = |key: &str| matches!(request.get(key), JsVal::Bool(true));
+  let select = match request.get("select") {
+    JsVal::Undefined | JsVal::Null => None,
+    value => Some(value.clone()),
+  };
+  let select_mode = match request.get("selectMode").as_str() {
     Some("include") => Some(SelectMode::Include),
     Some("exclude") => Some(SelectMode::Exclude),
     _ => None,
@@ -96,10 +118,10 @@ fn decode_request(json: &str) -> FuseResult<Request> {
     op,
     plan,
     db,
-    locale: json.get("locale").and_then(Json::as_str).map(str::to_string),
+    locale: request.get("locale").as_str().map(str::to_string),
     fallback,
     localization: flag("localization"),
-    flatten_locales: json.get("flattenLocales").and_then(Json::as_bool).unwrap_or(true),
+    flatten_locales: !matches!(request.get("flattenLocales"), JsVal::Bool(false)),
     show_hidden: flag("showHiddenFields"),
     depth: num("depth", 0.0),
     current_depth: num("currentDepth", 1.0),

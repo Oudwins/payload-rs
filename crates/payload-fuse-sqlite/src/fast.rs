@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use payload_engine::error::{EngineError, Result};
 use payload_engine::host::NoHost;
@@ -91,7 +91,7 @@ type Decoded<T> = std::result::Result<T, Failure>;
 /// (`one: true`: the document; no document is `Unsupported`, the exact lane decides), with
 /// `afterRead`, as result JSON.
 pub fn find(
-  engine: &SqliteEngine,
+  engine: &Arc<SqliteEngine>,
   options: &EngineOptions,
   conn: &Conn,
   args: &JsVal,
@@ -110,59 +110,169 @@ pub fn find(
   let Some(table_name) = engine.schema().table_name_map.get(&to_snake_case(collection_slug)).cloned() else {
     return Ok(unsupported("table"));
   };
-  let config = root.get("config");
   let collections = root.get("collections");
   let Some(tplan) = crate::tplan::plan(fields, &table_name, &engine.schema().table_name_map, collections) else {
     return Ok(unsupported("fields"));
   };
-  let blocks = root.get("blocks");
-  let qa = QueryAdapter::new(engine.schema(), config, collections, blocks, options.query.clone()).with_drizzle(engine.drizzle_schema());
-  let qb = SqlQueryBuilder::new(&qa);
-  let ctx = FindContext {
-    schema: engine.drizzle_schema(),
-    table_name_map: &engine.schema().table_name_map,
-    config,
-    collections,
-    blocks,
-    block_table_name_index: &engine.schema().block_table_name_index,
-    options: &options.query,
-    query: &qb,
-  };
-  let spec = Spec {
-    collection_slug: if one { args.get("collection").as_str() } else { Some(&**collection_slug) },
-    drafts_enabled: args.get("draftsEnabled").truthy(),
-    fields,
-    joins: args.get("joins"),
-    limit: if one { Some(1.0) } else { args.get("limit").as_num() },
-    locale: args.get("locale").as_str(),
-    page: if one { Some(1.0) } else { args.get("page").as_num() },
-    pagination: if one {
-      Some(false)
-    } else {
-      match args.get("pagination") {
-        JsVal::Bool(b) => Some(*b),
-        _ => None,
-      }
-    },
-    select: args.get("select"),
-    sort: if one {
-      JsVal::Undefined
-    } else if args.get("sort").is_nullish() {
-      collection.get("defaultSort").clone()
-    } else {
-      args.get("sort").clone()
-    },
-    table_name: &table_name,
-    where_: args.get("where"),
-  };
   let mut root_level = Level::default();
   level(&direct.read.plan.fields, &mut root_level);
   let reader = Reader { tplan: &tplan, root_level: &root_level, direct };
-  payload_sql_query::sql::with_driver_host(&NoHost, || match find_many(&ctx, conn, &spec, &reader, one) {
-    Ok(json) => Ok(Fast::Done(json)),
-    Err(Failure::Unsupported(reason)) => Ok(unsupported(reason)),
-    Err(Failure::Error(error)) => Err(error),
+  payload_sql_query::sql::with_driver_host(&NoHost, || {
+    let statements = match statements(engine, options, collection, &table_name, args, one) {
+      Ok(statements) => statements,
+      Err(Failure::Unsupported(reason)) => return Ok(unsupported(reason)),
+      Err(Failure::Error(error)) => return Err(error),
+    };
+    let spec = Spec::of(collection, &table_name, args, one);
+    match run(conn, &spec, &statements, &reader, one) {
+      Ok(json) => Ok(Fast::Done(json)),
+      Err(Failure::Unsupported(reason)) => Ok(unsupported(reason)),
+      Err(Failure::Error(error)) => Err(error),
+    }
   })
+}
+
+/// The statements of one call: `count` (when paginating), then the relational query.
+struct Statements {
+  count: Option<Sql>,
+  relational: payload_sql_find::relational::BuiltRelationalQuery,
+}
+
+/// A template: the statements built from sentinel values and where the values go.
+struct Template {
+  /// Keeps the engine (and so the address in the key) alive while the template exists.
+  _engine: Arc<SqliteEngine>,
+  count: Option<(Sql, crate::templates::Slots)>,
+  relational: payload_sql_find::relational::BuiltRelationalQuery,
+  relational_slots: crate::templates::Slots,
+}
+
+static TEMPLATES: OnceLock<crate::templates::Cache<Template>> = OnceLock::new();
+
+/// `PAYLOAD_RS_FUSE_TEMPLATES=off` (read once): build every statement from the call's values.
+static TEMPLATES_DISABLED: std::sync::LazyLock<bool> =
+  std::sync::LazyLock::new(|| std::env::var("PAYLOAD_RS_FUSE_TEMPLATES").is_ok_and(|v| v == "off"));
+
+fn statements(
+  engine: &Arc<SqliteEngine>,
+  options: &EngineOptions,
+  collection: &JsVal,
+  table_name: &str,
+  args: &JsVal,
+  one: bool,
+) -> Decoded<Statements> {
+  let build = |args: &JsVal| -> Decoded<Statements> {
+    let root = engine.root();
+    let config = root.get("config");
+    let collections = root.get("collections");
+    let blocks = root.get("blocks");
+    let qa = QueryAdapter::new(engine.schema(), config, collections, blocks, options.query.clone()).with_drizzle(engine.drizzle_schema());
+    let qb = SqlQueryBuilder::new(&qa);
+    let ctx = FindContext {
+      schema: engine.drizzle_schema(),
+      table_name_map: &engine.schema().table_name_map,
+      config,
+      collections,
+      blocks,
+      block_table_name_index: &engine.schema().block_table_name_index,
+      options: &options.query,
+      query: &qb,
+    };
+    build_statements(&ctx, &Spec::of(collection, table_name, args, one))
+  };
+  if *TEMPLATES_DISABLED {
+    return build(args);
+  }
+  let prefix = format!(
+    "{:p}|{}|{}|{}",
+    Arc::as_ptr(engine),
+    one,
+    options.query.limited_bound_parameters,
+    options.query.blocks_as_json
+  );
+  let Some(shaped) = crate::templates::shape(args, &prefix) else { return build(args) };
+  let cache = crate::templates::global(&TEMPLATES);
+  let template = match cache.get(&shaped.key) {
+    Some(Some(template)) => template,
+    Some(None) => return build(args),
+    None => {
+      let sentinels: Vec<JsVal> = {
+        let mut out = Vec::with_capacity(shaped.values.len());
+        for (slot, value) in shaped.values.iter().enumerate() {
+          out.push(crate::templates::sentinel(crate::templates::class_of(value).ok_or(Unsupported("template"))?, slot));
+        }
+        out
+      };
+      let built = build(&shaped.sentinel_args)?;
+      let count = match &built.count {
+        Some(sql) => match crate::templates::locate(sql, &sentinels) {
+          Some(slots) => Some(Some((sql.clone(), slots))),
+          None => None,
+        },
+        None => Some(None),
+      };
+      let relational_slots = crate::templates::locate(&built.relational.sql, &sentinels);
+      // every slot must be bound by the relational query (the count is optional)
+      let complete = relational_slots.as_ref().is_some_and(|slots| {
+        let mut bound = vec![false; sentinels.len()];
+        for &(_, slot) in slots {
+          bound[slot] = true;
+        }
+        bound.iter().all(|b| *b)
+      });
+      match (count, relational_slots) {
+        (Some(count), Some(relational_slots)) if complete => {
+          let template = Arc::new(Template { _engine: Arc::clone(engine), count, relational: built.relational, relational_slots });
+          cache.insert(shaped.key, Some(Arc::clone(&template)));
+          template
+        }
+        _ => {
+          cache.insert(shaped.key, None);
+          return build(args);
+        }
+      }
+    }
+  };
+  Ok(Statements {
+    count: template.count.as_ref().map(|(sql, slots)| crate::templates::bind(sql, slots, &shaped.values)),
+    relational: payload_sql_find::relational::BuiltRelationalQuery {
+      sql: crate::templates::bind(&template.relational.sql, &template.relational_slots, &shaped.values),
+      selection: template.relational.selection.clone(),
+    },
+  })
+}
+
+impl<'a> Spec<'a> {
+  /// The `FindSpec` of the engine's `find` / `findOne` for `args`.
+  fn of(collection: &'a JsVal, table_name: &'a str, args: &'a JsVal, one: bool) -> Self {
+    Spec {
+      collection_slug: if one { args.get("collection").as_str() } else { collection.get("slug").as_str() },
+      drafts_enabled: args.get("draftsEnabled").truthy(),
+      fields: collection.get("flattenedFields"),
+      joins: args.get("joins"),
+      limit: if one { Some(1.0) } else { args.get("limit").as_num() },
+      locale: args.get("locale").as_str(),
+      page: if one { Some(1.0) } else { args.get("page").as_num() },
+      pagination: if one {
+        Some(false)
+      } else {
+        match args.get("pagination") {
+          JsVal::Bool(b) => Some(*b),
+          _ => None,
+        }
+      },
+      select: args.get("select"),
+      sort: if one {
+        JsVal::Undefined
+      } else if args.get("sort").is_nullish() {
+        collection.get("defaultSort").clone()
+      } else {
+        args.get("sort").clone()
+      },
+      table_name,
+      where_: args.get("where"),
+    }
+  }
 }
 
 struct Spec<'a> {
@@ -180,9 +290,8 @@ struct Spec<'a> {
   where_: &'a JsVal,
 }
 
-/// `findMany()` of payload-sql-find (`find_many_js`) for queries without joins, then the
-/// operation's per-document work, as JSON.
-fn find_many(ctx: &FindContext<'_>, conn: &Conn, spec: &Spec<'_>, reader: &Reader<'_>, one: bool) -> Decoded<String> {
+/// The statements of `findMany()` (payload-sql-find `find_many_js`) for queries without joins.
+fn build_statements(ctx: &FindContext<'_>, spec: &Spec<'_>) -> Decoded<Statements> {
   let page = spec.page.unwrap_or(1.0);
   let mut pagination = spec.pagination;
   let mut limit = spec.limit;
@@ -234,6 +343,29 @@ fn find_many(ctx: &FindContext<'_>, conn: &Conn, spec: &Spec<'_>, reader: &Reade
     find_many_args.where_ = Some(w.clone());
   }
   let relational = build_relational_query(ctx.schema, spec.table_name, &find_many_args, Mode::Many)?;
+  // `ordered_ids_len.is_none_or(...)`: no distinct ids on this path
+  let count = (pagination != Some(false)).then(|| {
+    let mut q = Sql::raw("select count(*) from ");
+    q.push(&main_from);
+    if let Some(w) = &built.where_ {
+      q.push_str(" where ").push(w);
+    }
+    q
+  });
+  Ok(Statements { count, relational })
+}
+
+/// Runs the statements and writes the result JSON (the rest of `findMany()`, then the operation's
+/// per-document work).
+fn run(conn: &Conn, spec: &Spec<'_>, statements: &Statements, reader: &Reader<'_>, one: bool) -> Decoded<String> {
+  let page = spec.page.unwrap_or(1.0);
+  let mut pagination = spec.pagination;
+  let mut limit = spec.limit;
+  if limit == Some(0.0) {
+    pagination = Some(false);
+    limit = None;
+  }
+  let relational = &statements.relational;
   let shape = Shape::top(&relational.selection).ok_or(Unsupported("relations"))?;
 
   let mut total_docs = f64::NAN;
@@ -242,14 +374,8 @@ fn find_many(ctx: &FindContext<'_>, conn: &Conn, spec: &Spec<'_>, reader: &Reade
   let mut has_next_page = false;
   let mut paging_counter = f64::NAN;
   let mut counted = false;
-  // `ordered_ids_len.is_none_or(...)`: no distinct ids on this path
-  if pagination != Some(false) {
-    let mut q = Sql::raw("select count(*) from ");
-    q.push(&main_from);
-    if let Some(w) = &built.where_ {
-      q.push_str(" where ").push(w);
-    }
-    let rows = crate::exec::query(conn, &q)?;
+  if let Some(q) = &statements.count {
+    let rows = crate::exec::query(conn, q)?;
     // `Number(countResult?.[0]?.count ?? 0)`
     total_docs = match rows.first().and_then(|r| r.first()) {
       None | Some(Cell::Null) => 0.0,

@@ -8,6 +8,7 @@
 pub mod exec;
 pub mod fast;
 pub mod scan;
+pub mod templates;
 pub mod tplan;
 
 use std::sync::Arc;
@@ -49,7 +50,7 @@ impl FusedBackend for SqliteBackend {
 }
 
 struct SqliteRead<'a, 's> {
-  engine: &'a SqliteEngine,
+  engine: &'a Arc<SqliteEngine>,
   options: &'a EngineOptions,
   session: &'a mut Session<'s>,
 }
