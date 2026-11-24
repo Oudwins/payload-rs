@@ -958,6 +958,15 @@ const castValue = (schematype: Any, value: Any): Any => {
       if (value instanceof Date && !Number.isNaN(value.valueOf())) {
         return value
       }
+      if (typeof value === 'string' || typeof value === 'number') {
+        // the schema type's (pure) `cast` (`castDate`, or a custom one); a failure is mongoose's
+        // CastError, thrown on the exact lane
+        try {
+          return schematype.cast(value)
+        } catch {
+          unsupported('cast:Date')
+        }
+      }
       break
     case 'Mixed':
       return value

@@ -93,8 +93,8 @@ A collection is eligible for reads when:
   `isolateObjectProperty` proxy of either (the proxies are recorded in a `globalThis` `WeakMap`,
   `Symbol.for('payload.isolateObjectProperty')`);
 - population (`depth && currentDepth <= depth` with relationship fields in the plan) only with
-  `overrideAccess: true`, no localization, `req.i18n` set, no `transactionID` and a fresh payload
-  dataloader (section 9); the text lane (`fusedOperationText`) does not populate.
+  `overrideAccess: true`, `req.i18n` set, no `transactionID`, a fresh payload dataloader and, with
+  localization, one locale and a fallback the nested finds' `createPayloadRequest` keeps (section 9); the text lane (`fusedOperationText`) does not populate.
 
 ## 4. Request (JS → native)
 

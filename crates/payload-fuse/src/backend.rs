@@ -55,8 +55,8 @@ pub struct DirectRead<'a> {
 }
 
 /// What the nested `payload.find` calls of relationship population (`batchAndLoadDocs`) need
-/// beyond the operation's own inputs (FUSE_CONTRACT.md section 7). Only with `overrideAccess`,
-/// without localization and a fresh request dataloader (the TS side checks).
+/// beyond the operation's own inputs (FUSE_CONTRACT.md section 9). Only with `overrideAccess`,
+/// locales the nested finds keep and a fresh request dataloader (the TS side checks).
 #[derive(Debug)]
 pub struct Population {
   /// the operation's `draft` (nested finds pass it on)

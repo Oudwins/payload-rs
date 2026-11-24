@@ -14,6 +14,7 @@ import { sanitizeSortQuery } from '../../../payload/src/collections/operations/u
 import { createPayloadRequest } from '../../../payload/src/utilities/createPayloadRequest.js'
 import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../../payload/src/utilities/getVersionsConfig.js'
+import { sanitizeFallbackLocale } from '../../../payload/src/utilities/sanitizeFallbackLocale.js'
 import { getNativeEngine } from '../native.js'
 import { isInertTree, isPlainObject } from './inert.js'
 import { getCollectionPlan } from './plan.js'
@@ -66,9 +67,9 @@ const isSelect = (value: unknown, depth = 16): boolean => {
 /**
  * The `"pop"` part of a request whose operation would populate (`depth && currentDepth <=
  * depth`), or the reason it cannot be fused. Nested finds run with the operation's `req`, so
- * only calls whose request state they can reproduce qualify: `overrideAccess: true`, no
- * localization, `req.i18n` set (`createPayloadRequest` runs synchronously), no transaction, a
- * fresh payload dataloader.
+ * only calls whose request state they can reproduce qualify: `overrideAccess: true`,
+ * `req.i18n` set (`createPayloadRequest` runs synchronously), no transaction, a
+ * fresh payload dataloader; with localization one locale and a fallback the nested finds keep.
  */
 export const populationRequest = ({
   args,
@@ -92,7 +93,8 @@ export const populationRequest = ({
   if (args.overrideAccess !== true) {
     return 'populate:access'
   }
-  if (payload.config.localization) {
+  const localization = payload.config.localization
+  if (localization && !keepsLocales(req, localization)) {
     return 'populate:localization'
   }
   if (!req.i18n || req.transactionID != null) {
@@ -142,6 +144,20 @@ export const populationRequest = ({
     context: { args, draft, payload, req, selects, topCurrentDepth: currentDepth },
     json,
   }
+}
+
+/**
+ * Whether the nested finds' `createPayloadRequest({ fallbackLocale, locale })` (the key's values:
+ * `req`'s, through JSON) leaves `req.locale` / `req.fallbackLocale` as they are: one locale (not
+ * `all`), and a fallback that sanitizes to itself.
+ */
+const keepsLocales = (req: Any, localization: Any) => {
+  if (typeof req.locale !== 'string' || req.locale === 'all' || req.locale === '*') {
+    return false
+  }
+  const [fallbackLocale] = JSON.parse(JSON.stringify([req.fallbackLocale]))
+  const sanitized = sanitizeFallbackLocale({ fallbackLocale, locale: req.locale, localization })
+  return JSON.stringify([sanitized]) === JSON.stringify([req.fallbackLocale])
 }
 
 /** A related collection nested finds may read (`undefined`: a load of it bails natively). */
