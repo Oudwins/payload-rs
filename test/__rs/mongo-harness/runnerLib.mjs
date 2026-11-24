@@ -34,11 +34,20 @@ export const testsOf = (fileResult) => {
  * reach no live method).
  */
 export const readEngineStats = (dir) => {
-  const out = { calls: 0, driver: 0, files: 0, live: 0, nativeCalls: 0 }
+  const out = { calls: 0, driver: 0, files: 0, fused: 0, fusedDiffs: 0, live: 0, nativeCalls: 0 }
   if (!dir || !fs.existsSync(dir)) {
     return out
   }
   const sum = (record) => Object.values(record ?? {}).reduce((a, b) => a + b, 0)
+  // the fused read lanes' counters (packages/engine-rs/src/fuse/stats.ts): a fused hit is a read
+  // operation served by Rust end to end (it makes no adapter call)
+  for (const name of fs.readdirSync(dir).filter((n) => /^fuse-\d+\.json$/.test(n))) {
+    const stats = readJSON(path.join(dir, name))
+    if (!stats) continue
+    out.fused += sum(stats.hits)
+    out.fusedDiffs += stats.diffs ?? 0
+    out.nativeCalls += sum(stats.hits)
+  }
   for (const name of fs.readdirSync(dir).filter((n) => /^mongo-engine-\d+\.json$/.test(n))) {
     const stats = readJSON(path.join(dir, name))
     if (!stats) continue

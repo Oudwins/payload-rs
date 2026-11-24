@@ -24,6 +24,9 @@
  *   --config <file>    vitest config (default test/__rs/mongo-harness/vitest.config.ts); a
  *                      replacement must keep this config's databaseAdapter.js alias semantics
  *   --addon <path>     PAYLOAD_ENGINE_ADDON
+ *   --fuse <mode>      PAYLOAD_RS_FUSE=<mode> for the fused read lanes (packages/engine-rs/
+ *                      FUSE_CONTRACT.md): `shadow` compares every fused call with the exact lane; a
+ *                      file with a lane difference differs. Fused hits count as Rust-served calls.
  *   --shadow           PAYLOAD_RS_MONGO_SHADOW=true: differential adapter (reference TS adapter vs
  *                      candidate on a second database), JSONL reports under <out>/reports/<file>/
  *   --candidate <c>    with --shadow: PAYLOAD_RS_MONGO_CANDIDATE (ts | rs | module path), default ts
@@ -133,6 +136,7 @@ const options = {
   core: undefined,
   database: 'mongodb',
   engine: 'ts',
+  fuse: undefined,
   includeRs: false,
   jobs: 1,
   out: undefined,
@@ -155,6 +159,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (arg === '--database') options.database = next()
   else if (arg === '--config') options.config = path.relative(root, path.resolve(next()))
   else if (arg === '--addon') options.addon = path.resolve(next())
+  else if (arg === '--fuse') options.fuse = next()
   else if (arg === '--shadow') options.shadow = true
   else if (arg === '--candidate') options.candidate = next()
   else if (arg === '--strict') options.strict = true
@@ -309,11 +314,16 @@ const runFileNow = (file, { attempt }) =>
       'PAYLOAD_RS_ENGINE_STATS_FILE',
       'PAYLOAD_RS_MONGO_ENGINE_STATS_DIR',
       'PAYLOAD_RS_MONGO_ENGINE_STATS_FILE',
+      'PAYLOAD_RS_FUSE',
+      'PAYLOAD_RS_FUSE_STATS_DIR',
     ]) {
       delete env[key]
     }
-    // every process (incl. child processes) writes mongo-engine-<pid>.json there
+    // every process (incl. child processes) writes mongo-engine-<pid>.json (and the fused lanes'
+    // fuse-<pid>.json) there
     env.PAYLOAD_RS_MONGO_ENGINE_STATS_DIR = statsDir
+    env.PAYLOAD_RS_FUSE_STATS_DIR = statsDir
+    if (options.fuse) env.PAYLOAD_RS_FUSE = options.fuse
     if (options.engine === 'rs') {
       env.PAYLOAD_ENGINE = 'rs'
       if (options.core) env.PAYLOAD_CORE_ENGINE = options.core
@@ -613,7 +623,7 @@ await runQueue(
     writeSummary()
     done++
     process.stdout.write(
-      `[${done}/${todo.length}] ${entry.file}: ${entry.counts.passed}/${entry.counts.failed}/${entry.counts.skipped}${entry.differences.length ? `, ${entry.differences.length} diffs vs baseline` : ''}${isNativeExpected ? `, ${entry.engineStats.nativeCalls} native calls${entry.nativeProof ? ` (NO PROOF: ${entry.nativeProof})` : ''}` : ''}${entry.shadow ? `, ${entry.shadow.divergences} divergences, ${entry.shadow.calls} calls` : ''}${entry.loadError ? `, LOAD ERROR ${entry.loadError.split('\n')[0].slice(0, 160)}` : ''} ${Math.round(entry.durationMs / 1000)}s\n`,
+      `[${done}/${todo.length}] ${entry.file}: ${entry.counts.passed}/${entry.counts.failed}/${entry.counts.skipped}${entry.differences.length ? `, ${entry.differences.length} diffs vs baseline` : ''}${isNativeExpected ? `, ${entry.engineStats.nativeCalls} native calls${entry.nativeProof ? ` (NO PROOF: ${entry.nativeProof})` : ''}` : ''}${entry.shadow ? `, ${entry.shadow.divergences} divergences, ${entry.shadow.calls} calls` : ''}${entry.engineStats.fused ? `, ${entry.engineStats.fused} fused` : ''}${entry.engineStats.fusedDiffs ? `, ${entry.engineStats.fusedDiffs} LANE DIFFS` : ''}${entry.loadError ? `, LOAD ERROR ${entry.loadError.split('\n')[0].slice(0, 160)}` : ''} ${Math.round(entry.durationMs / 1000)}s\n`,
     )
   },
 )
@@ -671,6 +681,7 @@ if (options.writeBaseline) {
 /** A file differs unless its run (or, after a first-run difference, its solo rerun) is clean. */
 const isFirstRunDiffering = (r) =>
   Boolean(
+    r.engineStats?.fusedDiffs ||
     r.differences.length ||
     r.loadError ||
     r.nativeProof ||
@@ -678,7 +689,8 @@ const isFirstRunDiffering = (r) =>
     (r.shadow && r.shadow.divergences),
   )
 const isDiffering = (r) =>
-  isFirstRunDiffering(r) && !(r.rerun?.isClean && !(r.shadow && r.shadow.divergences))
+  isFirstRunDiffering(r) &&
+  !(r.rerun?.isClean && !(r.shadow && r.shadow.divergences) && !r.engineStats?.fusedDiffs)
 
 const totals = list.reduce(
   (sum, r) => ({
@@ -686,10 +698,21 @@ const totals = list.reduce(
     divergences: sum.divergences + (r.shadow?.divergences ?? 0),
     failed: sum.failed + r.counts.failed,
     passed: sum.passed + r.counts.passed,
+    fused: sum.fused + (r.engineStats?.fused ?? 0),
+    fusedDiffs: sum.fusedDiffs + (r.engineStats?.fusedDiffs ?? 0),
     shadowCalls: sum.shadowCalls + (r.shadow?.calls ?? 0),
     skipped: sum.skipped + r.counts.skipped,
   }),
-  { differing: 0, divergences: 0, failed: 0, passed: 0, shadowCalls: 0, skipped: 0 },
+  {
+    differing: 0,
+    divergences: 0,
+    failed: 0,
+    fused: 0,
+    fusedDiffs: 0,
+    passed: 0,
+    shadowCalls: 0,
+    skipped: 0,
+  },
 )
 let md = `database ${options.database}, engine ${options.engine}${options.shadow ? `, shadow candidate ${options.candidate} (${options.shadowMode} mode)` : ''}${options.baselines.length ? `, baselines ${options.baselines.map((f) => path.relative(root, f)).join(', ')}` : ''}\n\n`
 md += `| file | pass/fail/skip | ${options.baselines.length ? 'diffs vs baseline | ' : ''}${isNativeExpected ? 'native engine calls | ' : ''}${options.shadow ? 'shadow calls | db checks | raw mirrored | overlapping candidates | divergences | ' : ''}rerun |\n|---|---|${options.baselines.length ? '---|' : ''}${isNativeExpected ? '---|' : ''}${options.shadow ? '---|---|---|---|---|' : ''}---|\n`
@@ -700,7 +723,7 @@ const unreported = options.shadow ? list.filter((r) => !r.shadow).map((r) => r.f
 if (unreported.length) {
   md += `\nNo shadow report (the file created no shadowed adapter): ${unreported.join(', ')}\n`
 }
-md += `\n**${list.length - totals.differing}/${list.length} files clean**, tests ${totals.passed} passed / ${totals.failed} failed / ${totals.skipped} skipped${options.shadow ? `, ${totals.shadowCalls} shadowed calls, ${totals.divergences} divergences` : ''}${deferred.length ? `; deferred (child processes, /tmp/rs-phase-f-done missing): ${deferred.join(', ')}` : ''}\n`
+md += `\n**${list.length - totals.differing}/${list.length} files clean**, tests ${totals.passed} passed / ${totals.failed} failed / ${totals.skipped} skipped${options.shadow ? `, ${totals.shadowCalls} shadowed calls, ${totals.divergences} divergences` : ''}, ${totals.fused} fused read hits, ${totals.fusedDiffs} lane-shadow differences${deferred.length ? `; deferred (child processes, /tmp/rs-phase-f-done missing): ${deferred.join(', ')}` : ''}\n`
 for (const r of list) {
   if (isFirstRunDiffering(r)) {
     md += `\n### ${r.file}${isDiffering(r) ? '' : ' (solo rerun clean)'}\n`

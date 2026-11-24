@@ -1823,6 +1823,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "payload-fuse-mongo"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "payload-engine",
+ "payload-fuse",
+ "payload-mongo-driver",
+ "tokio",
+]
+
+[[package]]
 name = "payload-fuse-sqlite"
 version = "0.1.0"
 dependencies = [
@@ -1928,6 +1939,7 @@ dependencies = [
  "payload-engine",
  "payload-fn-ir",
  "payload-fuse",
+ "payload-fuse-mongo",
  "payload-fuse-sqlite",
  "payload-mongo-driver",
  "payload-mongo-live",

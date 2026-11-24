@@ -104,7 +104,7 @@ const fallbackTo = (method: string, reason: string) => {
 }
 
 /** A call that must run on the mongoose lane. */
-class Fallback extends Error {
+export class Fallback extends Error {
   constructor(readonly reason: string) {
     super(reason)
   }
@@ -139,7 +139,7 @@ const isEmptyKareem = (kareem: Any, names: readonly string[]) =>
  * own property shadows them: `vi.spyOn(Model, 'findOne')` defines one), mongoose-paginate-v2's
  * `paginate`, no query / aggregate middleware, no patched collection methods.
  */
-const isPristineModel = (lane: DriverLane, Model: Any): boolean => {
+export const isPristineModel = (lane: DriverLane, Model: Any): boolean => {
   if (!Model || typeof Model !== 'function') {
     return false
   }
@@ -170,7 +170,7 @@ const isPristineModel = (lane: DriverLane, Model: Any): boolean => {
 }
 
 /** mongoose settings the lane does not reproduce (checked per call: they can change at runtime). */
-const mongooseBlocksLane = (lane: DriverLane, Model: Any): string | undefined => {
+export const mongooseBlocksLane = (lane: DriverLane, Model: Any): string | undefined => {
   const base = Model.base ?? lane.mongoose
   if (base.get?.('debug')) {
     return 'mongoose debug'
@@ -247,7 +247,7 @@ const countSpec = ({ filter, options }: { filter: Any; options: Any }) => {
 }
 
 /** The plan id of `fields` for `key` (an immutable config object), built once. */
-const planFor = (
+export const planFor = (
   lane: DriverLane,
   kind: string,
   key: object,
@@ -450,7 +450,7 @@ const sessionFindOne = async (lane: DriverLane, Model: Any, plan: number, args: 
   return doc ? transformedDocs(lane, plan, [doc], args, false) : 'null'
 }
 
-const hasNear = (where: Any) => {
+export const hasNear = (where: Any) => {
   if (!where) {
     return false
   }
@@ -458,7 +458,7 @@ const hasNear = (where: Any) => {
   return constraints.some((prop: Any) => Object.keys(prop).some((key) => key === 'near'))
 }
 
-const localeCollation = (adapter: Any, locale: Any) => {
+export const localeCollation = (adapter: Any, locale: Any) => {
   const localizationConfig = adapter.payload.config.localization
   const defaultLocale =
     (typeof localizationConfig === 'object' && localizationConfig?.defaultLocale) || 'en'
@@ -782,7 +782,7 @@ const laneAggregatePaginate = async ({
  * The `paginationOptions` count part of find / findVersions / findGlobalVersions:
  * `useCustomCountFn` becomes `customCount` (the options of its `Model.countDocuments` call).
  */
-const customCountOptions = (
+export const customCountOptions = (
   adapter: Any,
   query: Any,
   useEstimatedCount: boolean,

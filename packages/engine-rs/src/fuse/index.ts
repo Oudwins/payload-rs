@@ -51,8 +51,11 @@ const mode: FuseMode =
 type Exact = () => Promise<Any>
 type Op = 'count' | 'find' | 'findByID'
 
-/** A call the fused lane serves: its request (FUSE_CONTRACT.md section 4) and backend. */
-type Fused = { op: Op; request: string; target: FusedTarget }
+/**
+ * A call the fused lane serves: its request (FUSE_CONTRACT.md section 4), its backend and what
+ * the backend's `run` takes besides the request.
+ */
+type Fused = { op: Op; payload: unknown; request: string; target: FusedTarget }
 
 type NativeFuse = { fuseRegisterPlan: (json: string) => number }
 
@@ -382,6 +385,19 @@ const serializeDbArgs = (args: unknown): string | undefined => {
   return registry.functions.length === 0 ? json : undefined
 }
 
+/** The `db` part of a request for `payload.db[method](args)` on `target`, or a guard reason. */
+const encodeDb = (
+  target: FusedTarget,
+  method: 'count' | 'find' | 'findOne',
+  args: Record<string, unknown>,
+): { db: string; payload: unknown } | string => {
+  if (target.encode) {
+    return target.encode(method, args)
+  }
+  const db = serializeDbArgs(args)
+  return db === undefined ? 'db:functions' : { db, payload: undefined }
+}
+
 const isRequestValue = (value: unknown) =>
   value === undefined ||
   value === null ||
@@ -464,7 +480,7 @@ const buildFindRequest = (args: Any): Fused | undefined => {
     where: combineQueries(where, accessResult as never),
   })
   const sort = sanitizeSortQuery({ fields: config.flattenedFields, sort: rawSort })
-  const db = serializeDbArgs({
+  const db = encodeDb(target, 'find', {
     collection: config.slug,
     draftsEnabled: draft,
     joins: req.payloadAPI === 'GraphQL' ? false : joins === false ? false : joins || {},
@@ -477,10 +493,10 @@ const buildFindRequest = (args: Any): Fused | undefined => {
     sort,
     where: fullWhere,
   })
-  if (db === undefined) {
-    return guard('db:functions')
+  if (typeof db === 'string') {
+    return guard(db)
   }
-  const request = `{"op":"find","plan":${planID},"db":${db},${readRequest({
+  const request = `{"op":"find","plan":${planID},"db":${db.db},${readRequest({
     currentDepth,
     depth,
     flattenLocales: true,
@@ -490,7 +506,7 @@ const buildFindRequest = (args: Any): Fused | undefined => {
     select,
     showHiddenFields: Boolean(showHiddenFields),
   })}`
-  return { op: 'find', request, target }
+  return { op: 'find', payload: db.payload, request, target }
 }
 
 export const fuseFind = (args: Any, exact: Exact): Promise<Any> | undefined => {
@@ -498,7 +514,7 @@ export const fuseFind = (args: Any, exact: Exact): Promise<Any> | undefined => {
     return undefined
   }
   const fused = buildFindRequest(args)
-  return fused && runFused(fused.op, args, fused.target, fused.request, exact)
+  return fused && runFused(fused, args, exact)
 }
 
 const buildFindByIDRequest = (args: Any): Fused | undefined => {
@@ -563,7 +579,7 @@ const buildFindByIDRequest = (args: Any): Fused | undefined => {
     trash,
     where: combineQueries({ id: { equals: id } }, overrideAccess ? true : (accessResult as never)),
   })
-  const db = serializeDbArgs({
+  const db = encodeDb(target, 'findOne', {
     collection: config.slug,
     draftsEnabled: replaceWithVersion,
     joins: req.payloadAPI === 'GraphQL' ? false : joins === false ? false : joins || {},
@@ -572,10 +588,10 @@ const buildFindByIDRequest = (args: Any): Fused | undefined => {
     select,
     where: fullWhere,
   })
-  if (db === undefined) {
-    return guard('db:functions')
+  if (typeof db === 'string') {
+    return guard(db)
   }
-  const request = `{"op":"findByID","plan":${planID},"db":${db},${readRequest({
+  const request = `{"op":"findByID","plan":${planID},"db":${db.db},${readRequest({
     currentDepth,
     depth,
     flattenLocales: flattenLocales === undefined ? true : flattenLocales,
@@ -585,7 +601,7 @@ const buildFindByIDRequest = (args: Any): Fused | undefined => {
     select,
     showHiddenFields: Boolean(showHiddenFields),
   })}`
-  return { op: 'findByID', request, target }
+  return { op: 'findByID', payload: db.payload, request, target }
 }
 
 export const fuseFindByID = (args: Any, exact: Exact): Promise<Any> | undefined => {
@@ -593,7 +609,7 @@ export const fuseFindByID = (args: Any, exact: Exact): Promise<Any> | undefined 
     return undefined
   }
   const fused = buildFindByIDRequest(args)
-  return fused && runFused(fused.op, args, fused.target, fused.request, exact)
+  return fused && runFused(fused, args, exact)
 }
 
 const buildCountRequest = (args: Any): Fused | undefined => {
@@ -616,18 +632,18 @@ const buildCountRequest = (args: Any): Fused | undefined => {
     trash,
     where: combineQueries(where, accessResult as never),
   })
-  const db = serializeDbArgs({
+  const db = encodeDb(target, 'count', {
     collection: config.slug,
     locale: req.locale || undefined,
     req: { fallbackLocale: req.fallbackLocale, locale: req.locale, payloadAPI: req.payloadAPI },
     where: fullWhere,
   })
-  if (db === undefined) {
-    return guard('db:functions')
+  if (typeof db === 'string') {
+    return guard(db)
   }
   void plan
-  const request = `{"op":"count","plan":${planID},"db":${db}}`
-  return { op: 'count', request, target }
+  const request = `{"op":"count","plan":${planID},"db":${db.db}}`
+  return { op: 'count', payload: db.payload, request, target }
 }
 
 export const fuseCount = (args: Any, exact: Exact): Promise<Any> | undefined => {
@@ -635,28 +651,31 @@ export const fuseCount = (args: Any, exact: Exact): Promise<Any> | undefined => 
     return undefined
   }
   const fused = buildCountRequest(args)
-  return fused && runFused(fused.op, args, fused.target, fused.request, exact)
+  return fused && runFused(fused, args, exact)
 }
 
-const runNative = (target: FusedTarget, request: string): Promise<string> | string => {
+const runNative = ({
+  payload,
+  request,
+  target,
+}: {
+  payload: unknown
+  request: string
+  target: FusedTarget
+}): Promise<string> | string => {
   try {
-    return target.run(request)
+    return target.run(request, payload)
   } catch {
     return '!native:error'
   }
 }
 
-const runFused = (
-  op: Op,
-  args: Any,
-  target: FusedTarget,
-  request: string,
-  exact: Exact,
-): Promise<Any> | undefined => {
+const runFused = (fused: Fused, args: Any, exact: Exact): Promise<Any> | undefined => {
+  const { op } = fused
   if (mode === 'shadow') {
-    return shadow(op, args, target, request, exact)
+    return shadow(fused, args, exact)
   }
-  const text = runNative(target, request)
+  const text = runNative(fused)
   if (typeof text !== 'string') {
     // an asynchronous backend: a bail continues on the exact lane
     return text.then((resolved) => settle(op, resolved) ?? exact())
@@ -677,15 +696,10 @@ const settle = (op: Op, text: string): Promise<Any> | undefined => {
 const argsSnapshot = (args: Any) =>
   canonical([args.where, args.sort, args.select, args.joins, args.populate, args.id])
 
-const shadow = async (
-  op: Op,
-  args: Any,
-  target: FusedTarget,
-  request: string,
-  exact: Exact,
-): Promise<Any> => {
+const shadow = async (fused: Fused, args: Any, exact: Exact): Promise<Any> => {
+  const { op, request } = fused
   const before = argsSnapshot(args)
-  const text = await runNative(target, request)
+  const text = await runNative(fused)
   const isBail = text.charCodeAt(0) === 33
   if (isBail) {
     count(stats.bails, text.slice(1))
@@ -694,7 +708,12 @@ const shadow = async (
   }
   let result: Any
   try {
-    result = await exact()
+    const { payload, target } = fused
+    result = await (target.shadowExact && !isBail
+      ? target.shadowExact(payload, exact, (difference) =>
+          recordDiff({ ...difference, op, request }),
+        )
+      : exact())
   } catch (error) {
     if (!isBail) {
       recordDiff({ kind: 'exact-threw', message: String((error as Error)?.message), op, request })
@@ -706,7 +725,7 @@ const shadow = async (
     const fusedText = canonical(JSON.parse(text))
     if (exactText !== fusedText) {
       // a concurrent write between the two reads: compare with a fused read made now
-      const again = await runNative(target, request)
+      const again = await runNative(fused)
       if (again.charCodeAt(0) === 33 || canonical(JSON.parse(again)) !== exactText) {
         recordDiff({ kind: 'result', op, request, ...firstDifference(exactText, fusedText) })
       } else {
@@ -775,6 +794,6 @@ export const fusedOperationText = ({
     }
     return text
   }
-  const text = runNative(fused.target, request)
+  const text = runNative({ ...fused, request })
   return typeof text === 'string' ? finish(text) : text.then(finish)
 }

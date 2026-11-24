@@ -8,8 +8,26 @@
 export type FusedTarget = {
   /** `"sqlite"`, `"mongodb"` */
   backend: string
+  /**
+   * The `db` part of a request for `payload.db[method](args)` and what `run` needs besides the
+   * request, or the reason the call cannot be fused. Without it the `db` part is the args
+   * serialized for the engine.
+   */
+  encode?: (
+    method: 'count' | 'find' | 'findOne',
+    args: Record<string, unknown>,
+  ) => { db: string; payload: unknown } | string
   /** Runs one fused request (JSON), returning the result JSON or `!<reason>`. */
-  run: (requestJson: string) => Promise<string> | string
+  run: (requestJson: string, payload?: unknown) => Promise<string> | string
+  /**
+   * Shadow mode: runs the exact lane (`exact`) and checks what the backend sees of it against
+   * `payload` (e.g. the database commands), reporting differences through `report`.
+   */
+  shadowExact?: <T>(
+    payload: unknown,
+    exact: () => Promise<T>,
+    report: (difference: Record<string, unknown>) => void,
+  ) => Promise<T>
 }
 
 /** A target, or the reason a fused call cannot run on the adapter now. */

@@ -1,0 +1,13 @@
+[package]
+name = "payload-fuse-mongo"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "MongoDB backend of the fused read lanes: the Rust driver's reads, transform and the fused afterRead in one call"
+
+[dependencies]
+indexmap.workspace = true
+payload-engine = { path = "../payload-engine" }
+payload-fuse = { path = "../payload-fuse" }
+payload-mongo-driver = { path = "../payload-mongo-driver" }
+tokio = { version = "1", features = ["macros"] }
