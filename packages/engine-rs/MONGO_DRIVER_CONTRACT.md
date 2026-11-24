@@ -173,6 +173,24 @@ process that writes inside transactions (every Payload write on a replica set, u
 `disableTransaction`) therefore opens mongoose at its first write. Without a replica set (or with
 `transactionOptions: false`) no session exists and every read is served by the lane.
 
+Two measurement switches, both off by default (they change what this section states, so they
+need an owner decision before either could become a default):
+
+- `PAYLOAD_MONGO_DRIVER_SESSION_IO=true`: a read whose `req` has a session is planned and cast
+  like any other lane read, but its I/O runs on the Node driver in that session: the mongoose
+  collection calls the replaced query would make (`Model.collection.find` / `findOne` /
+  `countDocuments` / `aggregate` with the cast filter, mongoose's options and the session, count and
+  find both in flight in upstream's order) with `raw: true`, and the raw documents go through the
+  lane's Rust transform and JSON materialization (`mongoDriverTransform`, synchronous). An
+  estimated count (the `count` command is not allowed in a transaction) or a Rust bail runs the call
+  on the mongoose lane. Counters: `driverLane.inTransaction`.
+- `PAYLOAD_MONGO_RUST_TXN=true` (prototype of RUST_PERF_PLAN.md D4, `mongo-driver/rustTxn.ts`):
+  write operations without collection / root hooks and with `overrideAccess` run in a transaction
+  the Rust client owns (`mongoDriverTxnBegin` / `mongoDriverTxnCommand` / `mongoDriverTxnEnd`);
+  `payload.db.sessions[id]` holds a stand-in, lane reads pass `txn`, mongoose collection calls
+  carrying the stand-in send the Node driver's command for that call through the Rust client in the
+  transaction. Counters: `driverLane.rustTransactions`.
+
 ## Verification
 
 - `PAYLOAD_MONGO_DRIVER_VERIFY=true`: every served read also runs on the mongoose lane with the same

@@ -62,6 +62,7 @@ fn target(client: u32, plan: u32, args: &payload_mongo_driver::ReadArgs) -> Read
     database: args.database.clone(),
     flags: args.flags,
     plan,
+    txn: args.txn,
   }
 }
 
@@ -149,7 +150,7 @@ pub fn mongo_driver_count<'env>(env: &'env Env, client: u32, args: BufferSlice) 
   let decoded = read_args(&args);
   spawn_lane(env, async move {
     let args = decoded?;
-    let count = payload_mongo_driver::count(client, args.database, args.collection, args.count).await?;
+    let count = payload_mongo_driver::count(client, args.database, args.collection, args.count, args.txn).await?;
     Ok(count.to_string())
   })
 }
@@ -191,4 +192,61 @@ pub fn mongo_driver_command<'env>(
     }
   });
   Ok(promise)
+}
+
+/// Begins a Rust-owned transaction on `client` (RUST_PERF_PLAN.md D4 prototype, off by default):
+/// returns its id (reads take it as `txn`, writes run through `mongoDriverTxnCommand`).
+#[napi]
+pub fn mongo_driver_txn_begin(client: u32) -> u32 {
+  payload_mongo_driver::txn_begin(client)
+}
+
+/// Commits (`commit`) or aborts a Rust-owned transaction: resolves with `""`, or with the error as
+/// `{ message, code?, codeName?, errorLabels? }` JSON.
+#[napi]
+pub fn mongo_driver_txn_end<'env>(env: &'env Env, txn: u32, commit: bool) -> Result<Object<'env>> {
+  let (deferred, promise) = env.create_deferred::<String, Resolver<String>>()?;
+  payload_mongo_driver::runtime().spawn(async move {
+    let text = payload_mongo_driver::txn_end(txn, commit).await.err().unwrap_or_default();
+    deferred.resolve(Box::new(move |_| Ok(text)));
+  });
+  Ok(promise)
+}
+
+/// A command (js-bson document) in a Rust-owned transaction: resolves with the reply as js-bson
+/// bytes, rejects with an Error whose message is `{ message, code?, codeName?, errorLabels? }` JSON.
+#[napi]
+pub fn mongo_driver_txn_command<'env>(
+  env: &'env Env,
+  txn: u32,
+  database: Option<String>,
+  command: BufferSlice,
+) -> Result<Object<'env>> {
+  let command = payload_mongo_driver::mongodb::bson::Document::from_reader(&*command).map_err(|e| Error::new(Status::InvalidArg, e.to_string()))?;
+  let (deferred, promise) = env.create_deferred::<Buffer, Resolver<Buffer>>()?;
+  payload_mongo_driver::runtime().spawn(async move {
+    match payload_mongo_driver::txn_command(txn, database, command).await {
+      Ok(reply) => {
+        let mut bytes = Vec::new();
+        match reply.to_writer(&mut bytes) {
+          Ok(()) => deferred.resolve(Box::new(move |_| Ok(Buffer::from(bytes)))),
+          Err(error) => deferred.reject(Error::new(Status::GenericFailure, error.to_string())),
+        }
+      }
+      Err(error) => deferred.reject(Error::new(Status::GenericFailure, error)),
+    }
+  });
+  Ok(promise)
+}
+
+/// The read transform of a read the Node driver ran inside a mongoose transaction (`raw: true`
+/// documents, concatenated): comma-separated JSON documents, or `"!<reason>"` (synchronous: a
+/// handful of documents, no I/O).
+#[napi]
+pub fn mongo_driver_transform(plan: u32, docs: BufferSlice, lean_with_id: bool, allow_additional_keys: bool) -> String {
+  let flags = payload_mongo_driver::Flags { allow_additional_keys };
+  match payload_mongo_driver::transform_raw(plan, flags, lean_with_id, &docs) {
+    Ok(text) => text,
+    Err(error) => format!("!{error}"),
+  }
 }

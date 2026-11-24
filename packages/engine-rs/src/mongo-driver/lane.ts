@@ -36,6 +36,7 @@ import { buildVersionGlobalFields } from '../../../payload/src/versions/buildGlo
 import { isTracing, traceDriverOperation } from '../shadow-mongo/trace.js'
 import { type DriverBinding } from './binding.js'
 import { buildTransformPlan } from './plan.js'
+import { isRustTransactionEnabled, RustSession } from './rustTxn.js'
 import { verifyMode, verifyResult } from './verify.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- mirrors untyped upstream code */
@@ -52,6 +53,13 @@ export type DriverLane = {
   plans: Map<string, WeakMap<object, null | number>>
   /** The replica set the client's topology names (`null`: none, transactions off). */
   replicaSet: null | string
+  /**
+   * The mongoose transaction session of the call: its I/O runs on the Node driver in that session
+   * (`raw: true` documents, transformed in Rust) instead of on the Rust client.
+   */
+  session?: Any
+  /** The Rust-owned transaction the call's reads run in (rustTxn.ts, prototype). */
+  txn?: number
   /** The adapter for the lane's own calls of upstream helpers (lazy.ts `createAdapterView`). */
   view: Any
 }
@@ -82,6 +90,8 @@ export const laneMethods: readonly LaneMethod[] = [
 /** Per method: calls served by the driver, and calls handed to the mongoose lane per reason. */
 export const laneStats = {
   fallback: {} as Record<string, Record<string, number>>,
+  /** Calls served inside a mongoose transaction (Node driver I/O in its session). */
+  inTransaction: {} as Record<string, number>,
   served: {} as Record<string, number>,
 }
 
@@ -268,7 +278,26 @@ const planFor = (
  * (`ignoreUndefined: false`: an `undefined` value is sent as `null`, e.g. `{ $eq: undefined }`).
  */
 const serializeArgs = (lane: DriverLane, args: Record<string, unknown>) =>
-  lane.BSON.serialize(args, { ignoreUndefined: false })
+  lane.BSON.serialize(lane.txn === undefined ? args : { ...args, txn: lane.txn }, {
+    ignoreUndefined: false,
+  })
+
+/**
+ * `PAYLOAD_MONGO_DRIVER_SESSION_IO=true` (experimental, off by default): reads inside a mongoose
+ * transaction stay on the lane with Node driver I/O in the session instead of running on the
+ * mongoose lane.
+ */
+const isSessionIoEnabled = process.env.PAYLOAD_MONGO_DRIVER_SESSION_IO === 'true'
+
+/** The Rust-owned transaction of `req` (rustTxn.ts, prototype), if any. */
+const rustSessionOf = (lane: DriverLane, req: Any) => {
+  const transactionID = req?.transactionID
+  if (!transactionID || transactionID instanceof Promise) {
+    return undefined
+  }
+  const session = lane.view.sessions[transactionID]
+  return session instanceof RustSession ? session : undefined
+}
 
 /**
  * The Node driver `Collection` calls of a count (shadow / parity traces, `traceDriverOperation`):
@@ -297,6 +326,86 @@ const outcome = (text: string) => {
     throw new Fallback(text.slice(1))
   }
   return JSON.parse(text)
+}
+
+/**
+ * The I/O of a read inside a mongoose transaction: the mongoose collection calls the replaced
+ * mongoose query would make (the same cast filter and options, plus the transaction's session),
+ * with `raw: true` documents transformed by the lane's Rust transform. Results are the text the
+ * Rust client's calls resolve with.
+ */
+const transformedDocs = (
+  lane: DriverLane,
+  plan: number,
+  docs: Uint8Array[],
+  args: Any,
+  isLeanWithId: boolean,
+) => {
+  const text = lane.binding.transform(
+    plan,
+    Buffer.concat(docs),
+    isLeanWithId,
+    Boolean(args.allowAdditionalKeys),
+  )
+  if (text.charCodeAt(0) === 33 /* ! */) {
+    throw new Fallback(text.slice(1))
+  }
+  return text
+}
+
+const sessionCount = (lane: DriverLane, Model: Any, count: Any, countCast: Any) => {
+  if (count === 'estimated') {
+    // the `count` command is not allowed in a transaction: the mongoose lane reproduces upstream
+    throw new Fallback('estimated count in a transaction')
+  }
+  return Model.collection.countDocuments(countCast.filter, {
+    ...countCast.options,
+    session: lane.session,
+  })
+}
+
+const sessionPaginate = async (
+  lane: DriverLane,
+  Model: Any,
+  plan: number,
+  args: Any,
+  countCast: Any,
+  findCast: Any,
+) => {
+  const countPromise =
+    args.count === undefined ? null : sessionCount(lane, Model, args.count, countCast)
+  const docsPromise = args.find
+    ? Model.collection
+        .find(findCast.filter, { ...findCast.options, raw: true, session: lane.session })
+        .toArray()
+    : []
+  const [count, docs] = await Promise.all([countPromise, docsPromise])
+  return `[${count ?? 'null'},[${transformedDocs(lane, plan, docs, args, true)}]]`
+}
+
+const sessionAggregate = async (
+  lane: DriverLane,
+  Model: Any,
+  plan: number,
+  args: Any,
+  countCast: Any,
+) => {
+  const docsPromise = Model.collection
+    .aggregate(args.pipeline, { collation: args.collation, raw: true, session: lane.session })
+    .toArray()
+  const countPromise =
+    args.count === undefined ? null : sessionCount(lane, Model, args.count, countCast)
+  const [docs, count] = await Promise.all([docsPromise, countPromise])
+  return `[${count ?? 'null'},[${transformedDocs(lane, plan, docs, args, false)}]]`
+}
+
+const sessionFindOne = async (lane: DriverLane, Model: Any, plan: number, args: Any, cast: Any) => {
+  const doc = await Model.collection.findOne(cast.filter, {
+    ...cast.options,
+    raw: true,
+    session: lane.session,
+  })
+  return doc ? transformedDocs(lane, plan, [doc], args, false) : 'null'
 }
 
 const hasNear = (where: Any) => {
@@ -429,7 +538,9 @@ const lanePaginate = async (
   }
   const trace = isTracing()
   const [rawCount, docs] = outcome(
-    await lane.binding.paginate(lane.clientID, plan, serializeArgs(lane, args)),
+    lane.session
+      ? await sessionPaginate(lane, Model, plan, args, countCast, findCast)
+      : await lane.binding.paginate(lane.clientID, plan, serializeArgs(lane, args)),
   )
   if (trace) {
     if (countCast) {
@@ -587,7 +698,9 @@ const laneAggregatePaginate = async ({
   }
   const trace = isTracing()
   const [countResult, docs] = outcome(
-    await lane.binding.aggregate(lane.clientID, plan, serializeArgs(lane, args)),
+    lane.session
+      ? await sessionAggregate(lane, Model, plan, args, countCast)
+      : await lane.binding.aggregate(lane.clientID, plan, serializeArgs(lane, args)),
   )
   if (trace) {
     traceDriverOperation(args.collection, 'aggregate', [
@@ -833,7 +946,11 @@ const laneFindOne = async (lane: DriverLane, Model: Any, cast: Any, plan: number
     args.allowAdditionalKeys = true
   }
   const trace = isTracing()
-  const result = outcome(await lane.binding.findOne(lane.clientID, plan, serializeArgs(lane, args)))
+  const result = outcome(
+    lane.session
+      ? await sessionFindOne(lane, Model, plan, args, cast)
+      : await lane.binding.findOne(lane.clientID, plan, serializeArgs(lane, args)),
+  )
   if (trace) {
     traceDriverOperation(args.collection, 'findOne', [cast.filter, cast.options])
     traceDriverOperation(args.collection, 'find', [
@@ -887,7 +1004,9 @@ const laneCount = async ({
   if (isTracing()) {
     traceCount(args.collection, countCast)
   }
-  const totalDocs = outcome(await lane.binding.count(lane.clientID, serializeArgs(lane, args)))
+  const totalDocs = lane.session
+    ? await sessionCount(lane, Model, count, countCast)
+    : outcome(await lane.binding.count(lane.clientID, serializeArgs(lane, args)))
   return { totalDocs }
 }
 
@@ -1260,14 +1379,33 @@ export const createLaneMethod = ({
       fallbackTo(method, 'no driver client')
       return fallback.call(this, args)
     }
+    const rustSession = isRustTransactionEnabled ? rustSessionOf(lane, args?.req) : undefined
+    if (rustSession) {
+      try {
+        const result = await implementation.call(lane.view, { ...lane, txn: rustSession.txn }, args)
+        laneStats.served[method] = (laneStats.served[method] ?? 0) + 1
+        return result
+      } catch (error) {
+        if (error instanceof Fallback) {
+          // the mongoose lane runs in the same transaction (its session is the stand-in)
+          fallbackTo(method, `rust transaction: ${error.reason}`)
+          return fallback.call(this, args)
+        }
+        throw error
+      }
+    }
     // a session (mongoose's) exists only inside a transaction; a promise `transactionID` resolving
     // to null (transactions disabled) is none: upstream's getSession decides, like upstream's call.
     // A settled `transactionID` is decided synchronously, so the method's synchronous prefix (its
     // argument mutations before the first await) runs in the same tick as upstream's.
     const inTransaction = hasTransactionSession(lane, args?.req)
+    let session: Any
     if (inTransaction instanceof Promise ? await inTransaction : inTransaction) {
-      fallbackTo(method, 'transaction')
-      return fallback.call(this, args)
+      if (!isSessionIoEnabled) {
+        fallbackTo(method, 'transaction')
+        return fallback.call(this, args)
+      }
+      session = await getSession(lane.view, args.req)
     }
     const blocked = mongooseBlocksLane(lane, lane.mongoose)
     if (blocked) {
@@ -1275,8 +1413,15 @@ export const createLaneMethod = ({
       return fallback.call(this, args)
     }
     try {
-      const result = await implementation.call(lane.view, lane, args)
+      const result = await implementation.call(
+        lane.view,
+        session ? { ...lane, session } : lane,
+        args,
+      )
       laneStats.served[method] = (laneStats.served[method] ?? 0) + 1
+      if (session) {
+        laneStats.inTransaction[method] = (laneStats.inTransaction[method] ?? 0) + 1
+      }
       if (verifyMode() !== 'off') {
         await verifyResult({
           lane: result,

@@ -28,6 +28,7 @@ import { getCoreHooksAfter } from '../runtime/afterChange/binding.js'
 import { getBeforeChangeBinding } from '../runtime/beforeChange/index.js'
 import { getBeforeValidateBinding } from '../runtime/beforeValidate/index.js'
 import { createOpsWriteHost } from './host.js'
+import { isAdapterTransactionEnabled, runInAdapterTransaction } from './transactionLanes.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- drop-ins keep the upstream generics */
 type Any = any
@@ -113,22 +114,34 @@ const recordStats = () => {
   }
 }
 
+type OperationName = Exclude<keyof CoreOpsWriteBinding, 'apiVersion' | 'init' | 'stats'>
+
 const op =
-  (name: Exclude<keyof CoreOpsWriteBinding, 'apiVersion' | 'init' | 'stats'>) =>
+  (name: OperationName) =>
   (args: Any): Promise<Any> => {
-    let promise: Promise<Any>
-    try {
-      promise = getCoreOpsWrite()[name](args)
-    } catch (error) {
-      // The upstream operations are `async`: a failure to load the engine rejects (same value).
-      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
-      return Promise.reject(error)
+    if (isAdapterTransactionEnabled) {
+      const owned = runInAdapterTransaction(name, args, () => runOperation(name, args))
+      if (owned) {
+        return owned
+      }
     }
-    if (statsFile) {
-      recordStats()
-    }
-    return promise
+    return runOperation(name, args)
   }
+
+const runOperation = (name: OperationName, args: Any): Promise<Any> => {
+  let promise: Promise<Any>
+  try {
+    promise = getCoreOpsWrite()[name](args)
+  } catch (error) {
+    // The upstream operations are `async`: a failure to load the engine rejects (same value).
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+    return Promise.reject(error)
+  }
+  if (statsFile) {
+    recordStats()
+  }
+  return promise
+}
 
 export const createOperation = op('create')
 export const updateOperation = op('update')

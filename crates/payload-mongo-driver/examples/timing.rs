@@ -90,7 +90,7 @@ fn main() {
     let mut samples = Vec::new();
     for _ in 0..300 {
       let start = Instant::now();
-      let target = ReadTarget { client: info.id, collection: collection.clone(), database: None, flags: Flags::default(), plan };
+      let target = ReadTarget { client: info.id, collection: collection.clone(), database: None, flags: Flags::default(), plan, txn: None };
       let find = FindSpec {
         filter: doc! {},
         limit: Some(100),

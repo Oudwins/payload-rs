@@ -12,6 +12,11 @@ import { resolveDbMongodbMongoose } from '../mongo-live/host.js'
 import { getDriverBinding } from './binding.js'
 import { createLaneMethod, type DriverLane, laneMethods, laneStats } from './lane.js'
 import { connectLazily, createAdapterView, eagerReason, isMongooseUnopened } from './lazy.js'
+import {
+  installRustTransactions,
+  isRustTransactionEnabled,
+  rustTransactionStats,
+} from './rustTxn.js'
 import { verifyMode, verifyStats } from './verify.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- adapter objects are untyped here */
@@ -31,6 +36,8 @@ export const getDriverLaneStats = () => {
     clients: { bailed, calls, served },
     connects: { ...connects },
     fallback: laneStats.fallback,
+    inTransaction: laneStats.inTransaction,
+    ...(isRustTransactionEnabled ? { rustTransactions: rustTransactionStats } : {}),
     served: laneStats.served,
     ...(verifyMode() !== 'off' ? { verify: verifyStats } : {}),
   }
@@ -171,6 +178,9 @@ export const installDriverLane = (adapter: Any): readonly string[] => {
     if (typeof fallback === 'function') {
       adapter[method] = createLaneMethod({ fallback, lane: getDriverLane, method })
     }
+  }
+  if (isRustTransactionEnabled) {
+    installRustTransactions(adapter, getDriverLane)
   }
   const upstreamConnect = adapter.connect
   adapter.connect = async function connect(this: Any, ...args: Any[]) {

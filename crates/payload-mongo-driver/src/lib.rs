@@ -15,7 +15,7 @@ use mongodb::options::{Collation, Hint};
 
 pub use client::{
   ConnectInfo, ConnectSpec, CountSpec, FindSpec, LaneError, ReadTarget, aggregate, close, command, connect, count,
-  find_one, paginate, register_plan, runtime,
+  find_one, paginate, register_plan, runtime, transform_raw, txn_begin, txn_command, txn_end,
 };
 pub use transform::Flags;
 /// The driver crate itself (bson types for the binding).
@@ -30,6 +30,8 @@ pub struct ReadArgs {
   pub pipeline: Option<Vec<Document>>,
   pub collation: Option<Collation>,
   pub flags: Flags,
+  /// The Rust-owned transaction the read runs in (`txn`, see [`client::txn_begin`]).
+  pub txn: Option<u32>,
 }
 
 fn bad(what: &str) -> LaneError {
@@ -134,5 +136,9 @@ pub fn read_args(bytes: &[u8]) -> Result<ReadArgs, LaneError> {
     find,
     flags: Flags { allow_additional_keys: doc.get_bool("allowAdditionalKeys").unwrap_or(false) },
     pipeline,
+    txn: match doc.get("txn") {
+      None | Some(Bson::Null) => None,
+      Some(value) => Some(integer(value).and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad("txn"))?),
+    },
   })
 }

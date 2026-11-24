@@ -17,6 +17,17 @@ export type DriverBinding = {
   paginate: (client: number, plan: number, args: Uint8Array) => Promise<string>
   registerPlan: (planJson: string) => number
   stats: () => number[]
+  /** The read transform of `raw: true` documents (concatenated BSON): JSON documents or `!reason`. */
+  transform: (
+    plan: number,
+    docs: Uint8Array,
+    isLeanWithId: boolean,
+    allowAdditionalKeys: boolean,
+  ) => string
+  /** Rust-owned transactions (RUST_PERF_PLAN.md D4 prototype, rustTxn.ts). */
+  txnBegin: (client: number) => number
+  txnCommand: (txn: number, database: null | string, command: Uint8Array) => Promise<Uint8Array>
+  txnEnd: (txn: number, shouldCommit: boolean) => Promise<string>
 }
 
 type DriverAddon = {
@@ -30,6 +41,10 @@ type DriverAddon = {
   mongoDriverPaginate?: DriverBinding['paginate']
   mongoDriverRegisterPlan?: DriverBinding['registerPlan']
   mongoDriverStats?: DriverBinding['stats']
+  mongoDriverTransform?: DriverBinding['transform']
+  mongoDriverTxnBegin?: DriverBinding['txnBegin']
+  mongoDriverTxnCommand?: DriverBinding['txnCommand']
+  mongoDriverTxnEnd?: DriverBinding['txnEnd']
 }
 
 let binding: DriverBinding | null | undefined
@@ -60,6 +75,10 @@ export const getDriverBinding = (): DriverBinding | null => {
     paginate: addon.mongoDriverPaginate!,
     registerPlan: addon.mongoDriverRegisterPlan!,
     stats: addon.mongoDriverStats!,
+    transform: addon.mongoDriverTransform!,
+    txnBegin: addon.mongoDriverTxnBegin!,
+    txnCommand: addon.mongoDriverTxnCommand!,
+    txnEnd: addon.mongoDriverTxnEnd!,
   }
   return binding
 }

@@ -7,6 +7,8 @@
 //! `Model.estimatedDocumentCount()` -> `count`, `Model.aggregate(...)` -> `aggregate`. Filters,
 //! sorts, projections and pipelines arrive already cast by mongoose and serialized by js-bson.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -15,7 +17,7 @@ use mongodb::options::{
   AggregateOptions, ClientOptions, Collation, CountOptions, EstimatedDocumentCountOptions, FindOneOptions, FindOptions,
   Hint,
 };
-use mongodb::{Client, Collection};
+use mongodb::{Client, ClientSession, Collection};
 use tokio::runtime::Runtime;
 
 use crate::json::{write_object, write_value};
@@ -185,9 +187,15 @@ fn collection(state: &DriverClient, database: Option<&str>, name: &str) -> Colle
   state.client.database(database.unwrap_or(&state.default_database)).collection(name)
 }
 
-async fn run_count(coll: &Collection<RawDocumentBuf>, count: CountSpec) -> Result<Option<u64>> {
+async fn run_count(
+  coll: &Collection<RawDocumentBuf>,
+  count: CountSpec,
+  session: Option<&mut ClientSession>,
+) -> Result<Option<u64>> {
   Ok(match count {
     CountSpec::None => None,
+    // the `count` command is not allowed in a multi-document transaction
+    CountSpec::Estimated if session.is_some() => return Err(LaneError::Bail("estimated count in a transaction")),
     CountSpec::Estimated => {
       Some(coll.estimated_document_count().with_options(EstimatedDocumentCountOptions::default()).await?)
     }
@@ -195,7 +203,11 @@ async fn run_count(coll: &Collection<RawDocumentBuf>, count: CountSpec) -> Resul
       let mut options = CountOptions::default();
       options.hint = hint;
       options.collation = collation;
-      Some(coll.count_documents(filter).with_options(options).await?)
+      let action = coll.count_documents(filter).with_options(options);
+      Some(match session {
+        Some(session) => action.session(session).await?,
+        None => action.await?,
+      })
     }
   })
 }
@@ -211,6 +223,7 @@ async fn run_find(
   plan: &Arc<Plan>,
   flags: Flags,
   shape: ReadShape,
+  session: Option<&mut ClientSession>,
 ) -> Result<String> {
   let mut options = FindOptions::default();
   options.sort = find.sort;
@@ -219,15 +232,28 @@ async fn run_find(
   options.limit = find.limit;
   options.collation = find.collation;
   options.hint = find.hint;
-  let mut cursor = coll.find(find.filter).with_options(options).await?;
   let mut tasks = Vec::new();
   let mut chunk = Vec::with_capacity(TRANSFORM_CHUNK);
-  while cursor.advance().await? {
-    chunk.push(cursor.current().to_raw_document_buf());
+  let mut push = |chunk: &mut Vec<RawDocumentBuf>, raw: RawDocumentBuf| {
+    chunk.push(raw);
     if chunk.len() == TRANSFORM_CHUNK {
-      let docs = std::mem::replace(&mut chunk, Vec::with_capacity(TRANSFORM_CHUNK));
+      let docs = std::mem::replace(chunk, Vec::with_capacity(TRANSFORM_CHUNK));
       let plan = plan.clone();
       tasks.push(tokio::spawn(async move { write_docs(&docs, &plan, flags, shape) }));
+    }
+  };
+  match session {
+    Some(session) => {
+      let mut cursor = coll.find(find.filter).with_options(options).session(&mut *session).await?;
+      while cursor.advance(&mut *session).await? {
+        push(&mut chunk, cursor.current().to_raw_document_buf());
+      }
+    }
+    None => {
+      let mut cursor = coll.find(find.filter).with_options(options).await?;
+      while cursor.advance().await? {
+        push(&mut chunk, cursor.current().to_raw_document_buf());
+      }
     }
   }
   // the last chunk in this task, while the spawned ones run on the other workers
@@ -281,6 +307,8 @@ pub struct ReadTarget {
   pub collection: String,
   pub plan: u32,
   pub flags: Flags,
+  /// The Rust-owned transaction ([`txn_begin`]) the read runs in.
+  pub txn: Option<u32>,
 }
 
 /// mongoose-paginate-v2's `Promise.all([countPromise, docsPromise])` (the count started first) plus
@@ -289,15 +317,30 @@ pub async fn paginate(target: ReadTarget, count: CountSpec, find: Option<FindSpe
   let state = client(target.client)?;
   let plan = plan(target.plan)?;
   let coll = collection(&state, target.database.as_deref(), &target.collection);
-  let count_future = run_count(&coll, count);
-  let find_future = async {
-    match find {
-      Some(find) => run_find(&coll, find, &plan, target.flags, ReadShape { lean_with_id: true }).await,
-      None => Ok(String::new()),
+  let shape = ReadShape { lean_with_id: true };
+  let (count, docs) = match target.txn {
+    // a session runs one statement at a time: the count first (it is started first otherwise)
+    Some(txn) => {
+      let mut session = txn_session(txn).await?;
+      let count = run_count(&coll, count, Some(session.get())).await?;
+      let docs = match find {
+        Some(find) => run_find(&coll, find, &plan, target.flags, shape, Some(session.get())).await?,
+        None => String::new(),
+      };
+      (count, docs)
+    }
+    None => {
+      let count_future = run_count(&coll, count, None);
+      let find_future = async {
+        match find {
+          Some(find) => run_find(&coll, find, &plan, target.flags, shape, None).await,
+          None => Ok(String::new()),
+        }
+      };
+      let (count, docs) = tokio::join!(count_future, find_future);
+      (count?, docs?)
     }
   };
-  let (count, docs) = tokio::join!(count_future, find_future);
-  let (count, docs) = (count?, docs?);
   let mut out = String::with_capacity(docs.len() + 32);
   out.push('[');
   match count {
@@ -322,7 +365,11 @@ pub async fn find_one(target: ReadTarget, find: FindSpec) -> Result<String> {
   options.skip = find.skip;
   options.collation = find.collation;
   options.hint = find.hint;
-  let doc = coll.find_one(find.filter).with_options(options).await?;
+  let action = coll.find_one(find.filter).with_options(options);
+  let doc = match target.txn {
+    Some(txn) => action.session(txn_session(txn).await?.get()).await?,
+    None => action.await?,
+  };
   let mut out = String::new();
   match doc {
     Some(raw) => write_doc(&mut out, &raw, &plan, target.flags, ReadShape { lean_with_id: false })?,
@@ -332,10 +379,20 @@ pub async fn find_one(target: ReadTarget, find: FindSpec) -> Result<String> {
 }
 
 /// `Model.countDocuments(...)` / `Model.estimatedDocumentCount()`.
-pub async fn count(client_id: u32, database: Option<String>, collection_name: String, count: CountSpec) -> Result<u64> {
+pub async fn count(
+  client_id: u32,
+  database: Option<String>,
+  collection_name: String,
+  count: CountSpec,
+  txn: Option<u32>,
+) -> Result<u64> {
   let state = client(client_id)?;
   let coll = collection(&state, database.as_deref(), &collection_name);
-  run_count(&coll, count).await?.ok_or(LaneError::Bail("no count"))
+  let count = match txn {
+    Some(txn) => run_count(&coll, count, Some(txn_session(txn).await?.get())).await?,
+    None => run_count(&coll, count, None).await?,
+  };
+  count.ok_or(LaneError::Bail("no count"))
 }
 
 /// db-mongodb's `aggregatePaginate`: `Promise.all([Model.aggregate(pipeline, { collation }),
@@ -349,23 +406,44 @@ pub async fn aggregate(
   let state = client(target.client)?;
   let plan = plan(target.plan)?;
   let coll = collection(&state, target.database.as_deref(), &target.collection);
-  let docs_future = async {
-    let mut options = AggregateOptions::default();
-    options.collation = collation;
-    let mut cursor = coll.aggregate(pipeline).with_options(options).await?;
-    let mut out = String::new();
-    let mut first = true;
-    while cursor.advance().await? {
-      if !first {
-        out.push(',');
+  let mut options = AggregateOptions::default();
+  options.collation = collation;
+  let shape = ReadShape { lean_with_id: false };
+  let (docs, count) = match target.txn {
+    // a session runs one statement at a time: the aggregate first (it is started first otherwise)
+    Some(txn) => {
+      let mut session = txn_session(txn).await?;
+      let session = session.get();
+      let mut cursor = coll.aggregate(pipeline).with_options(options).session(&mut *session).await?;
+      let mut out = String::new();
+      while cursor.advance(&mut *session).await? {
+        if !out.is_empty() {
+          out.push(',');
+        }
+        write_doc(&mut out, cursor.current(), &plan, target.flags, shape)?;
       }
-      first = false;
-      write_doc(&mut out, cursor.current(), &plan, target.flags, ReadShape { lean_with_id: false })?;
+      drop(cursor);
+      let count = run_count(&coll, count, Some(session)).await?;
+      (out, count)
     }
-    Ok::<_, LaneError>(out)
+    None => {
+      let docs_future = async {
+        let mut cursor = coll.aggregate(pipeline).with_options(options).await?;
+        let mut out = String::new();
+        let mut first = true;
+        while cursor.advance().await? {
+          if !first {
+            out.push(',');
+          }
+          first = false;
+          write_doc(&mut out, cursor.current(), &plan, target.flags, shape)?;
+        }
+        Ok::<_, LaneError>(out)
+      };
+      let (docs, count) = tokio::join!(docs_future, run_count(&coll, count, None));
+      (docs?, count?)
+    }
   };
-  let (docs, count) = tokio::join!(docs_future, run_count(&coll, count));
-  let (docs, count) = (docs?, count?);
   let mut out = String::with_capacity(docs.len() + 32);
   out.push('[');
   match count {
@@ -397,4 +475,117 @@ pub async fn command(
     }
     out.to_string()
   })
+}
+
+/// One Rust-owned transaction (RUST_PERF_PLAN.md D4, prototype behind `PAYLOAD_MONGO_RUST_TXN`,
+/// off by default): its session and transaction start with its first statement (the Node driver
+/// sends `startTransaction` with the first command too), so beginning one is synchronous.
+struct Txn {
+  client: u32,
+  session: Arc<tokio::sync::Mutex<Option<ClientSession>>>,
+}
+
+static NEXT_TXN: AtomicU32 = AtomicU32::new(1);
+
+fn txns() -> &'static Mutex<HashMap<u32, Arc<Txn>>> {
+  static TXNS: OnceLock<Mutex<HashMap<u32, Arc<Txn>>>> = OnceLock::new();
+  TXNS.get_or_init(Default::default)
+}
+
+fn txn(id: u32) -> Option<Arc<Txn>> {
+  txns().lock().expect("txns").get(&id).cloned()
+}
+
+/// Registers a transaction on `client`; returns its id.
+pub fn txn_begin(client: u32) -> u32 {
+  let id = NEXT_TXN.fetch_add(1, Ordering::Relaxed);
+  txns().lock().expect("txns").insert(id, Arc::new(Txn { client, session: Default::default() }));
+  id
+}
+
+/// The session of a transaction, locked for one statement (a session runs one at a time).
+pub struct TxnSession(tokio::sync::OwnedMutexGuard<Option<ClientSession>>);
+
+impl TxnSession {
+  pub fn get(&mut self) -> &mut ClientSession {
+    self.0.as_mut().expect("started session")
+  }
+}
+
+async fn txn_session(id: u32) -> Result<TxnSession> {
+  let txn = txn(id).ok_or(LaneError::Bail("unknown transaction"))?;
+  let mut guard = txn.session.clone().lock_owned().await;
+  if guard.is_none() {
+    let state = client(txn.client)?;
+    let mut session = state.client.start_session().await?;
+    session.start_transaction().await?;
+    *guard = Some(session);
+  }
+  Ok(TxnSession(guard))
+}
+
+/// Commits (`commit`) or aborts the transaction and ends its session (a transaction that ran no
+/// statement has nothing on the server).
+pub async fn txn_end(id: u32, commit: bool) -> std::result::Result<(), String> {
+  let Some(txn) = txns().lock().expect("txns").remove(&id) else {
+    return Ok(());
+  };
+  let mut guard = txn.session.lock().await;
+  let Some(session) = guard.as_mut() else {
+    return Ok(());
+  };
+  let outcome = if commit { session.commit_transaction().await } else { session.abort_transaction().await };
+  guard.take();
+  outcome.map_err(|error| command_error_json(&error))
+}
+
+/// A command in the transaction `id` (its writes): the raw reply, or the error as JSON `{ message,
+/// code?, codeName?, errorLabels? }`.
+pub async fn txn_command(id: u32, database: Option<String>, command: Document) -> std::result::Result<Document, String> {
+  let message = |e: LaneError| serde_json::json!({ "message": e.to_string() }).to_string();
+  let client_id = txn(id).ok_or_else(|| message(LaneError::Bail("unknown transaction")))?.client;
+  let state = client(client_id).map_err(message)?;
+  let mut session = txn_session(id).await.map_err(message)?;
+  let database = state.client.database(database.as_deref().unwrap_or(&state.default_database));
+  database.run_command(command).session(session.get()).await.map_err(|error| command_error_json(&error))
+}
+
+fn command_error_json(error: &mongodb::error::Error) -> String {
+  let mut out = serde_json::json!({ "message": error.to_string() });
+  if let mongodb::error::ErrorKind::Command(command_error) = error.kind.as_ref() {
+    out["code"] = serde_json::json!(command_error.code);
+    out["codeName"] = serde_json::json!(command_error.code_name);
+    out["message"] = serde_json::json!(command_error.message);
+  }
+  let labels: Vec<&String> = error.labels().iter().collect();
+  if !labels.is_empty() {
+    out["errorLabels"] = serde_json::json!(labels);
+  }
+  out.to_string()
+}
+
+/// The read transform of documents another driver fetched (the Node driver's `raw: true` results
+/// of a read inside a mongoose transaction, concatenated BSON documents): comma-separated JSON
+/// documents, like the lane's own reads write them.
+pub fn transform_raw(plan_id: u32, flags: Flags, lean_with_id: bool, bytes: &[u8]) -> Result<String> {
+  let plan = plan(plan_id)?;
+  let shape = ReadShape { lean_with_id };
+  let mut out = String::with_capacity(bytes.len() + 16);
+  let mut rest = bytes;
+  while !rest.is_empty() {
+    let length = rest
+      .get(..4)
+      .map(|prefix| i32::from_le_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]))
+      .and_then(|length| usize::try_from(length).ok())
+      .filter(|&length| length >= 5 && length <= rest.len())
+      .ok_or(LaneError::Bail("malformed raw documents"))?;
+    let raw = mongodb::bson::RawDocument::from_bytes(&rest[..length])
+      .map_err(|_| LaneError::Bail("malformed raw document"))?;
+    if !out.is_empty() {
+      out.push(',');
+    }
+    write_doc(&mut out, raw, &plan, flags, shape)?;
+    rest = &rest[length..];
+  }
+  Ok(out)
 }
