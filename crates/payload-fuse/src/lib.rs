@@ -66,6 +66,8 @@ struct Request {
   /// RUST_HTTP_LANES.md 3.1: the result as canonical text.
   canonical: bool,
   population: Option<Population>,
+  /// `fieldAccess`: the field `access.read` results (`ReadArgs::field_access`)
+  field_access: Option<Vec<bool>>,
 }
 
 fn decode_request(text: &str) -> FuseResult<Request> {
@@ -120,6 +122,20 @@ fn decode_request_value(request: &JsVal, db: Option<JsVal>) -> FuseResult<Reques
     JsVal::Undefined | JsVal::Null => None,
     pop => Some(decode_population(pop)?),
   };
+  let field_access = match request.get("fieldAccess") {
+    JsVal::Undefined | JsVal::Null => None,
+    results => Some(
+      results
+        .as_arr()
+        .ok_or_else(|| Bail::new("request:fieldAccess"))?
+        .iter()
+        .map(|result| match result {
+          JsVal::Bool(can_read) => Ok(*can_read),
+          _ => Err(Bail::new("request:fieldAccess")),
+        })
+        .collect::<FuseResult<Vec<_>>>()?,
+    ),
+  };
   Ok(Request {
     op,
     plan,
@@ -136,6 +152,7 @@ fn decode_request_value(request: &JsVal, db: Option<JsVal>) -> FuseResult<Reques
     auth: flag("auth"),
     canonical: flag("canonical"),
     population,
+    field_access,
   })
 }
 
@@ -207,6 +224,7 @@ pub fn peek_request(request_json: &str) -> Option<(Arc<CollectionPlan>, bool)> {
 fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<String> {
   let args = ReadArgs {
     plan: &request.plan,
+    field_access: request.field_access.as_deref(),
     locale: request.locale.clone(),
     fallback: request.fallback.clone(),
     localization: request.localization,

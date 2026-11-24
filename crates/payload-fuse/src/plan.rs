@@ -78,6 +78,9 @@ pub struct Field {
   pub max_depth: Option<f64>,
   /// lexical node types whose presence makes the editor's afterRead hook do work
   pub lexical_active: Option<HashSet<String>>,
+  /// `field.access.read` (without `overrideAccess`): its index in the request's `fieldAccess`
+  /// (FUSE_CONTRACT.md "Compiled user functions")
+  pub read_access: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -160,6 +163,7 @@ fn decode_field(json: &Json) -> Result<Field, String> {
     has_many: flag(json, "m"),
     max_depth: json.get("md").and_then(Json::as_f64),
     lexical_active,
+    read_access: json.get("ra").and_then(Json::as_u64).map(|i| i as usize),
   })
 }
 

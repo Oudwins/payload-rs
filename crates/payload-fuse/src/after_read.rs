@@ -34,6 +34,10 @@ pub enum Fallback {
 /// The per-operation inputs of `afterRead` (its args after destructuring, `depth` resolved).
 pub struct ReadArgs<'a> {
   pub plan: &'a CollectionPlan,
+  /// `field.access.read` results of the call without `overrideAccess` (FUSE_CONTRACT.md "Compiled
+  /// user functions"): `[i]` for the plan's `Field::read_access == Some(i)`. `None`:
+  /// `overrideAccess` (access is not called).
+  pub field_access: Option<&'a [bool]>,
   /// `req.locale` when it is a string
   pub locale: Option<String>,
   pub fallback: Fallback,
@@ -282,8 +286,17 @@ impl Walk<'_, '_, '_, '_> {
     }
 
     if ad {
-      // field hooks: none on a fused path; virtual: none; access.read: only with overrideAccess
-      if !removed && is_undefined(doc.get(name)) {
+      // field hooks: none on a fused path; virtual: none
+      let mut allow_default = true;
+      if let (Some(index), Some(field_access)) = (field.read_access, args.field_access) {
+        // `overrideAccess ? true : await field.access.read(...)`: decided by the dispatch (compiled
+        // functions reading only `req`, so one result per call)
+        if !*field_access.get(index).ok_or_else(|| Bail::new("access:field"))? {
+          allow_default = false;
+          doc.shift_remove(name);
+        }
+      }
+      if !removed && allow_default && is_undefined(doc.get(name)) {
         match &field.default {
           DefaultValue::None => {}
           DefaultValue::Function => return Err(Bail::new("default:function")),

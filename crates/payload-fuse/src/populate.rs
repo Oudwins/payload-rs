@@ -209,6 +209,8 @@ fn nested_find(run: &mut PopRun<'_>, session: &mut dyn ReadSession, args: &ReadA
   let mut docs = session.populate_find(&db_args, related, &ids)?;
   let nested_args = ReadArgs {
     plan: &related.plan,
+    // population runs only with `overrideAccess` (src/fuse/populate.ts)
+    field_access: None,
     locale: args.locale.clone(),
     fallback: args.fallback.clone(),
     localization: args.localization,

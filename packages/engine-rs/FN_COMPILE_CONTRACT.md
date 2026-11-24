@@ -72,7 +72,10 @@ if registry::is_active(id) && !guard::lane_should_verify(id) {
   through `lanes::request` (a partial object: reading any property other than `user`, `locale`,
   `fallbackLocale`, `context`, `query`, `headers`, `method`, `operation`,
   `payload.config.baseAccess`, `payload.config.admin.user` bails). Typed `JsVal`s (dates, bigints,
-  BSON) are opaque: comparing or reading them bails.
+  BSON) are opaque: comparing or reading them bails. From JS (`snapshotRequest`) these properties
+  are read as own data properties, the pristine Fetch `Request` getters, or through Payload's own
+  `isolateObjectProperty` proxies (the GraphQL resolvers' `req`: isolated keys from the
+  delegate, the rest from the target); anything else is left out (reading it bails).
 - `req.headers` is a read-only snapshot (`lanes::headers(pairs)`: lower-case names, values of one
   name combined with `, ` like the Fetch `Headers` iterator): only `get(name)` (string or `null`)
   and `has(name)`, case-insensitive; an invalid header name throws in JS (bail), any other member

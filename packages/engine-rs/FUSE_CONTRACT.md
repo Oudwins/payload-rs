@@ -56,7 +56,8 @@ A collection is eligible for reads when:
 - no field `hooks.afterRead`, no string `virtual` (also nothing `sanitizeWhereQuery` /
   `sanitizeSelect` would rewrite), no function `defaultValue` other than the array row `id`
   default of sanitization (applied only to rows without an `id`: the core bails then);
-- field `access.read` is allowed only while `overrideAccess` is truthy (per call);
+- field `access.read` functions are recorded in the plan (`fieldAccess`, once per function; a
+  field's `ra` is its index); see the access item below for calls without `overrideAccess`;
 - `richText` fields use lexical whose `afterRead` editor hook is recognised by its marker
   (`Symbol.for('payload.engine-rs.lexicalAfterRead')`, set by `@payloadcms/richtext-lexical`) and
   has no feature-level `afterRead` hooks; the node types with node hooks or sub fields are listed in
@@ -65,9 +66,30 @@ A collection is eligible for reads when:
 - without `overrideAccess` the collection read access must be compiled by the function compiler
   (FN_COMPILE_CONTRACT.md): it runs in the lane only while call-site guards are installed (payload's
   `init` installs sampled guards with the Rust core) and `fnIrLaneShouldVerify` does not ask for
-  the call; its result is `true` (no constraint) or a where constraint combined like
-  `executeAccess`' result; falsy, a bail, a de-optimised function or field `access.read` run the
-  exact lane. `where` paths are then `id` only and no `sort` (field permission checks).
+  the call (`compile/index.ts` `evaluateOnLane`, also used by the REST byte lanes'
+  `fusedResponse`); its result is `true` (no constraint) or a where constraint combined like
+  `executeAccess`' result; falsy, a bail or a de-optimised function run the exact lane. `where`
+  paths are then `id` only and no `sort` (field permission checks).
+- **Compiled user functions: field `access.read`** without `overrideAccess` (find / findByID;
+  count runs no afterRead): every function of `plan.fieldAccess` must be compiled with `argKeys`
+  reading nothing but `req` (`[]` or `[['req']]`), so its result is the same for every document,
+  field and locale of the call; each is evaluated once per call, after every other guard passed,
+  through `evaluateOnLane` (guards
+  installed, active, `lane_should_verify` false: the first 32 checked calls and then 1 in 256
+  lane calls run the exact lane, where the call-site guard verifies the JS result). The results
+  go to the request as `fieldAccess: [bool]`, and the core's afterRead applies them where
+  upstream calls the function (after hooks, before default values): falsy removes the field and
+  skips its default. A function reading `doc`, `siblingData`, `data`, `id` or the whole argument,
+  a bail, a sampled call or a de-optimised function run the exact lane (guard reasons
+  `access:field:*`). Population needs `overrideAccess` (section 9), so related plans never
+  evaluate field access. The SQLite fast afterRead does not apply them: such reads use the core's
+  generic path.
+- collection and field read hooks (`beforeOperation`, `beforeRead`, `afterRead`,
+  `afterOperation`) still keep a collection off the lanes, compiled or not: a compiled hook would
+  have to run per document (and per field) on the document's values inside the core's afterRead,
+  which is not built. The perf suite's hooks shape would not benefit from it: every hook there
+  increments a captured counter, a side effect the compiler rejects by design (and the suite
+  asserts the hook call counts).
 
 ## 3. Guards (per call)
 
@@ -119,6 +141,7 @@ binds the call's values (`PAYLOAD_RS_FUSE_TEMPLATES=off` disables it).
   "select": { ... } | null,  // sanitized select (upstream's sanitizeSelect / resolveSelect)
   "selectMode": "include" | "exclude" | null,
   "auth": false,             // auth collection: `{ ...doc, collection: slug }`
+  "fieldAccess": [true],     // without overrideAccess: field access.read results (section 2)
   "slug": "posts",
   "context": { "blocksAsJSON": false, "limitedBoundParameters": false } // adapter flags at call time
 }

@@ -21,7 +21,11 @@ export type CollectionPlan =
       access: unknown
       auth: boolean
       eligible: true
-      hasFieldAccess: boolean
+      /**
+       * The fields' `access.read` functions (once each): a field's `ra` is its index, the
+       * request's `fieldAccess[ra]` its result without `overrideAccess`.
+       */
+      fieldAccess: Any[]
       /** Relationship / upload fields: population would run with `depth && currentDepth <= depth`. */
       hasRelations: boolean
       /** The registered native plan, created on first use (`registerPlan`). */
@@ -45,7 +49,7 @@ const ineligible = (reason: string): never => {
 
 type Builder = {
   blocks: Map<string, unknown>
-  hasFieldAccess: boolean
+  fieldAccess: Any[]
   hasRelations: boolean
   payload: Any
   relations: Set<string>
@@ -160,8 +164,13 @@ const fieldPlan = (builder: Builder, field: Any): Record<string, unknown> => {
     watchEmptyHooks(builder, field, ['afterRead'])
     const access = watch(builder, field, 'access') as Any
     if (access !== undefined && access !== null) {
-      if (watch(builder, access, 'read')) {
-        builder.hasFieldAccess = true
+      const read = watch(builder, access, 'read')
+      if (read) {
+        if (typeof read !== 'function') {
+          return ineligible('field:access')
+        }
+        const index = builder.fieldAccess.indexOf(read)
+        out.ra = index === -1 ? builder.fieldAccess.push(read) - 1 : index
       }
     }
     const defaultValue = watch(builder, field, 'defaultValue')
@@ -250,6 +259,7 @@ const fieldPlan = (builder: Builder, field: Any): Record<string, unknown> => {
       out.tabs = tabs.map((tab: Any) => fieldPlan(builder, { ...tab, type: 'tab' }))
       // the copies above are not the config objects: watch the tabs themselves
       for (const tab of tabs) {
+        watch(builder, tab, 'access')
         watch(builder, tab, 'fields')
         watch(builder, tab, 'localized')
         watch(builder, tab, 'hidden')
@@ -283,7 +293,7 @@ export const buildCollectionPlan = (collection: Any): CollectionPlan => {
   const payload = config && collectionPayload.get(collection)
   const builder: Builder = {
     blocks: new Map(),
-    hasFieldAccess: false,
+    fieldAccess: [],
     hasRelations: false,
     payload,
     relations: new Set(),
@@ -321,7 +331,7 @@ export const buildCollectionPlan = (collection: Any): CollectionPlan => {
       access,
       auth: Boolean(config.auth),
       eligible: true,
-      hasFieldAccess: builder.hasFieldAccess,
+      fieldAccess: builder.fieldAccess,
       hasRelations: builder.hasRelations,
       json,
       relations: [...builder.relations],

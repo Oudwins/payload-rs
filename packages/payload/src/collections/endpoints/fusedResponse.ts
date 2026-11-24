@@ -31,12 +31,10 @@ type AnyFunction = (...args: any[]) => any
 
 /** The function compiler (`@payloadcms/engine-rs/compile`, RUST_PERF_PLAN.md S6). */
 type Compiler = {
-  compileFunction: (fn: AnyFunction) => { ok: boolean }
-  evaluateCompiled: (
+  evaluateOnLane: (
     fn: AnyFunction,
     args: unknown[],
   ) => { ok: false; reason: string } | { ok: true; value: unknown }
-  isCompiled: (fn: AnyFunction) => boolean
 }
 
 /**
@@ -61,12 +59,6 @@ if (isRustCoreEngine()) {
     })
     .catch(() => {})
 }
-
-/**
- * Guard mode (`PAYLOAD_FN_COMPILE_GUARD`, engine-rs compile/guard.ts) verifies compiled functions at
- * their JS call sites: while it is on, compiled access never replaces a call here.
- */
-const isCompileGuardOn = Boolean(process.env.PAYLOAD_FN_COMPILE_GUARD)
 
 /**
  * The response of a default read handler (find / findByID / count) served as bytes by the fused
@@ -182,8 +174,9 @@ const isAccessFusable = ({
  * - a user function the compiler accepted (RUST_PERF_PLAN.md S6 / owner decision D5): its IR is
  *   evaluated on the arguments `executeAccess` passes (`{ id, slug, data, isReadingStaticFile,
  *   req, skipCompilation }`); IR evaluation has no side effects, and the lane only serves when the
- *   result is exactly `true`. Not while guard mode verifies compiled functions at the JS call
- *   sites, and not for a function guard mode de-optimised (`isCompiled`).
+ *   result is exactly `true`. As on the fused lane (`evaluateOnLane`): only with guard mode's call
+ *   sites installed, for an active function, and not for calls the guard samples (those run the
+ *   exact path, where the guard verifies them).
  *
  * Anything else (no compiled version, an IR bail, a `Where` or falsy result) sends the request
  * to the exact path, which calls the access function as before.
@@ -203,13 +196,10 @@ const isAccessGranted = ({
   if (access === defaultAccess) {
     return defaultAccess({ req }) === true
   }
-  if (!access || !compiler || isCompileGuardOn) {
+  if (!access || !compiler) {
     return false
   }
-  if (!compiler.compileFunction(access).ok || !compiler.isCompiled(access)) {
-    return false
-  }
-  const evaluated = compiler.evaluateCompiled(access, [
+  const evaluated = compiler.evaluateOnLane(access, [
     { id, slug, data: undefined, isReadingStaticFile: false, req, skipCompilation },
   ])
   return evaluated.ok && evaluated.value === true

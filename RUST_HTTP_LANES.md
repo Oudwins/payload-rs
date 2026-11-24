@@ -243,7 +243,11 @@ and the JWT check (~48 µs under load).
 - **Byte lanes decide access only for calls the lane served** (the structural checks stay first;
   the lane runs with `overrideAccess: true` only when they pass, and its text is dropped unless the
   access is exactly `true`). A served fused read runs no JS, so nothing observable changes; requests
-  the lane cannot serve pay no access evaluation.
+  the lane cannot serve pay no access evaluation. A compiled access function is evaluated through
+  engine-rs `evaluateOnLane` (as in the operation lane): only with guard mode's call sites
+  installed (the default with the Rust core), and calls the guard samples take the exact path.
+  Collections with field `access.read` skip this pre-decision: the operation lane applies their
+  compiled field and collection access itself (FUSE_CONTRACT.md section 2).
 - **The JWT strategy remembers verified signatures** per (secret, token): the decoded header and
   claims text of tokens whose HMAC verified (at most 1,000 per secret, only tokens signed with the
   secret). Objects are parsed per call and the time claims checked per call.

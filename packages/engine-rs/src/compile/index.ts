@@ -19,6 +19,7 @@ import type { AnyFunction } from './snapshot.js'
 
 import { compileFunction, getCompiledFunction } from './compileFunction.js'
 import { configFunctions } from './configFunctions.js'
+import { compileGuardsInstalled } from './guard.js'
 import { getFnIr } from './native.js'
 import { snapshotArgs } from './snapshot.js'
 
@@ -65,6 +66,40 @@ export const evaluateCompiled = (
   const result = fnIr.fnIrEvaluate(entry.id, snapshotArgs(args, entry.argKeys))
   if (typeof result === 'string') {
     return { ok: false, reason: result }
+  }
+  return { ok: true, value: fnIr.fnIrResultToJs(result) }
+}
+
+/**
+ * A fused lane's call of `fn` (FN_COMPILE_CONTRACT.md "Lanes"): the compiled function evaluated on
+ * `args` only with call-site guards installed, for an active function whose call the guard does
+ * not need to see now (`lane_should_verify`, which counts this call as a lane call).
+ * `{ ok: false, reason }`: the call runs on the exact lane.
+ */
+export const evaluateOnLane = (
+  fn: AnyFunction,
+  args: unknown[],
+): { ok: false; reason: string } | { ok: true; value: unknown } => {
+  if (!compileGuardsInstalled()) {
+    return { ok: false, reason: 'no-guards' }
+  }
+  const entry = getCompiledFunction(fn)
+  if (!entry?.ok) {
+    return { ok: false, reason: 'not-compiled' }
+  }
+  const fnIr = getFnIr()
+  if (!fnIr.fnIrIsActive(entry.id)) {
+    return { ok: false, reason: 'deoptimized' }
+  }
+  if (fnIr.fnIrLaneShouldVerify(entry.id)) {
+    return { ok: false, reason: 'verify' }
+  }
+  // one `argKeys` entry per declared parameter; compiled functions have no rest parameter and no
+  // `arguments`, so later arguments are never read (and not snapshotted: e.g. `() => true`)
+  const declared = args.slice(0, entry.argKeys.length)
+  const result = fnIr.fnIrEvaluate(entry.id, snapshotArgs(declared, entry.argKeys))
+  if (typeof result === 'string') {
+    return { ok: false, reason: `bail:${result}` }
   }
   return { ok: true, value: fnIr.fnIrResultToJs(result) }
 }

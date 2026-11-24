@@ -215,13 +215,36 @@ const readRequestGetter = (
 /** `req` as a partial snapshot of the properties compiled functions may read. */
 export const snapshotRequest = (req: unknown): unknown => capture(req, capturedRequest)
 
+/** What payload's `isolateObjectProperty` recorded for each proxy it created. */
+const isolatedObjects = ((globalThis as Record<symbol, unknown>)[
+  Symbol.for('payload.isolateObjectProperty')
+] ??= new WeakMap()) as WeakMap<object, { delegate: object; keys: PropertyKey[]; target: object }>
+
+/**
+ * `object[key]` as `readDataProperty` / `readRequestGetter` read it, also through Payload's own
+ * `isolateObjectProperty` proxies (GraphQL resolvers' `req`): their handler reads isolated keys
+ * from a plain delegate and every other key from the target.
+ */
+const readRequestProperty = (
+  object: object,
+  key: string,
+  depth = 0,
+): { found: boolean; value?: unknown } | undefined => {
+  const isolated = depth < 8 ? isolatedObjects.get(object) : undefined
+  if (isolated) {
+    const source = isolated.keys.includes(key) ? isolated.delegate : isolated.target
+    return readRequestProperty(source, key, depth + 1)
+  }
+  return readDataProperty(object, key) ?? readRequestGetter(object, key)
+}
+
 const capture = (value: unknown, spec: CaptureSpec): unknown => {
   if (typeof value !== 'object' || value === null) {
     return snapshot(value)
   }
   const out: Record<string, unknown> = {}
   for (const [key, sub] of Object.entries(spec)) {
-    const read = readDataProperty(value, key) ?? readRequestGetter(value, key)
+    const read = readRequestProperty(value, key)
     if (!read) {
       // Not safely readable: leave it out, reading it bails.
       continue

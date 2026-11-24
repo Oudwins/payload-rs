@@ -79,8 +79,8 @@ impl ReadSession for SqliteRead<'_, '_> {
   }
 
   fn find_json(&mut self, args: &JsVal, one: bool, read: &DirectRead<'_>) -> Option<FuseResult<String>> {
-    // population runs in the core (crates/payload-fuse populate.rs) on the generic path
-    if *FAST_DISABLED || read.population.is_some() {
+    // population and field read access run in the core (crates/payload-fuse) on the generic path
+    if *FAST_DISABLED || read.population.is_some() || read.read.field_access.is_some() {
       return None;
     }
     let conn = match self.session.conn() {

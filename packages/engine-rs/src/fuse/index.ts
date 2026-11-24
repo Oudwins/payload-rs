@@ -20,9 +20,7 @@ import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../../payload/src/utilities/getVersionsConfig.js'
 import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.js'
 import { getCompiledFunction } from '../compile/compileFunction.js'
-import { compileGuardsInstalled } from '../compile/guard.js'
-import { getFnIr } from '../compile/native.js'
-import { snapshotArgs } from '../compile/snapshot.js'
+import { evaluateOnLane } from '../compile/index.js'
 import { getNativeEngine } from '../native.js'
 import { createFunctionRegistry, serializeForEngine } from '../serialize.js'
 import { hasDataProperties, isInertTree, isPlainDataObject, isPlainObject } from './inert.js'
@@ -233,9 +231,6 @@ const prepare = (op: Op, args: Any): Prepared | undefined => {
   const overrideAccess = Boolean(args.overrideAccess)
   let accessResult: unknown
   if (!overrideAccess) {
-    if (plan.hasFieldAccess) {
-      return guard('access:fields')
-    }
     const evaluated = compiledAccess(
       plan.access,
       op === 'findByID' ? args.id : undefined,
@@ -276,7 +271,7 @@ const config = (collection: Any): Any => collection.config
  * no access function: the default `Boolean(req.user)` wrapper's absence) runs the exact lane.
  */
 const compiledAccess = (
-  access: unknown,
+  access: Any,
   id: unknown,
   collectionConfig: Any,
   req: Any,
@@ -285,21 +280,7 @@ const compiledAccess = (
   if (typeof access !== 'function') {
     return { reason: 'access:none' }
   }
-  if (!compileGuardsInstalled()) {
-    return { reason: 'access:no-guards' }
-  }
-  const compiled = getCompiledFunction(access as never)
-  if (!compiled?.ok) {
-    return { reason: 'access:not-compiled' }
-  }
-  const fnIr = getFnIr()
-  if (!fnIr.fnIrIsActive(compiled.id)) {
-    return { reason: 'access:deoptimized' }
-  }
-  if (fnIr.fnIrLaneShouldVerify(compiled.id)) {
-    return { reason: 'access:verify' }
-  }
-  const accessArgs = [
+  const evaluated = evaluateOnLane(access, [
     {
       id,
       slug: collectionConfig.slug,
@@ -308,12 +289,11 @@ const compiledAccess = (
       req,
       skipCompilation,
     },
-  ]
-  const result = fnIr.fnIrEvaluate(compiled.id, snapshotArgs(accessArgs, compiled.argKeys))
-  if (typeof result === 'string') {
-    return { reason: `access:bail:${result}` }
+  ])
+  if (!evaluated.ok) {
+    return { reason: `access:${evaluated.reason}` }
   }
-  const value = fnIr.fnIrResultToJs(result)
+  const value = evaluated.value
   if (!value) {
     return { reason: 'access:denied' }
   }
@@ -321,6 +301,43 @@ const compiledAccess = (
     return { reason: 'access:where' }
   }
   return { value }
+}
+
+/**
+ * The `field.access.read` results of a find / findByID (afterRead's `overrideAccess ? true :
+ * await field.access.read({ id, blockData, collection, data, doc, req, siblingData,
+ * skipCompilation })`, falsy: the field is removed and gets no default), one per function of
+ * `plan.fieldAccess`, or the guard reason; `undefined` with `overrideAccess` or without such
+ * functions. Only compiled functions that read nothing but `req` (`argKeys`): their result is the
+ * same for every document and field of the call, so each is evaluated once, after every other
+ * guard passed (`evaluateOnLane`: guard sampling as for collection access).
+ */
+const compiledFieldAccess = ({
+  overrideAccess,
+  plan,
+  req,
+}: Pick<Prepared, 'overrideAccess' | 'plan' | 'req'>): boolean[] | string | undefined => {
+  if (overrideAccess || plan.fieldAccess.length === 0) {
+    return undefined
+  }
+  const results: boolean[] = []
+  for (const fn of plan.fieldAccess) {
+    const compiled = getCompiledFunction(fn)
+    if (compiled?.ok && !readsOnlyReq(compiled.argKeys)) {
+      return 'access:field:args'
+    }
+    const evaluated = evaluateOnLane(fn, [{ req }])
+    if (!evaluated.ok) {
+      return `access:field:${evaluated.reason}`
+    }
+    results.push(Boolean(evaluated.value))
+  }
+  return results
+}
+
+const readsOnlyReq = (argKeys: (null | string[])[]) => {
+  const [keys] = argKeys
+  return argKeys.length <= 1 && keys !== null && (keys ?? []).every((key) => key === 'req')
 }
 
 /** `afterRead`'s `depth` (`parseInt(String(depth))`, `defaultDepth`, capped at `maxDepth`). */
@@ -364,6 +381,7 @@ const isSelectTree = (select: unknown, depth = 16): boolean => {
 const readRequest = ({
   currentDepth,
   depth,
+  fieldAccess,
   flattenLocales,
   payload,
   plan,
@@ -373,6 +391,7 @@ const readRequest = ({
 }: {
   currentDepth: number
   depth: number
+  fieldAccess: boolean[] | undefined
   flattenLocales: boolean
   payload: Any
   plan: { eligible: true } & CollectionPlan
@@ -385,6 +404,7 @@ const readRequest = ({
     currentDepth,
     depth,
     fallbackLocale: req.fallbackLocale,
+    fieldAccess,
     flattenLocales,
     locale: req.locale,
     localization: Boolean(payload.config.localization),
@@ -515,9 +535,14 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   if (typeof db === 'string') {
     return guard(db)
   }
+  const fieldAccess = compiledFieldAccess(prepared)
+  if (typeof fieldAccess === 'string') {
+    return guard(fieldAccess)
+  }
   const request = `{"op":"find","plan":${planID},"db":${db.db},${readRequest({
     currentDepth,
     depth,
+    fieldAccess,
     flattenLocales: true,
     payload,
     plan,
@@ -623,9 +648,14 @@ const buildFindByIDRequest = (args: Any): Fused | undefined => {
   if (typeof db === 'string') {
     return guard(db)
   }
+  const fieldAccess = compiledFieldAccess(prepared)
+  if (typeof fieldAccess === 'string') {
+    return guard(fieldAccess)
+  }
   const request = `{"op":"findByID","plan":${planID},"db":${db.db},${readRequest({
     currentDepth,
     depth,
+    fieldAccess,
     flattenLocales: flattenLocales === undefined ? true : flattenLocales,
     payload,
     plan,
