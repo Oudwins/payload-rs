@@ -216,3 +216,88 @@ shadow 31/31 equal to the baseline with 10 served requests (`count` 2, `findByID
 divergences (status, headers, body bytes); the unit differentials (JWT, both document caches) 16/16.
 
 Decisions taken (owner, 2026-11-23): C1 accepted, C2 accepted, C3 assigned to WP C.
+
+## 5. MongoDB request path (2026-11-24, default engine: Rust core + B's driver lane)
+
+Profiled with `--cpu-prof` in the perf bench (`PAYLOAD_ENGINE` unset, typical shape, 1k posts):
+REST `GET /posts limit 10` costs 1.06 ms of JS-thread time per request, against 0.42 ms for the
+same Local `find`. Per request (µs of JS thread):
+
+| area                                                                                                          | µs  |
+| ------------------------------------------------------------------------------------------------------------- | --- |
+| engine-rs ops / runtime JS (afterRead plans, host helpers)                                                    | 164 |
+| B's driver lane JS (`outcome`: `JSON.parse` of the result text, ~48; `lanePaginate`, `laneFindOne`)           | 163 |
+| resumed Rust core tasks (`awaitValue`)                                                                        | 132 |
+| undici: `Response.json`'s stringify ~43, the bench client's `response.json()` ~53, Request / Headers          | 166 |
+| mongoose / mongodb / bson (query building still goes through mongoose `Query` in the lane)                    | 92  |
+| payload `afterRead` field code (relationship population promises)                                             | 54  |
+| payload request build and routing (`createPayloadRequestFromWebRequest`, `handleEndpoints`, `formatAdminURL`) | 46  |
+| fused-lane guards (`prepare`: once for the byte lane, once in the operation)                                  | 33  |
+| JWT strategy (after the memo below)                                                                           | 14  |
+
+Before the changes below, two of WP C's own pieces were the largest request-path costs outside the
+engine: the byte lane's read-access pre-decision (~150 µs per REST read: `evaluateCompiled` snapshots
+the whole access argument, `req` included, and it ran on MongoDB, where the lane cannot serve yet)
+and the JWT check (~48 µs under load).
+
+- **Byte lanes decide access only for calls the lane served** (the structural checks stay first;
+  the lane runs with `overrideAccess: true` only when they pass, and its text is dropped unless the
+  access is exactly `true`). A served fused read runs no JS, so nothing observable changes; requests
+  the lane cannot serve pay no access evaluation.
+- **The JWT strategy remembers verified signatures** per (secret, token): the decoded header and
+  claims text of tokens whose HMAC verified (at most 1,000 per secret, only tokens signed with the
+  secret). Objects are parsed per call and the time claims checked per call.
+
+**Throughput.** Every throughput scenario runs at an event-loop utilization of 1.00 at both x8 and
+x64, on both engines, and requests per second equal 1000 / (JS-thread ms per request) (typical
+`findByID` rs: 0.170 ms, 5,880 predicted, 5,886 measured). The limit is the JS thread from
+concurrency 8 on: not the mongoose pool (an exhausted pool leaves the loop idle) and not the
+database. Napi crossings count as JS-thread time (they run on it). Throughput therefore moves with
+JS-thread time per request only: REST `GET /posts limit 10` x64 went from 862 to 1,117 req/s
+(2.00x -> 2.48x TS) with the two changes above.
+
+**Measured** (perf suite, MongoDB, typical + complex, 1k posts; TS median / Rust median per
+scenario, geometric means per category; before = b1527366, after = the two changes above, same
+machine state, nothing else changed):
+
+| surface | category         | n   | before | after  |
+| ------- | ---------------- | --- | ------ | ------ |
+| REST    | all              | 69  | 1.033x | 1.075x |
+| REST    | read             | 14  | 1.107x | 1.249x |
+| REST    | uploads          | 4   | 0.946x | 1.169x |
+| REST    | delete           | 4   | 0.773x | 0.878x |
+| REST    | custom-endpoints | 12  | 1.191x | 1.208x |
+| GraphQL | all              | 24  | 1.081x | 1.158x |
+| GraphQL | read             | 10  | 1.282x | 1.295x |
+| GraphQL | auth             | 2   | 1.184x | 1.281x |
+| GraphQL | globals          | 4   | 0.972x | 1.108x |
+
+Throughput (rs, typical): REST `GET /posts limit 10` x64 862 -> 1,117 req/s (JS thread per
+request 1.160 -> 0.895 ms); Local `find limit 10` x64 2,407 -> 2,654 req/s; `findByID` x64 5,886
+(unchanged: no HTTP layer). Write categories (create, update, partial-update) move within run noise
+(0.88-0.96x on both sides); the changes do not touch them beyond the shared auth path.
+
+Verification (2026-11-24): full MongoDB harness, default engine, 135 files: 3329 / 165 / 422 against
+the 3330 / 164 / 422 baseline. The one difference is the Redis KV test (no Redis server was running;
+it fails the same way with `--engine ts`). Load errors without test differences: storage emulators,
+localstack, the hmr Next dev server. CLI test names differ only by the worktree path. Parity goldens
+503 / 503; MongoDB adapter shadow (rs candidate) over the 31 REST / GraphQL files: 0 divergences in
+the test processes; 2 in the CLI child processes of `plugin-mcp/instructions`, identical at the
+base commit without these changes. SQLite byte shadow 31 / 31, 10 served, 0 divergences; HTTP lanes
+unit differentials 18 / 18.
+
+**For the fused MongoDB backend (A) and the driver lane (B):**
+
+- The byte lanes (`fusedResponse`) and the auth user lookup (`fuseFindByID`) are backend-agnostic:
+  `fusedOperationText` may return a promise, nothing else is needed on WP C's side.
+- GraphQL reads cannot take any fused lane today: the resolvers pass
+  `isolateObjectProperty(req, [...])`, a `Proxy`, which the fused guard rejects (`req:object`).
+  Accepting Payload's own isolation proxies (e.g. registered in a `WeakSet` by
+  `isolateObjectProperty`) is the prerequisite for GraphQL plans.
+- Calls without `overrideAccess` need per-call compiled access in the lane (`isCompiledAccess` is
+  per config today); `evaluateCompiled` with `argKeys: [null]` copies every key of the argument,
+  `req` included: an access function that ignores its argument should not snapshot it.
+- A cheap "does this `payload.db` have a fused target" export would let the byte lane skip its
+  guard pass on databases without a backend (~15 µs per REST read).
+- The lane's remaining JS: `JSON.parse` of the result (removed entirely by text results through
+  the byte lanes) and mongoose `Query` construction for the filter.
