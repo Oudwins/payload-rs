@@ -589,3 +589,68 @@ pub fn transform_raw(plan_id: u32, flags: Flags, lean_with_id: bool, bytes: &[u8
   }
   Ok(out)
 }
+
+/// The raw documents of a find on `collection_name`, inside the Rust-owned transaction `txn` when
+/// given (the fused write lanes' nested reads).
+pub async fn find_raw(
+  client_id: u32,
+  database: Option<&str>,
+  collection_name: &str,
+  find: FindSpec,
+  txn: Option<u32>,
+) -> Result<Vec<RawDocumentBuf>> {
+  let state = client(client_id)?;
+  let coll = collection(&state, database, collection_name);
+  let mut options = FindOptions::default();
+  options.sort = find.sort;
+  options.projection = find.projection;
+  options.skip = find.skip;
+  options.limit = find.limit;
+  options.collation = find.collation;
+  options.hint = find.hint;
+  let mut docs = Vec::new();
+  match txn {
+    Some(txn) => {
+      let mut session = txn_session(txn).await?;
+      let session = session.get();
+      let mut cursor = coll.find(find.filter).with_options(options).session(&mut *session).await?;
+      while cursor.advance(&mut *session).await? {
+        docs.push(cursor.current().to_raw_document_buf());
+      }
+    }
+    None => {
+      let mut cursor = coll.find(find.filter).with_options(options).await?;
+      while cursor.advance().await? {
+        docs.push(cursor.current().to_raw_document_buf());
+      }
+    }
+  }
+  Ok(docs)
+}
+
+/// A command (BSON as the caller serialized it) in the Rust-owned transaction `txn` (the fused
+/// write lanes).
+pub async fn txn_command_raw(
+  id: u32,
+  database: Option<String>,
+  command: RawDocumentBuf,
+) -> std::result::Result<Document, String> {
+  let message = |e: LaneError| serde_json::json!({ "message": e.to_string() }).to_string();
+  let client_id = txn(id).ok_or_else(|| message(LaneError::Bail("unknown transaction")))?.client;
+  let state = client(client_id).map_err(message)?;
+  let mut session = txn_session(id).await.map_err(message)?;
+  let database = state.client.database(database.as_deref().unwrap_or(&state.default_database));
+  database.run_raw_command(command).session(session.get()).await.map_err(|error| command_error_json(&error))
+}
+
+/// A command (BSON as the caller serialized it) outside any transaction (statements upstream sends
+/// without a session, e.g. the expired-locks delete of `checkDocumentLockStatus`).
+pub async fn command_raw(
+  client_id: u32,
+  database: Option<String>,
+  command: RawDocumentBuf,
+) -> std::result::Result<Document, String> {
+  let state = client(client_id).map_err(|e| serde_json::json!({ "message": e.to_string() }).to_string())?;
+  let database = state.client.database(database.as_deref().unwrap_or(&state.default_database));
+  database.run_raw_command(command).await.map_err(|error| command_error_json(&error))
+}

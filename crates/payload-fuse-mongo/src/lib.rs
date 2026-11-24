@@ -95,9 +95,36 @@ pub async fn run(client_id: u32, plan_id: u32, reads: MongoReads, request_json: 
     Ok(plan) => plan,
     Err(_) => return "!mongo:plan".to_string(),
   };
-  let backend = MongoBackend { client: client_id, database: reads.database, loaded: Mutex::new(Some(loaded)), plan, flags: reads.flags };
+  let backend = MongoBackend { client: client_id, txn: None, database: reads.database, loaded: Mutex::new(Some(loaded)), plan, flags: reads.flags };
   // nested finds of relationship population block this worker (`block_in_place`)
   payload_fuse::run(&backend, 0, &request_json)
+}
+
+/// The fused `findByID` request `request_json` on `doc` (the document a fused write stored or
+/// changed, as the database holds it) instead of a read, with population's nested reads in the
+/// Rust-owned transaction `txn` (the fused write lanes, packages/engine-rs/FUSED_WRITES.md). The
+/// collection and flags are those of `reads`. Runs on a driver runtime worker.
+pub fn run_document(
+  client_id: u32,
+  plan_id: u32,
+  reads: &MongoReads,
+  doc: Option<RawDocumentBuf>,
+  request_json: &str,
+  txn: Option<u32>,
+) -> String {
+  let plan = match plan(plan_id) {
+    Ok(plan) => plan,
+    Err(_) => return "!mongo:plan".to_string(),
+  };
+  let backend = MongoBackend {
+    client: client_id,
+    txn,
+    database: reads.database.clone(),
+    loaded: Mutex::new(Some(Loaded::One(doc))),
+    plan,
+    flags: reads.flags,
+  };
+  payload_fuse::run(&backend, 0, request_json)
 }
 
 fn collection(state: &DriverClient, database: Option<&str>, name: &str) -> Collection<RawDocumentBuf> {
@@ -162,6 +189,8 @@ async fn load(client_id: u32, reads: &MongoReads) -> Result<Loaded, LaneError> {
 /// The fused core's view of the loaded reads: each read is served once, in the operation's order.
 struct MongoBackend {
   client: u32,
+  /// The Rust-owned transaction nested reads run in (fused writes, [`run_document`]).
+  txn: Option<u32>,
   database: Option<String>,
   loaded: Mutex<Option<Loaded>>,
   plan: std::sync::Arc<Plan>,
@@ -255,10 +284,23 @@ impl ReadSession for MongoSession<'_> {
       collation: None,
       hint: None,
     };
-    let state = client(self.backend.client).map_err(|_| bail("client"))?;
-    let coll = collection(&state, self.backend.database.as_deref(), &collection_name);
-    let raws = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(run_find(&coll, Some(&find))))
-      .map_err(|error| match error {
+    let raws = if let Some(txn) = self.backend.txn {
+      let database = self.backend.database.as_deref();
+      tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(payload_mongo_driver::find_raw(
+          self.backend.client,
+          database,
+          &collection_name,
+          find,
+          Some(txn),
+        ))
+      })
+    } else {
+      let state = client(self.backend.client).map_err(|_| bail("client"))?;
+      let coll = collection(&state, self.backend.database.as_deref(), &collection_name);
+      tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(run_find(&coll, Some(&find))))
+    }
+    .map_err(|error| match error {
         LaneError::Bail(reason) => bail(reason),
         LaneError::Driver(_) => bail("driver"),
       })?;

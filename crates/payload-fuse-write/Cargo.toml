@@ -1,0 +1,11 @@
+[package]
+name = "payload-fuse-write"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Fused MongoDB writes: an operation's statements in a Rust-owned transaction, its afterRead on the stored document, the commit, in one call"
+
+[dependencies]
+payload-fuse-mongo = { path = "../payload-fuse-mongo" }
+payload-mongo-driver = { path = "../payload-mongo-driver" }
+serde_json.workspace = true

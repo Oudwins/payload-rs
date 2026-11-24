@@ -15,7 +15,8 @@ use mongodb::options::{Collation, Hint};
 
 pub use client::{
   ConnectInfo, ConnectSpec, CountSpec, FindSpec, LaneError, ReadTarget, aggregate, close, command, connect, count,
-  find_one, paginate, register_plan, runtime, transform_raw, txn_begin, txn_command, txn_end,
+  command_raw, find_one, find_raw, paginate, register_plan, runtime, transform_raw, txn_begin,
+  txn_command, txn_command_raw, txn_end,
 };
 pub use transform::Flags;
 /// The driver crate itself (bson types for the binding).

@@ -1849,6 +1849,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "payload-fuse-write"
+version = "0.1.0"
+dependencies = [
+ "payload-fuse-mongo",
+ "payload-mongo-driver",
+ "serde_json",
+]
+
+[[package]]
 name = "payload-mongo-driver"
 version = "0.1.0"
 dependencies = [
@@ -1941,6 +1950,7 @@ dependencies = [
  "payload-fuse",
  "payload-fuse-mongo",
  "payload-fuse-sqlite",
+ "payload-fuse-write",
  "payload-mongo-driver",
  "payload-mongo-live",
  "payload-mongo-live-joins",

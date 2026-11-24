@@ -10,6 +10,7 @@ mod ops_write;
 mod engine;
 mod fn_ir;
 mod fuse;
+mod fuse_write;
 mod runtime;
 mod mongo_live;
 mod mongo_live_write;

@@ -31,6 +31,7 @@ members = [
   "crates/payload-fuse",
   "crates/payload-fuse-sqlite",
   "crates/payload-fuse-mongo",
+  "crates/payload-fuse-write",
 ]
 
 [workspace.package]
