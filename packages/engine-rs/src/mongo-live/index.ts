@@ -60,10 +60,11 @@ export type MongoLiveBinding = {
   nowISO: () => string
   objectIdIsValid: (value: unknown) => boolean
   ported: () => Record<string, boolean>
+  useUpstreamDeps: (force: boolean) => void
 } & Record<MongoLiveReadMethod, (adapter: unknown, args: unknown) => Promise<unknown>>
 
 /** The binding contract this host implements (crates/payload-mongo-live/src/binding.rs `API_VERSION`). */
-const MONGO_LIVE_API_VERSION = 1
+const MONGO_LIVE_API_VERSION = 2
 
 let binding: MongoLiveBinding | undefined
 

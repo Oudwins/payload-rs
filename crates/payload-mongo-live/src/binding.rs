@@ -16,7 +16,7 @@ use crate::{bson, deps, host, session};
 type Body<const N: usize> = fn([Local; N]) -> JsResult<Local>;
 
 /// Version of the binding / host-helper contract with `packages/engine-rs/src/mongo-live`.
-pub const API_VERSION: u32 = 1;
+pub const API_VERSION: u32 = 2;
 
 fn run<const N: usize>(env: sys::napi_env, info: sys::napi_callback_info, body: Body<N>) -> sys::napi_value {
   js::set_env(env);
@@ -68,6 +68,13 @@ export!(init, 2, |[host_obj, options]| {
   host::install(host_obj)?;
   let force = js::type_of(options).is_object_like() && truthy(js::get_named(options, "upstreamDeps")?);
   deps::set_force_upstream(force);
+  Ok(js::undefined())
+});
+
+// useUpstreamDeps(force): whether the data methods call upstream's TS query / transform / joins
+// functions instead of the registered ports (set by the production glue after `init`)
+export!(use_upstream_deps_export, 1, |[force]| {
+  deps::set_force_upstream(truthy(force));
   Ok(js::undefined())
 });
 
@@ -165,6 +172,7 @@ pub fn create() -> JsResult<Local> {
   add!("getGlobal", get_global_export);
   add!("nowISO", now_iso_export);
   add!("ported", ported_export);
+  add!("useUpstreamDeps", use_upstream_deps_export);
   js::set_named(o, "apiVersion", js::number(f64::from(API_VERSION)))?;
   Ok(o)
 }

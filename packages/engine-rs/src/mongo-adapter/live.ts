@@ -109,18 +109,32 @@ export const getMongoLiveWrite = ({ mongoose }: { mongoose?: unknown } = {}) => 
 let areDepsInitialized = false
 
 /**
+ * Whether the live data methods call the Rust ports of db-mongodb's `buildQuery`,
+ * `buildSortParam`, `buildProjectionFromSelect`, `transform`, `buildJoinAggregation` and
+ * `resolveJoins` (`PAYLOAD_RS_MONGO_LIVE_DEPS=rust`). By default they call upstream's TS functions:
+ * the ports read and write the live JS objects through Node-API once per field, which made the
+ * write path slower than upstream (WP-G A/B, typical shape: update 0.97x -> 1.04x of TS, delete
+ * 0.87x -> 0.94x). The driver lane plans its reads with the same TS functions.
+ * `PAYLOAD_RS_MONGO_LIVE_UPSTREAM_DEPS=true` forces upstream's functions in either mode.
+ */
+const isLiveDepsRust = () =>
+  process.env.PAYLOAD_RS_MONGO_LIVE_DEPS === 'rust' &&
+  process.env.PAYLOAD_RS_MONGO_LIVE_UPSTREAM_DEPS !== 'true'
+
+/**
  * Once per process, before the first data method: the live ports the data methods call through
  * `payload_mongo_live::deps` are initialized (each registers itself): transform / handleError
  * (`mongoLiveTransformBinding().init` with the values db-mongodb imports: payload's `APIError`,
  * `ValidationError`, `flattenAllFields`, mongoose's `Types`) and joins (`getMongoLiveJoins()`,
  * init.ts). A binding the addon lacks leaves upstream's TS function in place for that dependency.
+ * Whether the registered ports or upstream's functions run: `isLiveDepsRust`.
  */
 const initializeLiveDeps = () => {
   if (areDepsInitialized) {
     return
   }
   areDepsInitialized = true
-  getMongoLive()
+  getMongoLive().useUpstreamDeps(!isLiveDepsRust())
   const { addon } = requireEngineAddon()
   if (typeof addon.mongoLiveTransformBinding === 'function') {
     addon.mongoLiveTransformBinding().init({
@@ -169,7 +183,7 @@ export const installLiveEngine = ({
   if (missingMethods.length) {
     throw missingLiveEngineError({ addonPath, missing: missingMethods.map((m) => `live ${m}`) })
   }
-  if (process.env.PAYLOAD_RS_MONGO_LIVE_UPSTREAM_DEPS !== 'true') {
+  if (isLiveDepsRust()) {
     const upstreamDeps = Object.entries(getLiveDepsPorted())
       .filter(([, isPorted]) => !isPorted)
       .map(([name]) => `live ${name}`)
