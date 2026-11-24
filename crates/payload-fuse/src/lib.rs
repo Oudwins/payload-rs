@@ -260,6 +260,26 @@ fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<St
   }
 }
 
+/// updateByID's `originalDoc` (collections/operations/utilities/update.ts): `afterRead({ depth: 0,
+/// doc, fallbackLocale: null, overrideAccess: true, showHiddenFields: true, ... })` on `doc` (a
+/// copy of the stored document after the read transform), with the collection plan, locale and
+/// localization of the fused request `request_json` (the write's result read). The fused writes,
+/// packages/engine-rs/FUSED_WRITES.md section 13.
+pub fn after_read_original(request_json: &str, doc: &mut JsVal) -> FuseResult<()> {
+  let request = decode_request(request_json)?;
+  let args = ReadArgs {
+    plan: &request.plan,
+    locale: request.locale.clone(),
+    fallback: Fallback::None,
+    localization: request.localization,
+    flatten_locales: true,
+    show_hidden: true,
+    depth: 0.0,
+    current_depth: 1.0,
+  };
+  after_read::after_read(&args, doc, None, None)
+}
+
 /// `{ ...doc, collection: slug }`
 pub(crate) fn add_collection(doc: &mut JsVal, slug: &str) -> FuseResult<()> {
   let props = obj_mut(doc).ok_or_else(|| Bail::new("doc:not-object"))?;

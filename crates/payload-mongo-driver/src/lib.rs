@@ -15,7 +15,7 @@ use mongodb::options::{Collation, Hint};
 
 pub use client::{
   ConnectInfo, ConnectSpec, CountSpec, FindSpec, LaneError, ReadTarget, aggregate, close, command, connect, count,
-  command_raw, find_one, find_raw, paginate, register_plan, runtime, transform_raw, txn_begin,
+  command_raw, find_one, find_one_raw, find_raw, paginate, register_plan, runtime, transform_raw, txn_begin,
   txn_command, txn_command_raw, txn_end,
 };
 pub use transform::Flags;
@@ -75,7 +75,8 @@ fn document(value: Option<&Bson>, what: &str) -> Result<Option<Document>, LaneEr
   }
 }
 
-fn find_spec(doc: &Document) -> Result<FindSpec, LaneError> {
+/// A find spec (`{ filter, sort?, projection?, skip?, limit?, collation?, hint? }`, js-bson).
+pub fn find_spec(doc: &Document) -> Result<FindSpec, LaneError> {
   let filter = document(doc.get("filter"), "filter")?.unwrap_or_default();
   let skip = match doc.get("skip") {
     None | Some(Bson::Null) => None,

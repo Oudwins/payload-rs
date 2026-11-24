@@ -189,7 +189,7 @@ export const mongooseBlocksLane = (lane: DriverLane, Model: Any): string | undef
   return undefined
 }
 
-const findOptionKeys = new Set([
+export const findOptionKeys = new Set([
   'collation',
   'hint',
   'limit',
@@ -204,7 +204,7 @@ const countOptionKeys = new Set(['collation', 'hint', 'session'])
  * The filter and driver options mongoose would send for the query `mq` (what `_find` /
  * `_findOne` / `_countDocuments` / `_estimatedDocumentCount` pass to the collection).
  */
-const castQuery = (mq: Any, allowed: Set<string>, isEstimated = false) => {
+export const castQuery = (mq: Any, allowed: Set<string>, isEstimated = false) => {
   if (!isEstimated) {
     mq._applyTranslateAliases()
     mq._castConditions()
@@ -225,7 +225,7 @@ const castQuery = (mq: Any, allowed: Set<string>, isEstimated = false) => {
   return { filter: isEstimated ? undefined : mq._conditions, options }
 }
 
-const findSpec = ({ filter, options }: { filter: Any; options: Any }) => {
+export const findSpec = ({ filter, options }: { filter: Any; options: Any }) => {
   const spec: Record<string, unknown> = { filter }
   for (const key of ['collation', 'hint', 'limit', 'projection', 'skip', 'sort']) {
     if (options[key] !== undefined) {

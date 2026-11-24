@@ -18,7 +18,8 @@ use payload_engine::js::{JsVal, decode_value_bson, encode_value_text};
 use payload_mongo_driver::mongodb::bson::Document;
 
 use super::plan::decode;
-use super::{Bail, IdUse, RecordedEntropy, UpdateInput, WriteCtx, prepare_create, prepare_update};
+use super::plan::WritePlan;
+use super::{Bail, IdUse, Prepared, RecordedEntropy, UpdateInput, WriteCtx, prepare_create, prepare_update};
 
 fn hex(doc: &Document) -> Result<String, Bail> {
   let mut bytes = Vec::new();
@@ -40,8 +41,21 @@ pub fn prepare_json(plan_json: &str, request_json: &str, stored: Option<&[u8]>) 
   }
 }
 
-fn run(plan_json: &str, request_json: &str, stored: Option<&[u8]>) -> Result<String, Bail> {
-  let plan = decode(plan_json).map_err(Bail::new)?;
+/// The request-derived inputs of one prepare call.
+struct Request {
+  json: Json,
+  entropy: RecordedEntropy,
+  user: Option<(String, JsVal)>,
+  i18n: Option<I18n>,
+  context: JsVal,
+  language: String,
+  fallback_language: Vec<String>,
+  data: JsVal,
+  locale: Option<String>,
+  override_access: bool,
+}
+
+fn parse(request_json: &str) -> Result<Request, Bail> {
   let request: Json = serde_json::from_str(request_json).map_err(|e| Bail::new(format!("request:{e}")))?;
   let mut entropy = RecordedEntropy::default();
   for ms in request.get("clock").and_then(Json::as_array).into_iter().flatten() {
@@ -74,35 +88,82 @@ fn run(plan_json: &str, request_json: &str, stored: Option<&[u8]>) -> Result<Str
   };
   let data = value(&request, "data")?;
   let locale = request.get("locale").and_then(Json::as_str).map(str::to_string);
-  let mut ctx = WriteCtx {
-    locale: locale.as_deref(),
-    context: &context,
-    entropy: &mut entropy,
-    fallback_language: &fallback_language,
-    language: &language,
-    override_access: request.get("overrideAccess").and_then(Json::as_bool).unwrap_or(false),
-    t: i18n.as_ref().map(|i| i as &dyn payload_core_validate::Translate),
-    user,
-  };
-  let prepared = match request.get("op").and_then(Json::as_str) {
-    Some("create") => prepare_create(&plan, &data, &mut ctx)?,
-    Some("update") => {
-      let stored = stored.ok_or_else(|| Bail::new("request:stored"))?;
-      let stored = Document::from_reader(stored).map_err(|e| Bail::new(format!("request:stored:{e}")))?;
-      let input = UpdateInput { doc_with_locales: value(&request, "docWithLocales")?, original_doc: value(&request, "originalDoc")?, stored };
-      prepare_update(&plan, &value(&request, "id")?, &data, &input, &mut ctx)?
+  let override_access = request.get("overrideAccess").and_then(Json::as_bool).unwrap_or(false);
+  Ok(Request { json: request, entropy, user, i18n, context, language, fallback_language, data, locale, override_access })
+}
+
+impl Request {
+  fn ctx(&mut self) -> WriteCtx<'_> {
+    WriteCtx {
+      locale: self.locale.as_deref(),
+      context: &self.context,
+      entropy: &mut self.entropy,
+      fallback_language: &self.fallback_language,
+      language: &self.language,
+      override_access: self.override_access,
+      t: self.i18n.as_ref().map(|i| i as &dyn payload_core_validate::Translate),
+      user: self.user.clone(),
     }
-    _ => return Err(Bail::new("request:op")),
-  };
-  drop(ctx);
-  let mut out = serde_json::Map::new();
-  // values as `encode_value_text` writes them (`-0` kept), spliced below
-  let caller_data = prepared.caller_data.as_ref().map(encode_value_text);
-  let context_writes: Vec<String> = prepared
+  }
+
+  /// Readings the call did not take (clock, ids).
+  fn left(&self) -> (usize, usize) {
+    (self.entropy.clock.len(), self.entropy.ids.len())
+  }
+}
+
+/// What a driver-run prepare produced: the outcome, the readings it did not take (clock, ids)
+/// and `contextWrites` as the JSON text `[[key, value], ...]` (values in the boundary's tree
+/// encoding).
+pub struct DriverPrepared {
+  pub prepared: Prepared,
+  pub left: (usize, usize),
+  pub context_writes: String,
+}
+
+/// `prepare_update` with the request `request_json` (this module's format; `stored`,
+/// `docWithLocales`, `originalDoc` come from `input`, the operation driver's stored-document read).
+pub fn prepare_update_request(plan: &WritePlan, request_json: &str, input: &UpdateInput) -> Result<DriverPrepared, Bail> {
+  let mut request = parse(request_json)?;
+  let id = value(&request.json, "id")?;
+  let data = request.data.clone();
+  let prepared = prepare_update(plan, &id, &data, input, &mut request.ctx())?;
+  let left = request.left();
+  let context_writes = format!("[{}]", context_writes_text(&prepared).join(","));
+  Ok(DriverPrepared { prepared, left, context_writes })
+}
+
+fn context_writes_text(prepared: &Prepared) -> Vec<String> {
+  prepared
     .context_writes
     .iter()
     .map(|(k, v)| format!("[{},{}]", Json::String(k.clone()), encode_value_text(v)))
-    .collect();
+    .collect()
+}
+
+fn run(plan_json: &str, request_json: &str, stored: Option<&[u8]>) -> Result<String, Bail> {
+  let plan = decode(plan_json).map_err(Bail::new)?;
+  let mut request = parse(request_json)?;
+  let data = request.data.clone();
+  let prepared = match request.json.get("op").and_then(Json::as_str) {
+    Some("create") => prepare_create(&plan, &data, &mut request.ctx())?,
+    Some("update") => {
+      let stored = stored.ok_or_else(|| Bail::new("request:stored"))?;
+      let stored = Document::from_reader(stored).map_err(|e| Bail::new(format!("request:stored:{e}")))?;
+      let input = UpdateInput {
+        doc_with_locales: value(&request.json, "docWithLocales")?,
+        original_doc: value(&request.json, "originalDoc")?,
+        stored,
+      };
+      let id = value(&request.json, "id")?;
+      prepare_update(&plan, &id, &data, &input, &mut request.ctx())?
+    }
+    _ => return Err(Bail::new("request:op")),
+  };
+  let mut out = serde_json::Map::new();
+  // values as `encode_value_text` writes them (`-0` kept), spliced below
+  let caller_data = prepared.caller_data.as_ref().map(encode_value_text);
+  let context_writes = context_writes_text(&prepared);
   match &prepared.outcome {
     Err(invalid) => {
       let errors: Vec<Json> =
@@ -122,8 +183,9 @@ fn run(plan_json: &str, request_json: &str, stored: Option<&[u8]>) -> Result<Str
       }
     }
   }
-  out.insert("clockLeft".to_string(), json!(entropy.clock.len()));
-  out.insert("idsLeft".to_string(), json!(entropy.ids.len()));
+  let (clock_left, ids_left) = request.left();
+  out.insert("clockLeft".to_string(), json!(clock_left));
+  out.insert("idsLeft".to_string(), json!(ids_left));
   let rest = Json::Object(out).to_string();
   let mut text = format!("{{\"contextWrites\":[{}]", context_writes.join(","));
   if let Some(caller_data) = caller_data {

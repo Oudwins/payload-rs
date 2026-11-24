@@ -7,12 +7,13 @@
 //! The statements arrive as the commands the Node driver would send (BSON as the TS side
 //! serialized them, packages/engine-rs/src/fuse-write).
 
+pub mod by_id;
 pub mod ops;
 pub mod prepare;
 pub mod state;
 
 use payload_fuse_mongo::MongoReads;
-use payload_mongo_driver::mongodb::bson::{Bson, RawBsonRef, RawDocumentBuf};
+use payload_mongo_driver::mongodb::bson::{Bson, Document, RawBsonRef, RawDocumentBuf};
 use payload_mongo_driver::{command_raw, txn_command_raw, txn_end};
 
 /// Which document of a statement the operation's result is read from.
@@ -75,6 +76,9 @@ pub async fn exec(client: u32, txn: u32, statements: Vec<Statement>, read: Optio
 pub struct Outcome {
   pub text: String,
   pub state: Option<String>,
+  /// updateByID: the prepare's `req.context` writes (`[[key, value], ...]` in the boundary's tree
+  /// encoding), replayed by JS on success.
+  pub context: Option<String>,
 }
 
 /// [`exec`]; with `state` (the write lane-shadow, FUSED_WRITES.md section 9) the touched
@@ -89,8 +93,8 @@ pub async fn exec_shadowed(
 ) -> Outcome {
   let text = exec_inner(client, txn, statements, read, state.as_ref()).await;
   match text {
-    Ok((text, state)) => Outcome { text, state },
-    Err(text) => Outcome { text, state: None },
+    Ok((text, state)) => Outcome { text, state, context: None },
+    Err(text) => Outcome { text, state: None, context: None },
   }
 }
 
@@ -105,17 +109,10 @@ async fn exec_inner(
   for statement in statements {
     let Statement { command, database, in_txn, result } = statement;
     let inserted = if result == ResultOf::Inserted { inserted_document(&command) } else { None };
-    let reply =
-      if in_txn { txn_command_raw(txn, database, command).await } else { command_raw(client, database, command).await };
-    let reply = match reply {
+    let reply = match send(client, txn, database, command, in_txn).await {
       Ok(reply) => reply,
-      Err(error) => return Err(abort(txn, format!("!statement:{error}")).await),
+      Err(reason) => return Err(abort(txn, reason).await),
     };
-    if let Some(Bson::Array(errors)) = reply.get("writeErrors") {
-      if !errors.is_empty() {
-        return Err(abort(txn, "!statement:writeErrors".to_string()).await);
-      }
-    }
     match result {
       ResultOf::None => {}
       ResultOf::Inserted => result_doc = inserted,
@@ -140,6 +137,31 @@ async fn exec_inner(
     }
     None => "null".to_string(),
   };
+  finish(client, txn, text, state).await
+}
+
+/// Sends one statement (in transaction `txn` where `in_txn`, else without a session) and checks
+/// its reply; `Err` is the bail reason (the caller aborts).
+async fn send(client: u32, txn: u32, database: Option<String>, command: RawDocumentBuf, in_txn: bool) -> Result<Document, String> {
+  let reply =
+    if in_txn { txn_command_raw(txn, database, command).await } else { command_raw(client, database, command).await };
+  let reply = reply.map_err(|error| format!("!statement:{error}"))?;
+  if let Some(Bson::Array(errors)) = reply.get("writeErrors") {
+    if !errors.is_empty() {
+      return Err("!statement:writeErrors".to_string());
+    }
+  }
+  Ok(reply)
+}
+
+/// After the result read: with `state` (the write lane-shadow) the touched collections are read
+/// inside the transaction, which is then aborted; otherwise the commit.
+async fn finish(
+  client: u32,
+  txn: u32,
+  text: String,
+  state: Option<&(Option<String>, Vec<state::StateRead>)>,
+) -> Result<(String, Option<String>), String> {
   if let Some((database, reads)) = state {
     let state = state::read_state(client, database.as_deref(), Some(txn), reads).await;
     let _ = txn_end(txn, false).await;

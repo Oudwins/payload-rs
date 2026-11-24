@@ -164,7 +164,252 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     expect(doc.title).toBe('hook!')
   })
 
-  test('should have served creates without lane differences', async () => {
+  test('should update by id and write a version', async ({ payload }) => {
+    const author = await payload.create({
+      collection: 'authors',
+      data: { name: 'Ada' },
+      overrideAccess: true,
+    })
+    const post = await payload.create({
+      collection: 'posts',
+      data: { title: 'before' },
+      overrideAccess: true,
+    })
+    const data = { author: author.id, views: 5 }
+
+    const updated = await payload.update({
+      id: post.id,
+      collection: 'posts',
+      data,
+      depth: 1,
+      overrideAccess: true,
+    })
+    const versions = await payload.findVersions({
+      collection: 'posts',
+      overrideAccess: true,
+      sort: '-updatedAt',
+      where: { parent: { equals: post.id } },
+    })
+
+    expect(updated).toMatchObject({ id: post.id, revision: 0, title: 'before', views: 5 })
+    expect(updated.author).toMatchObject({ id: author.id, name: 'Ada' })
+    expect(Date.parse(updated.updatedAt)).toBeGreaterThanOrEqual(Date.parse(post.updatedAt))
+    expect(versions.docs).toHaveLength(2)
+    expect(versions.docs[0]).toMatchObject({ version: { views: 5 } })
+    expect(versions.docs[1]).toMatchObject({ version: { views: 0 } })
+    expect(data).toStrictEqual({ author: author.id, views: 5 })
+  })
+
+  test('should update the typical shape', async ({ payload }) => {
+    const category = await payload.create({
+      collection: 'categories',
+      data: { title: 'news' },
+      overrideAccess: true,
+    })
+    const doc = await payload.create({
+      collection: 'typical',
+      data: { slug: 'typical-update', tags: [{ tag: 'a' }], title: 'typical' } as never,
+      overrideAccess: true,
+    })
+
+    const updated = await payload.update({
+      id: doc.id,
+      collection: 'typical',
+      data: {
+        categories: [category.id],
+        seo: { title: 'seo' },
+        tags: [...doc.tags!, { tag: 'b' }],
+      } as never,
+      depth: 2,
+      overrideAccess: true,
+    })
+
+    expect(updated.tags!.map((row) => row.tag)).toStrictEqual(['a', 'b'])
+    expect(updated.tags![0]!.id).toBe(doc.tags![0]!.id)
+    expect(updated.categories).toMatchObject([{ title: 'news' }])
+    expect(updated.seo).toMatchObject({ title: 'seo' })
+  })
+
+  test('should update in a collection without versions', async ({ payload }) => {
+    const doc = await payload.create({
+      collection: 'unversioned',
+      data: { title: 'plain' },
+      overrideAccess: true,
+    })
+
+    const updated = await payload.update({
+      id: doc.id,
+      collection: 'unversioned',
+      data: { views: 2 },
+      overrideAccess: true,
+    })
+
+    expect(updated).toMatchObject({ title: 'plain', views: 2 })
+  })
+
+  test('should release the locks of an updated document', async ({ payload }) => {
+    const post = await payload.create({
+      collection: 'posts',
+      data: { title: 'locked' },
+      overrideAccess: true,
+    })
+    const user = await payload.create({
+      collection: 'users',
+      data: { email: 'lock@example.com', password: 'test' },
+      overrideAccess: true,
+    })
+    await payload.create({
+      collection: 'payload-locked-documents',
+      data: {
+        document: { relationTo: 'posts', value: post.id },
+        user: { relationTo: 'users', value: user.id },
+      },
+      overrideAccess: true,
+    })
+
+    await payload.update({
+      id: post.id,
+      collection: 'posts',
+      data: { views: 1 },
+      overrideAccess: true,
+    })
+    const locks = await payload.find({
+      collection: 'payload-locked-documents',
+      overrideAccess: true,
+    })
+
+    expect(locks.totalDocs).toBe(0)
+  })
+
+  test('should check locks with overrideLock false', async ({ payload }) => {
+    const post = await payload.create({
+      collection: 'posts',
+      data: { title: 'unlocked' },
+      overrideAccess: true,
+    })
+    const user = await payload.create({
+      collection: 'users',
+      data: { email: 'holder@example.com', password: 'test' },
+      overrideAccess: true,
+    })
+
+    const updated = await payload.update({
+      id: post.id,
+      collection: 'posts',
+      data: { views: 3 },
+      overrideAccess: true,
+      overrideLock: false,
+    })
+    await payload.create({
+      collection: 'payload-locked-documents',
+      data: {
+        document: { relationTo: 'posts', value: post.id },
+        user: { relationTo: 'users', value: user.id },
+      },
+      overrideAccess: true,
+    })
+
+    expect(updated.views).toBe(3)
+    await expect(
+      payload.update({
+        id: post.id,
+        collection: 'posts',
+        data: { views: 4 },
+        overrideAccess: true,
+        overrideLock: false,
+      }),
+    ).rejects.toThrow('currently locked')
+    await expect(
+      payload.delete({
+        id: post.id,
+        collection: 'posts',
+        overrideAccess: true,
+        overrideLock: false,
+      }),
+    ).rejects.toThrow('currently locked')
+  })
+
+  test('should throw upstream errors of updates', async ({ payload }) => {
+    const post = await payload.create({
+      collection: 'posts',
+      data: { title: 'valid' },
+      overrideAccess: true,
+    })
+
+    await expect(
+      payload.update({
+        id: post.id,
+        collection: 'posts',
+        data: { title: null } as never,
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Title')
+    await expect(
+      payload.update({
+        id: '0123456789abcdef01234567',
+        collection: 'posts',
+        data: { views: 1 },
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('Not Found')
+  })
+
+  test('should delete by id with its versions and preferences', async ({ payload }) => {
+    const author = await payload.create({
+      collection: 'authors',
+      data: { name: 'Lin' },
+      overrideAccess: true,
+    })
+    const post = await payload.create({
+      collection: 'posts',
+      data: { author: author.id, title: 'doomed' },
+      overrideAccess: true,
+    })
+    await payload.update({
+      id: post.id,
+      collection: 'posts',
+      data: { views: 2 },
+      overrideAccess: true,
+    })
+    const user = await payload.create({
+      collection: 'users',
+      data: { email: 'preferences@example.com', password: 'test' },
+      overrideAccess: true,
+    })
+    await payload.create({
+      collection: 'payload-preferences',
+      data: { key: `collection-posts-${post.id}`, value: { fields: {} } },
+      overrideAccess: true,
+      user,
+    })
+
+    const deleted = await payload.delete({
+      id: post.id,
+      collection: 'posts',
+      depth: 1,
+      overrideAccess: true,
+    })
+    const versions = await payload.countVersions({
+      collection: 'posts',
+      overrideAccess: true,
+      where: { parent: { equals: post.id } },
+    })
+    const preferences = await payload.count({
+      collection: 'payload-preferences',
+      overrideAccess: true,
+      where: { key: { equals: `collection-posts-${post.id}` } },
+    })
+
+    expect(deleted).toMatchObject({ id: post.id, title: 'doomed', views: 2 })
+    expect(deleted.author).toMatchObject({ id: author.id, name: 'Lin' })
+    expect(versions.totalDocs).toBe(0)
+    expect(preferences.totalDocs).toBe(0)
+    await expect(
+      payload.delete({ id: post.id, collection: 'posts', overrideAccess: true }),
+    ).rejects.toThrow('Not Found')
+  })
+
+  test('should have served writes without lane differences', async () => {
     const stats = fuseWriteStats()
 
     if (!process.env.PAYLOAD_RS_FUSE_WRITES || process.env.PAYLOAD_RS_FUSE_WRITES === 'off') {
@@ -172,6 +417,8 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     }
 
     expect(stats?.hits.create).toBeGreaterThan(0)
+    expect(stats?.hits.updateByID).toBeGreaterThan(0)
+    expect(stats?.hits.deleteByID).toBeGreaterThan(0)
     expect(stats?.diffs).toBe(0)
   })
 })

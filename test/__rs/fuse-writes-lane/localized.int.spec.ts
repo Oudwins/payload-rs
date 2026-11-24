@@ -91,13 +91,76 @@ test.suite('fuse-writes-lane localized', { config: './localized.config.ts' }, ()
     expect(all.title).toStrictEqual({ de: 'deutsch' })
   })
 
-  test('should have served creates without lane differences', () => {
+  test('should update a locale and keep the others', async ({ payload }) => {
+    const post = await payload.create({
+      collection: 'posts',
+      data: {
+        content: richText('hello'),
+        layout: [{ blockType: 'hero', heading: 'h', items: [{ label: 'x' }] }],
+        slug: 'post-update',
+        tags: [{ tag: 'a' }],
+        title: 'english',
+      } as never,
+      overrideAccess: true,
+    })
+
+    const german = await payload.update({
+      id: post.id,
+      collection: 'posts',
+      data: { content: richText('hallo'), seo: { title: 'titel' }, title: 'deutsch' },
+      depth: 2,
+      locale: 'de',
+      overrideAccess: true,
+    })
+    const english = await payload.update({
+      id: post.id,
+      collection: 'posts',
+      data: {
+        layout: [...post.layout!, { blockType: 'hero', heading: 'second' }],
+        tags: [{ tag: 'b' }],
+      } as never,
+      overrideAccess: true,
+    })
+    const all = await payload.findByID({
+      id: post.id,
+      collection: 'posts',
+      locale: 'all',
+      overrideAccess: true,
+    })
+
+    expect(german.title).toBe('deutsch')
+    expect(english.title).toBe('english')
+    expect(english.layout).toHaveLength(2)
+    expect(all.title).toStrictEqual({ de: 'deutsch', en: 'english' })
+  })
+
+  test('should delete in a locale', async ({ payload }) => {
+    const post = await payload.create({
+      collection: 'posts',
+      data: { slug: 'post-delete', title: 'english' },
+      overrideAccess: true,
+    })
+
+    const deleted = await payload.delete({
+      id: post.id,
+      collection: 'posts',
+      depth: 1,
+      locale: 'de',
+      overrideAccess: true,
+    })
+
+    expect(deleted.id).toBe(post.id)
+  })
+
+  test('should have served writes without lane differences', () => {
     if (!process.env.PAYLOAD_RS_FUSE_WRITES || process.env.PAYLOAD_RS_FUSE_WRITES === 'off') {
       return
     }
     const stats = fuseWriteStats()
 
     expect(stats?.hits.create).toBeGreaterThan(0)
+    expect(stats?.hits.updateByID).toBeGreaterThan(0)
+    expect(stats?.hits.deleteByID).toBeGreaterThan(0)
     expect(stats?.diffs).toBe(0)
   })
 })

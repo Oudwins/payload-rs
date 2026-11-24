@@ -25,7 +25,7 @@ use payload_mongo_driver::mongodb::bson::{Document, oid::ObjectId};
 
 pub use ops::{prepare_create, prepare_update};
 pub use plan::{WritePlan, register_write_plan, write_plan};
-pub use text::prepare_json;
+pub use text::{DriverPrepared, prepare_json, prepare_update_request};
 
 /// Not modelled for this input: run the exact lane with the untouched arguments.
 #[derive(Clone, Debug, PartialEq, Eq)]

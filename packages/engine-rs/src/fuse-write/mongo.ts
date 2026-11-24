@@ -19,21 +19,34 @@
  *
  * Only the driver lane imports this module (it loads db-mongodb's sources).
  */
+import { randomBytes } from 'node:crypto'
 import { createRequire } from 'node:module'
 
 import type { DriverLane } from '../mongo-driver/lane.js'
 import type { FusedWriteTarget } from './targets.js'
 
+import { buildQuery } from '../../../db-mongodb/src/queries/buildQuery.js'
+import { buildSortParam } from '../../../db-mongodb/src/queries/buildSortParam.js'
+import { buildProjectionFromSelect } from '../../../db-mongodb/src/utilities/buildProjectionFromSelect.js'
 import { getCollection } from '../../../db-mongodb/src/utilities/getEntity.js'
 import { transform } from '../../../db-mongodb/src/utilities/transform.js'
 import { beforeChange } from '../../../payload/src/fields/hooks/beforeChange/index.js'
 import { beforeValidate } from '../../../payload/src/fields/hooks/beforeValidate/index.js'
+import { lockedDocumentsCollectionSlug } from '../../../payload/src/locked-documents/config.js'
+import { preferencesCollectionSlug } from '../../../payload/src/preferences/config.js'
 import { deepCopyObjectSimple } from '../../../payload/src/utilities/deepCopyObject.js'
+import { getVersionsMax } from '../../../payload/src/utilities/getVersionsConfig.js'
 import { sanitizeInternalFields } from '../../../payload/src/utilities/sanitizeInternalFields.js'
 import { buildAllLocalesPublicationHookDoc } from '../../../payload/src/versions/allLocalesPublicationStatus.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
 import { loadCoreRuntimeAddon } from '../addon.js'
-import { isPristineModel, mongooseBlocksLane } from '../mongo-driver/lane.js'
+import {
+  castQuery,
+  findOptionKeys,
+  findSpec,
+  isPristineModel,
+  mongooseBlocksLane,
+} from '../mongo-driver/lane.js'
 import { verifyMode } from '../mongo-driver/verify.js'
 import { isTracing } from '../shadow-mongo/trace.js'
 import { registerFusedWriteTarget } from './targets.js'
@@ -54,6 +67,7 @@ type FuseWriteAddon = {
   ) => Promise<string[]>
   fuseWriteMongoState?: (client: number, state: Uint8Array) => Promise<string>
   fuseWritePrepare?: (planJson: string, requestJson: string, stored?: Uint8Array) => string
+  fuseWriteRegisterPlan?: (planJson: string) => number
 }
 
 /** What `run` needs of the result read (fuse/mongo.ts `MongoPayload`). */
@@ -125,7 +139,10 @@ export const registerFusedMongoWriteTarget = ({
     }
     const target: FusedWriteTarget = {
       backend: 'mongodb',
+      contextWrites: (text) =>
+        JSON.parse(text).map(([key, value]: Any) => [key, decodeTree(value)]),
       objectIdClass: lane.mongoose.Types.ObjectId,
+      prepareByID: (name, args) => prepareByID(lane, name, args),
       prepareCreate: (args, data, context) =>
         isTSPrepare
           ? prepareCreateTS(lane, args, data, context)
@@ -424,6 +441,323 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
     op,
     state: documentState(lane, Model, VersionModel, readings.documentID),
   }
+}
+
+const writePlanIDs = new WeakMap<object, number>()
+
+/** The native id of WP-I's write plan `plan` (registered once). */
+const writePlanID = (plan: WritePlanResult, json: string) => {
+  let id = writePlanIDs.get(plan)
+  if (id === undefined) {
+    const { fuseWriteRegisterPlan } = loadCoreRuntimeAddon() as FuseWriteAddon
+    if (typeof fuseWriteRegisterPlan !== 'function') {
+      return undefined
+    }
+    id = fuseWriteRegisterPlan(json)
+    writePlanIDs.set(plan, id)
+  }
+  return id
+}
+
+/**
+ * The id the statement templates are built with (a valid ObjectId: the casting takes the branches
+ * of any ObjectId id); a call's id replaces it byte for byte, as 12 ObjectId bytes and as 24 hex
+ * characters (inside strings too, e.g. the preferences key).
+ */
+const sentinelHex = randomBytes(12).toString('hex')
+const sentinelBytes = Buffer.from(sentinelHex, 'hex')
+const sentinelText = Buffer.from(sentinelHex, 'latin1')
+
+type Template = { bytes: Buffer; hex: number[]; raw: number[] }
+
+const positionsOf = (bytes: Buffer, needle: Buffer) => {
+  const positions: number[] = []
+  for (let at = bytes.indexOf(needle); at !== -1; at = bytes.indexOf(needle, at + 1)) {
+    positions.push(at)
+  }
+  return positions
+}
+
+const toTemplate = (bytes: Buffer): Template => ({
+  bytes,
+  hex: positionsOf(bytes, sentinelText),
+  raw: positionsOf(bytes, sentinelBytes),
+})
+
+/** `template` with the id `hex` (24 lowercase hex characters) in the sentinel's places. */
+const withID = ({ bytes, hex: hexAt, raw }: Template, hex: string) => {
+  const out = Buffer.from(bytes)
+  const idBytes = Buffer.from(hex, 'hex')
+  for (const at of raw) {
+    idBytes.copy(out, at)
+  }
+  for (const at of hexAt) {
+    out.write(hex, at, 'latin1')
+  }
+  return out
+}
+
+/** mongoose's cast of `query` on `Model` (what `find` / `deleteMany` / `findOneAndUpdate` send). */
+const castFilter = (Model: Any, query: Any) => castQuery(Model.find(query), findOptionKeys).filter
+
+const byIDTemplates = new WeakMap<object, Promise<string | Template>>()
+
+/**
+ * The cast filters of a collection's updateByID / deleteByID statements for the sentinel id, as
+ * db-mongodb builds them (`buildQuery`) and mongoose casts them, once per collection model:
+ * `q` the `{ id: { equals } }` of `updateOne` / `deleteOne`, `lf` the locks of
+ * `checkDocumentLockStatus`, `mf` `enforceMaxVersions`' find (db-mongodb `findVersions` with
+ * `limit: 1, page: max + 1, pagination: false, sort: '-updatedAt'`, as the driver lane sends it),
+ * `vq` `deleteCollectionVersions`' filter, `pf` `deleteUserPreferences`' filter (non-auth).
+ */
+const byIDTemplate = (lane: DriverLane, slug: string, Model: Any) => {
+  let template = byIDTemplates.get(Model)
+  if (!template) {
+    template = buildByIDTemplate(lane, slug).catch(() => 'template')
+    byIDTemplates.set(Model, template)
+  }
+  return template
+}
+
+const buildByIDTemplate = async (lane: DriverLane, slug: string): Promise<string | Template> => {
+  const adapter = lane.view
+  const config = adapter.payload.config
+  const { collectionConfig, Model } = getCollection({ adapter, collectionSlug: slug })
+  const parts: Record<string, unknown> = {
+    q: castFilter(
+      Model,
+      await buildQuery({
+        adapter,
+        collectionSlug: slug,
+        fields: collectionConfig.flattenedFields,
+        where: { id: { equals: sentinelHex } },
+      }),
+    ),
+  }
+  const locks = adapter.payload.collections[lockedDocumentsCollectionSlug]
+  if (locks) {
+    const LockModel = getCollection({
+      adapter,
+      collectionSlug: lockedDocumentsCollectionSlug,
+    }).Model
+    parts.lf = castFilter(
+      LockModel,
+      await buildQuery({
+        adapter,
+        collectionSlug: lockedDocumentsCollectionSlug,
+        fields: locks.config.flattenedFields,
+        where: {
+          and: [
+            { 'document.relationTo': { equals: slug } },
+            { 'document.value': { equals: sentinelHex } },
+          ],
+        },
+      }),
+    )
+  }
+  if (collectionConfig.versions) {
+    const VersionModel: Any = getCollection({ adapter, collectionSlug: slug, versions: true }).Model
+    const fields = buildVersionCollectionFields(config, collectionConfig, true)
+    const parent = await buildQuery({ adapter, fields, where: { parent: { equals: sentinelHex } } })
+    parts.vq = castFilter(VersionModel, parent)
+    const max = getVersionsMax(collectionConfig)
+    if (max > 0) {
+      if (adapter.collation || lane.paginate.options !== undefined) {
+        return 'template:max-versions'
+      }
+      // the driver lane's `laneFindVersions` / `lanePaginate` with `pagination: false`
+      const sort = buildSortParam({
+        adapter,
+        config,
+        fields,
+        locale: undefined,
+        sort: '-updatedAt',
+        timestamps: true,
+      })
+      const projection = buildProjectionFromSelect({ adapter, fields, select: undefined })
+      const query = VersionModel.find(parent, projection, {
+        limit: 1,
+        session: undefined,
+        skip: max,
+      })
+      query.select('')
+      query.sort(sort)
+      query.lean(true)
+      parts.mf = findSpec(castQuery(query, findOptionKeys))
+    }
+  }
+  const preferences = adapter.payload.collections[preferencesCollectionSlug]
+  if (preferences) {
+    const PreferencesModel = getCollection({
+      adapter,
+      collectionSlug: preferencesCollectionSlug,
+    }).Model
+    parts.pf = castFilter(
+      PreferencesModel,
+      await buildQuery({
+        adapter,
+        collectionSlug: preferencesCollectionSlug,
+        fields: preferences.config.flattenedFields,
+        where: { key: { in: [`collection-${slug}-${sentinelHex}`] } },
+      }),
+    )
+  }
+  const template = toTemplate(Buffer.from(lane.BSON.serialize(parts)))
+  return template.raw.length + template.hex.length === 0 ? 'template:id' : template
+}
+
+/** The collection of `slug`'s model if the lane may write it (`undefined`: none). */
+const pristineModel = (lane: DriverLane, slug: string) => {
+  if (!lane.view.payload.collections[slug]) {
+    return undefined
+  }
+  const { Model } = getCollection({ adapter: lane.view, collectionSlug: slug })
+  return isPristineModel(lane, Model) && !mongooseBlocksLane(lane, Model) ? Model : 'model'
+}
+
+/**
+ * The clock readings and ObjectIds of an upstream `updateByID` without hooks, in its order
+ * (FUSED_WRITES.md 12.3): one `bson-objectid` row id per array / block row without an id
+ * (beforeValidate), `dataToUpdate.updatedAt`, mongoose's `now` of the `findOneAndUpdate` (its
+ * `_setTimestampsOnUpdate` pre hook on schemas with timestamps: the value is unused, upstream
+ * passes `timestamps: false`, but the reading is taken), with versions `saveVersion`'s `now` and
+ * the version's `_id`. `clock` holds the readings the prepare uses.
+ */
+const captureUpdateReadings = (
+  lane: DriverLane,
+  fields: Any[],
+  data: Any,
+  { hasTimestamps, hasVersions }: { hasTimestamps: boolean; hasVersions: boolean },
+) => {
+  const rows = countMissingRowIds(fields, data)
+  if (rows === undefined) {
+    return undefined
+  }
+  const RowId: Any = rowIdClass()
+  const ids: [string, string][] = []
+  for (let i = 0; i < rows; i++) {
+    ids.push(['row', new RowId().toHexString()])
+  }
+  const clock = [Date.now()]
+  if (hasTimestamps) {
+    Date.now()
+  }
+  if (hasVersions) {
+    clock.push(Date.now())
+    ids.push(['version', new lane.mongoose.Types.ObjectId().toHexString()])
+  }
+  return { clock, ids }
+}
+
+/**
+ * An `updateByID` / `deleteByID` request (crates/payload-fuse-write `by_id`): the cast filters
+ * with the call's id, the lock check, the versions and preferences collections, and for updates
+ * WP-I's plan with the prepare request (its readings taken here, in upstream's order).
+ */
+const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', args: Any) => {
+  const slug = args.collection.config.slug
+  const resolved = entity(lane, slug)
+  if (typeof resolved === 'string') {
+    return `mongo:${resolved}`
+  }
+  const { collectionConfig, Model, VersionModel } = resolved
+  const { id, req } = args
+  const locks = pristineModel(lane, lockedDocumentsCollectionSlug)
+  const preferences = pristineModel(lane, preferencesCollectionSlug)
+  if (locks === 'model' || preferences === 'model') {
+    return 'mongo:model:internal'
+  }
+  const template = await byIDTemplate(lane, slug, Model)
+  if (typeof template === 'string') {
+    return `mongo:${template}`
+  }
+  // checkDocumentLockStatus: locking needs the collection and `lockDocuments !== false`
+  const isLocking = Boolean(locks) && collectionConfig.lockDocuments !== false
+  const request: Record<string, unknown> = {
+    c: Model.collection.collectionName,
+    op: name,
+    t: withID(template, id),
+  }
+  if (isLocking) {
+    request.lc = locks.collection.collectionName
+    request.lfind = args.overrideLock === false
+  }
+  if (VersionModel) {
+    request.vc = VersionModel.collection.collectionName
+  }
+  if (name === 'deleteByID' && preferences) {
+    request.pc = preferences.collection.collectionName
+  }
+  if (name === 'updateByID') {
+    const plan = writePlanOf(args.collection, req.payload)
+    if (plan.json === undefined) {
+      return `plan:${plan.reason}`
+    }
+    const planID = writePlanID(plan, plan.json)
+    if (planID === undefined) {
+      return 'prepare:addon'
+    }
+    const timestamps = Model.schema.options.timestamps
+    if (typeof timestamps === 'object' && timestamps !== null && 'currentTime' in timestamps) {
+      return 'mongo:currentTime'
+    }
+    const readings = captureUpdateReadings(lane, collectionConfig.fields, args.data, {
+      hasTimestamps: Boolean(timestamps),
+      hasVersions: Boolean(VersionModel),
+    })
+    if (!readings) {
+      return 'ctx:rows'
+    }
+    try {
+      request.p = JSON.stringify({
+        id,
+        clock: readings.clock,
+        context: encodeTree(req.context),
+        data: encodeTree(args.data),
+        fallbackLanguage: req.i18n?.fallbackLanguage,
+        ids: readings.ids,
+        language: req.i18n?.language ?? 'en',
+        locale:
+          req.payload.config.localization && typeof req.locale === 'string'
+            ? req.locale
+            : undefined,
+        op: 'update',
+        overrideAccess: Boolean(args.overrideAccess),
+        user: req.user ? [req.user.collection, encodeTree(req.user.id)] : undefined,
+      })
+    } catch {
+      return 'prepare:encode'
+    }
+    request.wp = planID
+  }
+  const objectID = new lane.mongoose.Types.ObjectId(id)
+  const state = lane.BSON.serialize({
+    r: [
+      { c: Model.collection.collectionName, f: { _id: objectID } },
+      ...(VersionModel
+        ? [{ c: VersionModel.collection.collectionName, f: { parent: objectID }, s: { _id: 1 } }]
+        : []),
+      ...(isLocking
+        ? [
+            {
+              c: locks.collection.collectionName,
+              f: { 'document.relationTo': slug, 'document.value': { $in: [objectID, id] } },
+              s: { _id: 1 },
+            },
+          ]
+        : []),
+      ...(name === 'deleteByID' && preferences
+        ? [
+            {
+              c: preferences.collection.collectionName,
+              f: { key: `collection-${slug}-${id}` },
+              s: { _id: 1 },
+            },
+          ]
+        : []),
+    ],
+  })
+  return { op: lane.BSON.serialize(request), state }
 }
 
 /**

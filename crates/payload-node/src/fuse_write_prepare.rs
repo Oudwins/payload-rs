@@ -11,3 +11,11 @@ use napi_derive::napi;
 pub fn fuse_write_prepare(plan_json: String, request_json: String, stored: Option<BufferSlice>) -> String {
   payload_fuse_write::prepare::prepare_json(&plan_json, &request_json, stored.as_deref())
 }
+
+/// `fuseWriteRegisterPlan(planJson)`: registers a write plan (packages/engine-rs/src/fuse-write/
+/// writePlan.ts) for the operation drivers (`updateByID`'s prepare runs inside the fused write)
+/// and returns its id. Throws on an invalid plan.
+#[napi]
+pub fn fuse_write_register_plan(plan_json: String) -> Result<u32> {
+  payload_fuse_write::prepare::register_write_plan(&plan_json).map_err(Error::from_reason)
+}

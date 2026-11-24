@@ -31,7 +31,7 @@ pub struct OpRequest {
 
 /// The latest flip of a version insert: its filter and update as mongoose casts them (`None`:
 /// built here, as db-mongodb `createVersion` sends it).
-type Flip = Option<(RawDocumentBuf, RawDocumentBuf)>;
+pub(crate) type Flip = Option<(RawDocumentBuf, RawDocumentBuf)>;
 
 /// Decodes `{ op: "create", d?: <database>, c: <collection>, doc | dob, v?: { c, doc | dob, ff?,
 /// fu? } }`: `doc` the document as a subdocument (the temporary TS prepare,
@@ -89,28 +89,35 @@ fn create_statements(
     result: ResultOf::Inserted,
   }];
   if let Some((versions, version, flip)) = version {
-    let (filter, update) = match flip {
-      Some(flip) => flip,
-      None => built_flip(&version)?,
-    };
+    statements.extend(version_statements(&versions, version, flip)?);
+  }
+  Ok(statements)
+}
+
+/// db-mongodb `createVersion`'s statements: the version insert, then the latest flip (none when
+/// its update is empty).
+pub(crate) fn version_statements(versions: &str, version: RawDocumentBuf, flip: Flip) -> Result<Vec<Statement>, String> {
+  let (filter, update) = match flip {
+    Some(flip) => flip,
+    None => built_flip(&version)?,
+  };
+  let mut statements = vec![Statement {
+    database: None,
+    command: rawdoc! { "insert": versions, "documents": [version], "ordered": true },
+    in_txn: true,
+    result: ResultOf::None,
+  }];
+  if !update.is_empty() {
     statements.push(Statement {
       database: None,
-      command: rawdoc! { "insert": versions.as_str(), "documents": [version], "ordered": true },
+      command: rawdoc! {
+        "update": versions,
+        "updates": [{ "q": filter, "u": update, "multi": true }],
+        "ordered": true,
+      },
       in_txn: true,
       result: ResultOf::None,
     });
-    if !update.is_empty() {
-      statements.push(Statement {
-        database: None,
-        command: rawdoc! {
-          "update": versions.as_str(),
-          "updates": [{ "q": filter, "u": update, "multi": true }],
-          "ordered": true,
-        },
-        in_txn: true,
-        result: ResultOf::None,
-      });
-    }
   }
   Ok(statements)
 }

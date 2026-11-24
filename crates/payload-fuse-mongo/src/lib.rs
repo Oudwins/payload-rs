@@ -127,6 +127,44 @@ pub fn run_document(
   payload_fuse::run(&backend, 0, request_json)
 }
 
+/// updateByID's stored-document read (`getLatestCollectionVersion`'s `payload.db.findOne`) inside
+/// the Rust-owned transaction `txn`: the `findOne` of `reads` (the write's result read, whose
+/// `findOne` is that same read), the raw document or `None`.
+pub async fn find_stored(client_id: u32, reads: &MongoReads, txn: u32) -> Result<Option<RawDocumentBuf>, String> {
+  let (ReadOp::FindOne, Some(find)) = (reads.op, reads.find.as_ref()) else {
+    return Err("stored:read".to_string());
+  };
+  let find = FindSpec {
+    filter: find.filter.clone(),
+    sort: find.sort.clone(),
+    projection: find.projection.clone(),
+    skip: find.skip,
+    limit: find.limit,
+    collation: find.collation.clone(),
+    hint: find.hint.clone(),
+  };
+  payload_mongo_driver::find_one_raw(client_id, reads.database.as_deref(), &reads.collection, find, Some(txn))
+    .await
+    .map_err(|error| match error {
+      LaneError::Bail(reason) => format!("stored:{reason}"),
+      LaneError::Driver(_) => "stored:driver".to_string(),
+    })
+}
+
+/// updateByID's `docWithLocales` (the stored document `raw` after db-mongodb's read transform, as
+/// `findOne` returns it) and `originalDoc` (`afterRead` of a copy at depth 0,
+/// `payload_fuse::after_read_original` with the result read `request_json`), with the transform
+/// plan `plan_id` and the flags of `reads`.
+pub fn update_inputs(plan_id: u32, reads: &MongoReads, raw: &RawDocument, request_json: &str) -> FuseResult<(JsVal, JsVal)> {
+  let plan = plan(plan_id).map_err(|_| bail("plan"))?;
+  let mut doc = decode_document(raw).map_err(|b| bail(b.0))?;
+  transform_read(&plan, reads.flags, ReadShape { lean_with_id: false }, &mut doc).map_err(|b| bail(b.0))?;
+  let doc_with_locales = to_js(V::Obj(doc), 0)?;
+  let mut original = doc_with_locales.clone();
+  payload_fuse::after_read_original(request_json, &mut original)?;
+  Ok((doc_with_locales, original))
+}
+
 fn collection(state: &DriverClient, database: Option<&str>, name: &str) -> Collection<RawDocumentBuf> {
   state.client.database(database.unwrap_or(&state.default_database)).collection(name)
 }

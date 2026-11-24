@@ -80,9 +80,54 @@ const guard = (reason: string) => {
   return undefined
 }
 
+/** Keys of the `updateByID` operation args (all must be data properties). */
+const updateArgKeys = [
+  'autosave',
+  'collection',
+  'data',
+  'depth',
+  'disableTransaction',
+  'draft',
+  'id',
+  'overrideAccess',
+  'overrideLock',
+  'overwriteExistingFiles',
+  'populate',
+  'publishAllLocales',
+  'req',
+  'select',
+  'showHiddenFields',
+  'trash',
+  'unpublishAllLocales',
+]
+
+/** Keys of the `deleteByID` operation args (all must be data properties). */
+const deleteArgKeys = [
+  'collection',
+  'depth',
+  'disableTransaction',
+  'id',
+  'overrideAccess',
+  'overrideLock',
+  'populate',
+  'req',
+  'select',
+  'showHiddenFields',
+  'trash',
+]
+
+/** The ids of collections without a custom ID type, as `ObjectId#toHexString` writes them. */
+const objectIDHex = /^[0-9a-f]{24}$/
+
 /** The fused lane of operation `name`, or `undefined` (run the exact lane). */
 export const fuseWrite = (name: string, args: Any, exact: Exact) => {
-  if (mode === 'off' || name !== 'create') {
+  if (mode === 'off') {
+    return undefined
+  }
+  if (name === 'updateByID' || name === 'deleteByID') {
+    return fuseByID(name, args, exact)
+  }
+  if (name !== 'create') {
     return undefined
   }
   if (!isPlainObject(args)) {
@@ -407,6 +452,270 @@ const shadowCreate = async (checked: Checked, args: Any, exact: Exact) => {
     if (canonical(before) !== exactAfter) {
       report({ kind, ...firstDifference(exactAfter, canonical(before)) })
     }
+  }
+  return result
+}
+
+type ByIDName = 'deleteByID' | 'updateByID'
+
+const fuseByID = (name: ByIDName, args: Any, exact: Exact) => {
+  if (!isPlainObject(args)) {
+    return guard('args')
+  }
+  let checked: ReturnType<typeof checkByID>
+  try {
+    checked = checkByID(name, args)
+  } catch {
+    return guard('error')
+  }
+  if (!checked) {
+    return undefined
+  }
+  return mode === 'shadow'
+    ? shadowByID(checked, name, args, exact)
+    : runByID(checked, name, args, exact)
+}
+
+/**
+ * The guards of a fused `updateByID` / `deleteByID` (FUSED_WRITES.md section 13): besides the
+ * create's, an ObjectId id, no `trash` (trashed documents and restores), and without
+ * `overrideAccess` an update / delete access that grants without a where constraint (the stored
+ * document's read is then the result read's).
+ */
+const checkByID = (name: ByIDName, args: Any) => {
+  const isUpdate = name === 'updateByID'
+  if (!hasDataProperties(args, isUpdate ? updateArgKeys : deleteArgKeys)) {
+    return guard('args')
+  }
+  const { id, collection, data, req } = args
+  if (typeof collection !== 'object' || collection === null || !isAcceptedRequest(req)) {
+    return guard('args:req')
+  }
+  if (req.transactionID) {
+    return guard('transaction')
+  }
+  if (args.disableTransaction) {
+    return guard('disableTransaction')
+  }
+  if (typeof id !== 'string' || !objectIDHex.test(id)) {
+    return guard('id')
+  }
+  if (args.select !== undefined && args.select !== null) {
+    return guard('select')
+  }
+  if (args.trash) {
+    return guard('trash')
+  }
+  if (!isPlainObject(req.context)) {
+    return guard('context')
+  }
+  if (isUpdate) {
+    if (req.file !== undefined) {
+      return guard('file')
+    }
+    if (
+      args.draft ||
+      args.autosave ||
+      args.publishAllLocales !== undefined ||
+      args.unpublishAllLocales
+    ) {
+      return guard('args:options')
+    }
+    if (!isPlainObject(data) || !isInertTree(data, false)) {
+      return guard('data')
+    }
+    if ('id' in data || '_id' in data) {
+      return guard('data:id')
+    }
+    if (collection.config.trash && 'deletedAt' in data) {
+      return guard('trash')
+    }
+  }
+  const payload = req.payload
+  const plan = getWritePlan(collection, payload)
+  if (!plan.eligible) {
+    count(stats.ineligible, plan.reason)
+    return undefined
+  }
+  const readPlan = getCollectionPlan(collection, payload)
+  if (!readPlan.eligible) {
+    count(stats.ineligible, `read:${readPlan.reason}`)
+    return undefined
+  }
+  if (!args.overrideAccess) {
+    if (plan.hasFieldAccess || readPlan.hasFieldAccess) {
+      return guard('access:fields')
+    }
+    if (readPlan.hasRelations) {
+      return guard('access:populate')
+    }
+    const evaluated = evaluateCompiledAccess(isUpdate ? plan.access.update : plan.access.delete, {
+      id,
+      collectionConfig: collection.config,
+      data: isUpdate ? data : undefined,
+      req,
+    })
+    if (evaluated.reason !== undefined) {
+      return guard(evaluated.reason)
+    }
+    if (evaluated.value !== true) {
+      return guard('access:where')
+    }
+  }
+  const target = getFusedWriteTarget(payload.db)
+  if (typeof target === 'string') {
+    return guard(target)
+  }
+  return { payload, target }
+}
+
+/** What preparing and running a fused updateByID / deleteByID produced (a string: a bail). */
+const fusedByID = async ({ target }: Checked, name: ByIDName, args: Any, isShadow: boolean) => {
+  const prepared = await target.prepareByID(name, args)
+  if (typeof prepared === 'string') {
+    return { bail: prepared }
+  }
+  // the result read's `findOne` is also the stored-document read
+  const fused = resultRead(args, args.id)
+  if (!fused) {
+    return { bail: 'read' }
+  }
+  // deleteByID's afterRead passes `draft: undefined` (its dataloader keys hold `null`)
+  const read =
+    name === 'deleteByID' && fused.population
+      ? { ...fused, population: { ...fused.population, draft: undefined } }
+      : fused
+  const result = await target.run({
+    op: prepared.op,
+    read,
+    state: isShadow ? prepared.state : undefined,
+  })
+  return { read, result, state: prepared.state }
+}
+
+const runByID = async (checked: Checked, name: ByIDName, args: Any, exact: Exact) => {
+  let outcome: Awaited<ReturnType<typeof fusedByID>>
+  try {
+    outcome = await fusedByID(checked, name, args, false)
+  } catch {
+    count(stats.bails, 'prepare:threw')
+    return exact()
+  }
+  if (outcome.bail !== undefined) {
+    count(stats.bails, outcome.bail)
+    return exact()
+  }
+  const [text = '!result', , contextWrites] = outcome.result
+  if (text.charCodeAt(0) === 33 /* ! */) {
+    if (text.charCodeAt(1) === 33) {
+      count(stats.bails, 'commit')
+      throw new Error(safeMessage(text.slice(2)))
+    }
+    count(stats.bails, text.slice(1))
+    return exact()
+  }
+  count(stats.hits, name)
+  if (contextWrites) {
+    for (const [key, value] of checked.target.contextWrites(contextWrites)) {
+      args.req.context[key] = value
+    }
+  }
+  const result = materializeFusedResult(withLoadTransaction(outcome.read, randomUUID()), text)
+  // upstream's `commitTransaction` deletes the id `initTransaction` set (after the nested finds)
+  delete args.req.transactionID
+  return result
+}
+
+const shadowByID = async (checked: Checked, name: ByIDName, args: Any, exact: Exact) => {
+  installReplay()
+  installObjectIdReplay(checked.target.objectIdClass)
+  installBsonObjectIdReplay(checked.target.rowIdClass)
+  const tapes = createReplayTapes()
+  const dataBefore = args.data === undefined ? undefined : structuredClone(args.data)
+  let contextBefore: Any
+  try {
+    contextBefore = structuredClone(args.req.context)
+  } catch {
+    count(stats.guards, 'context')
+    return exact()
+  }
+  let outcome: Awaited<ReturnType<typeof fusedByID>> | undefined
+  let fusedError: unknown
+  try {
+    outcome = await tapes.reference(() => fusedByID(checked, name, args, true))
+  } catch (error) {
+    fusedError = error
+  }
+  const slug = args.collection.config.slug
+  const report = (difference: Record<string, unknown>) =>
+    recordDiff({ ...difference, collection: slug, op: name })
+  if (outcome?.bail !== undefined) {
+    count(stats.bails, outcome.bail)
+    return exact()
+  }
+  const text = outcome?.result[0]
+  if (text !== undefined && text.charCodeAt(0) === 33) {
+    count(stats.bails, text.slice(1))
+    return exact()
+  }
+  let result: Any
+  try {
+    result = await tapes.candidate(exact)
+  } catch (error) {
+    if (fusedError === undefined) {
+      report({ kind: 'exact-threw', message: errorSummary(error) })
+    } else if (errorSummary(fusedError) === errorSummary(error)) {
+      count(stats.sameError, name)
+    } else {
+      report({ exact: errorSummary(error), fused: errorSummary(fusedError), kind: 'error' })
+    }
+    throw error
+  }
+  if (fusedError !== undefined || !outcome || text === undefined) {
+    report({ fused: errorSummary(fusedError), kind: 'fused-threw' })
+    return result
+  }
+  count(stats.hits, name)
+  const unmatched = Object.fromEntries(
+    Object.entries(tapes.unmatched()).filter(
+      ([channel, reads]) => channel !== 'uuids' || reads.recorded > 0,
+    ),
+  )
+  if (Object.keys(unmatched).length > 0) {
+    report({ kind: 'readings', unmatched })
+  }
+  const exactState = await checked.target.readState(outcome.state)
+  const fusedState = outcome.result[1] ?? ''
+  if (exactState !== fusedState) {
+    report({ kind: 'state', ...firstDifference(exactState, fusedState) })
+  }
+  const exactText = canonical(result)
+  const fusedText = canonical(fusedResultValue(text))
+  if (exactText !== fusedText) {
+    report({ kind: 'result', ...firstDifference(exactText, fusedText) })
+  }
+  const loaded = withLoadTransaction(outcome.read, exactLoadTransaction(args.req))
+  if (text.charCodeAt(0) === 35 /* # */ && loaded.population) {
+    const difference = await comparePopulated(text, loaded.population, result)
+    if (difference) {
+      report({ ...difference })
+    }
+  }
+  // updateByID works on a deep copy of `data`: the exact lane leaves the caller's untouched
+  if (canonical(dataBefore) !== canonical(args.data)) {
+    report({ kind: 'data', ...firstDifference(canonical(args.data), canonical(dataBefore)) })
+  }
+  // the fused lane's context writes replayed onto the context before the call must equal what
+  // the exact lane left
+  const contextWrites = outcome.result[2]
+  if (contextWrites) {
+    for (const [key, value] of checked.target.contextWrites(contextWrites)) {
+      contextBefore[key] = value
+    }
+  }
+  const contextAfter = canonical(args.req.context)
+  if (canonical(contextBefore) !== contextAfter) {
+    report({ kind: 'context', ...firstDifference(contextAfter, canonical(contextBefore)) })
   }
   return result
 }

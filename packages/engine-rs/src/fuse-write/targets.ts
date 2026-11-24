@@ -18,10 +18,24 @@ export type PreparedCreate = {
   state: Uint8Array
 }
 
+/** A prepared `updateByID` / `deleteByID`: the native request, the shadow's state reads. */
+export type PreparedByID = {
+  op: Uint8Array
+  state: Uint8Array
+}
+
 export type FusedWriteTarget = {
   backend: 'mongodb'
+  /** The `req.context` writes an `updateByID` result carries (`run`'s third text). */
+  contextWrites: (text: string) => [string, unknown][]
   /** The bson `ObjectId` class the adapter generates ids with (shadow replay). */
   objectIdClass: unknown
+  /**
+   * Prepares an `updateByID` / `deleteByID` of `args`: the clock readings and ids upstream would
+   * take (update), the cast filters of its statements; the stored-document read and WP-I's
+   * prepare run inside `run`. A string is a bail (nothing ran).
+   */
+  prepareByID: (name: 'deleteByID' | 'updateByID', args: Any) => Promise<PreparedByID | string>
   /**
    * Prepares a create of `args` on `data` and `context` (copies of the caller's data and
    * `req.context`, which upstream mutates in place: the dispatch replays that): the clock readings and
@@ -36,7 +50,8 @@ export type FusedWriteTarget = {
   /**
    * Runs one prepared operation in a new Rust-owned transaction with its result read (`read`:
    * the fused `findByID` request of the result), then commits; with `state` reads the touched
-   * collections inside the transaction and aborts. `[text]` / `[text, state]`.
+   * collections inside the transaction and aborts. `[text]` / `[text, state]`; `updateByID` /
+   * `deleteByID`: `[text, state | '', contextWrites | '']`.
    */
   run: (input: {
     op: Uint8Array

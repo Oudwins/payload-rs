@@ -628,6 +628,31 @@ pub async fn find_raw(
   Ok(docs)
 }
 
+/// The raw document of a `findOne` on `collection_name` (the Node driver's `find` with `limit: 1`,
+/// `singleBatch: true`), inside the Rust-owned transaction `txn` when given (the fused writes'
+/// stored-document read).
+pub async fn find_one_raw(
+  client_id: u32,
+  database: Option<&str>,
+  collection_name: &str,
+  find: FindSpec,
+  txn: Option<u32>,
+) -> Result<Option<RawDocumentBuf>> {
+  let state = client(client_id)?;
+  let coll = collection(&state, database, collection_name);
+  let mut options = FindOneOptions::default();
+  options.sort = find.sort;
+  options.projection = find.projection;
+  options.skip = find.skip;
+  options.collation = find.collation;
+  options.hint = find.hint;
+  let action = coll.find_one(find.filter).with_options(options);
+  Ok(match txn {
+    Some(txn) => action.session(txn_session(txn).await?.get()).await?,
+    None => action.await?,
+  })
+}
+
 /// A command (BSON as the caller serialized it) in the Rust-owned transaction `txn` (the fused
 /// write lanes).
 pub async fn txn_command_raw(
