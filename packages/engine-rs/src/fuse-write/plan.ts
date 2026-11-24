@@ -6,7 +6,7 @@
  *
  * Eligible: no collection hooks on the write paths and no root `afterError` hooks; every field
  * function on the path is Payload's own (`payloadOwnFunctions`, `defaultFieldValidators`); no
- * upload / auth collection, no joins, no drafts, no custom ID, no localization (later slices).
+ * upload / auth collection, no joins, no drafts, no custom ID (localization: WP-I's prepare and WP-A's read plan decide).
  */
 import { defaultFieldValidators } from '../../../payload/src/fields/config/defaultFieldValidators.js'
 import { payloadOwnFunctions } from '../../../payload/src/fields/config/payloadOwnFunctions.js'
@@ -182,9 +182,6 @@ export const buildWritePlan = (collection: Any, payload: Any): WritePlan => {
     }
     if (watch(builder, config, 'auth')) {
       ineligible('auth')
-    }
-    if (watch(builder, payload.config, 'localization')) {
-      ineligible('localization')
     }
     const joins = watch(builder, config, 'joins')
     if (

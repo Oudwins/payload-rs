@@ -230,16 +230,21 @@ const countMissingRowIds = (fields: Any[], data: Any): number | undefined => {
   let count = 0
   for (const field of fields) {
     let nested: number | undefined = 0
-    if (field.type === 'blocks') {
-      return undefined
-    }
-    if (field.type === 'array') {
+    if (field.type === 'array' || field.type === 'blocks') {
       const rows = data[field.name]
       for (const row of Array.isArray(rows) ? rows : []) {
         if (typeof row === 'object' && row !== null && 'id' in row && !row.id) {
           return undefined
         }
-        nested = countMissingRowIds(field.fields, row)
+        // a block row's fields: the field's own block of its `blockType` (global blocks bail)
+        const rowFields =
+          field.type === 'array'
+            ? field.fields
+            : field.blocks?.find((block: Any) => block.slug === row?.blockType)?.fields
+        if (!Array.isArray(rowFields)) {
+          return undefined
+        }
+        nested = countMissingRowIds(rowFields, row)
         if (nested === undefined) {
           return undefined
         }
@@ -364,6 +369,9 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
       data: encodeTree(data),
       fallbackLanguage: req.i18n?.fallbackLanguage,
       language: req.i18n?.language ?? 'en',
+      // `req.locale` exactly when the config is localized (the prepare bails otherwise)
+      locale:
+        req.payload.config.localization && typeof req.locale === 'string' ? req.locale : undefined,
       op: 'create',
       overrideAccess: Boolean(args.overrideAccess),
       user: req.user ? [req.user.collection, encodeTree(req.user.id)] : undefined,
