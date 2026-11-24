@@ -159,10 +159,14 @@ wrapper).
 
 ### 3.6 Shadow and counters
 
-`PAYLOAD_RS_HTTP_LANES=shadow` (verification only): every request served by a byte lane also runs
-the exact path; compared are status, the sorted header list and the body bytes; counters
-`hits[route]`, `bails[reason]`, `diffs` like FUSE_CONTRACT.md section 7 (`PAYLOAD_RS_HTTP_STATS_DIR`).
-A suite run proves the lane ran by non-zero `hits` per file.
+Implemented as a test-only wrapper (test/__rs/http-lanes/shadow.ts, routed in by the vite plugin
+of test/__rs/http-lanes, SQLite runs through `vitest.sqlite.config.ts`): every request the byte lane
+serves also runs the handler's exact path; status, the header list (names, values, order) and the
+body bytes must be equal, and the exact response is returned. `PAYLOAD_RS_HTTP_SHADOW_REPORT`
+collects `bytes:hit:<operation>`, `bytes:exact:<operation>` and `bytes:divergence` events;
+`summarize.mjs --bytes` fails on a divergence or when no request was served. The fused lane's own
+counters (`PAYLOAD_RS_FUSE_STATS_DIR`) give `count:text` / `find:text` / `findByID:text` hits and
+the guard reasons of the requests it did not serve.
 
 ### 3.7 Projections (not measured; sums of measured parts)
 
@@ -172,11 +176,43 @@ A suite run proves the lane ran by non-zero `hits` per file.
 | `GET /posts limit 100`     | 10.70 ms  | 9.39 ms                 | ~1.3-1.6 ms                                 |
 | GraphQL `Posts` limit 10   | 3.57 ms   | 2.69 ms                 | ~0.5-0.7 ms                                 |
 
-## 4. Decisions needed
+## 4. Status of step 2 (round 3)
 
-- **C1** speculative auth (3.4): concurrent user and main reads.
-- **C2** a second HS256 verification implementation in the JWT strategy (2): security-relevant
-  code that duplicates jose's checks for the tokens Payload issues; jose stays the authority for
-  everything else.
-- **C3** byte lanes live in upstream's default endpoint handlers (`packages/payload/src/collections/endpoints`,
-  `globals/endpoints`): outside WP C's files, so the owner (or A) must assign them.
+- **REST byte lanes: implemented** in upstream's default `find` / `findByID` / `count` handlers
+  (`packages/payload/src/collections/endpoints/fusedResponse.ts`). `globals/endpoints` is not wired:
+  `fusedOperationText` returns `undefined` for `findGlobal` so far.
+- **Access.** The fused lane serves `overrideAccess: false` calls only through compiled access, which
+  it does not implement yet (`fuse/compiled.ts` `isCompiledAccess` is `false`; access is checked per
+  config, not per call). The handler decides read access itself when that runs no user code:
+  Payload's own `defaultAccess` (pure), or a function the compiler accepted, evaluated as IR on the
+  arguments `executeAccess` would pass (D5; not while `PAYLOAD_FN_COMPILE_GUARD` verifies call
+  sites). Only a result of exactly `true` takes the lane, and only when every other effect of
+  `overrideAccess: false` is a no-op for the request: no field read access, `where` and the effective
+  sort on top-level non-relationship fields (not `hash` / `salt`), no `joins`. The lane then runs
+  with `overrideAccess: true`; anything else (a `Where` result, a bail) runs the handler's exact path,
+  which calls the access function as before. When the fused lane gets per-call compiled access, this
+  pre-decision can go.
+- **Coverage today: SQLite only** (the only fused backend). MongoDB and PostgreSQL requests run the
+  exact path, plus the lane's guards (a few microseconds). On SQLite, A's v1 guards decide most
+  misses: `populate` (REST's default depth with relationship fields; the perf scenarios that pass
+  `depth: 0` are served), field read access, `transaction`.
+- **Auth user lookup (task 2):** the JWT strategy's `payload.findByID` already goes through the
+  fused lane (`fuseFindByID`, a web-`Request` req passes A's guard): on SQLite every lookup of the
+  perf user is served (0.09 ms local, the strategy 0.12 ms). MongoDB / PostgreSQL need a fused
+  backend.
+- **Speculative auth (C1, accepted): not implemented.** It needs an asynchronous fused backend. On
+  SQLite both reads are synchronous native calls on the JS thread, so they cannot overlap; on
+  MongoDB / PostgreSQL there is no fused read to overlap with. It becomes worthwhile with B's
+  MongoDB lane or a PostgreSQL backend (design in 3.4).
+- **GraphQL plans (3.5): not implemented.** They meet the same two limits (access with
+  `overrideAccess: false` through the resolvers, population) and need a selection-to-select
+  compiler.
+- **tanstack-start:** the GraphQL handler change of step 1 (one graphql-http handler per schema,
+  the document cache as a factory over the dynamically loaded `graphql`).
+
+Verification (2026-11-23, the 31 REST / GraphQL suite files of WP C): MongoDB, SQLite and
+PostgreSQL, default engine and `--engine ts`, all 31/31 equal to the TS baselines; the SQLite byte
+shadow 31/31 equal to the baseline with 10 served requests (`count` 2, `findByID` 8) and 0
+divergences (status, headers, body bytes); the unit differentials (JWT, both document caches) 16/16.
+
+Decisions taken (owner, 2026-11-23): C1 accepted, C2 accepted, C3 assigned to WP C.
