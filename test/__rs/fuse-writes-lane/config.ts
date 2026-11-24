@@ -42,6 +42,42 @@ export default buildConfigWithDefaults({
         versions: false,
       },
       {
+        slug: 'categories',
+        fields: [{ name: 'title', type: 'text' }],
+      },
+      {
+        // the perf suite's `typical` post (test/__rs/perf/configs.mjs)
+        slug: 'typical',
+        fields: [
+          { name: 'title', type: 'text', index: true, required: true },
+          { name: 'views', type: 'number', defaultValue: 0 },
+          { name: 'revision', type: 'number', defaultValue: 0 },
+          { name: 'author', type: 'relationship', relationTo: 'authors' },
+          { name: 'slug', type: 'text', index: true, unique: true },
+          { name: 'excerpt', type: 'textarea' },
+          { name: 'content', type: 'richText' },
+          {
+            name: 'stage',
+            type: 'select',
+            defaultValue: 'draft',
+            index: true,
+            options: ['draft', 'review', 'published'].map((value) => ({ label: value, value })),
+          },
+          { name: 'publishedAt', type: 'date', index: true },
+          { name: 'featured', type: 'checkbox', defaultValue: false },
+          { name: 'categories', type: 'relationship', hasMany: true, relationTo: 'categories' },
+          { name: 'tags', type: 'array', fields: [{ name: 'tag', type: 'text' }] },
+          {
+            name: 'seo',
+            type: 'group',
+            fields: [
+              { name: 'title', type: 'text' },
+              { name: 'description', type: 'textarea' },
+            ],
+          },
+        ],
+      },
+      {
         slug: 'rows',
         fields: [
           { name: 'title', type: 'text' },

@@ -9,7 +9,6 @@
 
 pub mod ops;
 pub mod prepare;
-pub mod prepare_stub;
 pub mod state;
 
 use payload_fuse_mongo::MongoReads;

@@ -41,13 +41,8 @@ const writeHooks = [
   'beforeValidate',
 ] as const
 
-const fieldHookNames = [
-  'afterChange',
-  'afterRead',
-  'beforeChange',
-  'beforeDuplicate',
-  'beforeValidate',
-] as const
+// `beforeDuplicate` runs only for `duplicate`, which is not fused
+const fieldHookNames = ['afterChange', 'afterRead', 'beforeChange', 'beforeValidate'] as const
 
 class Ineligible extends Error {}
 

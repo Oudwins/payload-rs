@@ -5,9 +5,10 @@
  * replica set, no tracing / lane verify mode and no mongoose setting the lane refuses.
  *
  * Preparing a write (beforeValidate, the default validators, beforeChange, db-mongodb's write
- * transform and mongoose's casting) is WP-I's pure Rust `prepare_create` (crates/payload-fuse-write,
- * section 12; a stub that bails until it lands): the JS side only captures the clock readings and
- * ObjectIds upstream would generate, in upstream's order (`captureCreateCtx`).
+ * transform and mongoose's casting) is WP-I's pure Rust `prepare_create` (crates/payload-fuse-write
+ * `prepare`, section 12, through `fuseWritePrepare` with WP-I's plan of writePlan.ts): the JS side
+ * captures the clock readings and ObjectIds upstream would generate, in upstream's order
+ * (`captureCreateReadings`), with the classes upstream generates them with.
  *
  * TEMPORARY (`PAYLOAD_RS_FUSE_WRITES_PREPARE=ts`, never a default): `prepareCreateTS` runs
  * upstream's own steps in JS instead (the field traversals, db-mongodb `create` / `createVersion`
@@ -36,6 +37,7 @@ import { isPristineModel, mongooseBlocksLane } from '../mongo-driver/lane.js'
 import { verifyMode } from '../mongo-driver/verify.js'
 import { isTracing } from '../shadow-mongo/trace.js'
 import { registerFusedWriteTarget } from './targets.js'
+import { buildWritePlan, type WritePlanResult } from './writePlan.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- mirrors untyped upstream code */
 type Any = any
@@ -51,6 +53,7 @@ type FuseWriteAddon = {
     state?: Uint8Array,
   ) => Promise<string[]>
   fuseWriteMongoState?: (client: number, state: Uint8Array) => Promise<string>
+  fuseWritePrepare?: (planJson: string, requestJson: string, stored?: Uint8Array) => string
 }
 
 /** What `run` needs of the result read (fuse/mongo.ts `MongoPayload`). */
@@ -126,7 +129,7 @@ export const registerFusedMongoWriteTarget = ({
       prepareCreate: (args, data, context) =>
         isTSPrepare
           ? prepareCreateTS(lane, args, data, context)
-          : Promise.resolve(prepareCreateRust(lane, args, data)),
+          : Promise.resolve(prepareCreateRust(lane, args, data, context)),
       readState: (state) => fuseWriteMongoState(lane.clientID, state),
       rowIdClass: rowIdClass(),
       run: ({ op, read, state }) => {
@@ -186,60 +189,232 @@ const documentState = (lane: DriverLane, Model: Any, VersionModel: Any, id: Any)
   })
 
 /**
- * The clock readings and ObjectIds of an upstream `create` without hooks, in its order (the Rust
- * prepare's `WriteCtx`): `createdAt` (db-mongodb `create`, unless given), `updatedAt` (the write
- * transform, unless given), the document's `_id` (mongoose, a clock reading and a counter
- * increment), `now` of `saveVersion`, the version's `_id`. Row ids of arrays / blocks
- * (`baseIDField`, during beforeValidate, before all of these) come with the typical shape's
- * field kinds.
+ * The clock readings and ObjectIds of an upstream `create` without hooks, in its order (the
+ * readings `fuseWritePrepare` replays, FUSED_WRITES.md 12.3): one `bson-objectid` row id per array
+ * row without an id (`baseIDField`'s default, beforeValidate, in traversal order), `createdAt`
+ * (db-mongodb `create`), `updatedAt` (the write transform), the document's `_id` (mongoose's bson
+ * `ObjectId`), with versions `saveVersion`'s `now` and the version's `_id`. `undefined`: the data
+ * holds something whose readings this does not count (blocks, rows with a falsy id).
  */
-const captureCreateCtx = (lane: DriverLane, data: Any, hasVersions: boolean) => {
+const captureCreateReadings = (
+  lane: DriverLane,
+  fields: Any[],
+  data: Any,
+  hasVersions: boolean,
+) => {
+  const rows = countMissingRowIds(fields, data)
+  if (rows === undefined) {
+    return undefined
+  }
+  const RowId: Any = rowIdClass()
   const { ObjectId } = lane.mongoose.Types
-  const clock: string[] = []
-  const ids: Any[] = []
-  if (!data.createdAt) {
-    clock.push(new Date().toISOString())
+  const ids: [string, string][] = []
+  for (let i = 0; i < rows; i++) {
+    ids.push(['row', new RowId().toHexString()])
   }
-  if (data.updatedAt === undefined) {
-    clock.push(new Date().toISOString())
-  }
-  ids.push(new ObjectId())
+  const clock = [Date.now(), Date.now()]
+  const documentID = new ObjectId()
+  ids.push(['document', documentID.toHexString()])
   if (hasVersions) {
-    clock.push(new Date().toISOString())
-    ids.push(new ObjectId())
+    clock.push(Date.now())
+    ids.push(['version', new ObjectId().toHexString()])
   }
-  return { clock, ids }
+  return { clock, documentID, ids }
 }
 
-const prepareCreateRust = (lane: DriverLane, args: Any, data: Any) => {
+/** Array rows without an `id` in `data` (row ids beforeValidate generates), in traversal order. */
+const countMissingRowIds = (fields: Any[], data: Any): number | undefined => {
+  if (typeof data !== 'object' || data === null) {
+    return 0
+  }
+  let count = 0
+  for (const field of fields) {
+    let nested: number | undefined = 0
+    if (field.type === 'blocks') {
+      return undefined
+    }
+    if (field.type === 'array') {
+      const rows = data[field.name]
+      for (const row of Array.isArray(rows) ? rows : []) {
+        if (typeof row === 'object' && row !== null && 'id' in row && !row.id) {
+          return undefined
+        }
+        nested = countMissingRowIds(field.fields, row)
+        if (nested === undefined) {
+          return undefined
+        }
+        count += nested + (row?.id === undefined ? 1 : 0)
+      }
+      continue
+    }
+    if (field.type === 'tabs') {
+      for (const tab of field.tabs) {
+        nested = countMissingRowIds(tab.fields, 'name' in tab ? data[tab.name] : data)
+        if (nested === undefined) {
+          return undefined
+        }
+        count += nested
+      }
+      continue
+    }
+    if (Array.isArray(field.fields)) {
+      nested = countMissingRowIds(field.fields, 'name' in field ? data[field.name] : data)
+      if (nested === undefined) {
+        return undefined
+      }
+      count += nested
+    }
+  }
+  return count
+}
+
+/**
+ * A value in the boundary's tree encoding `fuseWritePrepare` decodes (`decode_value_bson`):
+ * `undefined`, `-0` and non-finite numbers marked, single-`$`-key objects wrapped. Data and context
+ * are inert (the dispatch's guards), anything else throws (the call then bails).
+ */
+const encodeTree = (value: unknown): unknown => {
+  if (value === undefined) {
+    return { $undefined: true }
+  }
+  if (typeof value === 'number') {
+    if (Object.is(value, -0)) {
+      return { $num: '-0' }
+    }
+    return Number.isFinite(value) ? value : { $num: String(value) }
+  }
+  if (Array.isArray(value)) {
+    return value.map(encodeTree)
+  }
+  if (typeof value === 'object' && value !== null) {
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error('encode')
+    }
+    const out: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = encodeTree(item)
+    }
+    const keys = Object.keys(out)
+    return keys.length === 1 && keys[0]!.startsWith('$') ? { $obj: out } : out
+  }
+  if (typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
+    throw new Error('encode')
+  }
+  return value
+}
+
+/** The inverse of `encodeTree` (the prepare's `callerData` and `contextWrites`). */
+const decodeTree = (value: Any): Any => {
+  if (Array.isArray(value)) {
+    return value.map(decodeTree)
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value
+  }
+  if (value.$undefined === true) {
+    return undefined
+  }
+  if (typeof value.$num === 'string') {
+    return Number(value.$num)
+  }
+  const source = value.$obj ?? value
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(source)) {
+    out[key] = decodeTree(source[key])
+  }
+  return out
+}
+
+const writePlans = new WeakMap<object, WritePlanResult>()
+
+/** WP-I's write plan of `collection` (writePlan.ts), rebuilt when a property it assumed changed. */
+const writePlanOf = (collection: Any, payload: Any) => {
+  let plan = writePlans.get(collection)
+  if (!plan || plan.volatile.some(([object, key, expected]) => object[key] !== expected)) {
+    plan = buildWritePlan({ collection, payload })
+    writePlans.set(collection, plan)
+  }
+  return plan
+}
+
+const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any) => {
   const resolved = entity(lane, args.collection.config.slug)
   if (typeof resolved === 'string') {
     return `mongo:${resolved}`
   }
-  const { Model, VersionModel } = resolved
+  const { collectionConfig, Model, VersionModel } = resolved
   if (data.createdAt !== undefined || data.updatedAt !== undefined) {
-    // whether upstream reads the clock depends on beforeChange's output
+    // whether upstream reads the clock for them depends on beforeChange's output
     return 'ctx:timestamps'
   }
-  const { clock, ids } = captureCreateCtx(lane, data, Boolean(VersionModel))
+  const plan = writePlanOf(args.collection, args.req.payload)
+  if (plan.json === undefined) {
+    return `plan:${plan.reason}`
+  }
+  const { fuseWritePrepare } = loadCoreRuntimeAddon() as FuseWriteAddon
+  if (typeof fuseWritePrepare !== 'function') {
+    return 'prepare:addon'
+  }
+  const { req } = args
+  let request: string
+  try {
+    request = JSON.stringify({
+      context: encodeTree(context),
+      data: encodeTree(data),
+      fallbackLanguage: req.i18n?.fallbackLanguage,
+      language: req.i18n?.language ?? 'en',
+      op: 'create',
+      overrideAccess: Boolean(args.overrideAccess),
+      user: req.user ? [req.user.collection, encodeTree(req.user.id)] : undefined,
+    }).slice(0, -1)
+  } catch {
+    return 'prepare:encode'
+  }
+  const readings = captureCreateReadings(lane, collectionConfig.fields, data, Boolean(VersionModel))
+  if (!readings) {
+    return 'ctx:rows'
+  }
+  // no translations: a validation failure bails, the exact lane throws upstream's error
+  const out = JSON.parse(
+    fuseWritePrepare(
+      plan.json,
+      `${request},"clock":${JSON.stringify(readings.clock)},"ids":${JSON.stringify(readings.ids)}}`,
+    ),
+  )
+  if (out.bail !== undefined) {
+    return `prepare:${out.bail}`
+  }
+  if (out.invalid || !out.doc) {
+    return 'prepare:invalid'
+  }
+  if (out.clockLeft || out.idsLeft) {
+    return 'prepare:readings-left'
+  }
+  for (const [key, value] of out.contextWrites) {
+    context[key] = decodeTree(value)
+  }
+  const hex = (text: string) => Buffer.from(text, 'hex')
   const op = lane.BSON.serialize({
     c: Model.collection.collectionName,
+    dob: hex(out.doc),
     op: 'create',
-    ...(VersionModel ? { vc: VersionModel.collection.collectionName } : {}),
-    p: {
-      clock,
-      data: JSON.stringify(data),
-      ids,
-      locale: args.req.locale ?? undefined,
-      plan: 0,
-      user: args.req.user ? JSON.stringify(args.req.user) : undefined,
-    },
+    ...(VersionModel && out.version
+      ? {
+          v: {
+            c: VersionModel.collection.collectionName,
+            dob: hex(out.version.doc),
+            ff: hex(out.version.flipFilter),
+            fu: hex(out.version.flipUpdate),
+          },
+        }
+      : {}),
   })
   return {
-    id: ids[0].toHexString(),
-    data,
+    id: readings.documentID.toHexString(),
+    data: out.callerData === undefined ? data : decodeTree(out.callerData),
     op,
-    state: documentState(lane, Model, VersionModel, ids[0]),
+    state: documentState(lane, Model, VersionModel, readings.documentID),
   }
 }
 

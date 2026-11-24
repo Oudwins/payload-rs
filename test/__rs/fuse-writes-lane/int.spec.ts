@@ -80,6 +80,62 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     expect(doc).toMatchObject({ title: 'plain', views: 0 })
   })
 
+  test('should create the typical shape and populate it at depth 2', async ({ payload }) => {
+    const author = await payload.create({
+      collection: 'authors',
+      data: { name: 'Lin' },
+      overrideAccess: true,
+    })
+    const category = await payload.create({
+      collection: 'categories',
+      data: { title: 'news' },
+      overrideAccess: true,
+    })
+    const paragraph = (text: string) => ({
+      type: 'paragraph',
+      children: [
+        { type: 'text', detail: 0, format: 0, mode: 'normal', style: '', text, version: 1 },
+      ],
+      direction: 'ltr',
+      format: '',
+      indent: 0,
+      textFormat: 0,
+      version: 1,
+    })
+
+    const doc = await payload.create({
+      collection: 'typical',
+      data: {
+        author: author.id,
+        categories: [category.id],
+        content: {
+          root: {
+            type: 'root',
+            children: [paragraph('hello')],
+            direction: 'ltr',
+            format: '',
+            indent: 0,
+            version: 1,
+          },
+        },
+        excerpt: 'short',
+        publishedAt: '2024-01-01T00:00:00.000Z',
+        seo: { description: 'd', title: 't' },
+        slug: 'typical-1',
+        stage: 'review',
+        tags: [{ tag: 'a' }, { tag: 'b' }],
+        title: 'typical',
+      } as never,
+      depth: 2,
+      overrideAccess: true,
+    })
+
+    expect(doc).toMatchObject({ featured: false, slug: 'typical-1', stage: 'review', views: 0 })
+    expect(doc.author).toMatchObject({ name: 'Lin' })
+    expect(doc.categories).toMatchObject([{ title: 'news' }])
+    expect(doc.tags).toHaveLength(2)
+  })
+
   test('should generate array row ids', async ({ payload }) => {
     const doc = await payload.create({
       collection: 'rows',

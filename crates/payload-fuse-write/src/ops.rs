@@ -1,4 +1,4 @@
-//! The operation drivers of the fused writes (FUSED_WRITES.md section 11): one operation's
+//! The operation drivers of the fused writes (FUSED_WRITES.md section 13): one operation's
 //! statements, in upstream's order, built from its prepared documents.
 //!
 //! `create` (packages/payload/src/collections/operations/create.ts, db-mongodb `create` /
@@ -6,17 +6,17 @@
 //!
 //! 1. `insert <collection>` of the document (`Model.create([data], { session })`);
 //! 2. with versions: `insert <versions collection>` of the version document, then the latest flip
-//!    (`updateMany` unsetting `latest` on the parent's other latest versions older than it);
+//!    (`updateMany` unsetting `latest` on the parent's other latest versions older than it; none
+//!    when the prepare's flip update is empty: mongoose then sends nothing);
 //! 3. no `enforceMaxVersions` find: the document's id was generated in this call, so the parent
 //!    has no other version (owner decision 2026-11-24; fused creates never take a custom id, see
 //!    the write plan in src/fuse-write/plan.ts);
 //!
 //! then the result's `afterRead` (population in the transaction) on the inserted document and the
-//! commit ([`crate::finish`]).
+//! commit ([`crate::exec_shadowed`]).
 
 use payload_mongo_driver::mongodb::bson::{RawBsonRef, RawDocument, RawDocumentBuf, rawdoc};
 
-use crate::prepare_stub::{WriteCtx, prepare_create};
 use crate::{ResultOf, Statement};
 
 pub enum Op {
@@ -29,9 +29,14 @@ pub struct OpRequest {
   pub statements: Vec<Statement>,
 }
 
-/// Decodes `{ op: "create", d?: <database>, c: <collection>, doc?: <document>, v?: { c, doc },
-/// p?: { plan, data, clock, ids, user?, locale? }, vc? }`: with `doc` the document the JS side
-/// prepared (the temporary TS prepare, src/fuse-write/mongo.ts), else `p` for the Rust prepare.
+/// The latest flip of a version insert: its filter and update as mongoose casts them (`None`:
+/// built here, as db-mongodb `createVersion` sends it).
+type Flip = Option<(RawDocumentBuf, RawDocumentBuf)>;
+
+/// Decodes `{ op: "create", d?: <database>, c: <collection>, doc | dob, v?: { c, doc | dob, ff?,
+/// fu? } }`: `doc` the document as a subdocument (the temporary TS prepare,
+/// src/fuse-write/mongo.ts), `dob` its BSON bytes (WP-I's prepare, `fuseWritePrepare`), `ff` /
+/// `fu` the flip's filter and update from that prepare.
 pub fn decode(bytes: &[u8]) -> Result<OpRequest, String> {
   let request = RawDocument::from_bytes(bytes).map_err(|e| e.to_string())?;
   let op = match request.get_str("op").map_err(|e| e.to_string())? {
@@ -40,26 +45,19 @@ pub fn decode(bytes: &[u8]) -> Result<OpRequest, String> {
   };
   let database = request.get_str("d").ok().map(str::to_string);
   let collection = request.get_str("c").map_err(|e| e.to_string())?.to_string();
-  let (doc, version) = match request.get_document("doc") {
-    Ok(doc) => {
-      let version = match request.get_document("v") {
-        Ok(v) => Some((
-          v.get_str("c").map_err(|e| e.to_string())?.to_string(),
-          v.get_document("doc").map_err(|e| e.to_string())?.to_raw_document_buf(),
+  let doc = document(request, "doc", "dob")?;
+  let version = match request.get_document("v") {
+    Ok(v) => {
+      let flip = match (v.get_binary("ff"), v.get_binary("fu")) {
+        (Ok(filter), Ok(update)) => Some((
+          RawDocumentBuf::from_bytes(filter.bytes.to_vec()).map_err(|e| e.to_string())?,
+          RawDocumentBuf::from_bytes(update.bytes.to_vec()).map_err(|e| e.to_string())?,
         )),
-        Err(_) => None,
+        _ => None,
       };
-      (doc.to_raw_document_buf(), version)
+      Some((v.get_str("c").map_err(|e| e.to_string())?.to_string(), document(v, "doc", "dob")?, flip))
     }
-    Err(_) => {
-      let input = request.get_document("p").map_err(|e| e.to_string())?;
-      let ctx = decode_ctx(input)?;
-      let plan = input.get_i32("plan").map_err(|e| e.to_string())? as u32;
-      let data = input.get_str("data").map_err(|e| e.to_string())?;
-      let prepared = prepare_create(plan, data, &ctx).map_err(|bail| bail.0)?;
-      let version_collection = request.get_str("vc").ok().map(str::to_string);
-      (prepared.doc, version_collection.zip(prepared.version))
-    }
+    Err(_) => None,
   };
   let mut statements = match op {
     Op::Create => create_statements(&collection, doc, version)?,
@@ -70,27 +68,19 @@ pub fn decode(bytes: &[u8]) -> Result<OpRequest, String> {
   Ok(OpRequest { op, database, statements })
 }
 
-fn decode_ctx(input: &RawDocument) -> Result<WriteCtx, String> {
-  let mut clock = Vec::new();
-  for value in input.get_array("clock").map_err(|e| e.to_string())? {
-    clock.push(value.map_err(|e| e.to_string())?.as_str().ok_or("ctx:clock")?.to_string());
+/// The document at `key` (a subdocument) or at `bytes_key` (its BSON bytes).
+fn document(owner: &RawDocument, key: &str, bytes_key: &str) -> Result<RawDocumentBuf, String> {
+  if let Ok(doc) = owner.get_document(key) {
+    return Ok(doc.to_raw_document_buf());
   }
-  let mut ids = Vec::new();
-  for value in input.get_array("ids").map_err(|e| e.to_string())? {
-    ids.push(value.map_err(|e| e.to_string())?.as_object_id().ok_or("ctx:ids")?);
-  }
-  Ok(WriteCtx {
-    clock,
-    ids,
-    user_json: input.get_str("user").ok().map(str::to_string),
-    locale: input.get_str("locale").ok().map(str::to_string),
-  })
+  let bytes = owner.get_binary(bytes_key).map_err(|e| e.to_string())?;
+  RawDocumentBuf::from_bytes(bytes.bytes.to_vec()).map_err(|e| e.to_string())
 }
 
 fn create_statements(
   collection: &str,
   doc: RawDocumentBuf,
-  version: Option<(String, RawDocumentBuf)>,
+  version: Option<(String, RawDocumentBuf, Flip)>,
 ) -> Result<Vec<Statement>, String> {
   let mut statements = vec![Statement {
     database: None,
@@ -98,20 +88,10 @@ fn create_statements(
     in_txn: true,
     result: ResultOf::Inserted,
   }];
-  if let Some((versions, version)) = version {
-    let id = version.get_object_id("_id").map_err(|_| "version:_id")?;
-    let parent = version.get("parent").map_err(|e| e.to_string())?.ok_or("version:parent")?.to_raw_bson();
-    let updated_at = match version.get("updatedAt").map_err(|e| e.to_string())? {
-      Some(value @ RawBsonRef::DateTime(_)) => value.to_raw_bson(),
-      _ => return Err("version:updatedAt".to_string()),
-    };
-    let flip = rawdoc! {
-      "$and": [
-        { "_id": { "$ne": id } },
-        { "$or": [{ "parent": { "$eq": parent } }] },
-        { "latest": { "$eq": true } },
-        { "updatedAt": { "$lt": updated_at } },
-      ]
+  if let Some((versions, version, flip)) = version {
+    let (filter, update) = match flip {
+      Some(flip) => flip,
+      None => built_flip(&version)?,
     };
     statements.push(Statement {
       database: None,
@@ -119,16 +99,37 @@ fn create_statements(
       in_txn: true,
       result: ResultOf::None,
     });
-    statements.push(Statement {
-      database: None,
-      command: rawdoc! {
-        "update": versions.as_str(),
-        "updates": [{ "q": flip, "u": { "$unset": { "latest": 1 } }, "multi": true }],
-        "ordered": true,
-      },
-      in_txn: true,
-      result: ResultOf::None,
-    });
+    if !update.is_empty() {
+      statements.push(Statement {
+        database: None,
+        command: rawdoc! {
+          "update": versions.as_str(),
+          "updates": [{ "q": filter, "u": update, "multi": true }],
+          "ordered": true,
+        },
+        in_txn: true,
+        result: ResultOf::None,
+      });
+    }
   }
   Ok(statements)
+}
+
+/// db-mongodb `createVersion`'s flip for `version`: the parent's other latest versions older than it.
+fn built_flip(version: &RawDocumentBuf) -> Result<(RawDocumentBuf, RawDocumentBuf), String> {
+  let id = version.get_object_id("_id").map_err(|_| "version:_id")?;
+  let parent = version.get("parent").map_err(|e| e.to_string())?.ok_or("version:parent")?.to_raw_bson();
+  let updated_at = match version.get("updatedAt").map_err(|e| e.to_string())? {
+    Some(value @ RawBsonRef::DateTime(_)) => value.to_raw_bson(),
+    _ => return Err("version:updatedAt".to_string()),
+  };
+  let filter = rawdoc! {
+    "$and": [
+      { "_id": { "$ne": id } },
+      { "$or": [{ "parent": { "$eq": parent } }] },
+      { "latest": { "$eq": true } },
+      { "updatedAt": { "$lt": updated_at } },
+    ]
+  };
+  Ok((filter, rawdoc! { "$unset": { "latest": 1 } }))
 }
