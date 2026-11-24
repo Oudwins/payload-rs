@@ -356,6 +356,21 @@ const Plain: CollectionConfig = {
     },
     { name: 'locText', type: 'text', localized: true },
     {
+      // tabs without hooks (the host's tabs path): a localized named tab, a named tab and a
+      // localized unnamed tab whose field is localized under a localized parent
+      type: 'tabs',
+      tabs: [
+        { name: 'locTabPlain', localized: true, fields: plainLeaves('lt', false) },
+        { name: 'namedTabPlain', fields: plainLeaves('nt', false) },
+        {
+          label: 'unnamed localized',
+          localized: true,
+          fields: [{ name: 'ulText', type: 'text', localized: true }],
+        },
+      ],
+    },
+    { name: 'locGroupPlain', type: 'group', localized: true, fields: plainLeaves('lg', false) },
+    {
       name: 'hookedHidden',
       type: 'text',
       hidden: true,
@@ -487,8 +502,12 @@ export default buildConfigWithDefaults({
         defaultRows: [{ dText: 'd', dNum: 2 }, { dText: 'e' }],
         hiddenText: 'h',
         hookedHidden: 'hh',
+        locGroupPlain: { lgText: 'en-lg', lgNum: 1 },
         locRows: [{ locLeaf: 'en-leaf', locPlain: 'en-plain' }],
+        locTabPlain: { ltText: 'en-lt', ltNum: 2 },
         locText: 'en',
+        namedTabPlain: { ntText: 'nt' },
+        ulText: 'en-ul',
         mixedRows: [{ mText: 'm' }, { mNum: 3 }],
         multiHook: 'v',
         probe: 'abcdefgh',
@@ -502,7 +521,13 @@ export default buildConfigWithDefaults({
     await payload.update({
       collection: 'plain',
       id: plain.id,
-      data: { locRows: [{ locLeaf: 'es-leaf' }], locText: 'es' } as any,
+      data: {
+        locGroupPlain: { lgText: '' },
+        locRows: [{ locLeaf: 'es-leaf' }],
+        locTabPlain: { ltText: 'es-lt' },
+        locText: 'es',
+        ulText: 'es-ul',
+      } as any,
       locale: 'es',
     })
     await payload.create({ collection: 'plain', data: { allow: false, topText: 'denied' } as any })
