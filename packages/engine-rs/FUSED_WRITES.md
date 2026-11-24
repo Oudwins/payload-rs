@@ -335,13 +335,16 @@ pub struct WriteCtx<'a> {
 pub enum IdUse { Row, Document, Version }
 pub trait Entropy {
   /// One upstream `new Date()` (ms since the epoch).
-  fn now(&mut self) -> f64;
+  fn now(&mut self) -> Result<f64, Bail>;
   /// One upstream `new ObjectId()`: `Row` = bson-objectid in `baseIDField` (row ids),
   /// `Document` / `Version` = mongoose's `_id` default (js-bson) of the main / version insert.
-  fn object_id(&mut self, used_for: IdUse) -> [u8; 12];
+  fn object_id(&mut self, used_for: IdUse) -> Result<[u8; 12], Bail>;
 }
 pub struct SystemEntropy;            // the live lane: SystemTime + bson's ObjectId::new()
-pub struct RecordedEntropy { .. }    // the shadow: replays recorded readings, bails when exhausted
+pub struct RecordedEntropy {         // the shadow: replays readings in order; a missing one or a
+  pub clock: VecDeque<f64>,          // reading of another kind bails
+  pub ids: VecDeque<(IdUse, [u8; 12])>,
+}
 ```
 
 The library asks for readings exactly where upstream takes them, in upstream's order, and only
@@ -349,9 +352,11 @@ when upstream takes them, so a shadow that records the exact lane's readings (in
 replays them one to one:
 
 - create: row ids (beforeValidate `defaultValue`, then beforeChange `value || new ObjectId()`, in
-  traversal order), `db.create`'s `createdAt` (only when `data.createdAt` is falsy), the write
-  transform's `updatedAt` (only when `undefined`), the document `_id` (`new Model(data)`), then
-  with versions `saveVersion`'s `now` and the version `_id`;
+  upstream's microtask order, which is the order the library's executor reproduces), `db.create`'s
+  `createdAt` (only when `data.createdAt` is falsy), the write transform's `updatedAt` (only when
+  `undefined`), the document `_id` (`new Model(data)`, a default mongoose applies before the
+  setters, so `_id` is the first key), then with versions `saveVersion`'s `now` and the version
+  `_id`;
 - updateByID: row ids, `dataToUpdate.updatedAt`, then with versions `saveVersion`'s `now` and the
   version `_id`.
 
@@ -400,7 +405,8 @@ pub struct PreparedWrite {
 pub struct VersionWrite { pub doc: bson::Document, pub flip_filter: bson::Document, pub flip_update: bson::Document }
 
 /// The `ValidationError` upstream throws from `beforeChange`; WP-H throws
-/// `new ValidationError({ id, collection, errors, req }, req.t)` (the message is the class's).
+/// `new ValidationError({ id, collection, errors, global: undefined, req }, req.t)` (the message
+/// is the class's; `data` then has upstream's keys, `global` included).
 pub struct Invalid { pub collection: String, pub id: Option<JsVal>, pub errors: Vec<FieldError> }
 pub struct FieldError { pub label: String, pub message: String, pub path: String }
 
@@ -409,10 +415,37 @@ pub struct Bail(pub String);
 ```
 
 `data`, `doc_with_locales`, `original_doc` are `JsVal` trees as the fused lanes decode them
-(`payload_engine::js`; `Date`s as typed values). A `Bail` is returned before anything is
-observable: the library never touches its inputs (it works on its own copies).
+(`payload_engine::js`; `Date`s as typed values, ObjectIds as BSON values; `-0` survives the
+boundary as `{ "$num": "-0" }`, which `JSON.stringify` alone loses). A `Bail` is returned before
+anything is observable: the library never touches its inputs (it works on its own copies).
+
+`flip_update` is empty when mongoose's cast drops every key of `{ $unset: { latest: 1 } }` (no
+`latest` path: collections without drafts); mongoose then sends no `update` command at all, so the
+driver sends the flip only when `flip_update` is not empty.
+
+Which data reaches `prepare_create`: the operation's `args.data`. The Local API hands the
+operation `deepCopyObjectSimple(data)`, so `caller_data` is what upstream leaves in that copy
+(observable only to callers of the operations themselves, e.g. REST's `req.data`).
+
+The JSON entry `prepare_json(planJson, requestJson, storedBson)` (napi `fuseWritePrepare`,
+`src/prepare/text.rs` documents the texts) runs either entry point with a `RecordedEntropy`; the
+corpus uses it and the shadow can too.
+
+How the traversals stay upstream-exact: `beforeValidate` / `beforeChange` run as one task per
+upstream `async` function on a small model of the JS heap (objects by reference, insertion order,
+own `undefined` properties) and of V8's microtask queue (`exec.rs`: an async call runs to its first
+await, `await` resumes one job after its operand settles, `Promise.all` one job after its last
+element). Upstream's fields write their fallback values after one, two or three awaits depending on
+the field (`getFallbackValue` / `getDefaultValue` are async), so the property order of `data`, the
+order of validation errors and the order of row id readings follow the tick counts, not the field
+order; the model reproduces them.
 
 ### 12.5 What each step ports (status in 12.6)
+
+Files: `crates/payload-fuse-write/src/prepare/` (`plan.rs` the plan, `before_validate.rs`,
+`before_change.rs`, `ops.rs` the operation steps and the version, `transform.rs` the write
+transform, `mongoose.rs` casting / documents / `castUpdate` / the `$set` MongoDB applies,
+`read.rs` the read transform of the version data, `exec.rs` / `heap.rs` the JS model).
 
 1. `beforeValidate` (fields/hooks/beforeValidate): `unflattenData`, the per-type value sanitizing
    (number strings, checkbox strings, relationship values, empty rows), fallback values from the
@@ -431,3 +464,38 @@ observable: the library never touches its inputs (it works on its own copies).
    (reverse key order of the sugar, strict / virtual paths dropped, nested objects cast in place),
    and the SchemaType casts (`String`, `Number`, `Boolean`, `Date` via V8's `Date.parse`,
    `ObjectId`, `Mixed`, document arrays with `_id: false`); a cast error is a bail.
+
+### 12.6 Status (2026-11-24)
+
+Ported and in the corpus, per field kind (no localization, no drafts):
+
+| kind                                   | beforeValidate                         | validator               | write transform / mongoose          |
+| -------------------------------------- | -------------------------------------- | ----------------------- | ----------------------------------- |
+| text, textarea, email (hasMany text)   | fallback, defaults, row `id` toString  | text / textarea / email | String cast, arrays                 |
+| number (hasMany)                       | number strings (`parseFloat`, `''`)    | number                  | Number cast, Int32 / Double, `-0`   |
+| checkbox                               | `'true'` / `'false'` / `''`            | checkbox                | Boolean cast (mongoose's sets)      |
+| select (hasMany)                       | -                                      | select                  | String cast, enum check on insert   |
+| date                                   | -                                      | date (no timezone)      | Date cast (V8 `Date.parse`)         |
+| relationship (single, hasMany, poly)   | `''` / `'none'` / `'null'`, `{ id }`   | relationship            | ObjectIds, Mixed for poly           |
+| array (row ids from the registry)      | `0` / `'0'`, rows, `getExistingRowDoc` | array                   | document arrays                     |
+| group, row, collapsible, unnamed tabs  | placeholders, traversal                | `() => true`            | single nested subdocuments          |
+| createdBy / updatedBy (registry hooks) | submitted marks in `req.context`       | relationship            | Mixed                               |
+| createdAt / updatedAt                  | -                                      | none                    | Date cast, stamps from the readings |
+
+Corpus (test/__rs/fuse-writes, TS engine as reference): 112 cases on the `minimal` and `typical`
+perf shapes (without rich text) and a `kinds` collection, creates and updates, valid and invalid,
+raw stored documents (unknown keys, `-0`, Double numbers, string dates, missing groups, rows
+without ids): 101 equal (written or invalid: insert / findAndModify BSON bytes, the stored
+document, the version insert, `req.context`, the operation's data, the error's message and data),
+5 bails, 0 differences.
+
+Bails (the exact lane runs): data holding `id` / `_id` on create, dotted keys (`unflattenData`),
+`null` / non-object array rows (upstream logs a warning), `null` / non-object groups, relationship
+values that are not 24-hex strings at the write transform (upstream throws the BSON error), number
+custom IDs on related collections, field access functions without `overrideAccess`, an existing
+`req.context._submittedAuthorshipFields`, `Date` values a validator stringifies, a cast mongoose
+rejects, an enum violation, operator values (`$inc`, `$push`, `$remove`), any validation failure
+without `ctx.t`.
+
+Not yet: lexical (step 3: the plan builder makes rich text ineligible), localization (step 4),
+blocks, drafts, update-many.
