@@ -518,3 +518,80 @@ node validations (form state).
 For WP-H, per operation: lexical's `afterChange` hook is the identity for every input the library
 accepts (no node ids, so its `originalNodeIDMap` is empty); the field `afterChange` traversal has
 no other own hooks on eligible collections.
+
+## 13. Dispatch, drivers and the write lane-shadow (WP-H, status 2026-11-24)
+
+Built (commits `f094e71e`, `62802c90`; off by default):
+
+| part                   | where                                                                                         |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| dispatch               | `src/fuse-write/index.ts` `fuseWrite`, called first by every `ops-write` drop-in              |
+| write plan             | `src/fuse-write/plan.ts` (WeakMap per `collection`, `volatile` triples)                       |
+| MongoDB target         | `src/fuse-write/mongo.ts` (registered by `installDriverLane`), registry `targets.ts`          |
+| counters               | `src/fuse-write/stats.ts`: `fuse-writes-<pid>.json`, diffs in `fuse-writes-diffs-<pid>.jsonl` |
+| operation drivers      | `crates/payload-fuse-write/src/ops.rs` (create)                                               |
+| shadow state reads     | `crates/payload-fuse-write/src/state.rs`, `exec_shadowed` in `lib.rs`                         |
+| Rust prepare interface | `crates/payload-fuse-write/src/prepare_stub.rs` (stub: bails `prepare:stub`)                  |
+| bindings               | `fuseWriteMongoOp`, `fuseWriteMongoState` (`crates/payload-node/src/fuse_write.rs`)           |
+| harness                | `runSuites.mjs --fuse-writes <mode> --fuse-writes-prepare <ts\|rs>`; `test/__rs/fuse-writes`  |
+
+Switches: `PAYLOAD_RS_FUSE_WRITES=off|on|shadow` (default `off`);
+`PAYLOAD_RS_FUSE_WRITES_PREPARE=ts` selects the **temporary TS prepare** (upstream's own
+`beforeValidate` / `beforeChange`, db-mongodb `create` / `createVersion` and mongoose's document
+casting, without their I/O); otherwise the Rust prepare (the stub until WP-I lands). The TS
+prepare is never a default: it exists to prove the drivers, the transaction and the shadow.
+
+**Eligibility** (plan, per collection): no collection hooks on any write path, no root
+`afterError`; every field hook / `defaultValue` function in `payloadOwnFunctions`, every
+`validate` in `defaultFieldValidators`; no `filterOptions` function, join, point, virtual field,
+block references; not upload, auth, drafts, custom ID, localization (later slices), no `select`
+function; WP-A's read plan eligible. **Guards** (per call): inert args and `data` (no Dates yet),
+accepted `req` kinds, no `transactionID`, no `disableTransaction`, no `draft` / `autosave` /
+`duplicateFromID` / `publishAllLocales` / `selectedLocales` / `select` / `req.file`, no `id` in
+data; `overrideAccess` or `access.create` compiled and truthy (then no field access and no
+population: nested finds would check read access); target: write and read methods unchanged since
+the lane was installed, a replica set, `transactionOptions !== false`, no tracing / verify.
+
+**create** (driver `ops.rs`): `insert` of the document, then with versions `insert` of the
+version and the latest flip `update` (`$unset: { latest: 1 }`, filter as `createVersion`), no
+max-versions find; then `run_document` (the fused `findByID` request of the new id: afterRead and
+population in the transaction), then the commit. JS replays what upstream mutates in place
+(`args.data` by `beforeValidate`, `req.context` by Payload's own hooks: the lane works on copies
+so a bail leaves both untouched), primes the dataloader with keys carrying a fresh transaction
+id (upstream's population runs inside the operation's transaction) and deletes
+`req.transactionID` like `commitTransaction`.
+
+**WriteCtx** (`captureCreateCtx`, the Rust prepare's input): clock readings and ObjectIds in
+upstream's order: `createdAt` (unless given), `updatedAt` (write transform, unless given), the
+document's `_id`, `saveVersion`'s `now`, the version's `_id`. Row ids (`bson-objectid`, read by
+`beforeValidate` before all of these) must be pre-generated per row without an id, in traversal
+order, once WP-I's plan says how many; until then the Rust path bails for data with
+`createdAt` / `updatedAt`. The op request for the Rust prepare is
+`{ op: 'create', c, vc?, p: { plan, data (JSON), clock, ids, user?, locale? } }`; with the TS
+prepare `{ op, c, doc, v?: { c, doc } }`.
+
+**Write lane-shadow**: the fused lane runs first (its readings recorded on replay tapes), reads the
+touched collections inside its transaction (the document by `_id`, its versions by `parent`,
+canonical extended JSON: BSON types and key order) and aborts; then the exact lane runs with the
+readings replayed (clock, bson `getInc`, `bson-objectid` row ids: new `objectIds` channel) and its
+result is returned. Compared: result (canonical), populated dataloader keys / cached objects / req
+state, raw state after the exact lane's commit, the operation's `data` and `req.context` (the
+fused copies replayed onto the state before the call), reading counts (the exact lane's
+transaction uuid is exempt, D4), and errors when both throw. Counted: `hits`, `bails`, `guards`,
+`ineligible`, `sameError`, `diffs`.
+
+Left, in order:
+
+1. **updateByID** (`ops.rs`): stored-doc `find` in the transaction, `checkDocumentLockStatus`
+   (expired-locks `delete` without a session after a clock reading, then the lock `find`),
+   `findAndModify` (`updatedAt` clock reading first), `saveVersion` (`now`, version insert,
+   flip, the max-versions `find` + conditional `deleteMany`); the result read runs on the
+   version's `version` with `id = parent` (`saveVersion` returns it, not the updated document).
+   With the TS prepare the stored doc must come back to JS before the prepare: `txnCommand` (the
+   driver's D4 API) runs the find in the same Rust transaction, then `fuseWriteMongoOp` continues
+   it; WP-I's prepare removes that JS turn. State reads add the locked documents of the id.
+2. **deleteByID**: find, locks, `deleteVersions`, `findAndModify` remove, preferences
+   `deleteMany` (`collection-<slug>-<id>` keys); state adds the preferences.
+3. Typical shape as WP-I's field kinds land (row ids in the ctx, lexical default features), then
+   `PAYLOAD_RS_FUSE_WRITES=on` by default once the harness, `--fuse-writes shadow` and the perf
+   floors of section 8 hold.

@@ -8,8 +8,8 @@
 //! 2. with versions: `insert <versions collection>` of the version document, then the latest flip
 //!    (`updateMany` unsetting `latest` on the parent's other latest versions older than it);
 //! 3. no `enforceMaxVersions` find: the document's id was generated in this call, so the parent
-//!    has no other version (owner decision 2026-11-24; the plan flag `m` is set by the JS side
-//!    only then);
+//!    has no other version (owner decision 2026-11-24; fused creates never take a custom id, see
+//!    the write plan in src/fuse-write/plan.ts);
 //!
 //! then the result's `afterRead` (population in the transaction) on the inserted document and the
 //! commit ([`crate::finish`]).
@@ -30,8 +30,8 @@ pub struct OpRequest {
 }
 
 /// Decodes `{ op: "create", d?: <database>, c: <collection>, doc?: <document>, v?: { c, doc },
-/// m: <skip max versions>, p?: { plan, data, clock, ids } }`: with `doc` the document the JS side
-/// prepared (temporary TS prepare, src/fuse-write/prepare.ts), else `p` for the Rust prepare.
+/// p?: { plan, data, clock, ids, user?, locale? }, vc? }`: with `doc` the document the JS side
+/// prepared (the temporary TS prepare, src/fuse-write/mongo.ts), else `p` for the Rust prepare.
 pub fn decode(bytes: &[u8]) -> Result<OpRequest, String> {
   let request = RawDocument::from_bytes(bytes).map_err(|e| e.to_string())?;
   let op = match request.get_str("op").map_err(|e| e.to_string())? {
