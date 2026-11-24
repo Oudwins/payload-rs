@@ -27,6 +27,10 @@
  *   --fuse <mode>      PAYLOAD_RS_FUSE=<mode> for the fused read lanes (packages/engine-rs/
  *                      FUSE_CONTRACT.md): `shadow` compares every fused call with the exact lane; a
  *                      file with a lane difference differs. Fused hits count as Rust-served calls.
+ *   --fuse-writes <m>  PAYLOAD_RS_FUSE_WRITES=<mode> for the fused writes (packages/engine-rs/
+ *                      FUSED_WRITES.md): `shadow` runs the write lane-shadow on every fused write;
+ *                      its differences count as lane differences, its hits as fused hits.
+ *   --fuse-writes-prepare <ts|rs>  PAYLOAD_RS_FUSE_WRITES_PREPARE (`ts`: the temporary TS prepare)
  *   --shadow           PAYLOAD_RS_MONGO_SHADOW=true: differential adapter (reference TS adapter vs
  *                      candidate on a second database), JSONL reports under <out>/reports/<file>/
  *   --candidate <c>    with --shadow: PAYLOAD_RS_MONGO_CANDIDATE (ts | rs | module path), default ts
@@ -137,6 +141,8 @@ const options = {
   database: 'mongodb',
   engine: 'ts',
   fuse: undefined,
+  fuseWrites: undefined,
+  fuseWritesPrepare: undefined,
   includeRs: false,
   jobs: 1,
   out: undefined,
@@ -160,6 +166,8 @@ for (let i = 0; i < argv.length; i++) {
   else if (arg === '--config') options.config = path.relative(root, path.resolve(next()))
   else if (arg === '--addon') options.addon = path.resolve(next())
   else if (arg === '--fuse') options.fuse = next()
+  else if (arg === '--fuse-writes') options.fuseWrites = next()
+  else if (arg === '--fuse-writes-prepare') options.fuseWritesPrepare = next()
   else if (arg === '--shadow') options.shadow = true
   else if (arg === '--candidate') options.candidate = next()
   else if (arg === '--strict') options.strict = true
@@ -316,6 +324,8 @@ const runFileNow = (file, { attempt }) =>
       'PAYLOAD_RS_MONGO_ENGINE_STATS_FILE',
       'PAYLOAD_RS_FUSE',
       'PAYLOAD_RS_FUSE_STATS_DIR',
+      'PAYLOAD_RS_FUSE_WRITES',
+      'PAYLOAD_RS_FUSE_WRITES_PREPARE',
     ]) {
       delete env[key]
     }
@@ -324,6 +334,8 @@ const runFileNow = (file, { attempt }) =>
     env.PAYLOAD_RS_MONGO_ENGINE_STATS_DIR = statsDir
     env.PAYLOAD_RS_FUSE_STATS_DIR = statsDir
     if (options.fuse) env.PAYLOAD_RS_FUSE = options.fuse
+    if (options.fuseWrites) env.PAYLOAD_RS_FUSE_WRITES = options.fuseWrites
+    if (options.fuseWritesPrepare) env.PAYLOAD_RS_FUSE_WRITES_PREPARE = options.fuseWritesPrepare
     if (options.engine === 'rs') {
       env.PAYLOAD_ENGINE = 'rs'
       if (options.core) env.PAYLOAD_CORE_ENGINE = options.core

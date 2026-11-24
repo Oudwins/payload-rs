@@ -23,6 +23,7 @@ import { afterRead as tsAfterRead } from '../../../payload/src/fields/hooks/afte
 import { beforeChange as tsBeforeChange } from '../../../payload/src/fields/hooks/beforeChange/index.js'
 import { beforeValidate as tsBeforeValidate } from '../../../payload/src/fields/hooks/beforeValidate/index.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
+import { fuseWrite } from '../fuse-write/index.js'
 import { getCoreOps } from '../ops/index.js'
 import { getCoreHooksAfter } from '../runtime/afterChange/binding.js'
 import { getBeforeChangeBinding } from '../runtime/beforeChange/index.js'
@@ -119,14 +120,20 @@ type OperationName = Exclude<keyof CoreOpsWriteBinding, 'apiVersion' | 'init' | 
 const op =
   (name: OperationName) =>
   (args: Any): Promise<Any> => {
-    if (isAdapterTransactionEnabled) {
-      const owned = runInAdapterTransaction(name, args, () => runOperation(name, args))
-      if (owned) {
-        return owned
-      }
-    }
-    return runOperation(name, args)
+    // the fused write lanes (src/fuse-write): `undefined` when the call runs here
+    const fused = fuseWrite(name, args, () => runExact(name, args))
+    return fused ?? runExact(name, args)
   }
+
+const runExact = (name: OperationName, args: Any): Promise<Any> => {
+  if (isAdapterTransactionEnabled) {
+    const owned = runInAdapterTransaction(name, args, () => runOperation(name, args))
+    if (owned) {
+      return owned
+    }
+  }
+  return runOperation(name, args)
+}
 
 const runOperation = (name: OperationName, args: Any): Promise<Any> => {
   let promise: Promise<Any>

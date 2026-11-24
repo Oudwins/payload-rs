@@ -27,6 +27,11 @@ export type PopulationContext = {
   args: Any
   /** the `draft` the operation passes to `afterRead` */
   draft: unknown
+  /**
+   * The transaction the loads ran in when it is not `req.transactionID` (the fused writes:
+   * upstream populates a write's result inside the operation's transaction, src/fuse-write).
+   */
+  loadTransactionID?: unknown
   payload: Any
   req: Any
   /** `populate?.[slug] ?? defaultPopulate` per related collection (the keys' `select`) */
@@ -279,7 +284,7 @@ const cacheKey = (
     populate: args.populate,
     select: context.selects[slug] as never,
     showHiddenFields: isOwn ? args.showHiddenFields : Boolean(args.showHiddenFields),
-    transactionID: req.transactionID,
+    transactionID: context.loadTransactionID ?? req.transactionID,
   })
 }
 
@@ -365,13 +370,18 @@ export const comparePopulated = async (
   }
   if (envelope.n.length > 0) {
     const depth = envelope.n[envelope.n.length - 1]
-    if (req.transactionID !== null || req.query?.depth !== depth) {
+    // a fused write's commit deletes `req.transactionID` after the nested finds (`loadTransactionID`)
+    const transactionID = context.loadTransactionID === undefined ? null : undefined
+    if (req.transactionID !== transactionID || req.query?.depth !== depth) {
       return {
         exact: JSON.stringify({
           depth: req.query?.depth,
           transactionID: req.transactionID ?? 'undefined',
         }),
-        fused: JSON.stringify({ depth, transactionID: null }),
+        fused: JSON.stringify({
+          depth,
+          transactionID: transactionID === undefined ? 'undefined' : null,
+        }),
         kind: 'req',
       }
     }

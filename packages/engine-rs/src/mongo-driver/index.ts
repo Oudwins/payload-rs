@@ -9,6 +9,7 @@
 import { createRequire } from 'node:module'
 
 import { registerFusedMongoTarget } from '../fuse/mongo.js'
+import { registerFusedMongoWriteTarget } from '../fuse-write/mongo.js'
 import { resolveDbMongodbMongoose } from '../mongo-live/host.js'
 import { getDriverBinding } from './binding.js'
 import { createLaneMethod, type DriverLane, laneMethods, laneStats } from './lane.js'
@@ -185,6 +186,8 @@ export const installDriverLane = (adapter: Any): readonly string[] => {
   }
   // the fused read lanes (FUSE_CONTRACT.md section 8) while these read methods are installed
   registerFusedMongoTarget({ adapter, getLane: getDriverLane })
+  // the fused writes (FUSED_WRITES.md) while these and the adapter's write methods are installed
+  registerFusedMongoWriteTarget({ adapter, getLane: getDriverLane })
   const upstreamConnect = adapter.connect
   adapter.connect = async function connect(this: Any, ...args: Any[]) {
     const hotReload = Boolean(args[0]?.hotReload)

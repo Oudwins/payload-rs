@@ -41,6 +41,14 @@ export const readEngineStats = (dir) => {
   const sum = (record) => Object.values(record ?? {}).reduce((a, b) => a + b, 0)
   // the fused read lanes' counters (packages/engine-rs/src/fuse/stats.ts): a fused hit is a read
   // operation served by Rust end to end (it makes no adapter call)
+  // the fused writes' counters (packages/engine-rs/src/fuse-write/stats.ts): the same meaning
+  for (const name of fs.readdirSync(dir).filter((n) => /^fuse-writes-\d+\.json$/.test(n))) {
+    const stats = readJSON(path.join(dir, name))
+    if (!stats) continue
+    out.fused += sum(stats.hits)
+    out.fusedDiffs += stats.diffs ?? 0
+    out.nativeCalls += sum(stats.hits)
+  }
   for (const name of fs.readdirSync(dir).filter((n) => /^fuse-\d+\.json$/.test(n))) {
     const stats = readJSON(path.join(dir, name))
     if (!stats) continue

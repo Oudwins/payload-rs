@@ -280,6 +280,7 @@ const compiledAccess = (
   id: unknown,
   collectionConfig: Any,
   req: Any,
+  data?: unknown,
 ): { reason: string; value?: undefined } | { reason?: undefined; value: unknown } => {
   if (typeof access !== 'function') {
     return { reason: 'access:none' }
@@ -302,7 +303,7 @@ const compiledAccess = (
     {
       id,
       slug: collectionConfig.slug,
-      data: undefined,
+      data,
       isReadingStaticFile: false,
       req,
       skipCompilation,
@@ -784,6 +785,34 @@ const shadow = async (fused: Fused, args: Any, exact: Exact): Promise<Any> => {
   }
   return result
 }
+
+/**
+ * The fused writes (src/fuse-write): the `findByID` request a write's result is read with (its
+ * `afterRead` and population on the document the write stored, crates/payload-fuse-mongo
+ * `run_document`), the accepted request kinds, compiled access, and the result's
+ * materialization (with population's dataloader priming) or plain value (shadow mode).
+ */
+export const fusedFindByIDRequest = (args: Any) => buildFindByIDRequest(args)
+export const isAcceptedRequest = (req: unknown) => {
+  const kind = acceptedRequest(req, 0)
+  return kind !== undefined && (kind === 'isolated' || hasDataProperties(req as object, reqKeys))
+}
+export const evaluateCompiledAccess = (
+  access: unknown,
+  {
+    id,
+    collectionConfig,
+    data,
+    req,
+  }: { collectionConfig: Any; data: unknown; id: unknown; req: Any },
+) => compiledAccess(access, id, collectionConfig, req, data)
+export const materializeFusedResult = (
+  { population }: { population?: PopulationContext },
+  text: string,
+) =>
+  text.charCodeAt(0) === 35 /* # */ ? materializePopulated(text, population!) : JSON.parse(text)
+export { parseResult as fusedResultValue }
+export type { Fused as FusedRead }
 
 const requestBuilders: Record<Op, (args: Any) => Fused | undefined> = {
   count: buildCountRequest,
