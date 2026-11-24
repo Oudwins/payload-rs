@@ -26,7 +26,15 @@ fn new_run<'e>(plan: &'e WritePlan, ctx: &'e mut WriteCtx<'_>, operation: Operat
     // upstream mutates the object a previous operation left there
     return Err(Bail::new("context:submittedAuthorship"));
   }
+  if matches!(ctx.locale, Some("all" | "*")) {
+    return Err(Bail::new("locale:all"));
+  }
+  if plan.localization.is_some() != ctx.locale.is_some() {
+    return Err(Bail::new("locale:missing"));
+  }
   Ok(Run {
+    locale: ctx.locale.map(str::to_string),
+    merge_locale_actions: RefCell::new(Vec::new()),
     bail: RefCell::new(None),
     context_order: RefCell::new(Vec::new()),
     entropy: RefCell::new(&mut *ctx.entropy),

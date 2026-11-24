@@ -179,12 +179,21 @@ pub struct Field {
   pub fields: Vec<Field>,
   pub tabs: Vec<Tab>,
   pub lexical: Option<Lexical>,
+  /// `field.localized` (sanitization keeps it only with localization).
+  pub localized: bool,
 }
 
 #[derive(Debug)]
 pub struct Tab {
   pub label: Label,
   pub fields: Vec<Field>,
+}
+
+impl WritePlan {
+  /// `config.localization && fieldShouldBeLocalized({ field, parentIsLocalized })`
+  pub fn localized_here(&self, field: &Field, parent_is_localized: bool) -> bool {
+    self.localization.is_some() && field.localized && !parent_is_localized
+  }
 }
 
 impl Field {
@@ -244,9 +253,17 @@ pub struct Versions {
   pub schema: Schema,
 }
 
+/// `config.localization`.
+#[derive(Debug)]
+pub struct Localization {
+  pub default_locale: String,
+  pub locale_codes: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct WritePlan {
   pub slug: String,
+  pub localization: Option<Localization>,
   pub timestamps: bool,
   pub allow_additional_keys: bool,
   pub allow_id_on_create: bool,
@@ -299,7 +316,18 @@ pub fn decode(text: &str) -> Result<WritePlan, String> {
       schema: decode_schema(v.get("schema").ok_or_else(|| bad("versions.schema"))?)?,
     }),
   };
+  let localization = match json.get("localization") {
+    None | Some(Json::Null) => None,
+    Some(l) => Some(Localization {
+      default_locale: l.get("defaultLocale").and_then(Json::as_str).ok_or_else(|| bad("localization"))?.to_string(),
+      locale_codes: match l.get("localeCodes") {
+        Some(Json::Array(codes)) => codes.iter().map(|c| c.as_str().map(str::to_string).ok_or_else(|| bad("localization"))).collect::<Result<_, _>>()?,
+        _ => return Err(bad("localization")),
+      },
+    }),
+  };
   Ok(WritePlan {
+    localization,
     allow_additional_keys: flag("allowAdditionalKeys"),
     allow_id_on_create: flag("allowIDOnCreate"),
     default_id_type: json.get("defaultIDType").map(JsVal::from_json).unwrap_or_default(),
@@ -439,6 +467,7 @@ fn decode_field(json: &Json) -> Result<Field, String> {
     kind,
     label: decode_label(json.get("label")),
     lexical,
+    localized: flag("l"),
     name: json.get("n").and_then(Json::as_str).map(str::to_string),
     relation_to,
     required: flag("req"),

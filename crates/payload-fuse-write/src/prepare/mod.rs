@@ -98,6 +98,8 @@ pub struct WriteCtx<'a> {
   pub override_access: bool,
   /// `req.context` at the start of the operation.
   pub context: &'a JsVal,
+  /// `req.locale` (`None` without localization; `'all'` / `'*'` bail).
+  pub locale: Option<&'a str>,
   /// `req.t`: only used to build a validation error (`None`: every validation failure bails).
   pub t: Option<&'a dyn Translate>,
   /// `req.i18n.language` / `fallbackLanguage` (labels of validation errors).

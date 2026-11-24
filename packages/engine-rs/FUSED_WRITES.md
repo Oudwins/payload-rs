@@ -287,7 +287,7 @@ pub fn write_plan(id: u32) -> Option<Arc<WritePlan>>;
 
 The JSON (`v: 1`) holds:
 
-- `slug`, `timestamps`, `versions` (`null` or `{ max }`: `getVersionsMax`), `defaultIDType`,
+- `slug`, `localization` (`null` or `{ defaultLocale, localeCodes }`), `timestamps`, `versions` (`null` or `{ max }`: `getVersionsMax`), `defaultIDType`,
   `defaultMaxTextLength`, `relations` (`{ [slug]: { customIDType } }` of every collection a
   relationship field reaches, for the validators and the write transform);
 - `fields`: `collection.fields` in config order, each with its type, name, `required`, `hasMany`,
@@ -303,7 +303,7 @@ The JSON (`v: 1`) holds:
 
 Ineligible (the plan builder returns a reason): user functions anywhere on the write path that are
 not in `payloadOwnFunctions` / `defaultFieldValidators` (hooks, `validate`, `defaultValue`,
-`access`, `admin.condition`, `filterOptions`), custom ID fields, localization (until step 4),
+`access`, `admin.condition`, `filterOptions`), custom ID fields, `localization.filterAvailableLocales`,
 drafts, upload / auth collections, join fields, blocks (until their discriminators are modelled),
 point / json / code / radio / upload fields, rich text other than lexical with default features
 (step 3), `timezone` dates, mongoose schema features the casting does not model (setters other
@@ -319,6 +319,9 @@ pub struct WriteCtx<'a> {
   /// `req.context` at the start of the operation (read: `isRestoringVersion`,
   /// `_submittedAuthorshipFields`).
   pub context: &'a JsVal,
+  /// `req.locale`: `Some` exactly when the config is localized (`'all'` / `'*'` bail). Added
+  /// 2026-11-25 (localization).
+  pub locale: Option<&'a str>,
   /// `req.t` (payload-core-validate `Translate`) and `req.i18n` (`language`, `fallbackLanguage`):
   /// only used to build a validation error; `None` makes every validation failure a bail.
   pub t: Option<&'a dyn Translate>,

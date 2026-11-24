@@ -231,26 +231,36 @@ type CaseArgs = {
   collection: string
   data: Record<string, unknown>
   id?: number | string
+  /** `req.locale` (localized configs). */
+  locale?: string
   overrideAccess?: boolean
   payload: Payload
   user?: Record<string, unknown>
 }
 
-const makeReq = async ({ payload, user }: { payload: Payload; user?: Record<string, unknown> }) =>
-  createPayloadRequest({ payload, user: user as any })
+const makeReq = async ({
+  locale,
+  payload,
+  user,
+}: {
+  locale?: string
+  payload: Payload
+  user?: Record<string, unknown>
+}) => createPayloadRequest({ locale, payload, user: user as any })
 
 /** Runs one case on both lanes and compares. */
 export const runCase = async ({
   collection,
   data,
   id,
+  locale,
   overrideAccess = true,
   payload,
   user,
 }: CaseArgs): Promise<CaseResult> => {
   const plan = planOf(payload, collection)
   const op = id === undefined ? 'create' : 'update'
-  const req = await makeReq({ payload, user })
+  const req = await makeReq({ locale, payload, user })
   const callerData = data
   const inputData = deepCopyObjectSimple(data)
   let stored: Buffer | undefined
@@ -262,7 +272,7 @@ export const runCase = async ({
       .findOne({ _id: new BSON.ObjectId(String(id)) }, { raw: true } as any)
     stored = raw as unknown as Buffer
     docWithLocales = await payload.db.findOne({ collection, where: { id: { equals: id } } })
-    const readReq = await makeReq({ payload, user })
+    const readReq = await makeReq({ locale, payload, user })
     originalDoc = await afterRead({
       collection: payload.collections[collection]!.config,
       context: readReq.context,
@@ -321,6 +331,7 @@ export const runCase = async ({
     id: op === 'update' ? encode(id) : undefined,
     ids,
     language: req.i18n.language,
+    locale: req.locale ?? undefined,
     op,
     originalDoc: op === 'update' ? encode(originalDoc) : undefined,
     overrideAccess,

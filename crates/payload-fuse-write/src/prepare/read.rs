@@ -61,9 +61,9 @@ pub fn read_document(plan: &WritePlan, heap: &mut Heap, doc: &Document) -> Resul
     heap.set(data, "id", V::str(&object_id_to_hex(&bytes)))?;
   }
   if !plan.allow_additional_keys {
-    strip_fields(heap, &plan.fields, data, &["id", "globalType"])?;
+    strip_fields(plan, heap, &plan.fields, data, &["id", "globalType"], false)?;
   }
-  sanitize(plan, heap, &plan.fields, data)?;
+  sanitize(plan, heap, &plan.fields, data, false)?;
   Ok(data)
 }
 
@@ -83,8 +83,8 @@ fn flattened<'f>(fields: &'f [Field], out: &mut Vec<&'f Field>) {
   }
 }
 
-/// `stripFields` (no localization, no blocks).
-fn strip_fields(heap: &mut Heap, fields: &[Field], data: Ref, reserved: &[&str]) -> Result<(), Bail> {
+/// `stripFields` (no blocks).
+fn strip_fields(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref, reserved: &[&str], parent_localized: bool) -> Result<(), Bail> {
   let mut level = Vec::new();
   flattened(fields, &mut level);
   for key in heap.keys(data) {
@@ -98,78 +98,134 @@ fn strip_fields(heap: &mut Heap, fields: &[Field], data: Ref, reserved: &[&str])
     if !value.truthy() || !Heap::is_object_like(&value) {
       continue;
     }
-    match field.kind {
-      Kind::Array => {
-        let Some(r) = value.as_ref() else { continue };
-        let Some(rows) = heap.arr(r).cloned() else { continue };
-        let mut has_null = false;
-        let mut kept = rows.clone();
-        for (i, row) in rows.iter().enumerate() {
-          match row.as_ref().filter(|rr| heap.obj(*rr).is_some()) {
-            Some(rr) if row.truthy() => strip_fields(heap, &field.fields, rr, &[])?,
-            _ if !row.truthy() || !Heap::is_object_like(row) => {
-              kept[i] = V::Null;
-              has_null = true;
-            }
-            _ => return Err(Bail::new("read:row")),
-          }
-        }
-        if has_null {
-          let filtered: Vec<V> = kept.into_iter().filter(V::truthy).collect();
-          let new = heap.alloc(Node::Arr(filtered));
-          heap.set(data, name, V::Ref(new))?;
-        } else if let Some(arr) = heap.arr_mut(r) {
-          *arr = kept;
-        }
-      }
-      Kind::Group => {
-        let Some(r) = value.as_ref().filter(|r| heap.obj(*r).is_some()) else {
-          return Err(Bail::new("read:group"));
-        };
-        strip_fields(heap, &field.fields, r, &[])?;
-      }
-      _ => {}
+    if !matches!(field.kind, Kind::Array | Kind::Group) {
+      continue;
     }
+    let child_localized = parent_localized || field.localized;
+    if plan.localized_here(field, parent_localized) {
+      let codes = plan.localization.as_ref().map(|l| l.locale_codes.clone()).unwrap_or_default();
+      let Some(r) = value.as_ref().filter(|r| heap.obj(*r).is_some()) else {
+        return Err(Bail::new("read:localeArray"));
+      };
+      for key in heap.keys(r) {
+        if !codes.iter().any(|c| c == &*key) {
+          heap.delete(r, &key);
+          continue;
+        }
+        let locale_value = heap.get(&value, &key);
+        if !locale_value.truthy() || !Heap::is_object_like(&locale_value) {
+          continue;
+        }
+        strip_value(plan, heap, field, r, &key, &locale_value, child_localized)?;
+      }
+      continue;
+    }
+    strip_value(plan, heap, field, data, name, &value, child_localized)?;
+  }
+  Ok(())
+}
+
+/// `stripFields` of one array or group value (`holder[key]`).
+fn strip_value(plan: &WritePlan, heap: &mut Heap, field: &Field, holder: Ref, key: &str, value: &V, child_localized: bool) -> Result<(), Bail> {
+  match field.kind {
+    Kind::Array => {
+      let Some(r) = value.as_ref() else { return Ok(()) };
+      let Some(rows) = heap.arr(r).cloned() else { return Ok(()) };
+      let mut has_null = false;
+      let mut kept = rows.clone();
+      for (i, row) in rows.iter().enumerate() {
+        match row.as_ref().filter(|rr| heap.obj(*rr).is_some()) {
+          Some(rr) if row.truthy() => strip_fields(plan, heap, &field.fields, rr, &[], child_localized)?,
+          _ if !row.truthy() || !Heap::is_object_like(row) => {
+            kept[i] = V::Null;
+            has_null = true;
+          }
+          _ => return Err(Bail::new("read:row")),
+        }
+      }
+      if has_null {
+        let filtered: Vec<V> = kept.into_iter().filter(V::truthy).collect();
+        let new = heap.alloc(Node::Arr(filtered));
+        heap.set(holder, key, V::Ref(new))?;
+      } else if let Some(arr) = heap.arr_mut(r) {
+        *arr = kept;
+      }
+    }
+    Kind::Group => {
+      let Some(r) = value.as_ref().filter(|r| heap.obj(*r).is_some()) else {
+        return Err(Bail::new("read:group"));
+      };
+      strip_fields(plan, heap, &field.fields, r, &[], child_localized)?;
+    }
+    _ => {}
   }
   Ok(())
 }
 
 /// The `sanitize` callback of the read transform over `traverseFields`.
-fn sanitize(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref) -> Result<(), Bail> {
+fn sanitize(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref, parent_localized: bool) -> Result<(), Bail> {
   let target = V::Ref(data);
+  let codes = plan.localization.as_ref().map(|l| l.locale_codes.clone()).unwrap_or_default();
   for field in fields {
     let name = field.name.as_deref().unwrap_or_default();
+    let localized = plan.localized_here(field, parent_localized);
+    let child_localized = parent_localized || field.localized;
     match field.kind {
       Kind::Date => {
-        if let V::Date(ms) = heap.get(&target, name) {
+        let value = heap.get(&target, name);
+        if !value.truthy() {
+          continue;
+        }
+        if localized {
+          let Some(r) = value.as_ref().filter(|r| heap.obj(*r).is_some()) else {
+            continue;
+          };
+          for code in &codes {
+            if let V::Date(ms) = heap.get(&value, code) {
+              heap.set(r, code, V::str(&iso(ms)?))?;
+            }
+          }
+        } else if let V::Date(ms) = value {
           heap.set(data, name, V::str(&iso(ms)?))?;
         }
       }
       Kind::Relationship => {
         let value = heap.get(&target, name);
-        if value.truthy() {
+        if !value.truthy() {
+          continue;
+        }
+        if localized {
+          let Some(r) = value.as_ref().filter(|r| heap.obj(*r).is_some()) else {
+            continue;
+          };
+          for code in &codes {
+            let item = heap.get(&value, code);
+            if item.truthy() {
+              let result = relationship(plan, heap, field, &item)?;
+              heap.set(r, code, result)?;
+            }
+          }
+        } else {
           let result = relationship(plan, heap, field, &value)?;
           heap.set(data, name, result)?;
         }
       }
       Kind::Array => {
-        if let Some(rows) = heap.get(&target, name).as_ref().and_then(|r| heap.arr(r).cloned()) {
-          for row in rows {
-            if let Some(r) = row.as_ref().filter(|r| heap.obj(*r).is_some()) {
-              sanitize(plan, heap, &field.fields, r)?;
-            }
-          }
+        let value = heap.get(&target, name);
+        for r in super::transform::array_rows(heap, &value, localized) {
+          sanitize(plan, heap, &field.fields, r, child_localized)?;
         }
       }
       Kind::Group => {
-        if let Some(r) = heap.get(&target, name).as_ref().filter(|r| heap.obj(*r).is_some()) {
-          sanitize(plan, heap, &field.fields, r)?;
+        let value = heap.get(&target, name);
+        for r in super::transform::group_refs(heap, &value, localized)? {
+          sanitize(plan, heap, &field.fields, r, child_localized)?;
         }
       }
-      Kind::Row | Kind::Collapsible => sanitize(plan, heap, &field.fields, data)?,
+      Kind::Row | Kind::Collapsible => sanitize(plan, heap, &field.fields, data, parent_localized)?,
       Kind::Tabs => {
         for tab in &field.tabs {
-          sanitize(plan, heap, &tab.fields, data)?;
+          sanitize(plan, heap, &tab.fields, data, parent_localized)?;
         }
       }
       _ => {}

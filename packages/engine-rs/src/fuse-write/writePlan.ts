@@ -94,8 +94,9 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
   const builder: Builder = { payload, relations: new Set(), volatile: [] }
   try {
     const config = collection.config
-    if (payload.config.localization) {
-      ineligible('localization')
+    const localization = payload.config.localization
+    if (localization && localization.filterAvailableLocales) {
+      ineligible('localization:filterAvailableLocales')
     }
     if (config.auth) {
       ineligible('auth')
@@ -157,6 +158,9 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
           ? payload.config.defaultMaxTextLength
           : null,
       fields,
+      localization: localization
+        ? { defaultLocale: localization.defaultLocale, localeCodes: localization.localeCodes }
+        : null,
       relations,
       schema: schemaPlan(Model.schema),
       timestamps: config.timestamps !== false,
@@ -193,12 +197,23 @@ const labelPlan = (label: unknown) => {
   return null
 }
 
+/** The field hooks and defaults the library ports, by registry kind. */
+const portedKinds = new Set([
+  'authorshipBeforeChange:createdBy',
+  'authorshipBeforeChange:updatedBy',
+  'authorshipBeforeValidate:createdBy',
+  'authorshipBeforeValidate:updatedBy',
+  'rowIdBeforeChange',
+  'rowIdDefaultValue',
+])
+
 const ownKind = (fn: unknown) => {
   const own = typeof fn === 'function' ? payloadOwnFunctions.get(fn) : undefined
   if (!own) {
     return ineligible('field:userFunction')
   }
-  return 'field' in own ? `${own.kind}:${own.field}` : own.kind
+  const kind = 'field' in own ? `${own.kind}:${own.field}` : own.kind
+  return portedKinds.has(kind) ? kind : ineligible(`field:${own.kind}`)
 }
 
 const fieldPlan = (builder: Builder, field: Any) => {
@@ -221,7 +236,8 @@ const fieldPlan = (builder: Builder, field: Any) => {
     out.n = field.name
   }
   if (watch(builder, field, 'localized')) {
-    return ineligible('field:localized')
+    // sanitization deletes `localized` without localization
+    out.l = 1
   }
   if (field.virtual) {
     return ineligible('field:virtual')

@@ -73,7 +73,9 @@ fn run(plan_json: &str, request_json: &str, stored: Option<&[u8]>) -> Result<Str
     _ => Vec::new(),
   };
   let data = value(&request, "data")?;
+  let locale = request.get("locale").and_then(Json::as_str).map(str::to_string);
   let mut ctx = WriteCtx {
+    locale: locale.as_deref(),
     context: &context,
     entropy: &mut entropy,
     fallback_language: &fallback_language,

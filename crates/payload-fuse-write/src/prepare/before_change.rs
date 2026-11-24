@@ -27,6 +27,7 @@ struct Level {
   /// `fieldLabelPath`; `None` when a label on the way is a function (an error here bails).
   label_path: Option<String>,
   skip_validation: bool,
+  parent_is_localized: bool,
 }
 
 /// `beforeChange({ data, doc, docWithLocales })` after its `deepCopyObjectSimple(data)` (the
@@ -45,11 +46,46 @@ pub fn before_change<'r, 'e: 'r>(s: S<'r, 'e>, data: Ref, doc: V, doc_with_local
       doc,
       doc_with_locales,
       label_path: Some(String::new()),
+      parent_is_localized: false,
       parent_path: String::new(),
       skip_validation: false,
     };
     s.exec.spawn(traverse_fields(s.clone(), &run.plan.fields, level)).wait().await;
+    if run.failed() || !run.errors.borrow().is_empty() {
+      return;
+    }
+    // `for (const action of mergeLocaleActions) await action()`
+    let actions = std::mem::take(&mut *run.merge_locale_actions.borrow_mut());
+    for (sibling_data, doc_with_locales, name) in actions {
+      if let Err(bail) = merge_locale(&s, sibling_data, &doc_with_locales, &name) {
+        return run.fail(bail);
+      }
+      tick().await;
+    }
   })
+}
+
+/// One of `mergeLocaleActions`: the field's value becomes `{ [locale]: value }` of the stored
+/// locales with the submitted one for `req.locale`.
+fn merge_locale(s: &S<'_, '_>, sibling_data: Ref, doc_with_locales: &V, name: &str) -> Result<(), Bail> {
+  let run = s.run;
+  let localization = run.plan.localization.as_ref().ok_or_else(|| Bail::new("localization"))?;
+  let mut heap = run.heap.borrow_mut();
+  let submitted = heap.get(&V::Ref(sibling_data), name);
+  let existing = heap.get(doc_with_locales, name);
+  let locale_data = heap.new_obj();
+  let mut any = false;
+  for code in &localization.locale_codes {
+    let value = if run.locale.as_deref() == Some(code.as_str()) { submitted.clone() } else { heap.get(&existing, code) };
+    if !value.is_undef() {
+      heap.set(locale_data, code, value)?;
+      any = true;
+    }
+  }
+  if any {
+    heap.set(sibling_data, name, V::Ref(locale_data))?;
+  }
+  Ok(())
 }
 
 fn traverse_fields<'r, 'e: 'r>(s: S<'r, 'e>, fields: &'r [Field], level: Level) -> Task<'r, ()> {
@@ -99,7 +135,15 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
     };
     let name = field.name.as_deref().unwrap_or_default();
     let path = if field.affects_data() { join_path(&level.parent_path, name) } else { level.parent_path.clone() };
+    let localized_here = run.plan.localized_here(field, level.parent_is_localized);
+    let mut skip_validation = level.skip_validation;
     if field.affects_data() {
+      if let Some(localization) = &run.plan.localization {
+        let operation_locale = run.locale.as_deref().unwrap_or(&localization.default_locale);
+        if localized_here && operation_locale != localization.default_locale && field.kind == Kind::Array && matches!(run.get(&level.data, name), V::Null) {
+          skip_validation = true;
+        }
+      }
       for hook in &field.before_change {
         let hooked = match hook {
           OwnHook::RowIdBeforeChange => {
@@ -133,7 +177,7 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
         };
         return push_error(&s, field, &level, message, &path);
       }
-      if !level.skip_validation {
+      if !skip_validation {
         if let Some(result) = validate(&s, field, &value, &path).await {
           if let Some(message) = result {
             push_error(&s, field, &level, message, &path);
@@ -142,7 +186,13 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
           return;
         }
       }
+      if localized_here {
+        run.merge_locale_actions.borrow_mut().push((sd, level.doc_with_locales.clone(), name.to_string()));
+      }
     }
+    let mut level = level;
+    level.skip_validation = skip_validation;
+    let child_localized = level.parent_is_localized || field.localized;
     match field.kind {
       Kind::Array => {
         let rows = run.get(&level.data, name);
@@ -176,6 +226,7 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
             doc,
             doc_with_locales,
             label_path,
+            parent_is_localized: child_localized,
             parent_path: format!("{path}.{index}"),
             skip_validation: level.skip_validation,
           };
@@ -194,9 +245,10 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
         s.exec.spawn(traverse_fields(s.clone(), &field.fields, inner)).wait().await;
       }
       Kind::Group => {
-        let Some(inner) = run.check(group_level(&s, field, sd, &level, &path)) else {
+        let Some(mut inner) = run.check(group_level(&s, field, sd, &level, &path)) else {
           return;
         };
+        inner.parent_is_localized = child_localized;
         s.exec.spawn(traverse_fields(s.clone(), &field.fields, inner)).wait().await;
       }
       Kind::Tabs => {
@@ -242,7 +294,15 @@ fn group_level(s: &S<'_, '_>, field: &Field, sd: Ref, level: &Level, path: &str)
       _ => None,
     },
   };
-  Ok(Level { data, doc, doc_with_locales, label_path, parent_path: path.to_string(), skip_validation: level.skip_validation })
+  Ok(Level {
+    data,
+    doc,
+    doc_with_locales,
+    label_path,
+    parent_is_localized: level.parent_is_localized,
+    parent_path: path.to_string(),
+    skip_validation: level.skip_validation,
+  })
 }
 
 /// `setCreatedBy` / `setUpdatedBy` (fields/baseFields/authorship).

@@ -18,7 +18,7 @@ pub fn transform_write(
   data: Ref,
   now: &mut dyn FnMut() -> Result<f64, Bail>,
 ) -> Result<(), Bail> {
-  traverse(plan, heap, fields, data)?;
+  traverse(plan, heap, fields, data, false)?;
   match heap.get(&V::Ref(data), "updatedAt") {
     V::Undef => {
       let iso = iso(now()?)?;
@@ -38,10 +38,50 @@ fn has_operator(heap: &Heap, value: &V, keys: &[&str]) -> bool {
   heap.is_obj(value) && keys.iter().any(|key| heap.has(value, key))
 }
 
-fn traverse(plan: &WritePlan, heap: &mut Heap, fields: &[Field], container: Ref) -> Result<(), Bail> {
+/// The operator also under a locale key (`{ en: { $push } }`).
+fn has_locale_operator(heap: &Heap, value: &V, keys: &[&str]) -> bool {
+  has_operator(heap, value, keys)
+    || value.as_ref().and_then(|r| heap.obj(r)).is_some_and(|o| o.values().any(|v| has_operator(heap, v, keys)))
+}
+
+/// The rows payload's `traverseFields` visits for an array value: the rows of an array, and of
+/// a localized array the rows of every key holding an array.
+pub fn array_rows(heap: &Heap, value: &V, localized: bool) -> Vec<Ref> {
+  let rows_of = |v: &V| v.as_ref().and_then(|r| heap.arr(r).cloned()).unwrap_or_default();
+  let rows: Vec<V> = match value.as_ref() {
+    Some(r) if heap.arr(r).is_some() => rows_of(value),
+    Some(r) if localized => heap.obj(r).map(|o| o.values().flat_map(rows_of).collect()).unwrap_or_default(),
+    _ => Vec::new(),
+  };
+  rows.into_iter().filter_map(|row| row.as_ref().filter(|r| heap.obj(*r).is_some())).collect()
+}
+
+/// The objects payload's `traverseFields` descends into for a group value: the group, or of a
+/// localized group every truthy key's value (non-objects are skipped by the traversal itself).
+pub fn group_refs(heap: &Heap, value: &V, localized: bool) -> Result<Vec<Ref>, Bail> {
+  let Some(r) = value.as_ref().filter(|r| heap.obj(*r).is_some()) else {
+    return Ok(Vec::new());
+  };
+  if !localized {
+    return Ok(vec![r]);
+  }
+  let mut out = Vec::new();
+  for item in heap.obj(r).into_iter().flat_map(|o| o.values()) {
+    match item {
+      V::Ref(rr) if heap.obj(*rr).is_some() => out.push(*rr),
+      V::Ref(_) => return Err(Bail::new("transform:localeArray")),
+      _ => {}
+    }
+  }
+  Ok(out)
+}
+
+fn traverse(plan: &WritePlan, heap: &mut Heap, fields: &[Field], container: Ref, parent_localized: bool) -> Result<(), Bail> {
   let target = V::Ref(container);
   for field in fields {
     let name = field.name.as_deref().unwrap_or_default();
+    let localized = plan.localized_here(field, parent_localized);
+    let child_localized = parent_localized || field.localized;
     match field.kind {
       Kind::Number => {
         if has_operator(heap, &heap.get(&target, name), &["$inc"]) {
@@ -50,36 +90,51 @@ fn traverse(plan: &WritePlan, heap: &mut Heap, fields: &[Field], container: Ref)
       }
       Kind::Relationship => {
         let value = heap.get(&target, name);
-        if field.has_many && has_operator(heap, &value, &["$push", "$remove"]) {
+        if field.has_many && has_locale_operator(heap, &value, &["$push", "$remove"]) {
           return Err(Bail::new("transform:$push"));
         }
-        if value.truthy() {
+        if !value.truthy() {
+          continue;
+        }
+        if localized {
+          // `for (const { code } of locales)`: each truthy locale value
+          let Some(r) = value.as_ref().filter(|r| heap.obj(*r).is_some()) else {
+            if heap.is_arr(&value) {
+              return Err(Bail::new("transform:localeArray"));
+            }
+            continue;
+          };
+          for code in &plan.localization.as_ref().map(|l| l.locale_codes.clone()).unwrap_or_default() {
+            let item = heap.get(&value, code);
+            if item.truthy() {
+              let result = sanitize_relationship(plan, heap, field, &item)?;
+              heap.set(r, code, result)?;
+            }
+          }
+        } else {
           let result = sanitize_relationship(plan, heap, field, &value)?;
           heap.set(container, name, result)?;
         }
       }
       Kind::Array => {
         let value = heap.get(&target, name);
-        if has_operator(heap, &value, &["$push"]) {
+        if has_locale_operator(heap, &value, &["$push"]) {
           return Err(Bail::new("transform:$push"));
         }
-        if let Some(rows) = value.as_ref().and_then(|r| heap.arr(r).cloned()) {
-          for row in rows {
-            if let Some(r) = row.as_ref().filter(|r| heap.obj(*r).is_some()) {
-              traverse(plan, heap, &field.fields, r)?;
-            }
-          }
+        for r in array_rows(heap, &value, localized) {
+          traverse(plan, heap, &field.fields, r, child_localized)?;
         }
       }
       Kind::Group => {
-        if let Some(r) = heap.get(&target, name).as_ref().filter(|r| heap.obj(*r).is_some()) {
-          traverse(plan, heap, &field.fields, r)?;
+        let value = heap.get(&target, name);
+        for r in group_refs(heap, &value, localized)? {
+          traverse(plan, heap, &field.fields, r, child_localized)?;
         }
       }
-      Kind::Row | Kind::Collapsible => traverse(plan, heap, &field.fields, container)?,
+      Kind::Row | Kind::Collapsible => traverse(plan, heap, &field.fields, container, parent_localized)?,
       Kind::Tabs => {
         for tab in &field.tabs {
-          traverse(plan, heap, &tab.fields, container)?;
+          traverse(plan, heap, &tab.fields, container, parent_localized)?;
         }
       }
       _ => {}

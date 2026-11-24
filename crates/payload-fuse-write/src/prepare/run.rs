@@ -35,6 +35,10 @@ pub struct Run<'e> {
   /// `req.user` as `{ relationTo, value }` parts.
   pub user: Option<(String, JsVal)>,
   pub id: Option<JsVal>,
+  /// `req.locale`
+  pub locale: Option<String>,
+  /// beforeChange's `mergeLocaleActions`: `(siblingData, siblingDocWithLocales, field name)`.
+  pub merge_locale_actions: RefCell<Vec<(Ref, V, String)>>,
   pub t: Option<&'e dyn Translate>,
   pub language: &'e str,
   pub fallback_language: &'e [String],
