@@ -355,13 +355,28 @@ those steps far faster than any crossing, the traversal now splits like this:
   a named group, an array, an unnamed row / collapsible / group, or `UPSTREAM`. A fast kind is a
   data field without a virtual path, without read access to await (or `overrideAccess`) and not
   localized under a non-localized parent (no value hoisting, no `locale: 'all'` hook runs), or a
-  passthrough container. One exception: a plain (or hooked) leaf that is localized under a
-  non-localized parent is `LOCALIZED_LEAF` (2026-11-24): the leaf sequence plus upstream's value
-  hoisting (`{ [locale]: value }` -> the locale's value or the fallback locale(s)', with the
-  text / textarea / slug empty-string rule), run by the host only for a truthy `flattenLocales`
-  and a `locale` other than `'all'` (otherwise upstream's `promise()`). On the complex perf shape
-  this took population reads from 0.89x to 1.11-1.18x of TS on MongoDB (rs CPU -16 to -30%). `FieldsDesc::js_plan(variant)` hands the host a plan object (`fields`, the
+  passthrough container. Kinds added 2026-11-24:
+  - `BLOCKS` (each row's block found like upstream: `req.payload.blocks[blockType] ??
+    field.blocks.find(...)`, `getBlockSelect` before the `if (block)`, per-block plans),
+    `TAB_NAMED` (a group without the `{}` fill; tabs with `afterRead` hooks stay `UPSTREAM`),
+    `TAB_UNNAMED` (passthrough with `parentIsLocalized || tab.localized`) and `TABS` (the named-tab
+    `{}` fill, then the tabs with the passthrough args; the binding's `afterReadTabsPlan(fields,
+    index, variant)` returns the tabs' plan). A `tabs` field runs in the host only when every tab
+    does: upstream hands its tabs fresh `{ ...tab, type: 'tab' }` objects, which an upstream tab
+    would see.
+  - the `LOCALIZED` bit (16) on `LEAF`, `GROUP`, `ARRAY`, `BLOCKS` and `TAB_NAMED` for a data field
+    localized under a non-localized parent (`fieldShouldBeLocalized`): upstream's value hoisting
+    (`{ [locale]: value }` -> the locale's value or the fallback locale(s)', text / textarea / slug
+    treating `''` as missing) and its localized branches (`null` for a hoisted empty array or
+    blocks value, every locale's rows / data when nothing was hoisted). The host runs these only for
+    a truthy `flattenLocales` and a `locale` other than `'all'` (no hooks per locale), and
+    upstream's `promise()` otherwise. Localized relationships stay `UPSTREAM`.
+
+  On the complex perf shape (MongoDB, 1k posts, interleaved A/B on one machine state) `find limit
+  10` went from 1.81 to 1.25 ms, `find limit 100` from 10.5 to 6.9 ms, population reads from
+  0.89x of TS (before `LOCALIZED_LEAF`) to 1.27-1.30x. `FieldsDesc::js_plan(variant)` hands the host a plan object (`fields`, the
   `keys` / `flags` leaf table, `kinds`, `isArray`, a `children` cache), created once.
+
 - **The host executes.** `packages/engine-rs/src/runtime/afterReadPlan.ts`: `traverse` pushes one
   promise per field (`fieldPromises.push(...)`, `push` read before the field runs); `UPSTREAM`
   fields call upstream's own `promise()` with upstream's args literal (`hookedLeaf`), every other
@@ -390,6 +405,15 @@ decides). `PAYLOAD_RS_AFTER_READ_TRAVERSAL=rust` selects the Rust traversal of t
 the plan path against the core-runtime suites: dropping the hoisting-check reads (traced runs
 only) 277 diffs in `hooks`; skipping the await tick of a synchronous field hook result 45 (`hooks`)
 and 986 (`synthetic`) diffs.
+
+**Where the JS thread goes now (2026-11-24, native profile).** `perf record -e cpu-clock:u` of the
+complex `find limit 10` on MongoDB (release addon, `node --perf-basic-prof`), JS thread only:
+V8 inline caches and builtins ~29% (megamorphic property loads of the generic traversal, the
+per-field `Promise.all` / microtasks), JIT code ~14%, `JSON.parse` of the driver lane's result
+text ~7%, libc ~3%, Node-API ~2.7%, the Rust core / ops / query / executor ~1.7%, Rust std /
+alloc ~2%. Merging host-helper crossings of the exact lane can recover at most those ~3-4%; the
+rest is JS work the exact lane keeps on purpose (one promise per field, upstream's awaits). The
+driver's transcoding runs on its own threads (20% of process samples), not on the JS thread.
 
 ### Whole write traversals in JS, validation merge elision
 
