@@ -264,3 +264,170 @@ then create on a scalar-only collection with versions (the `minimal` shape: text
 relationship, authorship), then updateByID and deleteByID, then the typical shape's arrays, groups,
 hasMany relationships, select / date / checkbox and lexical with default features, then
 localization, then update-many.
+
+## 12. The write-side steps on Rust values (`crates/payload-fuse-write`, WP-I)
+
+Binding interface between the pure write-side library (WP-I) and the operation drivers, dispatch
+and shadow (WP-H). No Node-API, no JS, no I/O: every input is a value, every nondeterministic
+reading comes from the caller. Breaking changes are written here first.
+
+### 12.1 The write plan
+
+`buildWritePlan({ collection, payload })` (`packages/engine-rs/src/fuse-write/writePlan.ts`) turns
+the sanitized collection config plus db-mongodb's mongoose models (`payload.db.collections[slug]`
+and `payload.db.versions[slug]`, read through `Model.schema`) into JSON text, or
+`{ plan: null, reason }` when the collection's write path holds anything the library does not
+model (that reason is an eligibility reason for WP-H's stats). Build it once per
+`collection.config` (immutable after init) and register it once:
+
+```rust
+pub fn register_write_plan(json: &str) -> Result<u32, String>;
+pub fn write_plan(id: u32) -> Option<Arc<WritePlan>>;
+```
+
+The JSON (`v: 1`) holds:
+
+- `slug`, `timestamps`, `versions` (`null` or `{ max }`: `getVersionsMax`), `defaultIDType`,
+  `defaultMaxTextLength`, `relations` (`{ [slug]: { customIDType } }` of every collection a
+  relationship field reaches, for the validators and the write transform);
+- `fields`: `collection.fields` in config order, each with its type, name, `required`, `hasMany`,
+  `relationTo`, sub fields, the static `defaultValue` (or `rowId` for the registry's
+  `rowIdDefaultValue`), Payload's own hooks by registry kind (`rowIdBeforeChange`,
+  `authorshipBeforeValidate` / `authorshipBeforeChange` with their field), the default validator
+  by name (`defaultFieldValidators`: the payload-core-validate `Validator`, or `true` for the
+  `() => true` stubs) with the field properties that validator reads, and the label (string,
+  language map, `false`, or `null` for a function label: an error on that field bails);
+- `schema` / `versionSchema`: the mongoose schemas as the casting needs them (12.5): the key order
+  of `schema.tree`, every path's SchemaType (`instance`, sub schema of document arrays, static
+  `default`), nested paths, `versionKey`, `strict`.
+
+Ineligible (the plan builder returns a reason): user functions anywhere on the write path that are
+not in `payloadOwnFunctions` / `defaultFieldValidators` (hooks, `validate`, `defaultValue`,
+`access`, `admin.condition`, `filterOptions`), custom ID fields, localization (until step 4),
+drafts, upload / auth collections, join fields, blocks (until their discriminators are modelled),
+point / json / code / radio / upload fields, rich text other than lexical with default features
+(step 3), `timezone` dates, mongoose schema features the casting does not model (setters other
+than `_id`'s, discriminators, maps, `Decimal128`, `Buffer`, `BigInt`, non-strict schemas).
+
+### 12.2 The call context
+
+```rust
+pub struct WriteCtx<'a> {
+  /// `req.user` as authorship reads it: `Some((user.collection, user.id))` when both are set.
+  pub user: Option<(String, JsVal)>,
+  pub override_access: bool,
+  /// `req.context` at the start of the operation (read: `isRestoringVersion`,
+  /// `_submittedAuthorshipFields`).
+  pub context: &'a JsVal,
+  /// `req.t` (payload-core-validate `Translate`) and `req.i18n` (`language`, `fallbackLanguage`):
+  /// only used to build a validation error; `None` makes every validation failure a bail.
+  pub t: Option<&'a dyn Translate>,
+  pub language: &'a str,
+  pub fallback_language: &'a [String],
+  /// Clock and ObjectId readings (12.3).
+  pub entropy: &'a mut dyn Entropy,
+}
+```
+
+### 12.3 Nondeterminism: clock and ObjectIds
+
+```rust
+pub enum IdUse { Row, Document, Version }
+pub trait Entropy {
+  /// One upstream `new Date()` (ms since the epoch).
+  fn now(&mut self) -> f64;
+  /// One upstream `new ObjectId()`: `Row` = bson-objectid in `baseIDField` (row ids),
+  /// `Document` / `Version` = mongoose's `_id` default (js-bson) of the main / version insert.
+  fn object_id(&mut self, used_for: IdUse) -> [u8; 12];
+}
+pub struct SystemEntropy;            // the live lane: SystemTime + bson's ObjectId::new()
+pub struct RecordedEntropy { .. }    // the shadow: replays recorded readings, bails when exhausted
+```
+
+The library asks for readings exactly where upstream takes them, in upstream's order, and only
+when upstream takes them, so a shadow that records the exact lane's readings (in order, per kind)
+replays them one to one:
+
+- create: row ids (beforeValidate `defaultValue`, then beforeChange `value || new ObjectId()`, in
+  traversal order), `db.create`'s `createdAt` (only when `data.createdAt` is falsy), the write
+  transform's `updatedAt` (only when `undefined`), the document `_id` (`new Model(data)`), then
+  with versions `saveVersion`'s `now` and the version `_id`;
+- updateByID: row ids, `dataToUpdate.updatedAt`, then with versions `saveVersion`'s `now` and the
+  version `_id`.
+
+The lock check (`checkDocumentLockStatus`), `getLatestCollectionVersion`, `enforceMaxVersions`,
+population and afterRead stay with WP-H's drivers and take no readings here.
+
+### 12.4 Entry points
+
+```rust
+pub fn prepare_create(plan: &WritePlan, data: &JsVal, ctx: &mut WriteCtx) -> Result<Prepared, Bail>;
+pub fn prepare_update(plan: &WritePlan, id: &JsVal, data: &JsVal, input: &UpdateInput, ctx: &mut WriteCtx)
+  -> Result<Prepared, Bail>;
+
+pub struct UpdateInput {
+  /// The stored document as the find returned it (field order as stored).
+  pub stored: bson::Document,
+  /// `docWithLocales`: `stored` after db-mongodb's read transform (`getLatestCollectionVersion`).
+  pub doc_with_locales: JsVal,
+  /// `originalDoc`: `afterRead({ depth: 0, doc: deepCopy(docWithLocales), overrideAccess: true,
+  /// showHiddenFields: true, ... })` (payload-fuse `after_read`).
+  pub original_doc: JsVal,
+}
+
+pub struct Prepared {
+  /// What upstream does to the caller's objects before it fails or writes (D2 replay):
+  /// create: the caller's `data` after `beforeValidate` (upstream mutates it in place);
+  /// update: `None` (updateByID deep-copies `data` first).
+  pub caller_data: Option<JsVal>,
+  /// `req.context` keys upstream sets, in order, with their final values
+  /// (`_submittedAuthorshipFields`, `_isNewDoc`).
+  pub context_writes: Vec<(String, JsVal)>,
+  pub outcome: Result<PreparedWrite, Invalid>,
+}
+
+pub struct PreparedWrite {
+  /// create: `documents[0]` of `insert <slug>`; update: the `update` of `findAndModify <slug>`
+  /// (`{ $set: ... }` after mongoose's `castUpdate`). Key order and BSON types as the Node driver
+  /// serializes what mongoose produces (Int32 / Double like js-bson, ObjectId, Date).
+  pub doc: bson::Document,
+  /// update: the document `findAndModify` returns (`stored` with the `$set` applied).
+  pub stored_after: Option<bson::Document>,
+  /// With versions: `documents[0]` of `insert _<slug>_versions` and the latest-flip
+  /// `updateMany` (`q`, `u`) createVersion sends after it.
+  pub version: Option<VersionWrite>,
+}
+pub struct VersionWrite { pub doc: bson::Document, pub flip_filter: bson::Document, pub flip_update: bson::Document }
+
+/// The `ValidationError` upstream throws from `beforeChange`; WP-H throws
+/// `new ValidationError({ id, collection, errors, req }, req.t)` (the message is the class's).
+pub struct Invalid { pub collection: String, pub id: Option<JsVal>, pub errors: Vec<FieldError> }
+pub struct FieldError { pub label: String, pub message: String, pub path: String }
+
+/// Not modelled for this input: run the exact lane with the untouched arguments.
+pub struct Bail(pub String);
+```
+
+`data`, `doc_with_locales`, `original_doc` are `JsVal` trees as the fused lanes decode them
+(`payload_engine::js`; `Date`s as typed values). A `Bail` is returned before anything is
+observable: the library never touches its inputs (it works on its own copies).
+
+### 12.5 What each step ports (status in 12.6)
+
+1. `beforeValidate` (fields/hooks/beforeValidate): `unflattenData`, the per-type value sanitizing
+   (number strings, checkbox strings, relationship values, empty rows), fallback values from the
+   stored document / static defaults / the registry row id default, authorship's submitted marks,
+   group / array traversal with `getExistingRowDoc`.
+2. `beforeChange` (fields/hooks/beforeChange): `deepCopyObjectSimple`, `recordNewDoc`, the
+   registry's `beforeChange` hooks (row id, `setCreatedBy` / `setUpdatedBy`),
+   `hasInvalidFieldValueShape`, the default validators (payload-core-validate on the options
+   object upstream builds), error labels (`buildFieldLabel`, `getTranslatedLabel`).
+3. The operation's own steps: create `db.create` (`createdAt`), updateByID `{ ...data, id }` and
+   `dataToUpdate.updatedAt`, `saveVersion` / `createVersion`'s version data.
+4. db-mongodb `transform({ operation: 'write' })`: relationship ids to ObjectIds (custom ID types
+   kept), `updatedAt`; data holding `$inc` / `$push` / `$addToSet` / `$pull` / `$remove` bails.
+5. mongoose: `new Model(data)` + `$toObject` (strict paths, `getKeysInSchemaOrder`, schema-tree
+   order, static defaults, `_id`, `versionKey`, `minimize: false`), `castUpdate` for `$set`
+   (reverse key order of the sugar, strict / virtual paths dropped, nested objects cast in place),
+   and the SchemaType casts (`String`, `Number`, `Boolean`, `Date` via V8's `Date.parse`,
+   `ObjectId`, `Mixed`, document arrays with `_id: false`); a cast error is a bail.
