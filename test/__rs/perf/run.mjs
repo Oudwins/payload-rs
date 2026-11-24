@@ -11,10 +11,12 @@
  *     [--scenarios <regex>] [--startup-shapes ...] [--startup-runs 5] [--engines ts,rs]
  *     [--addon file] [--out dir] [--reuse] [--quick] [--min-time-ms 1000] [--min-iterations 10]
  *     [--max-iterations 300] [--max-time-ms 5000] [--no-samples] [--no-startup] [--no-scenarios]
- *     [--db-prefix perf] [--verbose]
+ *     [--db-prefix perf] [--fuse on|off|shadow] [--verbose]
  *   node test/__rs/perf/run.mjs --list      # the scenario catalogue (markdown), nothing runs
  *
  * `--engines ts` or `--engines rs` alone measures one engine (absolute numbers, no comparison).
+ * `--fuse <mode>` sets `PAYLOAD_RS_FUSE` for the bench processes (the fused read lanes,
+ * packages/engine-rs/FUSE_CONTRACT.md); the bench environment drops every other `PAYLOAD_*`.
  *
  * Install: packs the packages (release layout: engine-rs plus this platform's addon package, the
  * addon being `--addon`, default the release build target/release/libpayload_node.so) and installs
@@ -66,6 +68,7 @@ const options = {
   /** Prefix of the per-cell database names (shared servers: one prefix per user of the server). */
   dbPrefix: option('--db-prefix', 'perf'),
   engines: list('--engines', 'ts,rs'),
+  fuse: option('--fuse', ''),
   maxIterations: Number(option('--max-iterations', isQuick ? 50 : 300)),
   maxTimeMs: Number(option('--max-time-ms', isQuick ? 1500 : 5000)),
   minIterations: Number(option('--min-iterations', isQuick ? 5 : 10)),
@@ -309,6 +312,9 @@ function spawnBench({ engine, label, spec: specInput }) {
     }
   }
   Object.assign(env, engineVariants[engine])
+  if (options.fuse) {
+    env.PAYLOAD_RS_FUSE = options.fuse
+  }
   const started = Date.now()
   const child = spawnSync(process.execPath, ['--expose-gc', 'bench.mjs', specFile], {
     cwd: appDir,
