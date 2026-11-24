@@ -1852,6 +1852,9 @@ dependencies = [
 name = "payload-fuse-write"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
+ "payload-core-validate",
+ "payload-engine",
  "payload-fuse-mongo",
  "payload-mongo-driver",
  "serde_json",

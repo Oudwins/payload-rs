@@ -833,7 +833,8 @@ fn local_time_zone(_ms: f64) -> (i64, String) {
 /// - `{"$fn": id}`: a JS function registered on the TS side
 /// - `{"$ref": id}`: a shared object, stored once in `objects[id]`
 /// - `{"$undefined": true}`: an own property whose value is `undefined`
-/// - `{"$num": "NaN" | "Infinity" | "-Infinity"}`: non-JSON numbers
+/// - `{"$num": "NaN" | "Infinity" | "-Infinity" | "-0"}`: non-JSON numbers (and `-0`, which
+///   `JSON.stringify` writes as `0`)
 /// - `{"$date": iso | null}`: a `Date` (`null` when invalid)
 /// - `{"$bigint": "123"}`: a `bigint`
 /// - `{"$obj": {...}}`: escape for plain objects that use one of the keys above
@@ -976,6 +977,7 @@ impl Decoder<'_> {
             "$num" => JsVal::Num(match v.as_str() {
               Some("Infinity") => f64::INFINITY,
               Some("-Infinity") => f64::NEG_INFINITY,
+              Some("-0") => -0.0,
               _ => f64::NAN,
             }),
             "$date" => {

@@ -1,0 +1,491 @@
+//! `beforeChange` (packages/payload/src/fields/hooks/beforeChange/{index,traverseFields,promise}.ts)
+//! for the modelled field kinds: Payload's own hooks, `hasInvalidFieldValueShape`, the default
+//! validators (payload-core-validate), the validation errors with their labels.
+
+use payload_core_validate::{FilterOptionsCall, FindArgs, Req, Translate, ValidateHost, ValidationResult, Validator};
+use payload_engine::bson::object_id_to_hex;
+use payload_engine::error::{EngineError, Result as EngineResult};
+use payload_engine::js::{JsVal, Obj as JsObj};
+
+use super::before_validate::{Task, existing_row_doc};
+use super::exec::{tick, ticks};
+use super::heap::{Heap, Ref, V};
+use super::plan::{Authorship, Field, Kind, Label, OwnHook, RelationTo, Tab, Validate};
+use super::run::{Operation, S};
+use super::{Bail, FieldError, IdUse};
+
+pub const NEW_DOC_KEY: &str = "_isNewDoc";
+
+/// One `traverseFields` call's arguments that differ between calls.
+#[derive(Clone)]
+struct Level {
+  data: V,
+  doc: V,
+  doc_with_locales: V,
+  /// Upstream's `parentPath` for the named fields of this level.
+  parent_path: String,
+  /// `fieldLabelPath`; `None` when a label on the way is a function (an error here bails).
+  label_path: Option<String>,
+  skip_validation: bool,
+}
+
+/// `beforeChange({ data, doc, docWithLocales })` after its `deepCopyObjectSimple(data)` (the
+/// caller passes the copy): `recordNewDoc`, then `await traverseFields(...)`.
+pub fn before_change<'r, 'e: 'r>(s: S<'r, 'e>, data: Ref, doc: V, doc_with_locales: V) -> Task<'r, ()> {
+  Box::pin(async move {
+    let run = s.run;
+    let is_new = match &doc_with_locales {
+      V::Ref(r) => run.heap.borrow().obj(*r).is_some_and(|o| o.is_empty()),
+      _ => true,
+    };
+    run.is_new_doc.set(Some(is_new));
+    run.note_context(NEW_DOC_KEY);
+    let level = Level {
+      data: V::Ref(data),
+      doc,
+      doc_with_locales,
+      label_path: Some(String::new()),
+      parent_path: String::new(),
+      skip_validation: false,
+    };
+    s.exec.spawn(traverse_fields(s.clone(), &run.plan.fields, level)).wait().await;
+  })
+}
+
+fn traverse_fields<'r, 'e: 'r>(s: S<'r, 'e>, fields: &'r [Field], level: Level) -> Task<'r, ()> {
+  Box::pin(async move {
+    if s.run.failed() {
+      return;
+    }
+    let promises = fields.iter().map(|field| s.exec.spawn(promise(s.clone(), field, level.clone()))).collect();
+    s.exec.all(promises).wait().await;
+  })
+}
+
+fn traverse_tabs<'r, 'e: 'r>(s: S<'r, 'e>, tabs: &'r [Tab], level: Level) -> Task<'r, ()> {
+  Box::pin(async move {
+    let promises = tabs
+      .iter()
+      .map(|tab| {
+        let s2 = s.clone();
+        let mut inner = level.clone();
+        s.exec.spawn(async move {
+          // an unnamed tab: `getTranslatedLabel(field?.label || field.name)`
+          inner.label_path = match tab_label(&s2, &tab.label) {
+            LabelText::False => inner.label_path,
+            LabelText::Text(text) => inner.label_path.map(|parent| build_field_label(&parent, text.as_deref())),
+            LabelText::Unknown => None,
+          };
+          s2.exec.spawn(traverse_fields(s2.clone(), &tab.fields, inner)).wait().await;
+        })
+      })
+      .collect();
+    s.exec.all(promises).wait().await;
+  })
+}
+
+fn join_path(parent: &str, name: &str) -> String {
+  if parent.is_empty() { name.to_string() } else { format!("{parent}.{name}") }
+}
+
+fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r, ()> {
+  Box::pin(async move {
+    if s.run.failed() {
+      return;
+    }
+    let run = s.run;
+    let Some(sd) = level.data.as_ref().filter(|r| run.heap.borrow().obj(*r).is_some()) else {
+      return run.fail(Bail::new("beforeChange:siblingData"));
+    };
+    let name = field.name.as_deref().unwrap_or_default();
+    let path = if field.affects_data() { join_path(&level.parent_path, name) } else { level.parent_path.clone() };
+    if field.affects_data() {
+      for hook in &field.before_change {
+        let hooked = match hook {
+          OwnHook::RowIdBeforeChange => {
+            let value = run.get(&level.data, name);
+            if value.truthy() {
+              value
+            } else {
+              match run.object_id(IdUse::Row) {
+                Ok(id) => V::str(&object_id_to_hex(&id)),
+                Err(bail) => return run.fail(bail),
+              }
+            }
+          }
+          OwnHook::AuthorshipBeforeChange(which) => match authorship_before_change(&s, *which, &level) {
+            Ok(value) => value,
+            Err(bail) => return run.fail(bail),
+          },
+          OwnHook::AuthorshipBeforeValidate(_) => return run.fail(Bail::new("beforeChange:hook")),
+        };
+        // `await callUserFunction(hook)` of a synchronous hook
+        tick().await;
+        if !hooked.is_undef() && run.check(run.set(sd, name, hooked)).is_none() {
+          return;
+        }
+      }
+      let value = run.get(&level.data, name);
+      if has_invalid_field_value_shape(&run.heap.borrow(), field, &value) {
+        let message = match translate(&s, "validation:invalidInput") {
+          Ok(message) => message,
+          Err(bail) => return run.fail(bail),
+        };
+        return push_error(&s, field, &level, message, &path);
+      }
+      if !level.skip_validation {
+        if let Some(result) = validate(&s, field, &value, &path).await {
+          if let Some(message) = result {
+            push_error(&s, field, &level, message, &path);
+          }
+        } else {
+          return;
+        }
+      }
+    }
+    match field.kind {
+      Kind::Array => {
+        let rows = run.get(&level.data, name);
+        let Some(rows) = rows.as_ref().and_then(|r| run.heap.borrow().arr(r).cloned()) else {
+          return;
+        };
+        let existing = run.get(&level.doc, name);
+        let existing_with_locales = run.get(&level.doc_with_locales, name);
+        let label = translated_label(&s, &field.label, name);
+        let mut promises = Vec::with_capacity(rows.len());
+        for (index, row) in rows.into_iter().enumerate() {
+          if !run.heap.borrow().is_obj(&row) {
+            return run.fail(Bail::new("beforeChange:row"));
+          }
+          let Some(doc) = run.check(existing_row_doc(&run.heap, &row, &existing)) else {
+            return;
+          };
+          let Some(doc_with_locales) = run.check(existing_row_doc(&run.heap, &row, &existing_with_locales)) else {
+            return;
+          };
+          let label_path = match (&field.label, &label) {
+            (Label::False, _) => level.label_path.clone(),
+            (_, LabelText::Text(text)) => level
+              .label_path
+              .as_ref()
+              .map(|parent| build_field_label(parent, Some(&format!("{} {}", text.as_deref().unwrap_or("undefined"), index + 1)))),
+            _ => None,
+          };
+          let inner = Level {
+            data: row,
+            doc,
+            doc_with_locales,
+            label_path,
+            parent_path: format!("{path}.{index}"),
+            skip_validation: level.skip_validation,
+          };
+          promises.push(s.exec.spawn(traverse_fields(s.clone(), &field.fields, inner)));
+        }
+        s.exec.all(promises).wait().await;
+      }
+      Kind::Collapsible | Kind::Row => {
+        let mut inner = level.clone();
+        if field.kind == Kind::Collapsible && !matches!(field.label, Label::False) {
+          inner.label_path = match translated_label(&s, &field.label, field.kind.name()) {
+            LabelText::Text(text) => level.label_path.as_ref().map(|parent| build_field_label(parent, text.as_deref())),
+            _ => None,
+          };
+        }
+        s.exec.spawn(traverse_fields(s.clone(), &field.fields, inner)).wait().await;
+      }
+      Kind::Group => {
+        let Some(inner) = run.check(group_level(&s, field, sd, &level, &path)) else {
+          return;
+        };
+        s.exec.spawn(traverse_fields(s.clone(), &field.fields, inner)).wait().await;
+      }
+      Kind::Tabs => {
+        // `getTranslatedLabel(field?.label || '')`: tabs carry no label in the modelled configs
+        s.exec.spawn(traverse_tabs(s.clone(), &field.tabs, level.clone())).wait().await;
+      }
+      _ => {}
+    }
+  })
+}
+
+fn group_level(s: &S<'_, '_>, field: &Field, sd: Ref, level: &Level, path: &str) -> Result<Level, Bail> {
+  let name = field.name.as_deref().unwrap_or_default();
+  let run = s.run;
+  let mut heap = run.heap.borrow_mut();
+  for holder in [&V::Ref(sd), &level.doc, &level.doc_with_locales] {
+    if !Heap::is_object_like(&heap.get(holder, name)) {
+      let r = holder.as_ref().filter(|r| heap.obj(*r).is_some()).ok_or_else(|| Bail::new("group:holder"))?;
+      let empty = heap.new_obj();
+      heap.set(r, name, V::Ref(empty))?;
+    }
+  }
+  let data = heap.get(&V::Ref(sd), name);
+  let doc = heap.get(&level.doc, name);
+  let doc_with_locales = heap.get(&level.doc_with_locales, name);
+  if !heap.is_obj(&data) || !heap.is_obj(&doc) || !heap.is_obj(&doc_with_locales) {
+    return Err(Bail::new("group:notObject"));
+  }
+  drop(heap);
+  let label_path = match &field.label {
+    Label::False => level.label_path.clone(),
+    label => match translated_label(s, label, name) {
+      LabelText::Text(text) => level.label_path.as_ref().map(|parent| build_field_label(parent, text.as_deref())),
+      _ => None,
+    },
+  };
+  Ok(Level { data, doc, doc_with_locales, label_path, parent_path: path.to_string(), skip_validation: level.skip_validation })
+}
+
+/// `setCreatedBy` / `setUpdatedBy` (fields/baseFields/authorship).
+fn authorship_before_change(s: &S<'_, '_>, which: Authorship, level: &Level) -> Result<V, Bail> {
+  let run = s.run;
+  let key = which.key();
+  let previous = run.get(&level.doc, key);
+  if which == Authorship::CreatedBy && run.operation != Operation::Create {
+    // not a first write (collections: `operation === 'create'`)
+    return Ok(previous);
+  }
+  let submitted = run.submitted.get().is_some_and(|r| matches!(run.get(&V::Ref(r), key), V::Bool(true)));
+  if run.override_access && submitted {
+    // `data?.updatedBy` / `data?.createdBy`: the top-level data of beforeChange
+    return Ok(run.get(&level_root(s), key));
+  }
+  match &run.user {
+    Some((collection, id)) if !id.is_nullish() && !collection.is_empty() => {
+      let mut heap = run.heap.borrow_mut();
+      let relation = heap.new_obj();
+      let value = heap.import(id)?;
+      heap.set(relation, "relationTo", V::str(collection))?;
+      heap.set(relation, "value", value)?;
+      Ok(V::Ref(relation))
+    }
+    _ => Ok(previous),
+  }
+}
+
+/// The authorship fields are top-level (sanitization appends them to `collection.fields`).
+fn level_root(s: &S<'_, '_>) -> V {
+  V::Ref(s.run.root_data.get().unwrap_or_default())
+}
+
+/// `hasInvalidFieldValueShape({ field, value })`.
+fn has_invalid_field_value_shape(heap: &Heap, field: &Field, value: &V) -> bool {
+  if value.is_nullish() || !field.affects_data() {
+    return false;
+  }
+  let is_object = Heap::is_object_like(value);
+  match field.kind {
+    Kind::Array => !(heap.is_arr(value) || matches!(value, V::Num(_))),
+    Kind::Number => is_object && !(field.has_many && heap.is_arr(value)),
+    Kind::Relationship if field.has_many => {
+      if !is_object || heap.is_arr(value) {
+        return false;
+      }
+      let RelationTo::Many(slugs) = &field.relation_to else {
+        return true;
+      };
+      let Some(obj) = value.as_ref().and_then(|r| heap.obj(r)) else {
+        return true;
+      };
+      let single = obj.len() == 2
+        && matches!(obj.get("relationTo"), Some(V::Str(slug)) if slugs.iter().any(|s| s == &**slug))
+        && matches!(obj.get("value"), Some(V::Str(_) | V::Num(_)));
+      !single
+    }
+    _ => false,
+  }
+}
+
+/// Runs `field.validate`; `None` when the run bailed, `Some(Some(message))` for an error.
+async fn validate(s: &S<'_, '_>, field: &Field, value: &V, path: &str) -> Option<Option<String>> {
+  let run = s.run;
+  match &field.validate {
+    Validate::None => Some(None),
+    Validate::True => {
+      tick().await;
+      Some(None)
+    }
+    Validate::Default(validator, field_options) => {
+      let (result, job_ticks) = match run_validator(s, *validator, field_options, value, path) {
+        Ok(result) => result,
+        Err(bail) => {
+          run.fail(bail);
+          return None;
+        }
+      };
+      ticks(job_ticks).await;
+      if run.failed() {
+        return None;
+      }
+      match result {
+        ValidationResult::Valid => Some(None),
+        ValidationResult::Invalid(message) => Some(Some(message)),
+      }
+    }
+  }
+}
+
+/// The validator's result and how many jobs `await validate(...)` takes: synchronous validators
+/// and async ones returning a value resume after one job; `relationship` returning
+/// `validateFilterOptions(...)` (a promise from an async function) after three.
+fn run_validator(
+  s: &S<'_, '_>,
+  validator: Validator,
+  field_options: &JsVal,
+  value: &V,
+  path: &str,
+) -> Result<(ValidationResult, usize), Bail> {
+  let run = s.run;
+  let value = run.heap.borrow().export(value);
+  let mut options = field_options.as_obj().cloned().unwrap_or_default();
+  let extras: [(&str, JsVal); 7] = [
+    ("id", run.id.clone().unwrap_or_default()),
+    ("collectionSlug", JsVal::str(&*run.plan.slug)),
+    ("event", JsVal::str("submit")),
+    ("operation", JsVal::str(run.operation.name())),
+    ("overrideAccess", JsVal::Bool(run.override_access)),
+    ("path", JsVal::arr(path.split('.').filter(|p| !p.is_empty()).map(JsVal::str).collect())),
+    ("preferences", JsVal::obj(JsObj::from_iter([("fields".to_string(), JsVal::obj(JsObj::new()))]))),
+  ];
+  for (key, extra) in extras {
+    options.insert(key.to_string(), extra);
+  }
+  let options = JsVal::obj(options);
+  let translate = MaybeTranslate(run.t);
+  let req = Req {
+    collections: &run.plan.validate_collections,
+    config: &run.plan.validate_config,
+    default_id_type: &run.plan.default_id_type,
+    host: &NoHost,
+    t: &translate,
+  };
+  let result = payload_core_validate::validate(validator, &value, &options, &req).map_err(|e| Bail::new(format!("validate:{e}")))?;
+  let jobs = if validator == Validator::Relationship {
+    match payload_core_validate::relationship_prefix(&value, &options, &req).map_err(|e| Bail::new(format!("validate:{e}")))? {
+      Some(_) => 1,
+      None => 3,
+    }
+  } else {
+    1
+  };
+  Ok((result, jobs))
+}
+
+/// `req.t`, or an error when the caller gave none (the failure then bails).
+struct MaybeTranslate<'a>(Option<&'a dyn Translate>);
+
+impl Translate for MaybeTranslate<'_> {
+  fn t(&self, key: &str, vars: Option<&JsObj>) -> EngineResult<String> {
+    match self.0 {
+      Some(t) => t.t(key, vars),
+      None => Err(EngineError::internal("no translations")),
+    }
+  }
+}
+
+/// The validators of the modelled fields call no JS.
+struct NoHost;
+
+impl ValidateHost for NoHost {
+  fn filter_options(&self, _func: u32, _call: FilterOptionsCall<'_>) -> EngineResult<JsVal> {
+    Err(EngineError::internal("filterOptions"))
+  }
+
+  fn find(&self, _args: FindArgs<'_>) -> EngineResult<JsVal> {
+    Err(EngineError::internal("find"))
+  }
+
+  fn log_error(&self, _msg: &str, _err: &EngineError) -> EngineResult<()> {
+    Err(EngineError::internal("logger"))
+  }
+
+  fn validate_json_schema(&self, _json_schema: &JsVal, _value: &JsVal) -> EngineResult<ValidationResult> {
+    Err(EngineError::internal("jsonSchema"))
+  }
+
+  fn rich_text_validate(&self, _editor: &JsVal, _value: &JsVal, _options: &JsVal) -> EngineResult<ValidationResult> {
+    Err(EngineError::internal("richText"))
+  }
+}
+
+fn translate(s: &S<'_, '_>, key: &str) -> Result<String, Bail> {
+  MaybeTranslate(s.run.t).t(key, None).map_err(|_| Bail::new("validation:translations"))
+}
+
+enum LabelText {
+  False,
+  /// `getTranslatedLabel(...)`: a string, or `undefined`.
+  Text(Option<String>),
+  /// A function label.
+  Unknown,
+}
+
+/// `getTranslatedLabel(field?.label || fallback, req.i18n)`.
+fn translated_label(s: &S<'_, '_>, label: &Label, fallback: &str) -> LabelText {
+  match label {
+    Label::Absent | Label::False => LabelText::Text(Some(fallback.to_string())),
+    Label::Str(text) if text.is_empty() => LabelText::Text(Some(fallback.to_string())),
+    Label::Str(text) => LabelText::Text(Some(text.clone())),
+    Label::Map(map) => get_translation(s, map),
+    Label::Function => LabelText::Unknown,
+  }
+}
+
+/// An unnamed tab's label (`field?.label || field.name`, the name being `undefined`).
+fn tab_label(s: &S<'_, '_>, label: &Label) -> LabelText {
+  match label {
+    Label::False => LabelText::False,
+    Label::Absent => LabelText::Text(None),
+    Label::Str(text) if text.is_empty() => LabelText::Text(None),
+    other => translated_label(s, other, ""),
+  }
+}
+
+/// `getTranslation(label, i18n)` of a language map.
+fn get_translation(s: &S<'_, '_>, map: &JsVal) -> LabelText {
+  let run = s.run;
+  let text = |value: &JsVal| match value {
+    JsVal::Str(text) => Some(LabelText::Text(Some(text.to_string()))),
+    JsVal::Undefined => Some(LabelText::Text(None)),
+    _ => None,
+  };
+  let own = map.get(run.language);
+  if own.truthy() {
+    return text(own).unwrap_or(LabelText::Unknown);
+  }
+  if let Some(fallback) = run.fallback_language.iter().find(|language| map.get(language).truthy()) {
+    return text(map.get(fallback)).unwrap_or(LabelText::Unknown);
+  }
+  let first = map.as_obj().and_then(|o| o.values().next().cloned()).unwrap_or_default();
+  text(&first).unwrap_or(LabelText::Unknown)
+}
+
+/// `buildFieldLabel(parentLabel, label)`.
+fn build_field_label(parent: &str, label: Option<&str>) -> String {
+  let Some(label) = label.filter(|l| !l.is_empty()) else {
+    return parent.to_string();
+  };
+  let mut chars = label.chars();
+  let first = chars.next().unwrap_or_default();
+  // `charAt(0).toUpperCase()`: one UTF-16 unit; astral characters are left as they are
+  let capitalized = if (first as u32) > 0xFFFF { label.to_string() } else { format!("{}{}", js_upper(first), chars.as_str()) };
+  if parent.is_empty() { capitalized } else { format!("{parent} > {capitalized}") }
+}
+
+/// `String.prototype.toUpperCase` of one BMP character.
+fn js_upper(c: char) -> String {
+  c.to_uppercase().collect()
+}
+
+fn push_error(s: &S<'_, '_>, field: &Field, level: &Level, message: String, path: &str) {
+  let run = s.run;
+  let name = field.name.as_deref().unwrap_or_default();
+  let Some(parent) = &level.label_path else {
+    return run.fail(Bail::new("validation:label"));
+  };
+  let label = match translated_label(s, &field.label, name) {
+    LabelText::Text(text) => build_field_label(parent, text.as_deref()),
+    _ => return run.fail(Bail::new("validation:label")),
+  };
+  run.errors.borrow_mut().push(FieldError { label, message, path: path.to_string() });
+}

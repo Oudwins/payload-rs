@@ -7,6 +7,8 @@
 //! The statements arrive as the commands the Node driver would send (BSON as the TS side
 //! serialized them, packages/engine-rs/src/fuse-write).
 
+pub mod prepare;
+
 use payload_fuse_mongo::MongoReads;
 use payload_mongo_driver::mongodb::bson::{Bson, RawBsonRef, RawDocumentBuf};
 use payload_mongo_driver::{command_raw, txn_command_raw, txn_end};

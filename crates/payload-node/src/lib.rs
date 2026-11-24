@@ -11,6 +11,7 @@ mod engine;
 mod fn_ir;
 mod fuse;
 mod fuse_write;
+mod fuse_write_prepare;
 mod runtime;
 mod mongo_live;
 mod mongo_live_write;
