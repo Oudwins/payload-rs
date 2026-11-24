@@ -18,6 +18,7 @@ use serde_json::Value as Json;
 use payload_engine::js::{JsVal, decode_graph_typed};
 
 pub use backend::{Bail, DirectRead, FuseResult, FusedBackend, Job, Population, ReadSession, Related};
+pub use write::RawLeaves;
 
 use after_read::{Fallback, ReadArgs, SelectMode, after_read_populating, obj_mut};
 use populate::{PopRun, resolve_level, write_result};
@@ -193,7 +194,14 @@ pub fn run(backend: &dyn FusedBackend, conn: u32, request_json: &str) -> String 
 }
 
 fn execute(request: Request, session: &mut dyn ReadSession) -> FuseResult<String> {
-  write::with_canonical(request.canonical, || execute_in(&request, session))
+  let leaves = session.raw_leaves();
+  write::with_raw_leaves(leaves, || write::with_canonical(request.canonical, || execute_in(&request, session)))
+}
+
+/// The collection plan and the canonical-text flag of a request, for a backend that prepares
+/// documents before the core runs (`None`: the request does not decode; `run` reports why).
+pub fn peek_request(request_json: &str) -> Option<(Arc<CollectionPlan>, bool)> {
+  decode_request(request_json).ok().map(|request| (request.plan, request.canonical))
 }
 
 fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<String> {
@@ -222,7 +230,7 @@ fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<St
   }
   match request.op {
     Op::Find => {
-      let mut result = session.find(&request.db)?;
+      let mut result = session.find_planned(&request.db, &request.plan)?;
       let mut run = request.population.as_ref().map(PopRun::new);
       let page = obj_mut(&mut result).ok_or_else(|| Bail::new("find:result"))?;
       let docs = match page.get_mut("docs") {
@@ -242,7 +250,7 @@ fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<St
       write_result(&result, run.as_ref())
     }
     Op::FindByID => {
-      let mut doc = session.find_one(&request.db)?;
+      let mut doc = session.find_one_planned(&request.db, &request.plan)?;
       if !doc.truthy() {
         return Err(Bail::new("findByID:notFound"));
       }

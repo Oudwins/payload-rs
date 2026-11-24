@@ -246,7 +246,13 @@ The reads (js-bson, the driver lane's `ReadArgs` plus `op` and `meta`) and the r
 `fuseRunMongo(client, transformPlan, requestJson, reads) -> Promise<string>`: on the driver
 runtime it runs the count and find (both in flight), decodes and transforms the documents (the
 driver crate's `transform_read`) into the core's values and runs the core (`afterRead`,
-population, result JSON). Shadow mode also runs the exact lane traced and compares its driver
+population, result JSON). Documents are converted in chunks of 32 on the runtime's workers while
+the cursor still yields, like the driver lane's transform. Guided by the collection plan, a raw
+(still undecoded) json value or rich text without node types that have `afterRead` work is not
+converted: it becomes a raw leaf (`payload_fuse::RawLeaves`, an empty object identified by its
+address in the job's table, written as the driver lane's JSON text of the subtree). The traversal
+never reaches into one, because only plan leaves become raw. Canonical text converts everything.
+Shadow mode also runs the exact lane traced and compares its driver
 operations (filter, sort, projection, skip, limit, hint, collation as js-bson serializes them)
 with the fused reads.
 

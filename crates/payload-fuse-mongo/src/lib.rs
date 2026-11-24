@@ -9,12 +9,13 @@
 //! them like the driver lane, from upstream's query planning and the casting mongoose would
 //! apply. [`run`] does the I/O on the driver runtime, then hands the documents to the fused core.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use payload_engine::js::{JsVal, Obj as JsObj};
-use payload_fuse::{Bail, FuseResult, FusedBackend, Job, ReadSession, Related};
+use payload_fuse::plan::{CollectionPlan, Field, Kind};
+use payload_fuse::{Bail, FuseResult, FusedBackend, Job, RawLeaves, ReadSession, Related};
 use payload_mongo_driver::client::{DriverClient, client, plan};
-use payload_mongo_driver::mongodb::Collection;
+use payload_mongo_driver::mongodb::{self, Collection};
 use payload_mongo_driver::mongodb::bson::oid::ObjectId;
 use payload_mongo_driver::mongodb::bson::{Bson, Document, RawDocument, RawDocumentBuf};
 use payload_mongo_driver::mongodb::options::{CountOptions, EstimatedDocumentCountOptions, FindOneOptions, FindOptions};
@@ -76,26 +77,56 @@ impl MongoReads {
   }
 }
 
-/// What the reads returned.
+/// What the reads returned: the documents decoded, transformed and converted.
 enum Loaded {
-  Page { count: Option<u64>, docs: Vec<RawDocumentBuf>, pagination: bool, limit: f64, page: f64 },
-  One(Option<RawDocumentBuf>),
+  Page { count: Option<u64>, docs: Vec<JsVal>, pagination: bool, limit: f64, page: f64 },
+  One(Option<JsVal>),
   Count(u64),
+}
+
+/// How the documents of a call become the core's values ([`document`]).
+#[derive(Clone)]
+struct Convert {
+  plan: Arc<Plan>,
+  flags: Flags,
+  /// the collection plan of the operation (`None`: the request does not decode; the core bails)
+  fields: Option<Arc<CollectionPlan>>,
+  /// raw json / rich text leaves (not in canonical text)
+  leaves: Option<RawLeaves>,
+}
+
+impl Convert {
+  fn document(&self, raw: &RawDocument, lean_with_id: bool) -> FuseResult<JsVal> {
+    document(&self.plan, self.flags, raw, lean_with_id, self.fields.as_deref(), self.leaves.as_ref())
+  }
 }
 
 /// Runs `reads` on client `client_id`, then the fused operation `request_json` on their
 /// documents (driver transform plan `plan_id`). Returns the result JSON or `!<reason>`.
 pub async fn run(client_id: u32, plan_id: u32, reads: MongoReads, request_json: String) -> String {
-  let loaded = match load(client_id, &reads).await {
-    Ok(loaded) => loaded,
-    Err(LaneError::Bail(reason)) => return format!("!mongo:{reason}"),
-    Err(LaneError::Driver(_)) => return "!mongo:driver".to_string(),
-  };
   let plan = match plan(plan_id) {
     Ok(plan) => plan,
     Err(_) => return "!mongo:plan".to_string(),
   };
-  let backend = MongoBackend { client: client_id, txn: None, database: reads.database, loaded: Mutex::new(Some(loaded)), plan, flags: reads.flags };
+  let (fields, canonical) = match payload_fuse::peek_request(&request_json) {
+    Some((fields, canonical)) => (Some(fields), canonical),
+    None => (None, false),
+  };
+  let convert = Convert { plan: Arc::clone(&plan), flags: reads.flags, leaves: (!canonical).then(RawLeaves::default), fields };
+  let loaded = match load(client_id, &reads, &convert).await {
+    Ok(loaded) => loaded,
+    Err(Failure::Lane(LaneError::Bail(reason))) => return format!("!mongo:{reason}"),
+    Err(Failure::Lane(LaneError::Driver(_))) => return "!mongo:driver".to_string(),
+    Err(Failure::Fuse(Bail(reason))) => return format!("!{reason}"),
+  };
+  let backend = MongoBackend {
+    client: client_id,
+    txn: None,
+    database: reads.database,
+    loaded: Mutex::new(Some(loaded)),
+    leaves: convert.leaves.clone(),
+    flags: reads.flags,
+  };
   // nested finds of relationship population block this worker (`block_in_place`)
   payload_fuse::run(&backend, 0, &request_json)
 }
@@ -116,12 +147,21 @@ pub fn run_document(
     Ok(plan) => plan,
     Err(_) => return "!mongo:plan".to_string(),
   };
+  let (fields, canonical) = match payload_fuse::peek_request(request_json) {
+    Some((fields, canonical)) => (Some(fields), canonical),
+    None => (None, false),
+  };
+  let convert = Convert { plan, flags: reads.flags, leaves: (!canonical).then(RawLeaves::default), fields };
+  let doc = match doc.map(|raw| convert.document(&raw, false)).transpose() {
+    Ok(doc) => doc,
+    Err(Bail(reason)) => return format!("!{reason}"),
+  };
   let backend = MongoBackend {
     client: client_id,
     txn,
     database: reads.database.clone(),
     loaded: Mutex::new(Some(Loaded::One(doc))),
-    plan,
+    leaves: convert.leaves.clone(),
     flags: reads.flags,
   };
   payload_fuse::run(&backend, 0, request_json)
@@ -165,6 +205,29 @@ pub fn update_inputs(plan_id: u32, reads: &MongoReads, raw: &RawDocument, reques
   Ok((doc_with_locales, original))
 }
 
+enum Failure {
+  Lane(LaneError),
+  Fuse(Bail),
+}
+
+impl From<LaneError> for Failure {
+  fn from(error: LaneError) -> Self {
+    Failure::Lane(error)
+  }
+}
+
+impl From<mongodb::error::Error> for Failure {
+  fn from(error: mongodb::error::Error) -> Self {
+    Failure::Lane(LaneError::from(error))
+  }
+}
+
+impl From<Bail> for Failure {
+  fn from(bail: Bail) -> Self {
+    Failure::Fuse(bail)
+  }
+}
+
 fn collection(state: &DriverClient, database: Option<&str>, name: &str) -> Collection<RawDocumentBuf> {
   state.client.database(database.unwrap_or(&state.default_database)).collection(name)
 }
@@ -184,8 +247,11 @@ async fn run_count(coll: &Collection<RawDocumentBuf>, count: &CountSpec) -> Resu
   })
 }
 
-async fn run_find(coll: &Collection<RawDocumentBuf>, find: Option<&FindSpec>) -> Result<Vec<RawDocumentBuf>, LaneError> {
-  let Some(find) = find else { return Ok(Vec::new()) };
+/// Documents per conversion task: larger results are converted on the driver runtime's workers
+/// while the cursor still yields (chunks joined in order), like the driver lane's transform.
+const CHUNK: usize = 32;
+
+fn find_options(find: &FindSpec) -> FindOptions {
   let mut options = FindOptions::default();
   options.sort = find.sort.clone();
   options.projection = find.projection.clone();
@@ -193,21 +259,48 @@ async fn run_find(coll: &Collection<RawDocumentBuf>, find: Option<&FindSpec>) ->
   options.limit = find.limit;
   options.collation = find.collation.clone();
   options.hint = find.hint.clone();
-  let mut cursor = coll.find(find.filter.clone()).with_options(options).await?;
-  let mut docs = Vec::new();
+  options
+}
+
+/// The find's documents, converted by `convert` (`lean_with_id`: read through `Model.paginate`).
+async fn run_find(
+  coll: &Collection<RawDocumentBuf>,
+  find: Option<&FindSpec>,
+  convert: &Convert,
+  lean_with_id: bool,
+) -> Result<Vec<JsVal>, Failure> {
+  let Some(find) = find else { return Ok(Vec::new()) };
+  let mut cursor = coll.find(find.filter.clone()).with_options(find_options(find)).await?;
+  let mut tasks = Vec::new();
+  let mut chunk = Vec::with_capacity(CHUNK);
   while cursor.advance().await? {
-    docs.push(cursor.current().to_raw_document_buf());
+    chunk.push(cursor.current().to_raw_document_buf());
+    if chunk.len() == CHUNK {
+      let docs = std::mem::replace(&mut chunk, Vec::with_capacity(CHUNK));
+      let convert = convert.clone();
+      tasks.push(tokio::spawn(async move {
+        docs.iter().map(|raw| convert.document(raw, lean_with_id)).collect::<FuseResult<Vec<_>>>()
+      }));
+    }
   }
+  // the last chunk in this task, while the spawned ones run on the other workers
+  let tail = chunk.iter().map(|raw| convert.document(raw, lean_with_id)).collect::<FuseResult<Vec<_>>>()?;
+  let mut docs = Vec::new();
+  for task in tasks {
+    docs.extend(task.await.map_err(|_| LaneError::Bail("conversion task failed"))??);
+  }
+  docs.extend(tail);
   Ok(docs)
 }
 
-async fn load(client_id: u32, reads: &MongoReads) -> Result<Loaded, LaneError> {
+async fn load(client_id: u32, reads: &MongoReads, convert: &Convert) -> Result<Loaded, Failure> {
   let state = client(client_id)?;
   let coll = collection(&state, reads.database.as_deref(), &reads.collection);
   Ok(match reads.op {
     ReadOp::Find { pagination, limit, page } => {
       // mongoose-paginate-v2: the count is started first, both in flight
-      let (count, docs) = tokio::join!(run_count(&coll, &reads.count), run_find(&coll, reads.find.as_ref()));
+      let (count, docs) =
+        tokio::join!(run_count(&coll, &reads.count), run_find(&coll, reads.find.as_ref(), convert, true));
       Loaded::Page { count: count?, docs: docs?, pagination, limit, page }
     }
     ReadOp::FindOne => {
@@ -218,7 +311,10 @@ async fn load(client_id: u32, reads: &MongoReads) -> Result<Loaded, LaneError> {
       options.skip = find.skip;
       options.collation = find.collation.clone();
       options.hint = find.hint.clone();
-      Loaded::One(coll.find_one(find.filter.clone()).with_options(options).await?)
+      match coll.find_one(find.filter.clone()).with_options(options).await? {
+        Some(raw) => Loaded::One(Some(convert.document(&raw, false)?)),
+        None => Loaded::One(None),
+      }
     }
     ReadOp::Count => Loaded::Count(run_count(&coll, &reads.count).await?.ok_or(LaneError::Bail("no count"))?),
   })
@@ -231,7 +327,7 @@ struct MongoBackend {
   txn: Option<u32>,
   database: Option<String>,
   loaded: Mutex<Option<Loaded>>,
-  plan: std::sync::Arc<Plan>,
+  leaves: Option<RawLeaves>,
   flags: Flags,
 }
 
@@ -242,7 +338,7 @@ impl FusedBackend for MongoBackend {
 
   fn run(&self, _conn: u32, job: Job) -> FuseResult<String> {
     let loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner()).take();
-    let mut session = MongoSession { backend: self, loaded, plan: &self.plan, flags: self.flags };
+    let mut session = MongoSession { backend: self, loaded };
     job(&mut session)
   }
 }
@@ -250,8 +346,6 @@ impl FusedBackend for MongoBackend {
 struct MongoSession<'p> {
   backend: &'p MongoBackend,
   loaded: Option<Loaded>,
-  plan: &'p Plan,
-  flags: Flags,
 }
 
 fn bail(reason: &'static str) -> Bail {
@@ -259,29 +353,52 @@ fn bail(reason: &'static str) -> Bail {
 }
 
 impl MongoSession<'_> {
-  /// One document as `transform` leaves it (`lean_with_id`: read through `Model.paginate`).
-  fn document(&self, raw: &RawDocument, lean_with_id: bool) -> FuseResult<JsVal> {
-    let mut doc = decode_document(raw).map_err(|b| bail(b.0))?;
-    transform_read(self.plan, self.flags, ReadShape { lean_with_id }, &mut doc).map_err(|b| bail(b.0))?;
-    to_js(V::Obj(doc), 0)
+  fn page(&mut self) -> FuseResult<JsVal> {
+    let Some(Loaded::Page { count, docs, pagination, limit, page }) = self.loaded.take() else {
+      return Err(bail("read order"));
+    };
+    Ok(page_result(docs, count, pagination, limit, page))
+  }
+
+  fn one(&mut self) -> FuseResult<JsVal> {
+    let Some(Loaded::One(doc)) = self.loaded.take() else { return Err(bail("read order")) };
+    Ok(doc.unwrap_or(JsVal::Null))
+  }
+}
+
+/// A document decoded and transformed (`transform_read` of `plan`), as the core's value. With the
+/// collection plan `fields` and raw `leaves` (not in canonical text), json / rich text subtrees the
+/// transform left raw stay JSON text ([`RawLeaves`]).
+fn document(
+  plan: &Plan,
+  flags: Flags,
+  raw: &RawDocument,
+  lean_with_id: bool,
+  fields: Option<&CollectionPlan>,
+  leaves: Option<&RawLeaves>,
+) -> FuseResult<JsVal> {
+  let mut doc = decode_document(raw).map_err(|b| bail(b.0))?;
+  transform_read(plan, flags, ReadShape { lean_with_id }, &mut doc).map_err(|b| bail(b.0))?;
+  match (fields, leaves) {
+    (Some(collection), Some(leaves)) => {
+      let planned = Planned { collection, leaves, localized: plan.localization.is_some() };
+      planned.object(doc, &collection.fields, false, 0)
+    }
+    _ => to_js(V::Obj(doc), 0),
   }
 }
 
 impl ReadSession for MongoSession<'_> {
   fn find(&mut self, _args: &JsVal) -> FuseResult<JsVal> {
-    let Some(Loaded::Page { count, docs, pagination, limit, page }) = self.loaded.take() else {
-      return Err(bail("read order"));
-    };
-    let docs = docs.iter().map(|raw| self.document(raw, true)).collect::<FuseResult<Vec<_>>>()?;
-    Ok(page_result(docs, count, pagination, limit, page))
+    self.page()
   }
 
   fn find_one(&mut self, _args: &JsVal) -> FuseResult<JsVal> {
-    let Some(Loaded::One(doc)) = self.loaded.take() else { return Err(bail("read order")) };
-    match doc {
-      Some(raw) => self.document(&raw, false),
-      None => Ok(JsVal::Null),
-    }
+    self.one()
+  }
+
+  fn raw_leaves(&self) -> Option<RawLeaves> {
+    self.backend.leaves.clone()
   }
 
   fn count(&mut self, _args: &JsVal) -> FuseResult<JsVal> {
@@ -322,9 +439,19 @@ impl ReadSession for MongoSession<'_> {
       collation: None,
       hint: None,
     };
-    let raws = if let Some(txn) = self.backend.txn {
+    let convert = Convert {
+      plan,
+      flags: self.backend.flags,
+      fields: Some(Arc::clone(&related.plan)),
+      leaves: self.backend.leaves.clone(),
+    };
+    let lane_bail = |error: LaneError| match error {
+      LaneError::Bail(reason) => bail(reason),
+      LaneError::Driver(_) => bail("driver"),
+    };
+    if let Some(txn) = self.backend.txn {
       let database = self.backend.database.as_deref();
-      tokio::task::block_in_place(|| {
+      let raws = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(payload_mongo_driver::find_raw(
           self.backend.client,
           database,
@@ -333,23 +460,16 @@ impl ReadSession for MongoSession<'_> {
           Some(txn),
         ))
       })
-    } else {
-      let state = client(self.backend.client).map_err(|_| bail("client"))?;
-      let coll = collection(&state, self.backend.database.as_deref(), &collection_name);
-      tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(run_find(&coll, Some(&find))))
+      .map_err(lane_bail)?;
+      return raws.iter().map(|raw| convert.document(raw, true)).collect();
     }
-    .map_err(|error| match error {
-        LaneError::Bail(reason) => bail(reason),
-        LaneError::Driver(_) => bail("driver"),
-      })?;
-    raws
-      .iter()
-      .map(|raw| {
-        let mut doc = decode_document(raw).map_err(|b| bail(b.0))?;
-        transform_read(&plan, self.flags, ReadShape { lean_with_id: true }, &mut doc).map_err(|b| bail(b.0))?;
-        to_js(V::Obj(doc), 0)
+    let state = client(self.backend.client).map_err(|_| bail("client"))?;
+    let coll = collection(&state, self.backend.database.as_deref(), &collection_name);
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(run_find(&coll, Some(&find), &convert, true)))
+      .map_err(|error| match error {
+        Failure::Lane(error) => lane_bail(error),
+        Failure::Fuse(bail) => bail,
       })
-      .collect()
   }
 }
 
@@ -475,4 +595,143 @@ fn to_js(value: V<'_>, depth: usize) -> FuseResult<JsVal> {
     V::Date(_) => return Err(bail("date")),
     V::Opaque(what) => return Err(bail(what)),
   })
+}
+
+/// The conversion of a transformed document guided by the collection plan: the same values as
+/// [`to_js`], except that a raw (not yet decoded) object holding a whole json or rich text value
+/// (one the `afterRead` traversal does not look into: a json leaf, rich text without node types
+/// that have `afterRead` work) is kept as its JSON text.
+struct Planned<'p> {
+  collection: &'p CollectionPlan,
+  leaves: &'p RawLeaves,
+  /// localized fields hold `{ [locale]: value }`
+  localized: bool,
+}
+
+impl Planned<'_> {
+  fn object(&self, obj: payload_mongo_driver::value::Obj<'_>, fields: &[Field], parent_localized: bool, depth: usize) -> FuseResult<JsVal> {
+    if depth > MAX_DEPTH {
+      return Err(bail("deep"));
+    }
+    let mut out = JsObj::with_capacity(obj.0.len());
+    for (key, value) in obj.0 {
+      let value = match find_field(fields, &key) {
+        Some(field) => self.field(value, field, parent_localized, depth + 1)?,
+        None => to_js(value, depth + 1)?,
+      };
+      out.insert(key.into_owned(), value);
+    }
+    Ok(JsVal::obj(out))
+  }
+
+  /// The value of `field` (for a localized field, its `{ [locale]: value }` object).
+  fn field(&self, mut value: V<'_>, field: &Field, parent_localized: bool, depth: usize) -> FuseResult<JsVal> {
+    if self.localized && field.localized && !parent_localized && value.is_plain_object() {
+      let Some(locales) = value.obj_mut().map_err(|b| bail(b.0))?.map(std::mem::take) else { return to_js(value, depth) };
+      let mut out = JsObj::with_capacity(locales.0.len());
+      for (locale, localized) in locales.0 {
+        out.insert(locale.into_owned(), self.value(localized, field, true, depth + 1)?);
+      }
+      return Ok(JsVal::obj(out));
+    }
+    self.value(value, field, parent_localized || field.localized, depth)
+  }
+
+  fn value(&self, value: V<'_>, field: &Field, parent_localized: bool, depth: usize) -> FuseResult<JsVal> {
+    match (field.kind, value) {
+      (Kind::Leaf, V::RawDoc(doc)) if field.type_name == "json" => raw(self.leaves, &V::RawDoc(doc)),
+      (Kind::RichText, V::RawDoc(doc)) if field.lexical_active.as_ref().is_some_and(|active| active.is_empty()) => {
+        raw(self.leaves, &V::RawDoc(doc))
+      }
+      (Kind::Group | Kind::Tab, mut value) if field.affects_data && value.is_plain_object() => {
+        let obj = value.obj_mut().map_err(|b| bail(b.0))?.map(std::mem::take).unwrap_or_default();
+        self.object(obj, &field.fields, parent_localized, depth)
+      }
+      (Kind::Array, mut value) if value.is_array() => {
+        let rows = value.arr_mut().map_err(|b| bail(b.0))?.map(std::mem::take).unwrap_or_default();
+        let mut out = Vec::with_capacity(rows.len());
+        for mut row in rows {
+          out.push(if row.is_plain_object() {
+            let obj = row.obj_mut().map_err(|b| bail(b.0))?.map(std::mem::take).unwrap_or_default();
+            self.object(obj, &field.fields, parent_localized, depth + 1)?
+          } else {
+            to_js(row, depth + 1)?
+          });
+        }
+        Ok(JsVal::arr(out))
+      }
+      (Kind::Blocks, mut value) if value.is_array() => {
+        let rows = value.arr_mut().map_err(|b| bail(b.0))?.map(std::mem::take).unwrap_or_default();
+        let mut out = Vec::with_capacity(rows.len());
+        for mut row in rows {
+          let fields = match row.obj_mut().map_err(|b| bail(b.0))? {
+            Some(obj) => match obj.get("blockType") {
+              Some(V::Str(slug)) => self.block_fields(field, slug),
+              _ => None,
+            },
+            None => None,
+          };
+          out.push(match (fields, row.is_plain_object()) {
+            (Some(fields), true) => {
+              let obj = row.obj_mut().map_err(|b| bail(b.0))?.map(std::mem::take).unwrap_or_default();
+              self.object(obj, &fields, parent_localized, depth + 1)?
+            }
+            _ => to_js(row, depth + 1)?,
+          });
+        }
+        Ok(JsVal::arr(out))
+      }
+      (_, value) => to_js(value, depth),
+    }
+  }
+
+  fn block_fields(&self, field: &Field, slug: &str) -> Option<std::sync::Arc<Vec<Field>>> {
+    self
+      .collection
+      .global_blocks
+      .get(slug)
+      .cloned()
+      .or_else(|| field.blocks.iter().find(|(s, _)| s == slug).map(|(_, fields)| fields.clone()))
+  }
+}
+
+/// The data field named `name` of one object level (rows, collapsibles, unnamed groups and
+/// unnamed tabs are part of their parent's level).
+fn find_field<'f>(fields: &'f [Field], name: &str) -> Option<&'f Field> {
+  for field in fields {
+    match field.kind {
+      Kind::Row => {
+        if let Some(found) = find_field(&field.fields, name) {
+          return Some(found);
+        }
+      }
+      Kind::Group if !field.affects_data => {
+        if let Some(found) = find_field(&field.fields, name) {
+          return Some(found);
+        }
+      }
+      Kind::Tabs => {
+        for tab in &field.tabs {
+          if tab.affects_data {
+            if tab.name.as_deref() == Some(name) {
+              return Some(tab);
+            }
+          } else if let Some(found) = find_field(&tab.fields, name) {
+            return Some(found);
+          }
+        }
+      }
+      Kind::Ui => {}
+      _ if field.affects_data && field.name.as_deref() == Some(name) => return Some(field),
+      _ => {}
+    }
+  }
+  None
+}
+
+/// A raw subtree as a raw leaf (its JSON as the driver lane writes it).
+fn raw(leaves: &RawLeaves, value: &V<'_>) -> FuseResult<JsVal> {
+  let mut text = String::new();
+  payload_mongo_driver::json::write_value(&mut text, value).map_err(|b| bail(b.0))?;
+  Ok(leaves.value(text))
 }

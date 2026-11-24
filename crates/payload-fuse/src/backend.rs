@@ -24,6 +24,21 @@ pub trait ReadSession {
   /// `payload.db.count(args)`: `{ totalDocs }`.
   fn count(&mut self, args: &JsVal) -> FuseResult<JsVal>;
 
+  /// `find` for collection `plan` (a backend may use the plan to keep leaf subtrees raw:
+  /// [`crate::write::raw_value`]).
+  fn find_planned(&mut self, args: &JsVal, _plan: &crate::plan::CollectionPlan) -> FuseResult<JsVal> {
+    self.find(args)
+  }
+  /// The raw leaves of the session's documents ([`crate::write::RawLeaves`]).
+  fn raw_leaves(&self) -> Option<crate::write::RawLeaves> {
+    None
+  }
+
+  /// `find_one` for collection `plan`.
+  fn find_one_planned(&mut self, args: &JsVal, _plan: &crate::plan::CollectionPlan) -> FuseResult<JsVal> {
+    self.find_one(args)
+  }
+
   /// Optional: `find` (`one: false`) or `findOne` (`one: true`) together with the operation's
   /// per-document work (auth `collection` key, `afterRead` of `read`), written directly as the
   /// result JSON. `None`: not available for this call (the core then calls `find` / `find_one`

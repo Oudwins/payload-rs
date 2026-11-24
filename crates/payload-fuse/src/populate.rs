@@ -397,6 +397,7 @@ impl SharedWriter {
         out.push(']');
         Ok(())
       }
+      JsVal::Obj(props) if write::raw_text(props, |_| ()).is_some() => write::write(value, out, depth),
       JsVal::Obj(props) if !(props.is_empty() && (value.typed().is_some() || value.bson().is_some() || value.as_host_object().is_some())) => {
         let ptr = Arc::as_ptr(props) as *const ();
         if self.shared.contains(&ptr) {

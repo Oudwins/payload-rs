@@ -1,7 +1,11 @@
 //! Result JSON for `JSON.parse` materialization (FUSE_CONTRACT.md section 5): bails on anything
 //! `JSON.parse` would not give back identically.
 
-use payload_engine::js::{JsVal, num_to_js_string, write_json_string};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use payload_engine::js::{JsVal, Obj, Props, num_to_js_string, write_json_string};
 
 use crate::backend::{Bail, FuseResult};
 
@@ -10,6 +14,46 @@ const MAX_DEPTH: usize = 400;
 
 thread_local! {
   static CANONICAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+  /// The raw leaves of the job running on this thread.
+  static RAW: RefCell<Option<RawLeaves>> = const { RefCell::new(None) };
+}
+
+/// The raw leaves of one fused job: values the core carries without looking into them and writes
+/// as JSON text (a backend's json or rich text subtree the `afterRead` traversal only moves). A
+/// raw leaf is an empty object identified by its address in this table, which keeps it alive (its
+/// address is not reused while the job runs). The traversal never reaches into one: backends only
+/// create them where the collection plan has a leaf. Shared by the threads that build the job's
+/// documents.
+#[derive(Clone, Default)]
+pub struct RawLeaves(Arc<Mutex<HashMap<usize, (Arc<Props>, String)>>>);
+
+impl RawLeaves {
+  /// A raw leaf written as `json` (`JSON.parse(json)` is the value).
+  pub fn value(&self, json: String) -> JsVal {
+    let props = Arc::new(Props::from(Obj::new()));
+    self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(Arc::as_ptr(&props) as usize, (Arc::clone(&props), json));
+    JsVal::Obj(props)
+  }
+}
+
+/// Runs `f` (the job's core) with the job's raw leaves visible to the writer.
+pub fn with_raw_leaves<R>(leaves: Option<RawLeaves>, f: impl FnOnce() -> R) -> R {
+  let previous = RAW.with(|raw| raw.replace(leaves));
+  let out = f();
+  RAW.with(|raw| raw.replace(previous));
+  out
+}
+
+/// The JSON text of a raw leaf.
+pub(crate) fn raw_text<R>(props: &Arc<Props>, f: impl FnOnce(&str) -> R) -> Option<R> {
+  if !props.is_empty() {
+    return None;
+  }
+  RAW.with(|raw| {
+    let raw = raw.borrow();
+    let table = raw.as_ref()?.0.lock().unwrap_or_else(|e| e.into_inner());
+    table.get(&(Arc::as_ptr(props) as usize)).map(|(_, text)| f(text))
+  })
 }
 
 /// Whether the running job writes canonical text (RUST_HTTP_LANES.md 3.1:
@@ -77,6 +121,9 @@ pub fn write(value: &JsVal, out: &mut String, depth: usize) -> FuseResult<()> {
       out.push(']');
     }
     JsVal::Obj(props) => {
+      if raw_text(props, |text| out.push_str(text)).is_some() {
+        return Ok(());
+      }
       if props.is_empty() && (value.typed().is_some() || value.bson().is_some() || value.as_host_object().is_some()) {
         return Err(Bail::new("value:typed"));
       }
