@@ -529,7 +529,7 @@ Built (off by default; the create slice runs on WP-I's prepare, section 12):
 | write plan             | `src/fuse-write/plan.ts` (WeakMap per `collection`, `volatile` triples)                       |
 | MongoDB target         | `src/fuse-write/mongo.ts` (registered by `installDriverLane`), registry `targets.ts`          |
 | counters               | `src/fuse-write/stats.ts`: `fuse-writes-<pid>.json`, diffs in `fuse-writes-diffs-<pid>.jsonl` |
-| operation drivers      | `crates/payload-fuse-write/src/ops.rs` (create)                                               |
+| operation drivers      | `crates/payload-fuse-write/src/ops.rs` (create), `by_id.rs` (updateByID, deleteByID)          |
 | shadow state reads     | `crates/payload-fuse-write/src/state.rs`, `exec_shadowed` in `lib.rs`                         |
 | Rust prepare interface | `crates/payload-fuse-write/src/prepare_stub.rs` (stub: bails `prepare:stub`)                  |
 | bindings               | `fuseWriteMongoOp`, `fuseWriteMongoState` (`crates/payload-node/src/fuse_write.rs`)           |
@@ -580,20 +580,72 @@ fused copies replayed onto the state before the call), reading counts (the exact
 transaction uuid is exempt, D4), and errors when both throw. Counted: `hits`, `bails`, `guards`,
 `ineligible`, `sameError`, `diffs`.
 
-Left, in order:
+**updateByID** and **deleteByID** (WP-J, driver `crates/payload-fuse-write/src/by_id.rs`; the
+TS side `prepareByID` in `src/fuse-write/mongo.ts`, dispatch `fuseByID` in `index.ts`). One
+Rust-owned transaction, no JS turn between the statements, the prepare running inside it:
 
-1. **updateByID** (`ops.rs`): stored-doc `find` in the transaction, `checkDocumentLockStatus`
-   (expired-locks `delete` without a session after a clock reading, then the lock `find`),
-   `findAndModify` (`updatedAt` clock reading first), `saveVersion` (`now`, version insert,
-   flip, the max-versions `find` + conditional `deleteMany`); the result read runs on the
-   version's `version` with `id = parent` (`saveVersion` returns it, not the updated document).
-   With the TS prepare the stored doc must come back to JS before the prepare: `txnCommand` (the
-   driver's D4 API) runs the find in the same Rust transaction, then `fuseWriteMongoOp` continues
-   it; WP-I's prepare removes that JS turn. State reads add the locked documents of the id.
-2. **deleteByID**: find, locks, `deleteVersions`, `findAndModify` remove, preferences
-   `deleteMany` (`collection-<slug>-<id>` keys); state adds the preferences.
-3. `PAYLOAD_RS_FUSE_WRITES=on` by default once the remaining bars (parity, shadow files, driver
-   lane, glue, packaging) are rerun on the final tree and the perf suite confirms section 8.
+1. the stored document: the result read's `findOne` (the same read as
+   `getLatestCollectionVersion` / deleteByID's `findOne`: same where, no select or joins), in the
+   transaction; none bails (`byID:notFound`, the exact lane throws `NotFound`);
+2. updateByID: `docWithLocales` (the driver crate's read transform of the stored BSON) and
+   `originalDoc` (`payload_fuse::after_read_original`: depth 0, `fallbackLocale: null`,
+   `showHiddenFields` and `overrideAccess` true), then WP-I's `prepare_update`
+   (`prepare_update_request`, the plan registered once through `fuseWriteRegisterPlan`); a bail,
+   unused readings or a validation error bail before anything is written. The prepare runs
+   before the lock check: it is pure, so the order is unobservable, and a bail then leaves the
+   locks alone;
+3. `checkDocumentLockStatus`: with `overrideLock: false` (REST) the lock `find` without a session,
+   which bails on any lock of the document (`byID:locked`: the exact lane decides whether it is
+   live and throws `Locked`); then the lock `delete` without a session, as upstream (committed at
+   once; a later bail reruns the exact lane, whose delete then finds nothing). The write
+   lane-shadow sends it inside its aborted transaction instead, so the exact lane's own delete is
+   compared;
+4. updateByID: `findAndModify` (`remove: false, new: true, upsert: false, update`, the Node
+   driver's key order), whose `value` must equal the prepare's `stored_after` byte for byte
+   (`byID:storedAfter`: the version would have been built from another document); with
+   versions the version insert, the latest flip (none without drafts) and `enforceMaxVersions`'
+   find (`skip: max, limit: 1`, sort `updatedAt: -1, createdAt: -1` as the driver lane sends it),
+   which bails when it finds a version (`byID:maxVersions`: the exact lane deletes the old
+   versions; reached only by documents with more than `maxPerDoc` versions). The result is
+   saveVersion's returned version: the version insert's `version` with `_id = parent` through the
+   collection's read transform (`id` last, as `sanitizeInternalFields` and `createdVersion.id =
+   parent` leave it); without versions the `findAndModify` value;
+5. deleteByID: `deleteVersions` (`delete` of the parent's versions), `findAndModify` with
+   `remove: true` (its value is the result's document), the preferences `delete`
+   (`key: { $in: ['collection-<slug>-<id>'] }`, non-auth); scheduled publish needs drafts
+   (ineligible);
+6. the result's `afterRead` / population in the transaction, the commit. JS assigns the
+   prepare's `req.context` writes (updateByID works on a deep copy of `data`: nothing else to
+   replay), primes the dataloader (deleteByID's afterRead passes `draft: undefined`, so its keys
+   hold `null`) and deletes `req.transactionID`.
+
+The statements' filters are mongoose's casts (`castQuery` of the driver lane) of db-mongodb's
+`buildQuery` for `{ id: { equals } }`, the locks' `document.relationTo` / `document.value`, the
+versions' `parent` and the preferences key, built once per collection model with a sentinel
+ObjectId and given each call's id by replacing the sentinel's 12 bytes and 24 hex characters in
+the serialized template (`withID`).
+
+Readings (12.3) of updateByID, taken by JS in upstream's order: row ids, `dataToUpdate.updatedAt`,
+mongoose's `now` in the `findOneAndUpdate` pre hook `_setTimestampsOnUpdate` (schemas with
+timestamps; the value is unused because db-mongodb passes `timestamps: false`, but the shadow's
+tapes need the reading), with versions `saveVersion`'s `now` and the version's `_id`. deleteByID
+takes none (the lock check's clock reading only happens when a lock exists, which bails).
+
+Guards besides the create's: a 24-hex lowercase id, no `trash` argument and no `deletedAt` in the
+data of a trash collection, no `draft` / `autosave` / `publishAllLocales` /
+`unpublishAllLocales`, a plain `req.context`, and without `overrideAccess` an `access.update` /
+`access.delete` that compiles to `true` (a where constraint would change the stored-document
+read). State reads add the locked documents of the id (`document.value` as ObjectId or string)
+and, for deletes, the preferences key.
+
+Verification of updateByID / deleteByID: the lane suites test/__rs/fuse-writes-lane (typical,
+unversioned, locks with `overrideLock` true and false, errors, localized typical with blocks
+updated in two locales) at 0 differences; the MongoDB harness with `--fuse shadow --fuse-writes
+shadow` equals `.rs-baseline/mongodb-all.json` (3330 / 164 / 422) with 2810 creates, 68
+updateByID and 162 deleteByID compared and 0 lane-shadow differences.
+
+Left: `PAYLOAD_RS_FUSE_WRITES=on` by default once the bars (parity, shadow files, driver lane,
+glue, packaging) are rerun on the final tree and the perf suite confirms section 8.
 
 Measured (2026-11-24, creates, WP-I's prepare, release addon, mongod 8.2 rs0 on loopback, cores
 22-31; vitest micro-benchmark of 300 creates after 30 warm-up, p50, not the perf suite):

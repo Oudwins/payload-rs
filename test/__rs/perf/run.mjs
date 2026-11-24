@@ -98,12 +98,15 @@ for (const category of options.categories) {
 }
 /**
  * `--engines` values: `ts` (upstream), `rs` (the default selection), and for attributing a
- * difference to a layer `db-rs` (Rust database engine, TS core) and `core-rs` (TS database
- * adapter, Rust core). Only ts and rs cells are paired for the fingerprint checks and the report.
+ * difference to a layer `db-rs` (Rust database engine, TS core), `core-rs` (TS database
+ * adapter, Rust core) and `rs-fused-off` (the default without the fused MongoDB writes,
+ * packages/engine-rs/FUSED_WRITES.md). Only ts and rs cells are paired for the fingerprint checks
+ * and the report.
  */
 const engineVariants = {
   'core-rs': { PAYLOAD_CORE_ENGINE: 'rs', PAYLOAD_ENGINE: 'ts' },
   'db-rs': { PAYLOAD_CORE_ENGINE: 'ts' },
+  'rs-fused-off': { PAYLOAD_RS_FUSE_WRITES: 'off' },
   rs: {},
   ts: { PAYLOAD_ENGINE: 'ts' },
 }

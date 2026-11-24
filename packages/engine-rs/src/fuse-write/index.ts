@@ -1,6 +1,6 @@
 /**
- * Fused writes (packages/engine-rs/FUSED_WRITES.md): an eligible collection `create` (then
- * `updateByID` / `deleteByID`) runs fully in Rust, its statements in a transaction the Rust driver
+ * Fused writes (packages/engine-rs/FUSED_WRITES.md): an eligible collection `create`,
+ * `updateByID` or `deleteByID` runs fully in Rust, its statements in a transaction the Rust driver
  * owns (D4), the result's `afterRead` / population through the fused read core, then the commit,
  * with no JS between the statements. Called by the write operation drop-ins of `../ops-write`:
  * `fuseWrite` returns the operation's promise, or `undefined` when the call runs on the exact lane
