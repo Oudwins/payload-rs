@@ -191,11 +191,21 @@ pub mod fast_kind {
   pub const ARRAY: u32 = 4;
   /// unnamed row / collapsible / group: its fields with the passthrough args
   pub const UNNAMED: u32 = 5;
-  /// a data field that is a plain (or hooked) leaf except that it is localized under a
-  /// non-localized parent (`fieldShouldBeLocalized` is true): the leaf sequence with upstream's
-  /// localized value hoisting. The host runs it only for a truthy `flattenLocales` and a
-  /// `locale` other than `'all'` (no hooks per locale), and upstream's `promise()` otherwise.
-  pub const LOCALIZED_LEAF: u32 = 6;
+  /// blocks: the leaf sequence, then each row's block fields (upstream's block lookup)
+  pub const BLOCKS: u32 = 6;
+  /// named tab (without `afterRead` hooks): the leaf sequence, then its fields like a group
+  /// (no `{}` fill: the `tabs` field fills named tabs)
+  pub const TAB_NAMED: u32 = 7;
+  /// unnamed tab: its fields with the passthrough args and `parentIsLocalized || tab.localized`
+  pub const TAB_UNNAMED: u32 = 8;
+  /// tabs: the named-tab `{}` fill, then the tabs (`afterReadTabsPlan`) with the passthrough args
+  pub const TABS: u32 = 9;
+  /// Bit set on `LEAF`, `GROUP`, `ARRAY`, `BLOCKS` and `TAB_NAMED` for a data field localized
+  /// under a non-localized parent (`fieldShouldBeLocalized` is true): the kind's sequence with
+  /// upstream's localized value hoisting and its localized branches. The host runs it only for a
+  /// truthy `flattenLocales` and a `locale` other than `'all'` (no hooks per locale), and
+  /// upstream's `promise()` otherwise.
+  pub const LOCALIZED: u32 = 16;
 }
 
 /// One step of `traverseFields` over a fields array: a run of consecutive plain or hooked leaves
@@ -383,27 +393,37 @@ impl FieldDesc {
     if self.leaf.holds(override_access, parent_localized) || self.hooked_leaf.holds(override_access, parent_localized) {
       return fast_kind::LEAF;
     }
+    // `fieldShouldBeLocalized`: localized under a non-localized parent (the host hoists)
+    let localized = self.localized_truthy && !parent_localized;
     // a leaf but for its own localization (`needs_localized_parent` is `localized_truthy`)
     let is_localized_leaf = |leaf: Leaf| {
       matches!(leaf, Leaf::Yes { needs_override_access, needs_localized_parent: true }
         if !needs_override_access || override_access)
     };
     if self.affects_data
-      && !parent_localized
+      && localized
       && (is_localized_leaf(self.leaf) || is_localized_leaf(self.hooked_leaf))
     {
-      return fast_kind::LOCALIZED_LEAF;
+      return fast_kind::LEAF | fast_kind::LOCALIZED;
     }
     // what gates the leaf sequence of a data field (`config::Leaf` for leaf kinds; field hooks
     // run in the host like upstream's loop, `HAS_HOOKS`)
     let plain_data = self.affects_data
       && self.virtual_path.is_none()
-      && (!self.has_read_access || override_access)
-      && (!self.localized_truthy || parent_localized);
+      && (!self.has_read_access || override_access);
+    let localized_bit = if localized { fast_kind::LOCALIZED } else { 0 };
     match self.kind {
-      Kind::Relationship | Kind::Upload | Kind::Join if plain_data => fast_kind::RELATIONSHIP,
-      Kind::Group if self.has_name && plain_data => fast_kind::GROUP,
-      Kind::Array if plain_data => fast_kind::ARRAY,
+      Kind::Relationship | Kind::Upload | Kind::Join if plain_data && !localized => {
+        fast_kind::RELATIONSHIP
+      }
+      Kind::Group if self.has_name && plain_data => fast_kind::GROUP | localized_bit,
+      Kind::Array if plain_data => fast_kind::ARRAY | localized_bit,
+      Kind::Blocks if plain_data => fast_kind::BLOCKS | localized_bit,
+      Kind::Tab if self.has_name && plain_data && !self.has_after_read_hooks => {
+        fast_kind::TAB_NAMED | localized_bit
+      }
+      Kind::Tab if !self.has_name => fast_kind::TAB_UNNAMED,
+      Kind::Tabs if !self.has_name => fast_kind::TABS,
       Kind::Row | Kind::Collapsible | Kind::Group if !self.has_name => fast_kind::UNNAMED,
       _ => fast_kind::UPSTREAM,
     }

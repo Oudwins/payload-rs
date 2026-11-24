@@ -70,6 +70,17 @@ export!(after_read_plan_export, 2, |[fields, variant]| {
   crate::config::fields_desc(fields)?.js_plan(u32_arg(variant) as usize)
 });
 
+// `afterReadTabsPlan(fields, index, variant)`: the host traversal plan of the tabs of the `tabs`
+// field `fields[index]` (each decoded as a `tab` field), `undefined` without such a field.
+export!(after_read_tabs_plan_export, 3, |[fields, index, variant]| {
+  let desc = crate::config::fields_desc(fields)?;
+  let field = desc.items.as_ref().and_then(|items| items.get(u32_arg(index) as usize)).cloned();
+  match field {
+    Some(field) => field.tabs()?.js_plan(u32_arg(variant) as usize),
+    None => Ok(js::undefined()),
+  }
+});
+
 export!(stats, 0, |[]| {
   // `stats` calls are not engine work
   executor::uncount_entry();
@@ -190,6 +201,7 @@ pub fn create() -> JsResult<Local> {
   add!("afterRead", after_read_export);
   add!("afterReadTraverseFields", after_read_traverse_fields_export);
   add!("afterReadPlan", after_read_plan_export);
+  add!("afterReadTabsPlan", after_read_tabs_plan_export);
   add!("stats", stats);
   add!("noop", noop);
   add!("probe", probe);

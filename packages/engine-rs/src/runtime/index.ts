@@ -41,6 +41,7 @@ export type CoreRuntimeBinding = {
   afterRead: (args: unknown) => Promise<unknown>
   /** The traversal plan of a fields array (crates/payload-core-runtime config.rs `js_plan`). */
   afterReadPlan: (fields: unknown, variant: number) => AfterReadPlan
+  afterReadTabsPlan: (fields: unknown, index: number, variant: number) => AfterReadPlan
   /**
    * afterRead's `traverseFields` with its parameter already destructured: the `afterReadArgs`
    * layout followed by the `TRAV_*` entries (after_read.rs `traverse_fields_entry`).
@@ -431,6 +432,7 @@ export const getCoreRuntime = (): CoreRuntimeBinding => {
       forEachFields,
       hookedLeaf,
       planFor: (fields, variant) => created.afterReadPlan(fields, variant),
+      tabsPlanFor: (fields, index, variant) => created.afterReadTabsPlan(fields, index, variant),
     }),
     planTraversal: process.env.PAYLOAD_RS_AFTER_READ_TRAVERSAL !== 'rust',
     /**

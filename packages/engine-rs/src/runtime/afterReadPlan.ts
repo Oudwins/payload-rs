@@ -4,15 +4,17 @@
  *
  * The Rust engine decides, once per fields array and per `overrideAccess` / parent-localized
  * combination, which branches of upstream's `promise()` (fields/hooks/afterRead/promise.ts) a
- * field can reach. For the kinds it classifies (plain leaves, localized plain leaves, relationship-
- * like fields, named groups, arrays, unnamed rows / collapsibles / groups) every remaining branch is a fixed
+ * field can reach. For the kinds it classifies (plain leaves, relationship-like fields, named
+ * groups, arrays, blocks, named and unnamed tabs, tabs, unnamed rows / collapsibles / groups, and
+ * the localized variants of leaves, groups, arrays, blocks and named tabs) every remaining branch is a fixed
  * sequence of sibling doc operations; `fastField` performs exactly that sequence, in upstream's
  * order, as an `async` function with upstream's awaits (the field hooks loop and the default
- * value step), and recurses into nested fields with the same plans. A localized plain leaf
- * (`LOCALIZED_LEAF`) adds upstream's value hoisting, and runs this way only with a truthy
- * `flattenLocales` and a `locale` other than `'all'`. Every other field (virtual fields, read
- * access to await, other localized fields, `locale: 'all'`, blocks, tabs, rich text, points)
- * runs upstream's own `promise()` with the args literal upstream's
+ * value step), and recurses into nested fields with the same plans. A `LOCALIZED` kind adds
+ * upstream's value hoisting and its localized branches, and runs this way only with a truthy
+ * `flattenLocales` and a `locale` other than `'all'`. A `tabs` field runs this way only when all
+ * its tabs do (upstream hands its tabs fresh `{ ...tab, type: 'tab' }` objects). Every other
+ * field (virtual fields, read access to await, localized relationships, `locale: 'all'`, rich
+ * text, points, tabs with hooks) runs upstream's own `promise()` with the args literal upstream's
  * `traverseFields` builds, so its behaviour is upstream's by construction.
  *
  * What the plans skip is config work only: argument literals, `getFieldPaths` and path segment
@@ -25,10 +27,12 @@
  * config mutations after the first traversal are not seen).
  */
 
+import { tabHasName } from '../../../payload/src/fields/config/types.js'
 import { getDefaultValue } from '../../../payload/src/fields/getDefaultValue.js'
 import { getFieldPaths } from '../../../payload/src/fields/getFieldPaths.js'
 import { relationshipPopulationPromise } from '../../../payload/src/fields/hooks/afterRead/relationshipPopulationPromise.js'
 import { callUserFunction } from '../../../payload/src/utilities/callUserFunction.js'
+import { getBlockSelect } from '../../../payload/src/utilities/getBlockSelect.js'
 import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.js'
 
 /** A fields array decoded by Rust (`FieldsDesc::js_plan`). */
@@ -57,7 +61,7 @@ type Trav = {
   parentPath: string
   parentSchemaPath: string
   select: any
-  selectMode: unknown
+  selectMode: any
   siblingDoc: any
 }
 
@@ -95,7 +99,20 @@ const RELATIONSHIP = 2
 const GROUP = 3
 const ARRAY = 4
 const UNNAMED = 5
-const LOCALIZED_LEAF = 6
+const BLOCKS = 6
+const TAB_NAMED = 7
+const TAB_UNNAMED = 8
+const TABS = 9
+/** bit on LEAF / GROUP / ARRAY / BLOCKS / TAB_NAMED: localized under a non-localized parent */
+const LOCALIZED = 16
+
+/** A localized kind runs in the host only with these arguments (no hooks per locale). */
+const isLocalizedFast = (c: any[]): boolean =>
+  Boolean(c[ARG_FLATTEN_LOCALES]) && c[ARG_LOCALE] !== 'all'
+
+/** Whether `kind` runs as `fastField` for these arguments. */
+const isFastKind = (c: any[], kind: number): boolean =>
+  kind !== UPSTREAM && (!(kind & LOCALIZED) || isLocalizedFast(c))
 
 /**
  * promise.ts's localized value hoisting (`if (fieldAffectsDataResult && shouldHoistLocalizedValue)`),
@@ -173,6 +190,8 @@ export type AfterReadTraverseDeps = {
   ) => Promise<void>
   /** the Rust plan of a fields array (`afterReadPlan` of the core runtime binding) */
   planFor: (fields: unknown, variant: number) => AfterReadPlan
+  /** the Rust plan of the tabs of the `tabs` field `fields[index]` (`afterReadTabsPlan`) */
+  tabsPlanFor: (fields: unknown, index: number, variant: number) => AfterReadPlan | undefined
 }
 
 /**
@@ -183,6 +202,7 @@ export const createAfterReadTraverse = ({
   forEachFields,
   hookedLeaf,
   planFor,
+  tabsPlanFor,
 }: AfterReadTraverseDeps) => {
   const traverse = (c: any[], plan: AfterReadPlan, t: Trav): void => {
     if (!plan.isArray) {
@@ -193,10 +213,8 @@ export const createAfterReadTraverse = ({
     const fieldPromises = c[ARG_FIELD_PROMISES]
     for (let i = 0; i < kinds.length; i++) {
       // `fieldPromises.push(promise({...}))`: `push` is read before the field runs
-      if (
-        kinds[i] === UPSTREAM ||
-        (kinds[i] === LOCALIZED_LEAF && (!c[ARG_FLATTEN_LOCALES] || c[ARG_LOCALE] === 'all'))
-      ) {
+      const kind = kinds[i]!
+      if (!isFastKind(c, kind) || (kind === TABS && !areTabsFast(c, plan, i, t))) {
         fieldPromises.push(
           hookedLeaf(
             c,
@@ -232,10 +250,56 @@ export const createAfterReadTraverse = ({
     return (plan.children[slot] ??= planFor(field.fields, variant))
   }
 
+  /**
+   * The plan of the tabs of the `tabs` field `plan.fields[index]` (cached on the parent plan: a
+   * `tabs` field has no `fields` of its own); `undefined` when `field.tabs` is not an array.
+   */
+  const tabsPlan = (
+    c: any[],
+    plan: AfterReadPlan,
+    index: number,
+    parentIsLocalized: unknown,
+  ): AfterReadPlan | undefined => {
+    const variant = (c[ARG_OVERRIDE_ACCESS] ? 1 : 0) | (parentIsLocalized ? 2 : 0)
+    const slot = index * 4 + variant
+    const cached = plan.children[slot] ?? tabsPlanFor(plan.fields, index, variant)
+    plan.children[slot] = cached
+    return cached?.isArray ? cached : undefined
+  }
+
+  /**
+   * A `tabs` field runs in the host only when each of its tabs does: upstream passes the tabs as
+   * fresh `{ ...tab, type: 'tab' }` objects to their `promise()`, which an upstream tab would see.
+   */
+  const areTabsFast = (c: any[], plan: AfterReadPlan, index: number, t: Trav): boolean => {
+    const tabs = tabsPlan(c, plan, index, t.parentIsLocalized)
+    return tabs !== undefined && tabs.kinds.every((kind) => isFastKind(c, kind))
+  }
+
+  /** Block plans per block config object and variant. */
+  const blockPlans = new WeakMap<object, (AfterReadPlan | undefined)[]>()
+
+  const blockPlan = (c: any[], block: any, parentIsLocalized: unknown): AfterReadPlan => {
+    const variant = (c[ARG_OVERRIDE_ACCESS] ? 1 : 0) | (parentIsLocalized ? 2 : 0)
+    let plans = blockPlans.get(block)
+    if (!plans) {
+      plans = []
+      blockPlans.set(block, plans)
+    }
+    return (plans[variant] ??= planFor(block.fields, variant))
+  }
+
+  /** promise.ts `req.payload.blocks[blockType] ?? field.blocks.find(...)` */
+  const findBlock = (c: any[], field: any, blockTypeToMatch: unknown): any =>
+    c[ARG_REQ].payload.blocks[blockTypeToMatch as string] ??
+    field.blocks.find(
+      (curBlock: any) => typeof curBlock !== 'string' && curBlock.slug === blockTypeToMatch,
+    )
+
   const trav = (
     siblingDoc: any,
     select: any,
-    selectMode: unknown,
+    selectMode: any,
     blockData: unknown,
     fieldDepth: number,
     parentIsLocalized: unknown,
@@ -258,6 +322,7 @@ export const createAfterReadTraverse = ({
   /** `promise()` of a field of a fast kind (see the module comment). */
   const fastField = async (c: any[], plan: AfterReadPlan, i: number, t: Trav): Promise<void> => {
     const kind = plan.kinds[i]!
+    const base = kind & ~LOCALIZED
     const flags = plan.flags[i]!
     const key = plan.keys[i]!
     const siblingDoc = t.siblingDoc
@@ -298,23 +363,34 @@ export const createAfterReadTraverse = ({
       }
     }
 
-    // shouldHoistLocalizedValue: `fieldShouldBeLocalized` is false for every kind but
-    // `LOCALIZED_LEAF` (true there), so for the others only the reads before it remain
+    // shouldHoistLocalizedValue: `fieldShouldBeLocalized` is true exactly for the `LOCALIZED`
+    // kinds, so for the others only the reads before it remain
+    let shouldHoistLocalizedValue = false
     if (
       c[ARG_FLATTEN_LOCALES] &&
       flags & AFFECTS_DATA &&
       typeof siblingDoc[key] === 'object' &&
       siblingDoc[key] !== null &&
-      kind === LOCALIZED_LEAF &&
+      kind & LOCALIZED &&
       c[ARG_LOCALE] !== 'all' &&
       c[ARG_REQ].payload.config.localization
     ) {
+      shouldHoistLocalizedValue = true
       hoistLocalizedValue(c, plan.fields[i], key, siblingDoc)
     }
 
     // Sanitize outgoing field value
-    if (kind === GROUP && typeof siblingDoc[key] === 'undefined') {
+    if (base === GROUP && typeof siblingDoc[key] === 'undefined') {
       siblingDoc[key] = {}
+    } else if (base === TABS) {
+      plan.fields[i].tabs.forEach((tab: any) => {
+        if (
+          tabHasName(tab) &&
+          (typeof siblingDoc[tab.name] === 'undefined' || siblingDoc[tab.name] === null)
+        ) {
+          siblingDoc[tab.name] = {}
+        }
+      })
     }
 
     if (flags & AFFECTS_DATA) {
@@ -387,7 +463,7 @@ export const createAfterReadTraverse = ({
         })
       }
 
-      if (kind === RELATIONSHIP) {
+      if (base === RELATIONSHIP) {
         c[ARG_POPULATION_PROMISES].push(
           relationshipPopulationPromise({
             currentDepth: c[ARG_CURRENT_DEPTH],
@@ -407,7 +483,7 @@ export const createAfterReadTraverse = ({
       }
     }
 
-    if (kind === ARRAY) {
+    if (base === ARRAY) {
       const field = plan.fields[i]
       const { path, schemaPath } = getFieldPaths({
         field,
@@ -445,8 +521,7 @@ export const createAfterReadTraverse = ({
             ),
           )
         })
-      } else if (typeof rows === 'object' && rows !== null) {
-        // `!shouldHoistLocalizedValue` holds for these kinds
+      } else if (!shouldHoistLocalizedValue && typeof rows === 'object' && rows !== null) {
         Object.values(rows).forEach((localeRows) => {
           if (Array.isArray(localeRows)) {
             localeRows.forEach((row, rowIndex) => {
@@ -469,10 +544,82 @@ export const createAfterReadTraverse = ({
             })
           }
         })
+      } else if (shouldHoistLocalizedValue && (!rows || rows.length === 0)) {
+        siblingDoc[key] = null
       } else if (!(flags & HIDDEN_IS_TRUE) || c[ARG_SHOW_HIDDEN_FIELDS] === true) {
         siblingDoc[key] = []
       }
-    } else if (kind === GROUP) {
+    } else if (base === BLOCKS) {
+      const field = plan.fields[i]
+      const { path, schemaPath } = getFieldPaths({
+        field,
+        index: i,
+        parentIndexPath: t.parentIndexPath,
+        parentPath: t.parentPath,
+        parentSchemaPath: t.parentSchemaPath,
+      })
+      const rows = siblingDoc[key]
+      if (Array.isArray(rows) && rows.length > 0) {
+        rows.forEach((row, rowIndex) => {
+          const blockTypeToMatch = row.blockType
+          const block = findBlock(c, field, blockTypeToMatch)
+          const { blockSelect, blockSelectMode } = getBlockSelect({
+            block,
+            select: t.select?.[key],
+            selectMode: t.selectMode,
+          })
+          if (block) {
+            const parentIsLocalized = t.parentIsLocalized || field.localized
+            traverse(
+              c,
+              blockPlan(c, block, parentIsLocalized),
+              trav(
+                row || {},
+                typeof blockSelect === 'object' ? blockSelect : undefined,
+                blockSelectMode,
+                row,
+                t.fieldDepth + 1,
+                parentIsLocalized,
+                '',
+                path + '.' + rowIndex,
+                schemaPath + '.' + block.slug,
+              ),
+            )
+          }
+        })
+      } else if (!shouldHoistLocalizedValue && typeof rows === 'object' && rows !== null) {
+        Object.values(rows).forEach((localeRows) => {
+          if (Array.isArray(localeRows)) {
+            localeRows.forEach((row, rowIndex) => {
+              const blockTypeToMatch = row.blockType
+              const block = findBlock(c, field, blockTypeToMatch)
+              if (block) {
+                const parentIsLocalized = t.parentIsLocalized || field.localized
+                traverse(
+                  c,
+                  blockPlan(c, block, parentIsLocalized),
+                  trav(
+                    row || {},
+                    undefined,
+                    undefined,
+                    row,
+                    t.fieldDepth + 1,
+                    parentIsLocalized,
+                    '',
+                    path + '.' + rowIndex,
+                    schemaPath + '.' + block.slug,
+                  ),
+                )
+              }
+            })
+          }
+        })
+      } else if (shouldHoistLocalizedValue && (!rows || rows.length === 0)) {
+        siblingDoc[key] = null
+      } else if (!(flags & HIDDEN_IS_TRUE) || c[ARG_SHOW_HIDDEN_FIELDS] === true) {
+        siblingDoc[key] = []
+      }
+    } else if (base === GROUP || base === TAB_NAMED) {
       const field = plan.fields[i]
       const { path, schemaPath } = getFieldPaths({
         field,
@@ -482,24 +629,95 @@ export const createAfterReadTraverse = ({
         parentSchemaPath: t.parentSchemaPath,
       })
       const groupSelect = typeof t.select?.[key] === 'object' ? t.select?.[key] : undefined
-      // `shouldLocalizeField` is false for this kind
+      // `shouldLocalizeField` is true exactly for the `LOCALIZED` kind
+      if (kind & LOCALIZED && !shouldHoistLocalizedValue) {
+        Object.values(siblingDoc[key] || {}).forEach((localizedData) => {
+          const parentIsLocalized = t.parentIsLocalized || field.localized
+          traverse(
+            c,
+            childPlan(c, plan, i, field, parentIsLocalized),
+            trav(
+              localizedData || {},
+              groupSelect,
+              t.selectMode,
+              t.blockData,
+              t.fieldDepth + 1,
+              parentIsLocalized,
+              '',
+              path,
+              schemaPath,
+            ),
+          )
+        })
+      } else {
+        const parentIsLocalized = t.parentIsLocalized || field.localized
+        traverse(
+          c,
+          childPlan(c, plan, i, field, parentIsLocalized),
+          trav(
+            typeof siblingDoc[key] !== 'object' ? {} : siblingDoc[key],
+            groupSelect,
+            t.selectMode,
+            t.blockData,
+            t.fieldDepth + 1,
+            parentIsLocalized,
+            '',
+            path,
+            schemaPath,
+          ),
+        )
+      }
+    } else if (base === TAB_UNNAMED) {
+      const field = plan.fields[i]
+      const { indexPath, schemaPath } = getFieldPaths({
+        field,
+        index: i,
+        parentIndexPath: t.parentIndexPath,
+        parentPath: t.parentPath,
+        parentSchemaPath: t.parentSchemaPath,
+      })
       const parentIsLocalized = t.parentIsLocalized || field.localized
       traverse(
         c,
         childPlan(c, plan, i, field, parentIsLocalized),
         trav(
-          typeof siblingDoc[key] !== 'object' ? {} : siblingDoc[key],
-          groupSelect,
+          siblingDoc,
+          t.select,
           t.selectMode,
           t.blockData,
-          t.fieldDepth + 1,
+          t.fieldDepth,
           parentIsLocalized,
-          '',
+          indexPath,
+          t.parentPath,
+          schemaPath,
+        ),
+      )
+    } else if (base === TABS) {
+      const field = plan.fields[i]
+      const { indexPath, path, schemaPath } = getFieldPaths({
+        field,
+        index: i,
+        parentIndexPath: t.parentIndexPath,
+        parentPath: t.parentPath,
+        parentSchemaPath: t.parentSchemaPath,
+      })
+      // `traverse` routed this field here only with a tabs plan whose tabs all run in the host
+      traverse(
+        c,
+        tabsPlan(c, plan, i, t.parentIsLocalized)!,
+        trav(
+          siblingDoc,
+          t.select,
+          t.selectMode,
+          t.blockData,
+          t.fieldDepth,
+          t.parentIsLocalized,
+          indexPath,
           path,
           schemaPath,
         ),
       )
-    } else if (kind === UNNAMED) {
+    } else if (base === UNNAMED) {
       const field = plan.fields[i]
       const { indexPath, schemaPath } = getFieldPaths({
         field,
