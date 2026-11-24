@@ -31,6 +31,7 @@ const ineligible = (reason: string) => {
 /** Field types the write-side steps model (12.1). */
 const modelledTypes = new Set([
   'array',
+  'blocks',
   'checkbox',
   'collapsible',
   'date',
@@ -103,6 +104,10 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
     }
     if (config.upload) {
       ineligible('upload')
+    }
+    if (Object.keys(payload.blocks ?? {}).length) {
+      // `req.payload.blocks[blockType]` wins over a field's own block of that slug
+      ineligible('blocks:global')
     }
     if (config.versions && typeof config.versions === 'object' && config.versions.drafts) {
       ineligible('drafts')
@@ -328,6 +333,20 @@ const fieldPlan = (builder: Builder, field: Any) => {
       }
       out.f = fieldsPlan(builder, field.fields)
       break
+    case 'blocks':
+      if (field.filterOptions) {
+        return ineligible('blocks:filterOptions')
+      }
+      out.b = field.blocks.map((block: Any) =>
+        typeof block === 'object' && block !== null && typeof block.slug === 'string'
+          ? {
+              slug: block.slug,
+              f: fieldsPlan(builder, block.fields),
+              label: labelPlan(block.labels?.singular),
+            }
+          : ineligible('blocks:reference'),
+      )
+      break
     case 'number':
     case 'select':
     case 'text':
@@ -446,12 +465,16 @@ const lexicalPlan = (builder: Builder, field: Any) => {
  * A mongoose schema as the casting needs it: `schema.tree`'s key order, every path with its
  * SchemaType, nested paths, the options the document building reads.
  */
-const schemaPlan = (schema: Any) => {
+const schemaPlan = (schema: Any, hasEmbeddedDiscriminators = false) => {
   const { options } = schema
   if (options.strict !== true && options.strict !== undefined) {
     ineligible('schema:strict')
   }
-  if (schema.discriminators && Object.keys(schema.discriminators).length) {
+  if (
+    !hasEmbeddedDiscriminators &&
+    schema.discriminators &&
+    Object.keys(schema.discriminators).length
+  ) {
     ineligible('schema:discriminators')
   }
   const paths: unknown[] = []
@@ -474,7 +497,8 @@ const pathPlan = (path: string, type: Any) => {
     if (setters.some((setter: Any) => setter.name !== 'resetId')) {
       ineligible('schema:setters')
     }
-  } else if (setters.length) {
+  } else if (setters.length && !type.options?.$skipDiscriminatorCheck) {
+    // (an embedded discriminator's key path keeps its value: the setter only rejects others)
     ineligible('schema:setters')
   }
   if (type.getters?.length) {
@@ -504,8 +528,18 @@ const pathPlan = (path: string, type: Any) => {
   if (Array.isArray(enumValues) && enumValues.length) {
     out.enum = enumValues
   }
+  const discriminators = type.$isMongooseDocumentArray
+    ? type.Constructor?.discriminators
+    : undefined
+  if (discriminators && Object.keys(discriminators).length) {
+    // embedded discriminators (blocks): the element's `discriminatorKey` value picks the schema
+    out.dk = type.schema.options.discriminatorKey
+    out.disc = Object.fromEntries(
+      Object.entries<Any>(discriminators).map(([name, ctor]) => [name, schemaPlan(ctor.schema)]),
+    )
+  }
   if (type.$isMongooseDocumentArray || type.$isSingleNested) {
-    out.sub = schemaPlan(type.schema)
+    out.sub = schemaPlan(type.schema, Boolean(out.disc))
     out.k = type.$isMongooseDocumentArray ? 'docArray' : 'single'
   } else if (type.$isMongooseArray) {
     const element = type.embeddedSchemaType ?? type.caster

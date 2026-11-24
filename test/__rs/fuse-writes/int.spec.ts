@@ -458,6 +458,55 @@ const richUpdates = (): Case[] =>
     },
   ].map((c) => ({ ...c, collection: 'rich' }))
 
+const hero = (heading: string) => ({ blockType: 'hero', heading })
+
+const pagesCreates = (f: Fixtures): Case[] =>
+  [
+    {
+      name: 'blocks',
+      data: {
+        layout: [hero('h'), { blockType: 'gallery', items: [{ caption: 'c' }], author: f.author }],
+      },
+    },
+    { name: 'content block', data: { layout: [{ blockType: 'content', body: richText('b') }] } },
+    { name: 'missing required in block', data: { layout: [hero('h'), { blockType: 'hero' }] } },
+    {
+      name: 'too many blocks',
+      data: { layout: [hero('1'), hero('2'), hero('3'), hero('4'), hero('5')] },
+    },
+    { name: 'unknown block type', data: { layout: [{ blockType: 'nope', x: 1 }, hero('h')] } },
+    { name: 'no block type', data: { layout: [{ heading: 'h' }] } },
+    { name: 'block with id', data: { layout: [{ ...hero('h'), id: '64b7f0f0f0f0f0f0f0f0f0aa' }] } },
+    { name: 'block unknown key', data: { layout: [{ ...hero('h'), junk: 1 }] } },
+    { name: 'layout zero', data: { layout: 0 } },
+    { name: 'layout object', data: { layout: { blockType: 'hero' } } },
+    { name: 'gallery invalid author', data: { layout: [{ blockType: 'gallery', author: 'x' }] } },
+  ].map((c) => ({ ...c, collection: 'pages' }))
+
+const pagesUpdates = (f: Fixtures): Case[] =>
+  [
+    {
+      name: 'replace blocks',
+      data: { layout: [hero('new')] },
+      seed: { data: { layout: [hero('old'), { blockType: 'gallery' }] } },
+    },
+    {
+      name: 'title only',
+      data: { title: 't' },
+      seed: { data: { layout: [hero('old'), { blockType: 'gallery', author: f.author }] } },
+    },
+    { name: 'clear layout', data: { layout: [] }, seed: { data: { layout: [hero('old')] } } },
+    {
+      name: 'raw: unknown blocks and keys',
+      data: { title: 't' },
+      seed: {
+        raw: {
+          layout: [{ blockType: 'hero', heading: 'h', junk: 1 }, { blockType: 'gone', a: 1 }, null],
+        },
+      },
+    },
+  ].map((c) => ({ ...c, collection: 'pages' }))
+
 const kindsUpdates = (f: Fixtures): Case[] =>
   [
     {
@@ -512,6 +561,18 @@ test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
     const f = await fixtures(payload)
     await runAll(payload, 'kinds create', kindsCreates(f), f)
     finish('kinds create')
+  })
+
+  test('pages creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'pages create', pagesCreates(f), f)
+    finish('pages create')
+  })
+
+  test('pages updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'pages update', pagesUpdates(f), f)
+    finish('pages update')
   })
 
   test('rich creates', async ({ payload }) => {

@@ -7,7 +7,7 @@ use payload_engine::bson::object_id_to_hex;
 use payload_engine::error::{EngineError, Result as EngineResult};
 use payload_engine::js::{JsVal, Obj as JsObj};
 
-use super::before_validate::{Task, existing_row_doc};
+use super::before_validate::{Task, block_to_match, existing_row_doc};
 use super::exec::{tick, ticks};
 use super::heap::{Heap, Ref, V};
 use super::plan::{Authorship, Field, Kind, Label, Lexical, NodeValidation, OwnHook, RelationTo, Tab, Validate};
@@ -140,7 +140,11 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
     if field.affects_data() {
       if let Some(localization) = &run.plan.localization {
         let operation_locale = run.locale.as_deref().unwrap_or(&localization.default_locale);
-        if localized_here && operation_locale != localization.default_locale && field.kind == Kind::Array && matches!(run.get(&level.data, name), V::Null) {
+        if localized_here
+          && operation_locale != localization.default_locale
+          && matches!(field.kind, Kind::Array | Kind::Blocks)
+          && matches!(run.get(&level.data, name), V::Null)
+        {
           skip_validation = true;
         }
       }
@@ -234,6 +238,47 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
         }
         s.exec.all(promises).wait().await;
       }
+      Kind::Blocks => {
+        let rows = run.get(&level.data, name);
+        let Some(rows) = rows.as_ref().and_then(|r| run.heap.borrow().arr(r).cloned()) else {
+          return;
+        };
+        let existing = run.get(&level.doc, name);
+        let existing_with_locales = run.get(&level.doc_with_locales, name);
+        let mut promises = Vec::with_capacity(rows.len());
+        for (index, row) in rows.into_iter().enumerate() {
+          if !run.heap.borrow().is_obj(&row) {
+            return run.fail(Bail::new("beforeChange:row"));
+          }
+          let Some(doc) = run.check(existing_row_doc(&run.heap, &row, &existing)) else {
+            return;
+          };
+          let Some(doc_with_locales) = run.check(existing_row_doc(&run.heap, &row, &existing_with_locales)) else {
+            return;
+          };
+          let Some(block) = run.check(block_to_match(&run.heap.borrow(), field, &row, &doc)) else {
+            return;
+          };
+          let Some((block, block_type)) = block else {
+            continue;
+          };
+          let label_path = match &field.label {
+            Label::False => level.label_path.clone(),
+            label => block_label_path(&s, label, name, &block.label, &block_type, index, level.label_path.as_deref()),
+          };
+          let inner = Level {
+            data: row,
+            doc,
+            doc_with_locales,
+            label_path,
+            parent_is_localized: child_localized,
+            parent_path: format!("{path}.{index}"),
+            skip_validation: level.skip_validation,
+          };
+          promises.push(s.exec.spawn(traverse_fields(s.clone(), &block.fields, inner)));
+        }
+        s.exec.all(promises).wait().await;
+      }
       Kind::Collapsible | Kind::Row => {
         let mut inner = level.clone();
         if field.kind == Kind::Collapsible && !matches!(field.label, Label::False) {
@@ -305,6 +350,33 @@ fn group_level(s: &S<'_, '_>, field: &Field, sd: Ref, level: &Level, path: &str)
   })
 }
 
+/// `${getTranslatedLabel(field?.label || field?.name)} > ${req.t('fields:block')} ${rowIndex + 1}
+/// (${getTranslatedLabel(block?.labels?.singular || blockTypeToMatch)})`, under the parent's.
+fn block_label_path(
+  s: &S<'_, '_>,
+  label: &Label,
+  name: &str,
+  block_label: &Label,
+  block_type: &V,
+  index: usize,
+  parent: Option<&str>,
+) -> Option<String> {
+  let field_label = match translated_label(s, label, name) {
+    LabelText::Text(text) => text.unwrap_or_else(|| "undefined".to_string()),
+    _ => return None,
+  };
+  let block_text = match block_label {
+    Label::Absent | Label::False => block_type.as_str().map(str::to_string)?,
+    Label::Str(text) if text.is_empty() => block_type.as_str().map(str::to_string)?,
+    other => match translated_label(s, other, "") {
+      LabelText::Text(text) => text.unwrap_or_else(|| "undefined".to_string()),
+      _ => return None,
+    },
+  };
+  let block_word = translate(s, "fields:block").ok()?;
+  Some(build_field_label(parent?, Some(&format!("{field_label} > {block_word} {} ({block_text})", index + 1))))
+}
+
 /// `setCreatedBy` / `setUpdatedBy` (fields/baseFields/authorship).
 fn authorship_before_change(s: &S<'_, '_>, which: Authorship, level: &Level) -> Result<V, Bail> {
   let run = s.run;
@@ -344,7 +416,7 @@ fn has_invalid_field_value_shape(heap: &Heap, field: &Field, value: &V) -> bool 
   }
   let is_object = Heap::is_object_like(value);
   match field.kind {
-    Kind::Array => !(heap.is_arr(value) || matches!(value, V::Num(_))),
+    Kind::Array | Kind::Blocks => !(heap.is_arr(value) || matches!(value, V::Num(_))),
     Kind::Number => is_object && !(field.has_many && heap.is_arr(value)),
     Kind::Relationship if field.has_many => {
       if !is_object || heap.is_arr(value) {

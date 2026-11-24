@@ -76,6 +76,23 @@ pub fn group_refs(heap: &Heap, value: &V, localized: bool) -> Result<Vec<Ref>, B
   Ok(out)
 }
 
+/// The block of a row (`typeof row.blockType === 'string'`, the field's own blocks).
+pub fn block_of_row<'f>(heap: &Heap, field: &'f Field, row: Ref) -> Option<&'f super::plan::Block> {
+  match heap.get(&V::Ref(row), "blockType") {
+    V::Str(block_type) => field.block(&block_type),
+    _ => None,
+  }
+}
+
+/// stripFields' block lookup: `field.blocks.find((each) => each.slug === data.blockType)`.
+pub fn block_of_row_loose<'f>(heap: &Heap, field: &'f Field, row: Ref) -> Result<Option<&'f super::plan::Block>, Bail> {
+  match heap.get(&V::Ref(row), "blockType") {
+    V::Str(block_type) => Ok(field.block(&block_type)),
+    V::Undef | V::Null | V::Bool(_) | V::Num(_) => Ok(None),
+    _ => Err(Bail::new("read:blockType")),
+  }
+}
+
 fn traverse(plan: &WritePlan, heap: &mut Heap, fields: &[Field], container: Ref, parent_localized: bool) -> Result<(), Bail> {
   let target = V::Ref(container);
   for field in fields {
@@ -129,6 +146,14 @@ fn traverse(plan: &WritePlan, heap: &mut Heap, fields: &[Field], container: Ref,
         let value = heap.get(&target, name);
         for r in group_refs(heap, &value, localized)? {
           traverse(plan, heap, &field.fields, r, child_localized)?;
+        }
+      }
+      Kind::Blocks => {
+        let value = heap.get(&target, name);
+        for r in array_rows(heap, &value, localized) {
+          if let Some(block) = block_of_row(heap, field, r) {
+            traverse(plan, heap, &block.fields, r, child_localized)?;
+          }
         }
       }
       Kind::Row | Kind::Collapsible => traverse(plan, heap, &field.fields, container, parent_localized)?,

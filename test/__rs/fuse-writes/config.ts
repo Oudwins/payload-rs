@@ -85,6 +85,39 @@ export default buildConfigWithDefaults({
         ],
       },
       {
+        slug: 'pages',
+        fields: [
+          { name: 'title', type: 'text' },
+          {
+            name: 'layout',
+            type: 'blocks',
+            maxRows: 4,
+            blocks: [
+              {
+                slug: 'hero',
+                fields: [
+                  { name: 'heading', type: 'text', required: true },
+                  { name: 'sub', type: 'textarea', defaultValue: 's' },
+                ],
+              },
+              {
+                slug: 'gallery',
+                labels: { plural: 'Galleries', singular: 'Gallery' },
+                fields: [
+                  { name: 'items', type: 'array', fields: [{ name: 'caption', type: 'text' }] },
+                  { name: 'credit', type: 'group', fields: [{ name: 'name', type: 'text' }] },
+                  { name: 'author', type: 'relationship', relationTo: 'authors' },
+                ],
+              },
+              {
+                slug: 'content',
+                fields: [{ name: 'body', type: 'richText', editor: lexicalEditor() }],
+              },
+            ],
+          },
+        ],
+      },
+      {
         slug: 'rich',
         fields: [
           { name: 'body', type: 'richText' },

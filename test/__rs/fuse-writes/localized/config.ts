@@ -89,6 +89,15 @@ export default buildConfigWithDefaults({
             ],
           },
           {
+            name: 'layout',
+            type: 'blocks',
+            localized: true,
+            blocks: [
+              { slug: 'hero', fields: [{ name: 'heading', type: 'text', required: true }] },
+              { slug: 'quote', fields: [{ name: 'text', type: 'textarea', localized: true }] },
+            ],
+          },
+          {
             name: 'rows',
             type: 'array',
             fields: [

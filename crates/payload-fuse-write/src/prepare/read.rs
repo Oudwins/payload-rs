@@ -98,7 +98,7 @@ fn strip_fields(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref, 
     if !value.truthy() || !Heap::is_object_like(&value) {
       continue;
     }
-    if !matches!(field.kind, Kind::Array | Kind::Group) {
+    if !matches!(field.kind, Kind::Array | Kind::Group | Kind::Blocks) {
       continue;
     }
     let child_localized = parent_localized || field.localized;
@@ -128,13 +128,20 @@ fn strip_fields(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref, 
 /// `stripFields` of one array or group value (`holder[key]`).
 fn strip_value(plan: &WritePlan, heap: &mut Heap, field: &Field, holder: Ref, key: &str, value: &V, child_localized: bool) -> Result<(), Bail> {
   match field.kind {
-    Kind::Array => {
+    Kind::Array | Kind::Blocks => {
       let Some(r) = value.as_ref() else { return Ok(()) };
       let Some(rows) = heap.arr(r).cloned() else { return Ok(()) };
       let mut has_null = false;
       let mut kept = rows.clone();
       for (i, row) in rows.iter().enumerate() {
         match row.as_ref().filter(|rr| heap.obj(*rr).is_some()) {
+          Some(rr) if field.kind == Kind::Blocks => match super::transform::block_of_row_loose(heap, field, rr)? {
+            Some(block) => strip_fields(plan, heap, &block.fields, rr, &["blockType"], child_localized)?,
+            None => {
+              kept[i] = V::Null;
+              has_null = true;
+            }
+          },
           Some(rr) if row.truthy() => strip_fields(plan, heap, &field.fields, rr, &[], child_localized)?,
           _ if !row.truthy() || !Heap::is_object_like(row) => {
             kept[i] = V::Null;
@@ -220,6 +227,14 @@ fn sanitize(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref, pare
         let value = heap.get(&target, name);
         for r in super::transform::group_refs(heap, &value, localized)? {
           sanitize(plan, heap, &field.fields, r, child_localized)?;
+        }
+      }
+      Kind::Blocks => {
+        let value = heap.get(&target, name);
+        for r in super::transform::array_rows(heap, &value, localized) {
+          if let Some(block) = super::transform::block_of_row(heap, field, r) {
+            sanitize(plan, heap, &block.fields, r, child_localized)?;
+          }
         }
       }
       Kind::Row | Kind::Collapsible => sanitize(plan, heap, &field.fields, data, parent_localized)?,

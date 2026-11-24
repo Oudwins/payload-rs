@@ -156,6 +156,35 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
         }
         s.exec.all(promises).wait().await;
       }
+      Kind::Blocks => {
+        let name = field.name.as_deref().unwrap_or_default();
+        let rows = run.get(&sibling_data, name);
+        let Some(items) = rows.as_ref().and_then(|r| run.heap.borrow().arr(r).cloned()) else {
+          return;
+        };
+        if !items.iter().all(|row| run.heap.borrow().is_obj(row)) {
+          return run.fail(Bail::new("beforeValidate:invalidRows"));
+        }
+        let existing = run.get(&sibling_doc, name);
+        let mut promises = Vec::with_capacity(items.len());
+        for (index, row) in items.into_iter().enumerate() {
+          let Some(row_doc) = run.check(existing_row_doc(&run.heap, &row, &existing)) else {
+            return;
+          };
+          let Some(block) = run.check(block_to_match(&run.heap.borrow(), field, &row, &row_doc)) else {
+            return;
+          };
+          if let Some((block, block_type)) = block {
+            if let Some(r) = row.as_ref() {
+              if run.check(run.set(r, "blockType", block_type)).is_none() {
+                return;
+              }
+            }
+            promises.push(s.exec.spawn(traverse_fields(s.clone(), &block.fields, row, row_doc, format!("{path}.{index}"))));
+          }
+        }
+        s.exec.all(promises).wait().await;
+      }
       Kind::Collapsible | Kind::Row => {
         s.exec.spawn(traverse_fields(s.clone(), &field.fields, sibling_data.clone(), sibling_doc.clone(), parent_path.clone())).wait().await;
       }
@@ -183,6 +212,18 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
       }
       _ => {}
     }
+  })
+}
+
+/// `row.blockType || rowSiblingDoc.blockType`, and the field's block of that slug
+/// (`req.payload.blocks` is empty for eligible configs).
+pub fn block_to_match<'f>(heap: &Heap, field: &'f Field, row: &V, row_doc: &V) -> Result<Option<(&'f super::plan::Block, V)>, Bail> {
+  let own = heap.get(row, "blockType");
+  let block_type = if own.truthy() { own } else { heap.get(row_doc, "blockType") };
+  Ok(match &block_type {
+    V::Str(slug) => field.block(slug).map(|b| (b, block_type.clone())),
+    V::Ref(_) | V::Date(_) | V::Oid(_) => return Err(Bail::new("blocks:blockType")),
+    _ => None,
   })
 }
 
@@ -408,7 +449,7 @@ fn sanitize_value(s: &S<'_, '_>, field: &Field, sd: Ref, name: &str) -> Result<(
   }
   let value = run.get(&target, name);
   match field.kind {
-    Kind::Array => {
+    Kind::Array | Kind::Blocks => {
       if matches!(&value, V::Str(s) if &**s == "0") || matches!(value, V::Num(n) if n == 0.0) {
         let empty = run.heap.borrow_mut().alloc(Node::Arr(Vec::new()));
         run.set(sd, name, V::Ref(empty))?;

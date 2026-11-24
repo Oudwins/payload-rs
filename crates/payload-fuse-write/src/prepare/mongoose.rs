@@ -28,7 +28,8 @@ enum Cv {
   /// A `Mixed` path's value, as given.
   Mixed(V),
   Arr(Vec<Cv>),
-  Doc(IndexMap<String, Cv>),
+  /// A subdocument and its schema's `minimize`.
+  Doc(IndexMap<String, Cv>, bool),
 }
 
 fn cast_error(path: &str) -> Bail {
@@ -48,7 +49,7 @@ pub fn build_insert(heap: &Heap, schema: &Schema, data: &V, new_id: &mut dyn FnM
       doc.insert(key.clone(), Cv::Num(0.0));
     }
   }
-  to_document(heap, &doc)
+  to_document(heap, &doc, schema.minimize)
 }
 
 /// The `new Constructor(obj)` of a (sub)document: the defaults mongoose applies before the
@@ -141,7 +142,7 @@ fn cast_path(heap: &Heap, path: &Path, name: &str, value: &V, validate_enums: bo
       if !heap.is_obj(value) {
         return Err(cast_error(name));
       }
-      Cv::Doc(construct(heap, sub, value, validate_enums, None)?)
+      Cv::Doc(construct(heap, sub, value, validate_enums, None)?, sub.minimize)
     }
     Instance::Array => {
       let items: Vec<V> = match value.as_ref().and_then(|r| heap.arr(r)) {
@@ -157,7 +158,16 @@ fn cast_path(heap: &Heap, path: &Path, name: &str, value: &V, validate_enums: bo
           out.push(if !item.truthy() {
             raw(&item)
           } else if heap.is_obj(&item) {
-            Cv::Doc(construct(heap, sub, &item, validate_enums, None)?)
+            // `getConstructor(Constructor, value)`: the embedded discriminator of `value[key]`
+            let schema = match &path.discriminator_key {
+              Some(key) => match heap.get(&item, key) {
+                V::Str(value) => path.discriminators.get(&*value).unwrap_or(sub),
+                V::Undef | V::Null => sub,
+                _ => return Err(Bail::new("cast:discriminatorValue")),
+              },
+              None => sub,
+            };
+            Cv::Doc(construct(heap, schema, &item, validate_enums, None)?, schema.minimize)
           } else {
             return Err(cast_error(name));
           });
@@ -283,19 +293,24 @@ fn date(ms: f64) -> Bson {
   Bson::DateTime(DateTime::from_millis(ms as i64))
 }
 
-fn to_document(heap: &Heap, doc: &IndexMap<String, Cv>) -> Result<Document, Bail> {
+/// `toObject` of a (sub)document: `undefined` properties dropped, and with `minimize` (the
+/// document's schema option, inherited by everything below a minimizing subdocument) empty
+/// objects too (not inside arrays).
+fn to_document(heap: &Heap, doc: &IndexMap<String, Cv>, minimize: bool) -> Result<Document, Bail> {
   let mut out = Document::new();
   for (key, value) in doc {
-    if let Some(bson) = to_bson(heap, value, false)? {
+    if let Some(bson) = to_bson(heap, value, false, minimize)? {
+      if minimize && matches!(&bson, Bson::Document(d) if d.is_empty()) {
+        continue;
+      }
       out.insert(key.clone(), bson);
     }
   }
   Ok(out)
 }
 
-/// `toObject` (minimize: false drops `undefined` properties) and the driver's serializer
-/// (`undefined` array elements are written as null).
-fn to_bson(heap: &Heap, value: &Cv, in_array: bool) -> Result<Option<Bson>, Bail> {
+/// `toObject` and the driver's serializer (`undefined` array elements are written as null).
+fn to_bson(heap: &Heap, value: &Cv, in_array: bool, minimize: bool) -> Result<Option<Bson>, Bail> {
   Ok(Some(match value {
     Cv::Undef if in_array => Bson::Null,
     Cv::Undef => return Ok(None),
@@ -305,20 +320,21 @@ fn to_bson(heap: &Heap, value: &Cv, in_array: bool) -> Result<Option<Bson>, Bail
     Cv::Str(s) => Bson::String(s.clone()),
     Cv::Date(ms) => date(*ms),
     Cv::Oid(bytes) => Bson::ObjectId(ObjectId::from_bytes(*bytes)),
-    Cv::Mixed(v) => return heap_to_bson(heap, v, in_array),
+    Cv::Mixed(v) => return heap_to_bson_minimized(heap, v, in_array, minimize),
     Cv::Arr(items) => {
       let mut out = Vec::with_capacity(items.len());
       for item in items {
-        out.push(to_bson(heap, item, true)?.unwrap_or(Bson::Null));
+        out.push(to_bson(heap, item, true, minimize)?.unwrap_or(Bson::Null));
       }
       Bson::Array(out)
     }
-    Cv::Doc(doc) => Bson::Document(to_document(heap, doc)?),
+    Cv::Doc(doc, own) => Bson::Document(to_document(heap, doc, minimize || *own)?),
   }))
 }
 
-/// A heap value as `clone` + the driver serialize it.
-pub fn heap_to_bson(heap: &Heap, value: &V, in_array: bool) -> Result<Option<Bson>, Bail> {
+/// A heap value as `clone` + the driver serialize it; under `cloneObject({ minimize })` empty
+/// objects are dropped (not array elements).
+fn heap_to_bson_minimized(heap: &Heap, value: &V, in_array: bool, minimize: bool) -> Result<Option<Bson>, Bail> {
   Ok(Some(match value {
     V::Undef if in_array => Bson::Null,
     V::Undef => return Ok(None),
@@ -333,16 +349,22 @@ pub fn heap_to_bson(heap: &Heap, value: &V, in_array: bool) -> Result<Option<Bso
       Node::Arr(items) => {
         let mut out = Vec::with_capacity(items.len());
         for item in items {
-          out.push(heap_to_bson(heap, item, true)?.unwrap_or(Bson::Null));
+          out.push(heap_to_bson_minimized(heap, item, true, minimize)?.unwrap_or(Bson::Null));
         }
         Bson::Array(out)
       }
       Node::Obj(props) => {
         let mut out = Document::new();
         for (key, item) in props {
-          if let Some(bson) = heap_to_bson(heap, item, false)? {
+          if let Some(bson) = heap_to_bson_minimized(heap, item, false, minimize)? {
+            if minimize && matches!(&bson, Bson::Document(d) if d.is_empty()) {
+              continue;
+            }
             out.insert(key.to_string(), bson);
           }
+        }
+        if minimize && !in_array && out.is_empty() {
+          return Ok(None);
         }
         Bson::Document(out)
       }
@@ -379,7 +401,7 @@ pub fn cast_set_update(heap: &Heap, schema: &Schema, data: &V) -> Result<Documen
           return Err(Bail::new("update:$each"));
         }
         let sub = path.sub.as_deref().ok_or_else(|| Bail::new("schema:embedded"))?;
-        Cv::Doc(construct(heap, sub, &value, false, None)?)
+        Cv::Doc(construct(heap, sub, &value, false, None)?, sub.minimize)
       }
       Instance::Array if heap.is_obj(&value) => return Err(Bail::new("update:arrayObject")),
       _ => cast_path(heap, path, key, &value, false)?,
@@ -390,7 +412,7 @@ pub fn cast_set_update(heap: &Heap, schema: &Schema, data: &V) -> Result<Documen
     set.insert(key.to_string(), cast);
   }
   let mut update = Document::new();
-  update.insert("$set", to_document(heap, &set)?);
+  update.insert("$set", to_document(heap, &set, false)?);
   Ok(update)
 }
 

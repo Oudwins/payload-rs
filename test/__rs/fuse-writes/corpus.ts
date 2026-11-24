@@ -104,7 +104,8 @@ export const runAll = async (payload: Payload, group: string, cases: Case[], f: 
 /** Writes the cumulative report and fails on any difference of `group`. */
 export const finish = (group: string) => {
   writeFileSync(
-    process.env.PAYLOAD_RS_FUSE_WRITES_REPORT ?? '/tmp/fuse-writes-corpus.txt',
+    // one report per spec file (each has its own module state)
+    `${process.env.PAYLOAD_RS_FUSE_WRITES_REPORT ?? '/tmp/fuse-writes-corpus.txt'}${expect.getState().testPath?.includes('/localized/') ? '.localized' : ''}`,
     `${JSON.stringify(summary, null, 1)}\n${report.join('\n')}\n`,
   )
   const diffs = report.filter((line) => line.startsWith(`${group} / `) && line.includes(': DIFF'))

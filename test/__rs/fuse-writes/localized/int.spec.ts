@@ -79,6 +79,23 @@ const creates = (f: Fixtures): Case[] =>
     { name: 'en editors empty', data: { title: 't', editors: [] }, locale: 'en' },
     { name: 'de date local', data: { title: 't', publishedAt: '2024-01-02' }, locale: 'de' },
     { name: 'user', data: { title: 't' }, locale: 'de', user: true },
+    {
+      name: 'de blocks',
+      data: {
+        title: 't',
+        layout: [
+          { blockType: 'hero', heading: 'h' },
+          { blockType: 'quote', text: 'q' },
+        ],
+      },
+      locale: 'de',
+    },
+    { name: 'de blocks null', data: { title: 't', layout: null }, locale: 'de' },
+    {
+      name: 'en block missing heading',
+      data: { title: 't', layout: [{ blockType: 'hero' }] },
+      locale: 'en',
+    },
   ].map((c) => ({ ...c, collection: 'posts' }))
 
 const updates = (f: Fixtures): Case[] =>
@@ -111,6 +128,12 @@ const updates = (f: Fixtures): Case[] =>
       seed: { data: full(f) },
     },
     { name: 'user fr', data: { count: 2 }, locale: 'fr', seed: { data: full(f) }, user: true },
+    {
+      name: 'all locales: fr blocks',
+      data: { layout: [{ blockType: 'quote', text: 'citation' }] },
+      locale: 'fr',
+      seed: { raw: stored(f) },
+    },
     {
       name: 'all locales: de title',
       data: { title: 'neu' },

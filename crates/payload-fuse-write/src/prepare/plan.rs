@@ -13,6 +13,7 @@ use payload_engine::js::{JsVal, Obj as JsObj};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
   Array,
+  Blocks,
   Checkbox,
   Collapsible,
   Date,
@@ -32,6 +33,7 @@ impl Kind {
   fn parse(s: &str) -> Option<Kind> {
     Some(match s {
       "array" => Kind::Array,
+      "blocks" => Kind::Blocks,
       "checkbox" => Kind::Checkbox,
       "collapsible" => Kind::Collapsible,
       "date" => Kind::Date,
@@ -53,6 +55,7 @@ impl Kind {
   pub fn name(self) -> &'static str {
     match self {
       Kind::Array => "array",
+      Kind::Blocks => "blocks",
       Kind::Checkbox => "checkbox",
       Kind::Collapsible => "collapsible",
       Kind::Date => "date",
@@ -181,6 +184,23 @@ pub struct Field {
   pub lexical: Option<Lexical>,
   /// `field.localized` (sanitization keeps it only with localization).
   pub localized: bool,
+  pub blocks: Vec<Block>,
+}
+
+impl Field {
+  /// `field.blocks.find((block) => block.slug === blockType)`
+  pub fn block(&self, block_type: &str) -> Option<&Block> {
+    self.blocks.iter().find(|b| b.slug == block_type)
+  }
+}
+
+/// A block of a `blocks` field (no block references).
+#[derive(Debug)]
+pub struct Block {
+  pub slug: String,
+  /// `block.labels?.singular`
+  pub label: Label,
+  pub fields: Vec<Field>,
 }
 
 #[derive(Debug)]
@@ -235,6 +255,9 @@ pub struct Path {
   pub doc_array: bool,
   /// The element of a primitive array.
   pub element: Option<Box<Path>>,
+  /// Embedded discriminators of a document array (blocks): the key and the schema per value.
+  pub discriminator_key: Option<String>,
+  pub discriminators: IndexMap<String, Schema>,
 }
 
 #[derive(Debug)]
@@ -468,6 +491,20 @@ fn decode_field(json: &Json) -> Result<Field, String> {
     label: decode_label(json.get("label")),
     lexical,
     localized: flag("l"),
+    blocks: match json.get("b") {
+      Some(Json::Array(items)) => items
+        .iter()
+        .map(|b| {
+          Ok(Block {
+            fields: decode_fields(b.get("f"))?,
+            label: decode_label(b.get("label")),
+            slug: b.get("slug").and_then(Json::as_str).ok_or_else(|| bad("block.slug"))?.to_string(),
+          })
+        })
+        .collect::<Result<_, String>>()?,
+      Some(_) => return Err(bad("field.b")),
+      None => Vec::new(),
+    },
     name: json.get("n").and_then(Json::as_str).map(str::to_string),
     relation_to,
     required: flag("req"),
@@ -533,7 +570,15 @@ fn decode_path(json: &Json) -> Result<Path, String> {
     Some(el) => Some(Box::new(decode_path(el)?)),
     None => None,
   };
+  let mut discriminators = IndexMap::new();
+  if let Some(Json::Object(map)) = json.get("disc") {
+    for (name, schema) in map {
+      discriminators.insert(name.clone(), decode_schema(schema)?);
+    }
+  }
   Ok(Path {
+    discriminator_key: json.get("dk").and_then(Json::as_str).map(str::to_string),
+    discriminators,
     doc_array: json.get("k").and_then(Json::as_str) == Some("docArray"),
     default,
     element,
