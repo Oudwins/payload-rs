@@ -95,7 +95,7 @@ type EditorAfterReadHook = NonNullable<RichTextHooks['afterRead']>[number]
 const markLexicalAfterRead = (
   editorConfig: SanitizedServerEditorConfig,
   hook: EditorAfterReadHook,
-): EditorAfterReadHook =>
+) =>
   Object.defineProperty(hook, Symbol.for('payload.engine-rs.lexicalAfterRead'), {
     value: editorConfig,
   })
