@@ -233,3 +233,34 @@ divergences, the parity goldens, and hit counters proving the fused lane ran.
   payload's sanitization and richtext-lexical.
 - Skipping `enforceMaxVersions` for creates with generated ids (section 6): same database effects,
   one statement fewer (a command-stream change like D6).
+
+## 11. Implementation plan (status 2026-11-24)
+
+Done (merged or ready): in-transaction reads on the driver lane, upstream write methods, the
+max-versions skip (`PAYLOAD_RS_SKIP_MAX_VERSIONS`), the own-function registry
+(`payloadOwnFunctions`), the D4 prototype's transaction API on the Rust client
+(`txn_begin` / `txn_command` / `txn_end`), WP-A's fused Mongo reads with population
+(`crates/payload-fuse`, `crates/payload-fuse-mongo`, `src/fuse/mongo.ts`, `populate.ts`).
+
+What the first slice (create / updateByID / deleteByID, typical shape) still needs. Unlike the
+fused reads, whose core only ports `afterRead`, a fused write needs the write-side traversals on
+Rust value trees (`JsVal`); the Rust core's existing ports run on live JS objects through Node-API
+and cannot run without JS:
+
+| piece                                                                                                                                                                                                                                                                            | module                                                | reuse                                                                 | size                                                                                |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| write plan + eligibility (registry, `defaultFieldValidators`, hooks, access, upload / auth, joins)                                                                                                                                                                               | `src/fuse-write/plan.ts`                              | WP-A's `fuse/plan.ts` field plan, `volatile` triples                  | small                                                                               |
+| TS dispatch, guards, `PAYLOAD_RS_FUSE_WRITES=off                                                                                                                                                                                                                                 | on                                                    | shadow`, counters                                                     | `src/fuse-write/index.ts`, hook in `ops-write/index.ts` (`runInAdapterTransaction`) | `fuse/inert.ts`, `fuse/stats.ts` | small |
+| `beforeValidate` on `JsVal` (static defaults, row ids via the registry, relationship value sanitizing, authorship submitted marks)                                                                                                                                               | `crates/payload-fuse-write/src/before_validate.rs`    | the Rust core's `payload-core-hooks-validate` logic, transliterated   | medium                                                                              |
+| default validators on `JsVal` (text / textarea / number / select / date / checkbox / email / relationship / array / group)                                                                                                                                                       | `.../validate.rs`                                     | `payload-core-validate` (already Rust, pure functions where possible) | medium                                                                              |
+| lexical `beforeValidate` / validate / `beforeChange` / `afterChange` with default features: bail on node types that have feature hooks or validations (link, upload, relationship nodes), pass the rest                                                                          | `.../lexical.rs`                                      | WP-A's `lx` node lists                                                | medium                                                                              |
+| `beforeChange` on `JsVal` (merge with the stored document for updates, locales, timestamps, authorship `setCreatedBy` / `setUpdatedBy`)                                                                                                                                          | `.../before_change.rs`                                | `payload-core-hooks-change` logic                                     | large                                                                               |
+| db-mongodb write transform + mongoose casting from the schema's write plan (section 5)                                                                                                                                                                                           | `.../cast.rs` + TS plan from `Model.schema`           | the driver lane's read transform plan format                          | large                                                                               |
+| operation drivers: create (insert, version insert + latest flip, max-versions plan flag), updateByID (find stored doc, lock check, findAndModify, version), deleteByID (find, locks, versions, delete, preferences) in one Rust-owned transaction; result afterRead + population | `.../ops.rs` on the driver client                     | `payload-fuse` `after_read`, `populate`; D4 txn API                   | large                                                                               |
+| write lane-shadow (section 9): fused lane on database A, exact lane on database B with the same clock / ObjectId readings replayed, raw BSON of every touched collection, result, error                                                                                          | `src/fuse-write/shadow.ts` + `test/__rs/fuse-writes/` | `shadow-mongo/replay.ts`, `trace.ts`                                  | medium                                                                              |
+
+Order: plan + dispatch + shadow harness first (shadow mode compares nothing until a lane serves),
+then create on a scalar-only collection with versions (the `minimal` shape: text, number,
+relationship, authorship), then updateByID and deleteByID, then the typical shape's arrays, groups,
+hasMany relationships, select / date / checkbox and lexical with default features, then
+localization, then update-many.
