@@ -521,7 +521,7 @@ no other own hooks on eligible collections.
 
 ## 13. Dispatch, drivers and the write lane-shadow (WP-H, status 2026-11-24)
 
-Built (commits `f094e71e`, `62802c90`; off by default):
+Built (off by default; the create slice runs on WP-I's prepare, section 12):
 
 | part                   | where                                                                                         |
 | ---------------------- | --------------------------------------------------------------------------------------------- |
@@ -538,7 +538,7 @@ Built (commits `f094e71e`, `62802c90`; off by default):
 Switches: `PAYLOAD_RS_FUSE_WRITES=off|on|shadow` (default `off`);
 `PAYLOAD_RS_FUSE_WRITES_PREPARE=ts` selects the **temporary TS prepare** (upstream's own
 `beforeValidate` / `beforeChange`, db-mongodb `create` / `createVersion` and mongoose's document
-casting, without their I/O); otherwise the Rust prepare (the stub until WP-I lands). The TS
+casting, without their I/O); otherwise WP-I's Rust prepare (`fuseWritePrepare`). The TS
 prepare is never a default: it exists to prove the drivers, the transaction and the shadow.
 
 **Eligibility** (plan, per collection): no collection hooks on any write path, no root
@@ -592,6 +592,21 @@ Left, in order:
    it; WP-I's prepare removes that JS turn. State reads add the locked documents of the id.
 2. **deleteByID**: find, locks, `deleteVersions`, `findAndModify` remove, preferences
    `deleteMany` (`collection-<slug>-<id>` keys); state adds the preferences.
-3. Typical shape as WP-I's field kinds land (row ids in the ctx, lexical default features), then
-   `PAYLOAD_RS_FUSE_WRITES=on` by default once the harness, `--fuse-writes shadow` and the perf
-   floors of section 8 hold.
+3. `PAYLOAD_RS_FUSE_WRITES=on` by default once the remaining bars (parity, shadow files, driver
+   lane, glue, packaging) are rerun on the final tree and the perf suite confirms section 8.
+
+Measured (2026-11-24, creates, WP-I's prepare, release addon, mongod 8.2 rs0 on loopback, cores
+22-31; vitest micro-benchmark of 300 creates after 30 warm-up, p50, not the perf suite):
+
+| shape (non-localized)        | TS      | rs, fused off | rs, fused on | fused vs TS |
+| ---------------------------- | ------- | ------------- | ------------ | ----------- |
+| minimal, depth 0             | 3.8-4.3 | 3.8-3.9       | 1.96-2.03    | ~2.0x       |
+| minimal, depth 2 (populates) | 4.7-4.9 | 4.3-4.5       | 2.8-3.2      | ~1.6x       |
+| typical, depth 0             | 6.2     | 5.4           | 3.4          | ~1.85x      |
+| typical, depth 2             | 7.0     | 6.3           | 4.3          | ~1.6x       |
+
+Verification of the create slice: the MongoDB harness with `--fuse shadow --fuse-writes shadow`
+equals `.rs-baseline/mongodb-all.json` (3330 / 164 / 422; test/cli differs by the worktree path,
+storage emulators absent) with 2810 fused creates compared and 0 lane-shadow differences; the lane
+suites test/__rs/fuse-writes-lane (minimal, typical, rows, unversioned, localized typical with
+blocks) at 0 differences.
