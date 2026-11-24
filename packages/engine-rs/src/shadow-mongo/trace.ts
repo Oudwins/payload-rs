@@ -110,6 +110,13 @@ export const traceDriverOperation = (collection: unknown, op: string, args: unkn
   }
 }
 
+/**
+ * Runs `fn` with no traced call in context: driver operations it starts are not recorded (the
+ * driver lane's reads inside a mongoose transaction report the mongoose-shaped calls themselves,
+ * with `traceDriverOperation`).
+ */
+export const untraced = <T>(fn: () => T): T => traceContext.exit(fn)
+
 const DRIVER_FRAME = /[\\/]node_modules[\\/]mongodb[\\/]lib[\\/]/
 
 /**

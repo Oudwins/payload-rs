@@ -36,7 +36,7 @@ import { flattenWhereToOperators } from '../../../payload/src/database/flattenWh
 import { flattenAllFields } from '../../../payload/src/utilities/flattenAllFields.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
 import { buildVersionGlobalFields } from '../../../payload/src/versions/buildGlobalFields.js'
-import { isTracing, traceDriverOperation } from '../shadow-mongo/trace.js'
+import { isTracing, traceDriverOperation, untraced } from '../shadow-mongo/trace.js'
 import { type DriverBinding } from './binding.js'
 import { buildTransformPlan } from './plan.js'
 import { isRustTransactionEnabled, RustSession } from './rustTxn.js'
@@ -355,15 +355,56 @@ const transformedDocs = (
   return text
 }
 
+/**
+ * A cast query's options as the mongoose lane passes them to the driver inside the transaction
+ * (its `session` set in place, so the traces of the call site report what mongoose would send).
+ */
+const withSession = (lane: DriverLane, cast: Any) => {
+  cast.options.session = lane.session
+  return cast.options
+}
+
+/**
+ * Starts `operations` in order inside the session: concurrently like upstream, except while the
+ * transaction is starting (no command answered yet), when each waits for the previous one (two
+ * first commands would both carry `startTransaction`, which the server rejects). The driver calls
+ * are not traced (the call sites report the mongoose-shaped calls).
+ */
+const inSession = async (lane: DriverLane, operations: (() => Any | Promise<Any>)[]) => {
+  const pending = startingSessions.get(lane.session)
+  if (pending) {
+    await pending.catch(() => {})
+  }
+  if (!lane.session.transaction?.isStarting) {
+    return Promise.all(operations.map((operation) => untraced(operation)))
+  }
+  const run = (async () => {
+    const results: Any[] = []
+    for (const operation of operations) {
+      results.push(await untraced(operation))
+    }
+    return results
+  })()
+  startingSessions.set(lane.session, run)
+  try {
+    return await run
+  } finally {
+    if (startingSessions.get(lane.session) === run) {
+      startingSessions.delete(lane.session)
+    }
+  }
+}
+
+/** The session I/O in flight while its transaction is starting. */
+const startingSessions = new WeakMap<object, Promise<Any>>()
+
 const sessionCount = (lane: DriverLane, Model: Any, count: Any, countCast: Any) => {
   if (count === 'estimated') {
     // the `count` command is not allowed in a transaction: the mongoose lane reproduces upstream
     throw new Fallback('estimated count in a transaction')
   }
-  return Model.collection.countDocuments(countCast.filter, {
-    ...countCast.options,
-    session: lane.session,
-  })
+  const options = withSession(lane, countCast)
+  return () => Model.collection.countDocuments(countCast.filter, options)
 }
 
 const sessionPaginate = async (
@@ -374,15 +415,16 @@ const sessionPaginate = async (
   countCast: Any,
   findCast: Any,
 ) => {
-  const countPromise =
-    args.count === undefined ? null : sessionCount(lane, Model, args.count, countCast)
-  const docsPromise = args.find
-    ? Model.collection
-        .find(findCast.filter, { ...findCast.options, raw: true, session: lane.session })
-        .toArray()
-    : []
-  const [count, docs] = await Promise.all([countPromise, docsPromise])
-  return `[${count ?? 'null'},[${transformedDocs(lane, plan, docs, args, true)}]]`
+  const count =
+    args.count === undefined ? () => null : sessionCount(lane, Model, args.count, countCast)
+  const find = args.find
+    ? () =>
+        Model.collection
+          .find(findCast.filter, { ...withSession(lane, findCast), raw: true })
+          .toArray()
+    : () => []
+  const [total, docs] = await inSession(lane, [count, find])
+  return `[${total ?? 'null'},[${transformedDocs(lane, plan, docs, args, true)}]]`
 }
 
 const sessionAggregate = async (
@@ -392,21 +434,19 @@ const sessionAggregate = async (
   args: Any,
   countCast: Any,
 ) => {
-  const docsPromise = Model.collection
-    .aggregate(args.pipeline, { collation: args.collation, raw: true, session: lane.session })
-    .toArray()
-  const countPromise =
-    args.count === undefined ? null : sessionCount(lane, Model, args.count, countCast)
-  const [docs, count] = await Promise.all([docsPromise, countPromise])
-  return `[${count ?? 'null'},[${transformedDocs(lane, plan, docs, args, false)}]]`
+  const aggregate = () =>
+    Model.collection
+      .aggregate(args.pipeline, { collation: args.collation, raw: true, session: lane.session })
+      .toArray()
+  const count =
+    args.count === undefined ? () => null : sessionCount(lane, Model, args.count, countCast)
+  const [docs, total] = await inSession(lane, [aggregate, count])
+  return `[${total ?? 'null'},[${transformedDocs(lane, plan, docs, args, false)}]]`
 }
 
 const sessionFindOne = async (lane: DriverLane, Model: Any, plan: number, args: Any, cast: Any) => {
-  const doc = await Model.collection.findOne(cast.filter, {
-    ...cast.options,
-    raw: true,
-    session: lane.session,
-  })
+  const options = { ...withSession(lane, cast), raw: true }
+  const [doc] = await inSession(lane, [() => Model.collection.findOne(cast.filter, options)])
   return doc ? transformedDocs(lane, plan, [doc], args, false) : 'null'
 }
 
@@ -707,7 +747,7 @@ const laneAggregatePaginate = async ({
   if (trace) {
     traceDriverOperation(args.collection, 'aggregate', [
       aggregation,
-      { collation, session: undefined },
+      { collation, session: lane.session },
     ])
     if (countCast) {
       traceCount(args.collection as string, countCast)
@@ -1006,9 +1046,9 @@ const laneCount = async ({
   if (isTracing()) {
     traceCount(args.collection, countCast)
   }
-  const totalDocs = lane.session
-    ? await sessionCount(lane, Model, count, countCast)
-    : outcome(await lane.binding.count(lane.clientID, serializeArgs(lane, args)))
+  // inside a transaction `castQuery` hands the call to the mongoose lane (its options carry the
+  // session)
+  const totalDocs = outcome(await lane.binding.count(lane.clientID, serializeArgs(lane, args)))
   return { totalDocs }
 }
 
@@ -1407,7 +1447,13 @@ export const createLaneMethod = ({
         fallbackTo(method, 'transaction')
         return fallback.call(this, args)
       }
-      session = await getSession(lane.view, args.req)
+      // a settled `transactionID` is read synchronously (the method's synchronous prefix runs in
+      // the same tick as upstream's)
+      const transactionID = args.req.transactionID
+      session =
+        transactionID instanceof Promise
+          ? await getSession(lane.view, args.req)
+          : lane.view.sessions[transactionID]
     }
     const blocked = mongooseBlocksLane(lane, lane.mongoose)
     if (blocked) {

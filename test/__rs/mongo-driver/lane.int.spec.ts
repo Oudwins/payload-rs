@@ -273,17 +273,32 @@ describe('driver lane', () => {
       typeof createPayloadRequest
     >[0])
     await initTransaction(req)
+    const where = { views: { greater_than_equal: 0 } }
     const fallbacksBefore = fallbacks('find')
     const servedBefore = served()
     const inTransactionBefore = { ...getDriverLaneStats().inTransaction }
-    const inTransaction = await payload.find({ collection: 'posts', depth: 0, limit: 3, req })
+    const inTransaction = await payload.find({
+      collection: 'posts',
+      depth: 0,
+      limit: 3,
+      req,
+      where,
+    })
     expect(delta(fallbacksBefore, fallbacks('find'))).toEqual({})
     expect(delta(servedBefore, served())).toEqual({ find: 1 })
     expect(delta(inTransactionBefore, { ...getDriverLaneStats().inTransaction })).toEqual({
       find: 1,
     })
+    // an estimated count (no where) is the `count` command, which a transaction does not allow
+    const estimatedBefore = fallbacks('find')
+    await payload.find({ collection: 'posts', depth: 0, limit: 3, req })
+    expect(delta(estimatedBefore, fallbacks('find'))).toEqual({
+      'estimated count in a transaction': 1,
+    })
     await killTransaction(req)
-    expect(inTransaction).toEqual(await payload.find({ collection: 'posts', depth: 0, limit: 3 }))
+    expect(inTransaction).toEqual(
+      await payload.find({ collection: 'posts', depth: 0, limit: 3, where }),
+    )
   })
 
   it('re-runs reads whose documents hold values JSON cannot carry on the mongoose lane', async () => {
