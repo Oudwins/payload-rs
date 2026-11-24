@@ -355,7 +355,12 @@ those steps far faster than any crossing, the traversal now splits like this:
   a named group, an array, an unnamed row / collapsible / group, or `UPSTREAM`. A fast kind is a
   data field without a virtual path, without read access to await (or `overrideAccess`) and not
   localized under a non-localized parent (no value hoisting, no `locale: 'all'` hook runs), or a
-  passthrough container. `FieldsDesc::js_plan(variant)` hands the host a plan object (`fields`, the
+  passthrough container. One exception: a plain (or hooked) leaf that is localized under a
+  non-localized parent is `LOCALIZED_LEAF` (2026-11-24): the leaf sequence plus upstream's value
+  hoisting (`{ [locale]: value }` -> the locale's value or the fallback locale(s)', with the
+  text / textarea / slug empty-string rule), run by the host only for a truthy `flattenLocales`
+  and a `locale` other than `'all'` (otherwise upstream's `promise()`). On the complex perf shape
+  this took population reads from 0.89x to 1.11-1.18x of TS on MongoDB (rs CPU -16 to -30%). `FieldsDesc::js_plan(variant)` hands the host a plan object (`fields`, the
   `keys` / `flags` leaf table, `kinds`, `isArray`, a `children` cache), created once.
 - **The host executes.** `packages/engine-rs/src/runtime/afterReadPlan.ts`: `traverse` pushes one
   promise per field (`fieldPromises.push(...)`, `push` read before the field runs); `UPSTREAM`
