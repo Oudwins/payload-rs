@@ -14,6 +14,8 @@ mod read;
 mod run;
 mod text;
 mod transform;
+#[cfg(test)]
+mod tests;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
