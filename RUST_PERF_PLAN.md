@@ -12,6 +12,13 @@ Scope: ideation only, nothing in the repo was changed. Numbers marked "measured 
 - **D5 accepted, on by default:** user functions (access, hooks, validators) may be compiled to the Rust-interpreted IR under the stated assumptions, with guard-mode verification (first N calls, then sampled). Owner requirement: a per-function opt-out, done "by calling something passed through": an extra argument passed to the function (e.g. `args.noCompile()` or similar; a call to it anywhere in the function's source makes the analyzer skip that function; at runtime it is a no-op). The extra argument is an additive type change.
 - **mongoose (D3 / D4):** every Payload operation (Local API, REST, GraphQL) runs through Rust talking to MongoDB directly (Rust driver). `payload.db.collections` / `versions` / `globals` / `connection` stay real mongoose objects, made **lazy**: mongoose connects and builds models only when one of them is touched, so a normal app runs a single (Rust) pool. Transactions that user code can share stay on mongoose. A Rust-backed mongoose-compatible facade is a possible later step. An env switch forces the Node drivers.
 - **D6 / D9 accepted:** no transaction around single-statement writes; pipelining / merging SQL statements; coalescing identical concurrent reads.
+- **2026-11-24, MongoDB writes:**
+  - **Fused writes approved, with D4.** Eligible create / update / delete run fully in Rust (`packages/engine-rs/FUSED_WRITES.md`) inside a transaction the Rust driver owns, proven equal by a write lane-shadow. Ineligible writes stay on the mongoose-backed path.
+  - **Registry allowed:** an internal, additive registry that tells Payload's own field functions (row ids, authorship, slug, lexical hooks) from user code, in payload's sanitization and richtext-lexical.
+  - **Max-versions check skipped** on creates with a generated id (one statement fewer, same database effects).
+  - **In-transaction reads on the driver lane by default** (Node driver I/O in mongoose's session).
+  - **Upstream's mongoose write methods allowed for the default rs writes.**
+  - **Test changes:** only our own specs `test/__rs/mongo-driver/lane.int.spec.ts` and `test/__rs/mongo-adapter/live.int.spec.ts` may change to assert the new wiring. Upstream tests stay unmodified.
 - Every work package must keep: the full upstream suite on MongoDB / SQLite / PostgreSQL equal to the TS baselines, shadow mode at 0 divergences, and add lane-specific differential checks (fast lane vs exact lane) with hit counters proving the fast lane ran.
 
 ## 1. Bottom line
