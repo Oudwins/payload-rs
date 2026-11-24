@@ -5,7 +5,9 @@
  * Right after upstream's `init` builds the adapter, its data methods are replaced by the live Rust
  * ports (live.ts), which receive the caller's real arguments and the adapter as `this` (no copy, no
  * JSON) and call the adapter's real mongoose models, and its `init` (model building) by the live
- * port of db-mongodb's `init`. Nothing else is wrapped. Connection use, transactions, migrations
+ * port of db-mongodb's `init`. The collection write methods of `upstreamWriteMethods` stay
+ * upstream's (owner decision 2026-11-24: faster than the live ports, which cross Node-API per
+ * statement); `PAYLOAD_RS_MONGO_LIVE_WRITES=true` serves them with the live ports too. Nothing else is wrapped. Connection use, transactions, migrations
  * and `payload.db.collections` / `versions` / `globals` / `connection` stay the upstream TS. An
  * addon without the complete live engine is an error.
  */
@@ -46,6 +48,24 @@ export const mongoEngineMethods = [
   'upsert',
 ] as const
 
+/**
+ * Write methods upstream's db-mongodb serves by default (measured faster than their live ports:
+ * WP-G A/B, typical shape, about +2-4% on create / update / delete). The global, jobs and upsert
+ * writes stay live.
+ */
+export const upstreamWriteMethods = [
+  'create',
+  'createVersion',
+  'deleteMany',
+  'deleteOne',
+  'deleteVersions',
+  'updateMany',
+  'updateOne',
+  'updateVersion',
+] as const
+
+const isLiveWrites = () => process.env.PAYLOAD_RS_MONGO_LIVE_WRITES === 'true'
+
 type AdapterObj = { init: (args: { payload: any }) => AnyObject }
 
 const rustAdapters = new WeakSet<object>()
@@ -63,6 +83,8 @@ const stats = {
   liveCalls: {} as Record<string, number>,
   /** Methods served by the live engine (union over adapters). */
   liveMethods: [] as string[],
+  /** Data methods left to upstream's db-mongodb (union over adapters). */
+  upstreamMethods: [] as string[],
   /** Live dependencies (buildQuery, transform, joins, ...) running their Rust port. */
   livePorted: {} as Record<string, boolean>,
   /** Reads served by the Rust driver lane / handed to the mongoose lane (mongo-driver). */
@@ -162,12 +184,22 @@ export const withRustMongoEngine = <TAdapterObj extends AdapterObj>(
       return adapter
     }
     rustAdapters.add(adapter)
+    const upstream = isLiveWrites()
+      ? []
+      : upstreamWriteMethods.map((method) => [method, adapter[method]] as const)
     const live = installLiveEngine({ adapter, methods: mongoEngineMethods })
+    for (const [method, upstreamMethod] of upstream) {
+      adapter[method] = upstreamMethod
+      live.delete(method)
+    }
     const driver = installDriverLane(adapter)
     adapter.init = createLiveInit()
     recordStats(() => {
       stats.engines.live++
       stats.liveMethods = [...new Set([...live, ...stats.liveMethods])].sort()
+      stats.upstreamMethods = [
+        ...new Set([...stats.upstreamMethods, ...upstream.map(([method]) => method)]),
+      ].sort()
       stats.driverMethods = [...new Set([...driver, ...stats.driverMethods])].sort()
       stats.liveInit++
     })

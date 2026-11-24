@@ -1,8 +1,9 @@
 /**
  * `withRustMongoEngine` on the live engine (packages/engine-rs/src/mongo-adapter/live.ts):
  *
- * - every data method of the adapter is the live Rust port (no copy of
- *   the arguments), proven by the addon's own call counters;
+ * - every data method of the adapter is the live Rust port (no copy of the arguments), proven by
+ *   the addon's own call counters, except the collection writes of `upstreamWriteMethods`, which
+ *   stay upstream's db-mongodb methods (owner decision 2026-11-24);
  * - shadow differential, serial and concurrent mode: reference = upstream TS adapter, candidate =
  *   `withRustMongoEngine(mongooseAdapter(args))` on a second database; zero divergences required
  *   (results, thrown errors, argument mutations, generated values, database state).
@@ -29,6 +30,7 @@ import {
   getRustMongoEngineStats,
   isRustMongoEngineAdapter,
   mongoEngineMethods,
+  upstreamWriteMethods,
   withRustMongoEngine,
 } from '../../../packages/engine-rs/src/mongo-adapter/index.js'
 import {
@@ -211,7 +213,10 @@ describe('withRustMongoEngine (live engine)', () => {
     // model building is the live port by default
     expect(stats.liveInit - liveInitBefore).toBe(1)
     expect(payload.db.init.toString()).toContain('getMongoLiveSchema()')
-    expect(stats.liveMethods).toEqual([...mongoEngineMethods].sort())
+    expect(stats.upstreamMethods).toEqual([...upstreamWriteMethods].sort())
+    expect([...stats.liveMethods, ...stats.upstreamMethods].sort()).toEqual(
+      [...mongoEngineMethods].sort(),
+    )
     // reads outside transactions are served by the Rust driver lane (mongo-driver), the others by
     // the live engine's methods: both are Rust
     const before = getLiveEngineCalls()
@@ -225,16 +230,11 @@ describe('withRustMongoEngine (live engine)', () => {
       (driverAfter[method] ?? 0) -
       (driverBefore[method] ?? 0)
     for (const method of [
-      'create',
       'find',
       'findOne',
       'count',
       'findDistinct',
-      'updateOne',
       'upsert',
-      'deleteOne',
-      'deleteMany',
-      'createVersion',
       'findVersions',
       'createGlobal',
       'findGlobal',
@@ -242,10 +242,14 @@ describe('withRustMongoEngine (live engine)', () => {
     ]) {
       expect(served(method), method).toBeGreaterThan(0)
     }
-    // the installed write methods are the live write binding's own functions
+    // the live write methods are the live write binding's own functions, the others upstream's
     const writes = getMongoLiveWrite()!
-    for (const method of ['create', 'updateOne', 'upsert', 'deleteMany', 'updateJobs']) {
+    for (const method of ['upsert', 'updateJobs', 'createGlobal', 'updateGlobal']) {
       expect(payload.db[method], method).toBe(writes[method])
+    }
+    for (const method of upstreamWriteMethods) {
+      expect(payload.db[method], method).not.toBe(writes[method])
+      expect(served(method), method).toBe(0)
     }
     expect(payload.db.create.name).toBe('create')
   })
@@ -265,12 +269,15 @@ describe('withRustMongoEngine (live engine)', () => {
         },
       }) as DatabaseAdapterObj
       const payload = await start(db)
-      const before = Object.values(getLiveEngineCalls()).reduce((x, y) => x + y, 0)
+      const rustCalls = () =>
+        [
+          ...Object.values(getLiveEngineCalls()),
+          ...Object.values(getDriverLaneStats().served),
+        ].reduce((x, y) => x + y, 0)
+      const before = rustCalls()
       await exercise(payload)
-      // the candidate really ran on the live engine
-      expect(
-        Object.values(getLiveEngineCalls()).reduce((x, y) => x + y, 0) - before,
-      ).toBeGreaterThan(40)
+      // the candidate really ran on the Rust engine (live methods and driver lane)
+      expect(rustCalls() - before).toBeGreaterThan(40)
       const state = getMongoShadowState(payload.db)!
       await state.diffDatabases()
       expect(records.filter((r) => r.type === 'divergence')).toEqual([])
