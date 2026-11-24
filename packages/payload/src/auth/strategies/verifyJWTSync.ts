@@ -142,8 +142,10 @@ const rememberVerifiedToken = ({
     verifiedTokensBySecret.set(secret, verifiedTokens)
   }
 
-  if (verifiedTokens.size >= maxVerifiedTokens) {
-    verifiedTokens.delete(verifiedTokens.keys().next().value!)
+  const oldest = verifiedTokens.keys().next()
+
+  if (verifiedTokens.size >= maxVerifiedTokens && !oldest.done) {
+    verifiedTokens.delete(oldest.value)
   }
 
   verifiedTokens.set(token, { header, payload })
