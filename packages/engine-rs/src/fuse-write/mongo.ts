@@ -128,6 +128,7 @@ export const registerFusedMongoWriteTarget = ({
           ? prepareCreateTS(lane, args, data, context)
           : Promise.resolve(prepareCreateRust(lane, args, data)),
       readState: (state) => fuseWriteMongoState(lane.clientID, state),
+      rowIdClass: rowIdClass(),
       run: ({ op, read, state }) => {
         const { bytes, client, plan } = read.payload as ReadPayload
         return fuseWriteMongoOp(
@@ -143,6 +144,19 @@ export const registerFusedMongoWriteTarget = ({
     }
     return target
   })
+}
+
+let rowIdClassValue: unknown
+
+/** The `bson-objectid` class payload's `baseIDField` generates row ids with (one module instance). */
+const rowIdClass = () => {
+  if (rowIdClassValue === undefined) {
+    const loaded = createRequire(new URL('../../../payload/package.json', import.meta.url))(
+      'bson-objectid',
+    )
+    rowIdClassValue = loaded && 'default' in loaded ? loaded.default : loaded
+  }
+  return rowIdClassValue
 }
 
 /** The model of `slug` (and of its versions) if the lane may write it. */

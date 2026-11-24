@@ -30,6 +30,8 @@ type Tape = {
   incs: Channel<number>
   isClockReplayed: boolean
   isRecording: boolean
+  /** Values of `bson-objectid` (payload's array / block row ids), whose counter is a closure. */
+  objectIds: Channel<string>
   uuids: Channel<string>
 }
 
@@ -38,7 +40,7 @@ const tapeContext = new AsyncLocalStorage<Tape>()
 const DRIVER_FRAME = /[\\/]node_modules[\\/]mongodb[\\/]lib[\\/]/
 
 /** Whether the code calling `reader` is the MongoDB driver (see the module comment). */
-const isReadByDriver = (reader: Function) => {
+const isReadByDriver = (reader: (...args: never[]) => unknown) => {
   const holder: { stack?: string } = {}
   const limit = Error.stackTraceLimit
   Error.stackTraceLimit = 1
@@ -52,9 +54,9 @@ const isReadByDriver = (reader: Function) => {
 
 /** Reads one value through the tape of the current context (recording, replaying or neither). */
 const through = <T>(
-  channel: keyof Pick<Tape, 'clock' | 'incs' | 'uuids'>,
+  channel: keyof Pick<Tape, 'clock' | 'incs' | 'objectIds' | 'uuids'>,
   base: () => T,
-  reader?: Function,
+  reader?: (...args: never[]) => unknown,
 ): T => {
   const tape = tapeContext.getStore()
   if (
@@ -142,6 +144,28 @@ export const installObjectIdReplay = (objectIdClass: unknown) => {
   }
 }
 
+/**
+ * Wraps `generate` of a `bson-objectid` class (payload's array / block row ids, `baseIDField`;
+ * idempotent per class). Its counter is a closure, so the generated value is taped instead (the
+ * `objectIds` channel); the clock reading it makes is read outside the tape's value, so the clock
+ * channel stays aligned on both halves. Added for the fused writes' lane-shadow (src/fuse-write).
+ */
+export const installBsonObjectIdReplay = (objectIdClass: unknown) => {
+  if (typeof objectIdClass !== 'function') {
+    return
+  }
+  const proto = Reflect.get(objectIdClass, 'prototype')
+  if (!proto || typeof proto.generate !== 'function' || patchedObjectIdOwners.has(proto)) {
+    return
+  }
+  patchedObjectIdOwners.add(proto)
+  const baseGenerate: (this: unknown, time?: unknown) => string = proto.generate
+  proto.generate = function generate(this: unknown, time?: unknown) {
+    const seconds = typeof time === 'number' ? time : ~~(Date.now() / 1000)
+    return through('objectIds', () => baseGenerate.call(this, seconds))
+  }
+}
+
 export type UnmatchedReads = {
   /** Values the candidate read past the reference's tape. */
   extra: number
@@ -157,12 +181,14 @@ export const createReplayTapes = ({
 }: { isClockReplayed?: boolean } = {}) => {
   const clock: number[] = []
   const incs: number[] = []
+  const objectIds: string[] = []
   const uuids: string[] = []
   const tape = (isRecording: boolean): Tape => ({
     clock: { cursor: 0, extra: 0, values: clock },
     incs: { cursor: 0, extra: 0, values: incs },
     isClockReplayed,
     isRecording,
+    objectIds: { cursor: 0, extra: 0, values: objectIds },
     uuids: { cursor: 0, extra: 0, values: uuids },
   })
   const reference = tape(true)
@@ -173,7 +199,7 @@ export const createReplayTapes = ({
     /** Channels whose readings do not line up 1:1 (empty when every reading matched). */
     unmatched: () => {
       const out: Record<string, UnmatchedReads> = {}
-      for (const channel of ['clock', 'incs', 'uuids'] as const) {
+      for (const channel of ['clock', 'incs', 'objectIds', 'uuids'] as const) {
         if (channel === 'clock' && !isClockReplayed) {
           continue
         }

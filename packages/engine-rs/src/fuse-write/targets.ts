@@ -31,6 +31,8 @@ export type FusedWriteTarget = {
   prepareCreate: (args: Any, data: Any, context: Any) => Promise<PreparedCreate | string>
   /** The touched collections' state outside any transaction (shadow, after the exact lane). */
   readState: (state: Uint8Array) => Promise<string>
+  /** payload's `bson-objectid` class (array / block row ids; shadow replay). */
+  rowIdClass: unknown
   /**
    * Runs one prepared operation in a new Rust-owned transaction with its result read (`read`:
    * the fused `findByID` request of the result), then commits; with `state` reads the touched

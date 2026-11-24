@@ -28,7 +28,12 @@ import { hasDataProperties, isInertTree, isPlainObject } from '../fuse/inert.js'
 import { getCollectionPlan } from '../fuse/plan.js'
 import { comparePopulated } from '../fuse/populate.js'
 import { canonical, firstDifference } from '../fuse/shadow.js'
-import { createReplayTapes, installObjectIdReplay, installReplay } from '../shadow-mongo/replay.js'
+import {
+  createReplayTapes,
+  installBsonObjectIdReplay,
+  installObjectIdReplay,
+  installReplay,
+} from '../shadow-mongo/replay.js'
 import { getWritePlan } from './plan.js'
 import { count, recordDiff, stats } from './stats.js'
 import { getFusedWriteTarget } from './targets.js'
@@ -323,6 +328,7 @@ const shadowCreate = async (checked: Checked, args: Any, exact: Exact) => {
   }
   installReplay()
   installObjectIdReplay(checked.target.objectIdClass)
+  installBsonObjectIdReplay(checked.target.rowIdClass)
   const tapes = createReplayTapes()
   const dataBefore = structuredClone(args.data)
   const contextBefore = structuredClone(args.req.context)
