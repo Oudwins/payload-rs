@@ -241,6 +241,11 @@ const capture = (value: unknown, spec: CaptureSpec): unknown => {
  */
 export const snapshotArgs = (args: unknown[], argKeys: (null | string[])[]): unknown[] =>
   args.map((arg, i) => {
+    // `argKeys` has one entry per parameter; a compiled function has no rest parameter and never
+    // reads `arguments` (both rejected), so it cannot read the arguments past its parameters
+    if (i >= argKeys.length) {
+      return opaqueObject
+    }
     if (typeof arg !== 'object' || arg === null || Array.isArray(arg) || types.isProxy(arg)) {
       return snapshot(arg)
     }
