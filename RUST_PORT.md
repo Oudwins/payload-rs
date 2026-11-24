@@ -131,6 +131,24 @@ surface; TS median / Rust median, geometric means): MongoDB 1.11x (throughput 2.
 engine of pass 1 (before the shared HTTP gains): MongoDB GraphQL 1.52x, REST 1.21x, SQLite REST
 1.40x.
 
+Optimization round 3 (2026-11-24), WP-A's fused read lanes for SQLite
+(`packages/engine-rs/FUSE_CONTRACT.md`, crates `payload-fuse` / `payload-fuse-sqlite`): `find`,
+`findByID` and `count` of a collection whose read path holds no user JS run as one native call
+whose result text is parsed once (`fusedOperationText`), with statement templates and a direct
+request decoder; anything ineligible stays on the exact lane, `PAYLOAD_RS_FUSE=shadow` compares
+every fused call with it. Perf (SQLite, typical at 1k posts): Local 3.10x geomean, `findByID` 9.7x,
+`find` where-equals 10.1x, `find` limit 10 6.2x, limit 100 3.2x, REST 1.40x, GraphQL 1.29x;
+complex / hooks shapes stay about 1.0x (mostly ineligible: population, user hooks). Verification
+on the merged tree: MongoDB 3330 / 164 / 422 (= baseline), SQLite 134/135 identical with the fused
+lanes on and under `--fuse shadow` (2,195 fused hits, 0 lane differences), PostgreSQL 131/135 (=
+baseline), shadow 8/8 files 22,519 calls 0 divergences, parity goldens 503/503 in 7 of 8 runs (the
+known `update many over several docs` ordering race: upstream processes the documents with
+`Promise.all`, TS flakes on it too), glue 33/33, driver lane 4/4, HTTP lanes 11/11, fn-compile 39/39,
+packaging and default-path check OK. The fused lanes made the core read operations import
+`native.ts`, which set the engine-loaded marker db-sqlite's `connect` reads; the marker now lives in
+the sqlite adapter module (`switch.int.spec.ts` 9/9). Next: the fused lanes on MongoDB (over
+`payload-mongo-driver`), fused population, Mongo write overhead.
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).
