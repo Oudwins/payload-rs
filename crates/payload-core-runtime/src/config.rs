@@ -191,6 +191,11 @@ pub mod fast_kind {
   pub const ARRAY: u32 = 4;
   /// unnamed row / collapsible / group: its fields with the passthrough args
   pub const UNNAMED: u32 = 5;
+  /// a data field that is a plain (or hooked) leaf except that it is localized under a
+  /// non-localized parent (`fieldShouldBeLocalized` is true): the leaf sequence with upstream's
+  /// localized value hoisting. The host runs it only for a truthy `flattenLocales` and a
+  /// `locale` other than `'all'` (no hooks per locale), and upstream's `promise()` otherwise.
+  pub const LOCALIZED_LEAF: u32 = 6;
 }
 
 /// One step of `traverseFields` over a fields array: a run of consecutive plain or hooked leaves
@@ -377,6 +382,17 @@ impl FieldDesc {
   pub fn fast_kind(&self, override_access: bool, parent_localized: bool) -> u32 {
     if self.leaf.holds(override_access, parent_localized) || self.hooked_leaf.holds(override_access, parent_localized) {
       return fast_kind::LEAF;
+    }
+    // a leaf but for its own localization (`needs_localized_parent` is `localized_truthy`)
+    let is_localized_leaf = |leaf: Leaf| {
+      matches!(leaf, Leaf::Yes { needs_override_access, needs_localized_parent: true }
+        if !needs_override_access || override_access)
+    };
+    if self.affects_data
+      && !parent_localized
+      && (is_localized_leaf(self.leaf) || is_localized_leaf(self.hooked_leaf))
+    {
+      return fast_kind::LOCALIZED_LEAF;
     }
     // what gates the leaf sequence of a data field (`config::Leaf` for leaf kinds; field hooks
     // run in the host like upstream's loop, `HAS_HOOKS`)

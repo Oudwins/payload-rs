@@ -4,13 +4,15 @@
  *
  * The Rust engine decides, once per fields array and per `overrideAccess` / parent-localized
  * combination, which branches of upstream's `promise()` (fields/hooks/afterRead/promise.ts) a
- * field can reach. For the kinds it classifies (plain leaves, relationship-like fields, named
- * groups, arrays, unnamed rows / collapsibles / groups) every remaining branch is a fixed
+ * field can reach. For the kinds it classifies (plain leaves, localized plain leaves, relationship-
+ * like fields, named groups, arrays, unnamed rows / collapsibles / groups) every remaining branch is a fixed
  * sequence of sibling doc operations; `fastField` performs exactly that sequence, in upstream's
  * order, as an `async` function with upstream's awaits (the field hooks loop and the default
- * value step), and recurses into nested fields with the same plans. Every other field (virtual
- * fields, read access to await, localized values to hoist, `locale: 'all'`, blocks,
- * tabs, rich text, points) runs upstream's own `promise()` with the args literal upstream's
+ * value step), and recurses into nested fields with the same plans. A localized plain leaf
+ * (`LOCALIZED_LEAF`) adds upstream's value hoisting, and runs this way only with a truthy
+ * `flattenLocales` and a `locale` other than `'all'`. Every other field (virtual fields, read
+ * access to await, other localized fields, `locale: 'all'`, blocks, tabs, rich text, points)
+ * runs upstream's own `promise()` with the args literal upstream's
  * `traverseFields` builds, so its behaviour is upstream's by construction.
  *
  * What the plans skip is config work only: argument literals, `getFieldPaths` and path segment
@@ -93,6 +95,59 @@ const RELATIONSHIP = 2
 const GROUP = 3
 const ARRAY = 4
 const UNNAMED = 5
+const LOCALIZED_LEAF = 6
+
+/**
+ * promise.ts's localized value hoisting (`if (fieldAffectsDataResult && shouldHoistLocalizedValue)`),
+ * verbatim: `{ [locale]: value }` -> the value of `locale`, or of the fallback locale(s) when that
+ * is missing (or empty, for text-like fields).
+ */
+const hoistLocalizedValue = (c: any[], field: any, key: PropertyKey, siblingDoc: any): void => {
+  const locale = c[ARG_LOCALE]
+  const fallbackLocale = c[ARG_FALLBACK_LOCALE]
+  const value = siblingDoc[key][locale]
+
+  let hoistedValue = value
+
+  if (fallbackLocale && fallbackLocale !== locale) {
+    let fallbackValue
+    const isNullOrUndefined = typeof value === 'undefined' || value === null
+
+    if (Array.isArray(fallbackLocale)) {
+      for (const locale of fallbackLocale) {
+        const val = siblingDoc[key]?.[locale]
+        if (val !== undefined && val !== null && val !== '') {
+          fallbackValue = val
+          break
+        }
+      }
+    } else {
+      fallbackValue = siblingDoc[key][fallbackLocale]
+    }
+
+    if (fallbackValue) {
+      switch (field.type) {
+        case 'slug':
+        case 'text':
+        case 'textarea': {
+          if (value === '' || isNullOrUndefined) {
+            hoistedValue = fallbackValue
+          }
+          break
+        }
+
+        default: {
+          if (isNullOrUndefined) {
+            hoistedValue = fallbackValue
+          }
+          break
+        }
+      }
+    }
+  }
+
+  siblingDoc[key] = hoistedValue
+}
 
 /** after_read.rs `parent_path_to_use_is_empty` */
 const isIDPathOf = (parentPath: string): boolean =>
@@ -138,7 +193,10 @@ export const createAfterReadTraverse = ({
     const fieldPromises = c[ARG_FIELD_PROMISES]
     for (let i = 0; i < kinds.length; i++) {
       // `fieldPromises.push(promise({...}))`: `push` is read before the field runs
-      if (kinds[i] === UPSTREAM) {
+      if (
+        kinds[i] === UPSTREAM ||
+        (kinds[i] === LOCALIZED_LEAF && (!c[ARG_FLATTEN_LOCALES] || c[ARG_LOCALE] === 'all'))
+      ) {
         fieldPromises.push(
           hookedLeaf(
             c,
@@ -240,15 +298,18 @@ export const createAfterReadTraverse = ({
       }
     }
 
-    // shouldHoistLocalizedValue: `fieldShouldBeLocalized` is false for these kinds, so only the
-    // reads before it remain
+    // shouldHoistLocalizedValue: `fieldShouldBeLocalized` is false for every kind but
+    // `LOCALIZED_LEAF` (true there), so for the others only the reads before it remain
     if (
       c[ARG_FLATTEN_LOCALES] &&
       flags & AFFECTS_DATA &&
       typeof siblingDoc[key] === 'object' &&
-      siblingDoc[key] !== null
+      siblingDoc[key] !== null &&
+      kind === LOCALIZED_LEAF &&
+      c[ARG_LOCALE] !== 'all' &&
+      c[ARG_REQ].payload.config.localization
     ) {
-      // (the condition goes on with `shouldLocalizeField`, false here)
+      hoistLocalizedValue(c, plan.fields[i], key, siblingDoc)
     }
 
     // Sanitize outgoing field value
