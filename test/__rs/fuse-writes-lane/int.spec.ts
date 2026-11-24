@@ -409,6 +409,65 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     ).rejects.toThrow('Not Found')
   })
 
+  test('should write own blocks next to global blocks', async ({ payload }) => {
+    const doc = await payload.create({
+      collection: 'layouts',
+      data: { layout: [{ blockType: 'text', body: 'b' }], title: 'own' },
+      overrideAccess: true,
+    })
+    const withGlobal = await payload.create({
+      collection: 'layouts',
+      data: { layout: [{ blockType: 'callout', note: 'n' }], title: 'global' } as never,
+      overrideAccess: true,
+    })
+
+    const updated = await payload.update({
+      id: doc.id,
+      collection: 'layouts',
+      data: { layout: [...doc.layout!, { blockType: 'text', body: 'c' }] },
+      overrideAccess: true,
+    })
+
+    expect(updated.layout!.map((row) => row.blockType)).toStrictEqual(['text', 'text'])
+    expect(withGlobal.title).toBe('global')
+  })
+
+  test('should validate a static relationship filterOptions', async ({ payload }) => {
+    const shown = await payload.create({
+      collection: 'authors',
+      data: { name: 'shown' },
+      overrideAccess: true,
+    })
+    const hidden = await payload.create({
+      collection: 'authors',
+      data: { name: 'hidden' },
+      overrideAccess: true,
+    })
+
+    const empty = await payload.create({
+      collection: 'layouts',
+      data: { title: 'no author' },
+      overrideAccess: true,
+    })
+    const allowed = await payload.update({
+      id: empty.id,
+      collection: 'layouts',
+      data: { author: shown.id },
+      depth: 0,
+      overrideAccess: true,
+    })
+
+    expect(allowed.author).toBe(shown.id)
+    await expect(
+      payload.update({
+        id: empty.id,
+        collection: 'layouts',
+        data: { author: hidden.id },
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Author')
+  })
+
   test('should have served writes without lane differences', async () => {
     const stats = fuseWriteStats()
 

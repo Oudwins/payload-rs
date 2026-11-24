@@ -105,10 +105,6 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
     if (config.upload) {
       ineligible('upload')
     }
-    if (Object.keys(payload.blocks ?? {}).length) {
-      // `req.payload.blocks[blockType]` wins over a field's own block of that slug
-      ineligible('blocks:global')
-    }
     if (config.versions && typeof config.versions === 'object' && config.versions.drafts) {
       ineligible('drafts')
     }
@@ -163,6 +159,9 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
           ? payload.config.defaultMaxTextLength
           : null,
       fields,
+      // `req.payload.blocks[blockType]` wins over a field's own block of that slug: rows of these
+      // slugs bail in the prepare
+      globalBlocks: Object.keys(payload.blocks ?? {}),
       localization: localization
         ? { defaultLocale: localization.defaultLocale, localeCodes: localization.localeCodes }
         : null,
@@ -314,7 +313,15 @@ const fieldPlan = (builder: Builder, field: Any) => {
           options[key] = value
         }
       }
-      if (field.filterOptions) {
+      if (type === 'relationship' && field.filterOptions !== undefined) {
+        // a static `filterOptions` (a where, `true` / `false`): the validator returns `true` for
+        // an empty value without I/O, and its `payloadDataLoader.find` for any other value is a
+        // bail of payload-core-validate's host in the prepare
+        if (typeof field.filterOptions === 'function' || !isInertTree(field.filterOptions, false)) {
+          return ineligible('field:filterOptions')
+        }
+        options.filterOptions = field.filterOptions
+      } else if (field.filterOptions) {
         return ineligible('field:filterOptions')
       }
       out.vo = options

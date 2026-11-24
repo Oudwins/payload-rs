@@ -9,7 +9,8 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
  * The fused writes' shapes (packages/engine-rs/FUSED_WRITES.md section 11): `posts` is the perf
  * suite's `minimal` shape (text, number defaults, a relationship, versions on), `hooked` the same
  * with a user hook (ineligible: the exact lane), `rows` array rows (generated row ids) and a
- * group.
+ * group, `layouts` own blocks beside a global block and a relationship with a static
+ * `filterOptions`.
  */
 export default buildConfigWithDefaults({
   suite: 'fuse-writes-lane',
@@ -92,6 +93,25 @@ export default buildConfigWithDefaults({
           beforeChange: [({ data }) => ({ ...data, title: `${data.title}!` })],
         },
       },
+      {
+        // own blocks next to the config's global block, a static relationship filterOptions
+        slug: 'layouts',
+        fields: [
+          { name: 'title', type: 'text' },
+          {
+            name: 'layout',
+            type: 'blocks',
+            blocks: [{ slug: 'text', fields: [{ name: 'body', type: 'text' }] }],
+          },
+          {
+            name: 'author',
+            type: 'relationship',
+            filterOptions: { name: { not_equals: 'hidden' } },
+            relationTo: 'authors',
+          },
+        ],
+      },
     ],
+    blocks: [{ slug: 'callout', fields: [{ name: 'note', type: 'text' }] }],
   },
 })

@@ -1,7 +1,7 @@
 //! The write plan (FUSED_WRITES.md section 12.1), decoded from the JSON
 //! `packages/engine-rs/src/fuse-write/writePlan.ts` builds.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use indexmap::IndexMap;
@@ -295,6 +295,9 @@ pub struct WritePlan {
   pub allow_additional_keys: bool,
   pub allow_id_on_create: bool,
   pub fields: Vec<Field>,
+  /// The slugs of `req.payload.blocks` (the config's global blocks): a row of one of them bails
+  /// (upstream's block lookup prefers it over the field's own blocks).
+  pub global_blocks: HashSet<String>,
   /// `{ [slug]: customIDType }` of the collections relationship fields reach.
   pub relations: HashMap<String, Option<String>>,
   pub schema: Schema,
@@ -359,6 +362,13 @@ pub fn decode(text: &str) -> Result<WritePlan, String> {
     allow_id_on_create: flag("allowIDOnCreate"),
     default_id_type: json.get("defaultIDType").map(JsVal::from_json).unwrap_or_default(),
     fields,
+    global_blocks: match json.get("globalBlocks") {
+      None => HashSet::new(),
+      Some(Json::Array(slugs)) => {
+        slugs.iter().map(|slug| slug.as_str().map(str::to_string).ok_or_else(|| bad("globalBlocks"))).collect::<Result<_, _>>()?
+      }
+      Some(_) => return Err(bad("globalBlocks")),
+    },
     relations,
     schema: decode_schema(json.get("schema").ok_or_else(|| bad("schema"))?)?,
     slug,

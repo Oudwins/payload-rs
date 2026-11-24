@@ -2,6 +2,7 @@
 //! promise,getFallbackValue}.ts, fields/getDefaultValue.ts) for the modelled field kinds, one task
 //! per upstream `async` function, awaiting where upstream awaits (exec.rs).
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -171,7 +172,7 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
           let Some(row_doc) = run.check(existing_row_doc(&run.heap, &row, &existing)) else {
             return;
           };
-          let Some(block) = run.check(block_to_match(&run.heap.borrow(), field, &row, &row_doc)) else {
+          let Some(block) = run.check(block_to_match(&run.heap.borrow(), &run.plan.global_blocks, field, &row, &row_doc)) else {
             return;
           };
           if let Some((block, block_type)) = block {
@@ -215,12 +216,20 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
   })
 }
 
-/// `row.blockType || rowSiblingDoc.blockType`, and the field's block of that slug
-/// (`req.payload.blocks` is empty for eligible configs).
-pub fn block_to_match<'f>(heap: &Heap, field: &'f Field, row: &V, row_doc: &V) -> Result<Option<(&'f super::plan::Block, V)>, Bail> {
+/// `row.blockType || rowSiblingDoc.blockType`, and the field's block of that slug. Upstream's
+/// lookup is `req.payload.blocks[blockType] ?? field.blocks.find(...)`: a slug of a global block
+/// (`global`) bails.
+pub fn block_to_match<'f>(
+  heap: &Heap,
+  global: &HashSet<String>,
+  field: &'f Field,
+  row: &V,
+  row_doc: &V,
+) -> Result<Option<(&'f super::plan::Block, V)>, Bail> {
   let own = heap.get(row, "blockType");
   let block_type = if own.truthy() { own } else { heap.get(row_doc, "blockType") };
   Ok(match &block_type {
+    V::Str(slug) if global.contains(&**slug) => return Err(Bail::new("blocks:global")),
     V::Str(slug) => field.block(slug).map(|b| (b, block_type.clone())),
     V::Ref(_) | V::Date(_) | V::Oid(_) => return Err(Bail::new("blocks:blockType")),
     _ => None,

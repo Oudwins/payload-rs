@@ -256,7 +256,7 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
           let Some(doc_with_locales) = run.check(existing_row_doc(&run.heap, &row, &existing_with_locales)) else {
             return;
           };
-          let Some(block) = run.check(block_to_match(&run.heap.borrow(), field, &row, &doc)) else {
+          let Some(block) = run.check(block_to_match(&run.heap.borrow(), &run.plan.global_blocks, field, &row, &doc)) else {
             return;
           };
           let Some((block, block_type)) = block else {
