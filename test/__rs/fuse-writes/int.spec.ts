@@ -353,7 +353,11 @@ const kindsCreates = (f: Fixtures): Case[] =>
     { name: 'textRequired cleared', data: { textRequired: '' } },
   ].map((c) => ({ ...c, collection: 'kinds' }))
 
-const richCreates = (): Case[] =>
+const node = (n: Record<string, unknown>) => ({
+  root: { type: 'root', children: [{ type: 'paragraph', children: [n], version: 1 }], version: 1 },
+})
+
+const richCreates = (f: Fixtures): Case[] =>
   [
     { name: 'paragraph', data: { required: richText('r'), body: richText('b') } },
     { name: 'required missing', data: { body: richText('b') } },
@@ -361,6 +365,43 @@ const richCreates = (): Case[] =>
     { name: 'required empty text', data: { required: richText('') } },
     { name: 'lists, headings, quotes', data: { required: list, body: list } },
     { name: 'link', data: { required: link('https://payloadcms.com') } },
+    {
+      name: 'relationship node',
+      data: {
+        required: node({
+          type: 'relationship',
+          format: '',
+          relationTo: 'authors',
+          value: f.author,
+          version: 2,
+        }),
+      },
+    },
+    {
+      name: 'relationship node, collection not enabled',
+      data: {
+        required: node({
+          type: 'relationship',
+          format: '',
+          relationTo: 'nope',
+          value: f.author,
+          version: 2,
+        }),
+      },
+    },
+    {
+      name: 'upload node, no upload collections',
+      data: {
+        required: node({
+          type: 'upload',
+          fields: null,
+          format: '',
+          relationTo: 'media',
+          value: f.author,
+          version: 3,
+        }),
+      },
+    },
     {
       name: 'link in body',
       data: { required: richText('r'), body: link('https://payloadcms.com') },
@@ -577,7 +618,7 @@ test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
 
   test('rich creates', async ({ payload }) => {
     const f = await fixtures(payload)
-    await runAll(payload, 'rich create', richCreates(), f)
+    await runAll(payload, 'rich create', richCreates(f), f)
     finish('rich create')
   })
 

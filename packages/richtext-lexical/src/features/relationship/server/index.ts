@@ -1,5 +1,10 @@
 import type { CollectionSlug } from 'payload'
 
+import { registerPayloadOwnFunction } from 'payload/internal'
+
+import type { NodeValidation } from '../../typesServer.js'
+import type { SerializedRelationshipNode } from './schema.js'
+
 import { populate } from '../../../populateGraphQL/populate.js'
 import { createServerFeature } from '../../../utilities/createServerFeature.js'
 import { createNode } from '../../typeUtilities.js'
@@ -126,15 +131,23 @@ export const RelationshipFeature = createServerFeature<
           jsonSchema: createRelationshipNodeJSONSchema(props),
           node: RelationshipServerNode,
           validations: [
-            ({
-              node,
-              validation: {
-                options: { req },
+            // Payload's own (payload `payloadOwnFunctions`), ported by the fused write lanes
+            registerPayloadOwnFunction<NodeValidation<SerializedRelationshipNode>>(
+              ({
+                node,
+                validation: {
+                  options: { req },
+                },
+              }) =>
+                props.enabledCollectionSlugs.includes(node.relationTo)
+                  ? true
+                  : req.t('validation:invalidSelection'),
+              {
+                allowed: [...props.enabledCollectionSlugs],
+                kind: 'lexicalNodeValidation',
+                validation: 'relationship',
               },
-            }) =>
-              props.enabledCollectionSlugs.includes(node.relationTo)
-                ? true
-                : req.t('validation:invalidSelection'),
+            ),
           ],
         }),
       ],

@@ -447,9 +447,14 @@ const lexicalPlan = (builder: Builder, field: Any) => {
     const ported = Array.isArray(list)
       ? list.map((fn: unknown) => {
           const own = typeof fn === 'function' ? payloadOwnFunctions.get(fn) : undefined
-          return own?.kind === 'lexicalNodeValidation'
-            ? { allowed: own.allowed, validation: own.validation }
-            : undefined
+          if (own?.kind !== 'lexicalNodeValidation') {
+            return undefined
+          }
+          if (own.validation === 'upload' || own.validation === 'relationship') {
+            // the upload validation reads the collections' ID types
+            own.allowed?.forEach((slug) => builder.relations.add(slug))
+          }
+          return { allowed: own.allowed, formState: own.formState, validation: own.validation }
         })
       : [undefined]
     if (ported.every(Boolean)) {

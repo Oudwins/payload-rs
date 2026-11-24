@@ -468,48 +468,52 @@ transform, `mongoose.rs` casting / documents / `castUpdate` / the `$set` MongoDB
    and the SchemaType casts (`String`, `Number`, `Boolean`, `Date` via V8's `Date.parse`,
    `ObjectId`, `Mixed`, document arrays with `_id: false`); a cast error is a bail.
 
-### 12.6 Status (2026-11-24)
+### 12.6 Status (2026-11-25)
 
-Ported and in the corpus, per field kind (no localization, no drafts):
+Ported and in the corpus, per field kind (no drafts):
 
-| kind                                       | beforeValidate                                     | validator                                                                 | write transform / mongoose          |
-| ------------------------------------------ | -------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------- |
-| text, textarea, email (hasMany text)       | fallback, defaults, row `id` toString              | text / textarea / email                                                   | String cast, arrays                 |
-| number (hasMany)                           | number strings (`parseFloat`, `''`)                | number                                                                    | Number cast, Int32 / Double, `-0`   |
-| checkbox                                   | `'true'` / `'false'` / `''`                        | checkbox                                                                  | Boolean cast (mongoose's sets)      |
-| select (hasMany)                           | -                                                  | select                                                                    | String cast, enum check on insert   |
-| date                                       | -                                                  | date (no timezone)                                                        | Date cast (V8 `Date.parse`)         |
-| relationship (single, hasMany, poly)       | `''` / `'none'` / `'null'`, `{ id }`               | relationship                                                              | ObjectIds, Mixed for poly           |
-| array (row ids from the registry)          | `0` / `'0'`, rows, `getExistingRowDoc`             | array                                                                     | document arrays                     |
-| group, row, collapsible, unnamed tabs      | placeholders, traversal                            | `() => true`                                                              | single nested subdocuments          |
-| createdBy / updatedBy (registry hooks)     | submitted marks in `req.context`                   | relationship                                                              | Mixed                               |
-| createdAt / updatedAt                      | -                                                  | none                                                                      | Date cast, stamps from the readings |
-| richText (lexical, features without hooks) | editor hook: `req.context.internal.richText[path]` | `hasText`, `validateNodes` (heading / list / listItem validations ported) | Mixed                               |
+| kind                                       | beforeValidate                         | validator                     | write transform / mongoose                                         |
+| ------------------------------------------ | -------------------------------------- | ----------------------------- | ------------------------------------------------------------------ |
+| text, textarea, email (hasMany text)       | fallback, defaults, row `id` toString  | text / textarea / email       | String cast, arrays                                                |
+| number (hasMany)                           | number strings (`parseFloat`, `''`)    | number                        | Number cast, Int32 / Double, `-0`                                  |
+| checkbox                                   | `'true'` / `'false'` / `''`            | checkbox                      | Boolean cast (mongoose's sets)                                     |
+| select (hasMany)                           | -                                      | select                        | String cast, enum check on insert                                  |
+| date                                       | -                                      | date (no timezone)            | Date cast (V8 `Date.parse`)                                        |
+| relationship (single, hasMany, poly)       | `''` / `'none'` / `'null'`, `{ id }`   | relationship                  | ObjectIds, Mixed for poly                                          |
+| array (row ids from the registry)          | `0` / `'0'`, rows, `getExistingRowDoc` | array                         | document arrays                                                    |
+| blocks (the field's own blocks)            | block lookup, `blockType`              | blocks (no `filterOptions`)   | embedded discriminators, block `minimize`                          |
+| group, row, collapsible, unnamed tabs      | placeholders, traversal                | `() => true`                  | single nested subdocuments                                         |
+| createdBy / updatedBy (registry hooks)     | submitted marks in `req.context`       | relationship                  | Mixed                                                              |
+| createdAt / updatedAt                      | -                                      | none                          | Date cast, stamps from the readings                                |
+| richText (lexical, features without hooks) | `req.context.internal.richText[path]`  | `hasText`, `validateNodes`    | Mixed                                                              |
+| localized fields and containers            | -                                      | localized array / blocks skip | `mergeLocaleActions`, locale-keyed transforms, locale subdocuments |
 
-Corpus (test/__rs/fuse-writes, TS engine as reference): 133 cases on the `minimal` and `typical`
-perf shapes (`typical` with its lexical content, lexical's default features), a `rich` collection
-(the test suites' editor: blocks, links, uploads, lists, headings) and a `kinds` collection,
-creates and updates, valid and invalid, raw stored documents (unknown keys, `-0`, Double numbers,
-string dates, missing groups, rows without ids, Double numbers inside rich text): 123 equal (91
-written, 32 invalid; compared: insert / findAndModify BSON bytes, the stored document, the version
-insert, `req.context`, the operation's data, the error's message and data), 10 bails, 0
-differences. Crate unit tests: `cargo test -p payload-fuse-write`.
+Lexical node validations ported (registered in `payloadOwnFunctions` by richtext-lexical):
+heading (enabled tags), list, listItem, relationship (enabled collections), upload (enabled
+collections, `isValidID`; collections with upload fields need form state and bail). Link /
+autolink and block / inline block validations run `fieldSchemasToFormState` (@payloadcms/ui form
+state of the node's fields): not ported, documents holding them bail.
 
-Rich text bails: a string editor state (upstream `JSON.parse`s it), nodes with ids (blocks; their
-hooks and sub fields would run), node types whose validations are not ported (link / autolink,
-upload, relationship, block, inline block).
+Corpus (TS engine as reference; `test/__rs/fuse-writes/int.spec.ts` and `localized/int.spec.ts`):
+the `minimal` and `typical` perf shapes (typical with lexical content), `kinds`, `rich`, `pages`
+(blocks) and a localized config (localized scalars, relationships, rich text, groups, arrays and
+blocks, localized fields in non-localized containers; creates and updates in en / de / fr, stored
+documents with every locale filled, unknown locale keys). 191 cases: 178 equal (127 written, 51
+invalid; compared: insert / findAndModify BSON bytes, the stored document, the version insert,
+`req.context`, the operation's data, the error's message and data), 13 bails, 0 differences.
+Crate unit tests: `cargo test -p payload-fuse-write`.
 
 Bails (the exact lane runs): data holding `id` / `_id` on create, dotted keys (`unflattenData`),
-`null` / non-object array rows (upstream logs a warning), `null` / non-object groups, relationship
-values that are not 24-hex strings at the write transform (upstream throws the BSON error), number
-custom IDs on related collections, field access functions without `overrideAccess`, an existing
-`req.context._submittedAuthorshipFields`, `Date` values a validator stringifies, a cast mongoose
-rejects, an enum violation, operator values (`$inc`, `$push`, `$remove`), any validation failure
-without `ctx.t`.
+`null` / non-object array or block rows (upstream logs a warning), `null` / non-object groups,
+relationship values that are not 24-hex strings at the write transform (upstream throws the BSON
+error), number custom IDs on related collections, field access functions without
+`overrideAccess`, an existing `req.context._submittedAuthorshipFields` or `req.context.internal`,
+`req.locale` `'all'`, `Date` values a validator stringifies, a cast mongoose rejects, an enum
+violation, operator values (`$inc`, `$push`, `$remove`), any validation failure without `ctx.t`,
+rich text given as a string, nodes with ids, link / block node types.
 
-Not yet: localization (step 4: the plan builder makes localized configs ineligible), blocks,
-drafts, update-many, link validation, deleteByID (it needs no write-side steps beyond the
-statements WP-H's driver sends).
+Not yet: drafts and autosave, update-many, named tabs, global block references, link and block
+node validations (form state).
 
 For WP-H, per operation: lexical's `afterChange` hook is the identity for every input the library
 accepts (no node ids, so its `originalNodeIDMap` is empty); the field `afterChange` traversal has

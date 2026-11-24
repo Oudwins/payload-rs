@@ -152,6 +152,10 @@ pub enum NodeValidation {
   Heading(Vec<String>),
   List,
   ListItem,
+  /// `node.relationTo` among the enabled collections.
+  Relationship(Vec<String>),
+  /// The enabled collections, and those whose upload fields need form state (a node bails).
+  Upload(Vec<String>, Vec<String>),
 }
 
 /// A lexical editor whose features add no hooks (writePlan.ts `lexicalPlan`).
@@ -463,6 +467,20 @@ fn decode_field(json: &Json) -> Result<Field, String> {
                   _ => Err(bad("field.lx")),
                 },
                 Some("list") => Ok(NodeValidation::List),
+                Some(kind @ ("relationship" | "upload")) => {
+                  let strings = |key: &str| -> Result<Vec<String>, String> {
+                    match item.get(key) {
+                      Some(Json::Array(v)) => v.iter().map(|t| t.as_str().map(str::to_string).ok_or_else(|| bad("field.lx"))).collect(),
+                      None => Ok(Vec::new()),
+                      _ => Err(bad("field.lx")),
+                    }
+                  };
+                  Ok(if kind == "upload" {
+                    NodeValidation::Upload(strings("allowed")?, strings("formState")?)
+                  } else {
+                    NodeValidation::Relationship(strings("allowed")?)
+                  })
+                }
                 Some("listItem") => Ok(NodeValidation::ListItem),
                 _ => Err(bad("field.lx")),
               })

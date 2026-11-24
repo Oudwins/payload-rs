@@ -1,5 +1,6 @@
 import { fieldSchemasToFormState } from '@payloadcms/ui/forms/fieldSchemasToFormState'
 import { isValidID } from 'payload'
+import { registerPayloadOwnFunction } from 'payload/internal'
 
 import type { NodeValidation } from '../../typesServer.js'
 import type { UploadFeatureServerProps } from './index.js'
@@ -8,6 +9,19 @@ import type { SerializedUploadNode } from './schema.js'
 export const uploadValidation = (
   props: UploadFeatureServerProps,
 ): NodeValidation<SerializedUploadNode> => {
+  // Payload's own (payload `payloadOwnFunctions`), ported by the fused write lanes for the
+  // collections without upload fields (the others go through form state)
+  return registerPayloadOwnFunction<NodeValidation<SerializedUploadNode>>(uploadValidate(props), {
+    allowed: [...props.enabledCollectionSlugs],
+    formState: Object.entries(props?.collections ?? {})
+      .filter(([, collection]) => collection?.fields?.length)
+      .map(([slug]) => slug),
+    kind: 'lexicalNodeValidation',
+    validation: 'upload',
+  })
+}
+
+const uploadValidate = (props: UploadFeatureServerProps): NodeValidation<SerializedUploadNode> => {
   return async ({
     node,
     validation: {

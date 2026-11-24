@@ -542,7 +542,7 @@ fn lexical_validate(s: &S<'_, '_>, field: &Field, field_options: &JsVal, value: 
   }
   let (settled, result) = match children.as_ref().and_then(|r| heap.arr(r)) {
     Some(nodes) if !nodes.is_empty() => {
-      let (jobs, failure) = validate_nodes(&heap, nodes, lexical)?;
+      let (jobs, failure) = validate_nodes(s, &heap, nodes, lexical)?;
       (jobs + 1, failure.map_or(ValidationResult::Valid, ValidationResult::Invalid))
     }
     _ => (0, ValidationResult::Valid),
@@ -580,7 +580,7 @@ fn has_text(heap: &Heap, children: &V) -> Result<bool, Bail> {
 
 /// `validateNodes({ nodes, nodeValidations })`: when it settles (jobs after its call) and its
 /// failure message; a node type whose validations are not ported bails.
-fn validate_nodes(heap: &Heap, nodes: &[V], lexical: &Lexical) -> Result<(usize, Option<String>), Bail> {
+fn validate_nodes(s: &S<'_, '_>, heap: &Heap, nodes: &[V], lexical: &Lexical) -> Result<(usize, Option<String>), Bail> {
   let mut jobs = 0;
   for node in nodes {
     if !heap.is_obj(node) {
@@ -595,7 +595,7 @@ fn validate_nodes(heap: &Heap, nodes: &[V], lexical: &Lexical) -> Result<(usize,
     for validation in node_type.as_ref().and_then(|t| lexical.node_validations.get(&**t)).into_iter().flatten() {
       // `await validation({ node, ... })` of a synchronous validation
       jobs += 1;
-      if let Some(message) = node_validation(heap, node, validation)? {
+      if let Some(message) = node_validation(s, heap, node, validation)? {
         let node_type = node_type.as_deref().unwrap_or_default();
         return Ok((jobs, Some(format!("{node_type} node failed to validate: {message}"))));
       }
@@ -605,7 +605,7 @@ fn validate_nodes(heap: &Heap, nodes: &[V], lexical: &Lexical) -> Result<(usize,
       let Some(items) = children.as_ref().and_then(|r| heap.arr(r)) else {
         return Err(Bail::new("lexical:children"));
       };
-      let (child_jobs, failure) = validate_nodes(heap, items, lexical)?;
+      let (child_jobs, failure) = validate_nodes(s, heap, items, lexical)?;
       jobs += child_jobs + 1;
       if failure.is_some() {
         return Ok((jobs, failure));
@@ -617,8 +617,47 @@ fn validate_nodes(heap: &Heap, nodes: &[V], lexical: &Lexical) -> Result<(usize,
 
 /// richtext-lexical's `headingValidation` / `listValidation` / `listItemValidation`: `None` when
 /// valid.
-fn node_validation(heap: &Heap, node: &V, validation: &NodeValidation) -> Result<Option<String>, Bail> {
+fn node_validation(s: &S<'_, '_>, heap: &Heap, node: &V, validation: &NodeValidation) -> Result<Option<String>, Bail> {
+  let enabled = |allowed: &[String]| matches!(heap.get(node, "relationTo"), V::Str(slug) if allowed.iter().any(|a| a == &*slug));
   Ok(match validation {
+    NodeValidation::Relationship(allowed) => {
+      if enabled(allowed) {
+        None
+      } else {
+        Some(translate(s, "validation:invalidSelection")?)
+      }
+    }
+    NodeValidation::Upload(allowed, form_state) => {
+      if !enabled(allowed) {
+        return Ok(Some(translate(s, "validation:invalidSelection")?));
+      }
+      let slug = heap.get(node, "relationTo");
+      let slug = slug.as_str().unwrap_or_default();
+      // `payload.collections[relationTo]?.customIDType || payload.db.defaultIDType`
+      let id_type = match s.run.plan.relations.get(slug) {
+        Some(Some(custom)) => custom.clone(),
+        Some(None) => s.run.plan.default_id_type.as_str().unwrap_or_default().to_string(),
+        None => return Err(Bail::new("lexical:uploadCollection")),
+      };
+      let value = heap.get(node, "value");
+      let inner = heap.get(&value, "id");
+      let id = if inner.truthy() { inner } else { value };
+      let valid = match (id_type.as_str(), &id) {
+        ("text", V::Str(s)) => !s.is_empty(),
+        ("text", V::Ref(_) | V::Date(_) | V::Oid(_)) => return Err(Bail::new("lexical:uploadID")),
+        ("text", _) => false,
+        ("number", V::Num(n)) => !n.is_nan(),
+        ("number", _) => false,
+        _ => return Err(Bail::new("lexical:uploadIDType")),
+      };
+      if !valid {
+        return Ok(Some(translate(s, "validation:validUploadID")?));
+      }
+      if form_state.iter().any(|f| f == slug) {
+        return Err(Bail::new("lexical:uploadFields"));
+      }
+      None
+    }
     NodeValidation::Heading(allowed) => {
       let tag = heap.get(node, "tag");
       if tag.as_str().is_some_and(|t| allowed.iter().any(|a| a == t)) {

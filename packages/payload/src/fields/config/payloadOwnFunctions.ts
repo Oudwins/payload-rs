@@ -7,11 +7,14 @@ export type PayloadOwnFunction =
   | {
       /**
        * A lexical node validation of richtext-lexical's own features: `heading` (`allowed`: the
-       * enabled heading tags, in order), `list`, `listItem`.
+       * enabled heading tags, in order), `list`, `listItem`, `relationship` / `upload` (`allowed`:
+       * the enabled collection slugs).
        */
       allowed?: string[]
+      /** `upload`: the collections whose upload fields the validation checks through form state. */
+      formState?: string[]
       kind: 'lexicalNodeValidation'
-      validation: 'heading' | 'list' | 'listItem'
+      validation: 'heading' | 'list' | 'listItem' | 'relationship' | 'upload'
     }
   | {
       /**
