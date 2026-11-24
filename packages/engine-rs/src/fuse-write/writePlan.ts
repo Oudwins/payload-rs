@@ -38,6 +38,7 @@ const modelledTypes = new Set([
   'group',
   'number',
   'relationship',
+  'richText',
   'row',
   'select',
   'tabs',
@@ -333,6 +334,9 @@ const fieldPlan = (builder: Builder, field: Any) => {
       }
       break
     }
+    case 'richText':
+      out.lx = lexicalPlan(builder, field)
+      break
     case 'tabs':
       out.tabs = field.tabs.map((tab: Any) => {
         if ('name' in tab) {
@@ -345,6 +349,81 @@ const fieldPlan = (builder: Builder, field: Any) => {
       break
   }
   return out
+}
+
+/** The editor hooks upstream runs on the create / update path, and its `validate`. */
+const lexicalHookNames = ['beforeValidate', 'beforeChange', 'afterChange'] as const
+
+const mapKeys = (map: unknown) => {
+  if (map === undefined || map === null) {
+    return []
+  }
+  if (!(map instanceof Map)) {
+    return ineligible('richText:features')
+  }
+  return [...map.keys()].map((key) =>
+    typeof key === 'string' ? key : ineligible('richText:features'),
+  )
+}
+
+/**
+ * Lexical with Payload's own editor hooks and validator (registered in `payloadOwnFunctions`)
+ * whose features add no hooks: `maps` whether the hooks do their node bookkeeping (any node hooks
+ * or sub fields: the `req.context.internal.richText` entry), `nodeValidations` the node types
+ * whose validations are all richtext-lexical's own (ported: `heading` with its tags, `list`,
+ * `listItem`), `validated` the other node types with validations (a document holding one bails).
+ */
+const lexicalPlan = (builder: Builder, field: Any) => {
+  const editor = watch(builder, field, 'editor')
+  if (typeof editor !== 'object' || editor === null) {
+    return ineligible('richText:editor')
+  }
+  const validate = payloadOwnFunctions.get(watch(builder, editor, 'validate'))
+  if (validate?.kind !== 'lexicalValidate') {
+    return ineligible('richText:validate')
+  }
+  const editorConfig: Any = validate.editorConfig
+  const hooks = watch(builder, editor, 'hooks')
+  for (const name of lexicalHookNames) {
+    const list = hooks ? watch(builder, hooks, name) : undefined
+    const own =
+      Array.isArray(list) && list.length === 1 ? payloadOwnFunctions.get(list[0]) : undefined
+    if (own?.kind !== 'lexicalHook' || own.hook !== name || own.editorConfig !== editorConfig) {
+      return ineligible('richText:hooks')
+    }
+  }
+  const features = editorConfig?.features
+  for (const name of lexicalHookNames) {
+    if (features?.hooks?.[name]?.length) {
+      return ineligible('richText:featureHooks')
+    }
+  }
+  const nodeHooks = features?.nodeHooks
+  const maps =
+    mapKeys(nodeHooks?.beforeValidate).length +
+      mapKeys(nodeHooks?.beforeChange).length +
+      mapKeys(nodeHooks?.afterChange).length +
+      mapKeys(features?.getSubFields).length >
+    0
+  const nodeValidations: Record<string, unknown[]> = {}
+  const validated: string[] = []
+  for (const type of mapKeys(features?.validations)) {
+    const list = features.validations.get(type)
+    const ported = Array.isArray(list)
+      ? list.map((fn: unknown) => {
+          const own = typeof fn === 'function' ? payloadOwnFunctions.get(fn) : undefined
+          return own?.kind === 'lexicalNodeValidation'
+            ? { allowed: own.allowed, validation: own.validation }
+            : undefined
+        })
+      : [undefined]
+    if (ported.every(Boolean)) {
+      nodeValidations[type] = ported
+    } else {
+      validated.push(type)
+    }
+  }
+  return { maps, nodeValidations, validated }
 }
 
 /**

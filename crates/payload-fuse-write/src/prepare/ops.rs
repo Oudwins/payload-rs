@@ -8,7 +8,7 @@ use payload_engine::js::JsVal;
 use payload_mongo_driver::mongodb::bson::{Bson, DateTime, Document, doc};
 
 use super::before_change::{NEW_DOC_KEY, before_change};
-use super::before_validate::{SUBMITTED_AUTHORSHIP_KEY, before_validate};
+use super::before_validate::{INTERNAL_KEY, SUBMITTED_AUTHORSHIP_KEY, before_validate};
 use super::exec::Exec;
 use super::heap::{Heap, Ref, V};
 use super::mongoose::{apply_set, build_insert, cast_set_update};
@@ -22,7 +22,7 @@ fn new_run<'e>(plan: &'e WritePlan, ctx: &'e mut WriteCtx<'_>, operation: Operat
   if !ctx.context.is_nullish() && !matches!(ctx.context, JsVal::Obj(_)) {
     return Err(Bail::new("context:shape"));
   }
-  if ctx.context.has(SUBMITTED_AUTHORSHIP_KEY) {
+  if ctx.context.has(SUBMITTED_AUTHORSHIP_KEY) || ctx.context.has(INTERNAL_KEY) {
     // upstream mutates the object a previous operation left there
     return Err(Bail::new("context:submittedAuthorship"));
   }
@@ -34,6 +34,7 @@ fn new_run<'e>(plan: &'e WritePlan, ctx: &'e mut WriteCtx<'_>, operation: Operat
     fallback_language: ctx.fallback_language,
     heap: RefCell::new(Heap::default()),
     id,
+    internal: Cell::new(None),
     is_new_doc: Cell::new(None),
     language: ctx.language,
     operation,
@@ -69,6 +70,7 @@ fn context_writes(run: &Run<'_>) -> Vec<(String, JsVal)> {
     .filter_map(|key| match *key {
       SUBMITTED_AUTHORSHIP_KEY => run.submitted.get().map(|r| (key.to_string(), heap.export(&V::Ref(r)))),
       NEW_DOC_KEY => run.is_new_doc.get().map(|b| (key.to_string(), JsVal::Bool(b))),
+      INTERNAL_KEY => run.internal.get().map(|r| (key.to_string(), heap.export(&V::Ref(r)))),
       _ => None,
     })
     .collect()

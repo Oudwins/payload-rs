@@ -20,6 +20,7 @@ pub enum Kind {
   Group,
   Number,
   Relationship,
+  RichText,
   Row,
   Select,
   Tabs,
@@ -38,6 +39,7 @@ impl Kind {
       "group" => Kind::Group,
       "number" => Kind::Number,
       "relationship" => Kind::Relationship,
+      "richText" => Kind::RichText,
       "row" => Kind::Row,
       "select" => Kind::Select,
       "tabs" => Kind::Tabs,
@@ -58,6 +60,7 @@ impl Kind {
       Kind::Group => "group",
       Kind::Number => "number",
       Kind::Relationship => "relationship",
+      Kind::RichText => "richText",
       Kind::Row => "row",
       Kind::Select => "select",
       Kind::Tabs => "tabs",
@@ -139,6 +142,26 @@ pub enum RelationTo {
   Many(Vec<String>),
 }
 
+/// A lexical node validation of richtext-lexical's own features.
+#[derive(Clone, Debug)]
+pub enum NodeValidation {
+  /// `headingValidation({ enabledHeadingSizes })`: the allowed tags, in order.
+  Heading(Vec<String>),
+  List,
+  ListItem,
+}
+
+/// A lexical editor whose features add no hooks (writePlan.ts `lexicalPlan`).
+#[derive(Debug)]
+pub struct Lexical {
+  /// The editor hooks do their node bookkeeping (`req.context.internal.richText`).
+  pub maps: bool,
+  /// Node types whose validations are all ported.
+  pub node_validations: HashMap<String, Vec<NodeValidation>>,
+  /// Other node types with validations (a document holding one bails).
+  pub validated: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct Field {
   pub kind: Kind,
@@ -155,6 +178,7 @@ pub struct Field {
   pub label: Label,
   pub fields: Vec<Field>,
   pub tabs: Vec<Tab>,
+  pub lexical: Option<Lexical>,
 }
 
 #[derive(Debug)]
@@ -370,6 +394,41 @@ fn decode_field(json: &Json) -> Result<Field, String> {
     Some(_) => return Err(bad("field.tabs")),
     None => Vec::new(),
   };
+  let lexical = match json.get("lx") {
+    Some(lx) => Some(Lexical {
+      maps: lx.get("maps").and_then(Json::as_bool).ok_or_else(|| bad("field.lx"))?,
+      node_validations: match lx.get("nodeValidations") {
+        Some(Json::Object(map)) => map
+          .iter()
+          .map(|(node_type, list)| {
+            let Json::Array(items) = list else { return Err(bad("field.lx")) };
+            let validations = items
+              .iter()
+              .map(|item| match item.get("validation").and_then(Json::as_str) {
+                Some("heading") => match item.get("allowed") {
+                  Some(Json::Array(tags)) => Ok(NodeValidation::Heading(
+                    tags.iter().map(|t| t.as_str().map(str::to_string).ok_or_else(|| bad("field.lx"))).collect::<Result<_, _>>()?,
+                  )),
+                  _ => Err(bad("field.lx")),
+                },
+                Some("list") => Ok(NodeValidation::List),
+                Some("listItem") => Ok(NodeValidation::ListItem),
+                _ => Err(bad("field.lx")),
+              })
+              .collect::<Result<_, _>>()?;
+            Ok((node_type.clone(), validations))
+          })
+          .collect::<Result<_, String>>()?,
+        _ => return Err(bad("field.lx")),
+      },
+      validated: match lx.get("validated") {
+        Some(Json::Array(items)) => items.iter().map(|s| s.as_str().map(str::to_string).ok_or_else(|| bad("field.lx"))).collect::<Result<_, _>>()?,
+        _ => return Err(bad("field.lx")),
+      },
+    }),
+    None if kind == Kind::RichText => return Err(bad("field.lx")),
+    None => None,
+  };
   Ok(Field {
     access: flag("access"),
     before_change: decode_hooks(hooks.and_then(|h| h.get("beforeChange")))?,
@@ -379,6 +438,7 @@ fn decode_field(json: &Json) -> Result<Field, String> {
     has_many: flag("m"),
     kind,
     label: decode_label(json.get("label")),
+    lexical,
     name: json.get("n").and_then(Json::as_str).map(str::to_string),
     relation_to,
     required: flag("req"),

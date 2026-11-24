@@ -1,5 +1,7 @@
 import type { HeadingTagType, SerializedHeadingNode } from '@lexical/rich-text'
 
+import { registerPayloadOwnFunction } from 'payload/internal'
+
 import type { NodeValidation } from '../../typesServer.js'
 
 import { ALLOWED_HEADING_TAGS } from '../constants.js'
@@ -13,7 +15,7 @@ export const headingValidation = ({
     enabledHeadingSizes.filter((tag) => ALLOWED_HEADING_TAGS.has(tag)),
   )
 
-  return ({ node }) => {
+  const validation: NodeValidation<SerializedHeadingNode> = ({ node }) => {
     if (allowedHeadingTags.has(node.tag)) {
       return true
     }
@@ -22,4 +24,11 @@ export const headingValidation = ({
       ? `Heading tag must be one of ${Array.from(allowedHeadingTags).join(', ')}.`
       : 'Headings are not enabled.'
   }
+
+  // Payload's own (payload `payloadOwnFunctions`), ported by the fused write lanes
+  return registerPayloadOwnFunction(validation, {
+    allowed: Array.from(allowedHeadingTags),
+    kind: 'lexicalNodeValidation',
+    validation: 'heading',
+  })
 }

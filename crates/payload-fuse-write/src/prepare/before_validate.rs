@@ -19,11 +19,14 @@ pub type Task<'r, T> = Pin<Box<dyn Future<Output = T> + 'r>>;
 
 pub const SUBMITTED_AUTHORSHIP_KEY: &str = "_submittedAuthorshipFields";
 
+/// The `req.context` key lexical's editor hooks keep their node maps under.
+pub const INTERNAL_KEY: &str = "internal";
+
 /// `beforeValidate({ data, doc })` (index.ts): `await traverseFields(...)`.
 pub fn before_validate<'r, 'e: 'r>(s: S<'r, 'e>, data: Ref, doc: Ref) -> Task<'r, ()> {
   Box::pin(async move {
     let fields = &s.run.plan.fields;
-    s.exec.spawn(traverse_fields(s.clone(), fields, V::Ref(data), V::Ref(doc))).wait().await;
+    s.exec.spawn(traverse_fields(s.clone(), fields, V::Ref(data), V::Ref(doc), String::new())).wait().await;
   })
 }
 
@@ -35,7 +38,7 @@ pub fn has_dotted_keys(heap: &Heap, value: &V) -> bool {
   }
 }
 
-fn traverse_fields<'r, 'e: 'r>(s: S<'r, 'e>, fields: &'r [Field], sibling_data: V, sibling_doc: V) -> Task<'r, ()> {
+fn traverse_fields<'r, 'e: 'r>(s: S<'r, 'e>, fields: &'r [Field], sibling_data: V, sibling_doc: V, parent_path: String) -> Task<'r, ()> {
   Box::pin(async move {
     if s.run.failed() {
       return;
@@ -45,14 +48,14 @@ fn traverse_fields<'r, 'e: 'r>(s: S<'r, 'e>, fields: &'r [Field], sibling_data: 
     }
     let promises = fields
       .iter()
-      .map(|field| s.exec.spawn(promise(s.clone(), field, sibling_data.clone(), sibling_doc.clone())))
+      .map(|field| s.exec.spawn(promise(s.clone(), field, sibling_data.clone(), sibling_doc.clone(), parent_path.clone())))
       .collect();
     s.exec.all(promises).wait().await;
   })
 }
 
 /// `traverseFields` over `field.tabs.map((tab) => ({ ...tab, type: 'tab' }))`.
-fn traverse_tabs<'r, 'e: 'r>(s: S<'r, 'e>, tabs: &'r [Tab], sibling_data: V, sibling_doc: V) -> Task<'r, ()> {
+fn traverse_tabs<'r, 'e: 'r>(s: S<'r, 'e>, tabs: &'r [Tab], sibling_data: V, sibling_doc: V, parent_path: String) -> Task<'r, ()> {
   Box::pin(async move {
     if has_dotted_keys(&s.run.heap.borrow(), &sibling_data) {
       return s.run.fail(Bail::new("beforeValidate:dottedKeys"));
@@ -61,10 +64,10 @@ fn traverse_tabs<'r, 'e: 'r>(s: S<'r, 'e>, tabs: &'r [Tab], sibling_data: V, sib
       .iter()
       .map(|tab| {
         let s2 = s.clone();
-        let (sibling_data, sibling_doc) = (sibling_data.clone(), sibling_doc.clone());
+        let (sibling_data, sibling_doc, parent_path) = (sibling_data.clone(), sibling_doc.clone(), parent_path.clone());
         s.exec.spawn(async move {
           // an unnamed tab: `await traverseFields({ fields: tab.fields, siblingData, siblingDoc })`
-          s2.exec.spawn(traverse_fields(s2.clone(), &tab.fields, sibling_data, sibling_doc)).wait().await;
+          s2.exec.spawn(traverse_fields(s2.clone(), &tab.fields, sibling_data, sibling_doc, parent_path)).wait().await;
         })
       })
       .collect();
@@ -72,7 +75,7 @@ fn traverse_tabs<'r, 'e: 'r>(s: S<'r, 'e>, tabs: &'r [Tab], sibling_data: V, sib
   })
 }
 
-fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_doc: V) -> Task<'r, ()> {
+fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_doc: V, parent_path: String) -> Task<'r, ()> {
   Box::pin(async move {
     if s.run.failed() {
       return;
@@ -80,6 +83,10 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
     let run = s.run;
     let Some(sd) = sibling_data.as_ref() else {
       return run.fail(Bail::new("beforeValidate:siblingData"));
+    };
+    let path = match &field.name {
+      Some(name) if field.affects_data() => join_path(&parent_path, name),
+      _ => parent_path.clone(),
     };
     if field.affects_data() {
       let name = field.name.as_deref().unwrap_or_default();
@@ -144,26 +151,105 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
           let Some(row_doc) = run.check(existing_row_doc(&run.heap, &row, &existing)) else {
             return;
           };
-          promises.push(s.exec.spawn(traverse_fields(s.clone(), &field.fields, row, row_doc)));
+          let row_path = format!("{path}.{}", promises.len());
+          promises.push(s.exec.spawn(traverse_fields(s.clone(), &field.fields, row, row_doc, row_path)));
         }
         s.exec.all(promises).wait().await;
       }
       Kind::Collapsible | Kind::Row => {
-        s.exec.spawn(traverse_fields(s.clone(), &field.fields, sibling_data.clone(), sibling_doc.clone())).wait().await;
+        s.exec.spawn(traverse_fields(s.clone(), &field.fields, sibling_data.clone(), sibling_doc.clone(), parent_path.clone())).wait().await;
       }
       Kind::Group => {
         let name = field.name.as_deref().unwrap_or_default();
         let Some((group_data, group_doc)) = run.check(group_siblings(&s, sd, &sibling_doc, name)) else {
           return;
         };
-        s.exec.spawn(traverse_fields(s.clone(), &field.fields, group_data, group_doc)).wait().await;
+        s.exec.spawn(traverse_fields(s.clone(), &field.fields, group_data, group_doc, path)).wait().await;
       }
       Kind::Tabs => {
-        s.exec.spawn(traverse_tabs(s.clone(), &field.tabs, sibling_data.clone(), sibling_doc.clone())).wait().await;
+        s.exec.spawn(traverse_tabs(s.clone(), &field.tabs, sibling_data.clone(), sibling_doc.clone(), parent_path.clone())).wait().await;
+      }
+      Kind::RichText => {
+        let name = field.name.as_deref().unwrap_or_default();
+        if run.check(lexical_before_validate(&s, field, &sibling_data, &sibling_doc, name, &path)).is_none() {
+          return;
+        }
+        // `await callUserFunction(hook)`: the hook returns `value`
+        tick().await;
+        let value = run.get(&sibling_data, name);
+        if !value.is_undef() && run.check(run.set(sd, name, value)).is_none() {
+          return;
+        }
       }
       _ => {}
     }
   })
+}
+
+pub fn join_path(parent: &str, name: &str) -> String {
+  if parent.is_empty() { name.to_string() } else { format!("{parent}.{name}") }
+}
+
+/// Whether `recurseNodeTree({ nodeIDMap, nodes: value?.root?.children ?? [] })` puts a node in
+/// the map (a node with a truthy `id` or `fields.id`); shapes it would throw on bail.
+pub fn has_id_nodes(heap: &Heap, value: &V) -> Result<bool, Bail> {
+  fn walk(heap: &Heap, nodes: &V) -> Result<bool, Bail> {
+    let Some(items) = nodes.as_ref().and_then(|r| heap.arr(r)) else {
+      return Ok(false);
+    };
+    for node in items {
+      if !heap.is_obj(node) {
+        return Err(Bail::new("lexical:node"));
+      }
+      let fields = heap.get(node, "fields");
+      if heap.get(node, "id").truthy() || (heap.is_obj(&fields) && heap.get(&fields, "id").truthy()) {
+        return Ok(true);
+      }
+      let children = heap.get(node, "children");
+      if heap.is_arr(&children) && walk(heap, &children)? {
+        return Ok(true);
+      }
+    }
+    Ok(false)
+  }
+  let children = heap.get(&heap.get(value, "root"), "children");
+  if !children.is_nullish() && !heap.is_arr(&children) {
+    return Err(Bail::new("lexical:children"));
+  }
+  walk(heap, &children)
+}
+
+/// lexical's editor `beforeValidate` hook (richtext-lexical hooks.ts) of an editor whose features
+/// add no hooks: with node maps, `req.context.internal.richText[path] = { originalNodeIDMap }`
+/// from `previousValue`; nodes with ids (whose hooks / sub fields would run) bail.
+fn lexical_before_validate(s: &S<'_, '_>, field: &Field, sibling_data: &V, sibling_doc: &V, name: &str, path: &str) -> Result<(), Bail> {
+  let run = s.run;
+  let lexical = field.lexical.as_ref().ok_or_else(|| Bail::new("lexical:plan"))?;
+  if !lexical.maps {
+    return Ok(());
+  }
+  let mut heap = run.heap.borrow_mut();
+  let value = heap.get(sibling_data, name);
+  let previous = heap.get(sibling_doc, name);
+  if has_id_nodes(&heap, &previous)? || has_id_nodes(&heap, &value)? {
+    return Err(Bail::new("lexical:nodeIDs"));
+  }
+  let internal = match run.internal.get() {
+    Some(r) => r,
+    None => heap.new_obj(),
+  };
+  if !heap.is_obj(&heap.get(&V::Ref(internal), "richText")) {
+    let rich_text = heap.new_obj();
+    heap.set(internal, "richText", V::Ref(rich_text))?;
+  }
+  let rich_text = heap.get(&V::Ref(internal), "richText").as_ref().ok_or_else(|| Bail::new("lexical:internal"))?;
+  let map = heap.new_obj();
+  let entry = heap.new_obj();
+  heap.set(entry, "originalNodeIDMap", V::Ref(map))?;
+  heap.set(rich_text, path, V::Ref(entry))?;
+  run.internal.set(Some(internal));
+  run.note_context(INTERNAL_KEY);
+  Ok(())
 }
 
 /// The named group's `siblingData[name]` / `siblingDoc[name]`, set to `{}` when not objects.
@@ -341,6 +427,8 @@ fn sanitize_value(s: &S<'_, '_>, field: &Field, sd: Ref, name: &str) -> Result<(
       }
     }
     Kind::Relationship => sanitize_relationship(s, field, sd, name)?,
+    // a string is `JSON.parse`d (when it parses)
+    Kind::RichText if value.as_str().is_some() => return Err(Bail::new("richText:string")),
     _ => {}
   }
   Ok(())

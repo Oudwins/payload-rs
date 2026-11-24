@@ -6,6 +6,15 @@
 export type PayloadOwnFunction =
   | {
       /**
+       * A lexical node validation of richtext-lexical's own features: `heading` (`allowed`: the
+       * enabled heading tags, in order), `list`, `listItem`.
+       */
+      allowed?: string[]
+      kind: 'lexicalNodeValidation'
+      validation: 'heading' | 'list' | 'listItem'
+    }
+  | {
+      /**
        * A lexical rich text editor hook (`@payloadcms/richtext-lexical` `getLexicalHooks`); its
        * work depends on the editor config's features (`editorConfig.features.hooks`, node hooks).
        */
@@ -31,6 +40,11 @@ export type PayloadOwnFunction =
       /** Authorship (`createdBy` / `updatedBy`) hooks. */
       field: 'createdBy' | 'updatedBy'
       kind: 'authorshipBeforeChange' | 'authorshipBeforeDuplicate' | 'authorshipBeforeValidate'
+    }
+  | {
+      /** The lexical editor's `validate` (`richTextValidateHOC`), with its editor config. */
+      editorConfig: unknown
+      kind: 'lexicalValidate'
     }
 
 /**

@@ -200,12 +200,125 @@ const minimalUpdates = (f: Fixtures): Case[] =>
 
 let slugs = 0
 
+/** The perf suite's rich text (test/__rs/perf/configs.mjs `richText`). */
+const richText = (text: string) => ({
+  root: {
+    type: 'root',
+    children: [
+      {
+        type: 'paragraph',
+        children: [
+          { type: 'text', detail: 0, format: 0, mode: 'normal', style: '', text, version: 1 },
+        ],
+        direction: 'ltr',
+        format: '',
+        indent: 0,
+        textFormat: 0,
+        version: 1,
+      },
+    ],
+    direction: 'ltr',
+    format: '',
+    indent: 0,
+    version: 1,
+  },
+})
+
+const emptyParagraph = {
+  root: { type: 'root', children: [{ type: 'paragraph', children: [], version: 1 }], version: 1 },
+}
+
+const list = {
+  root: {
+    type: 'root',
+    children: [
+      {
+        type: 'list',
+        listType: 'bullet',
+        tag: 'ul',
+        children: [
+          {
+            type: 'listitem',
+            value: 1,
+            children: [{ type: 'text', text: 'a', version: 1 }],
+            version: 1,
+          },
+          { type: 'listitem', value: 2, children: [], version: 1 },
+        ],
+        version: 1,
+      },
+      {
+        type: 'heading',
+        tag: 'h2',
+        children: [{ type: 'text', text: 'h', version: 1 }],
+        version: 1,
+      },
+      { type: 'quote', children: [{ type: 'linebreak', version: 1 }], version: 1 },
+    ],
+    version: 1,
+  },
+}
+
+const headings = {
+  root: {
+    type: 'root',
+    children: [
+      {
+        type: 'heading',
+        tag: 'h2',
+        children: [{ type: 'text', text: 'h', version: 1 }],
+        version: 1,
+      },
+      { type: 'quote', children: [{ type: 'linebreak', version: 1 }], version: 1 },
+      { type: 'paragraph', children: [], version: 1 },
+      { type: 'horizontalrule', version: 1 },
+    ],
+    version: 1,
+  },
+}
+
+const link = (url: string) => ({
+  root: {
+    type: 'root',
+    children: [
+      {
+        type: 'paragraph',
+        children: [
+          {
+            type: 'link',
+            children: [{ type: 'text', text: 'l', version: 1 }],
+            fields: { linkType: 'custom', newTab: false, url },
+            version: 3,
+          },
+        ],
+        version: 1,
+      },
+    ],
+    version: 1,
+  },
+})
+
+const block = {
+  root: {
+    type: 'root',
+    children: [
+      {
+        type: 'block',
+        fields: { id: '65f000000000000000000001', blockType: 'myBlock', someTextRequired: 'x' },
+        version: 2,
+      },
+    ],
+    version: 1,
+  },
+}
+
 const typicalDoc = (f: Fixtures) => ({
   title: 'Post',
   views: 10,
   author: f.author,
   slug: `post-${++slugs}`,
   excerpt: 'An excerpt',
+  content: richText('Body text'),
   stage: 'published',
   publishedAt: '2024-05-06T07:08:09.000Z',
   featured: true,
@@ -343,6 +456,111 @@ const kindsCreates = (f: Fixtures): Case[] =>
     { name: 'textRequired cleared', data: { textRequired: '' } },
   ].map((c) => ({ ...c, collection: 'kinds' }))
 
+const richCreates = (): Case[] =>
+  [
+    { name: 'paragraph', data: { required: richText('r'), body: richText('b') } },
+    { name: 'required missing', data: { body: richText('b') } },
+    { name: 'required empty paragraph', data: { required: emptyParagraph } },
+    { name: 'required empty text', data: { required: richText('') } },
+    { name: 'lists, headings, quotes', data: { required: list, body: list } },
+    { name: 'link', data: { required: link('https://payloadcms.com') } },
+    {
+      name: 'link in body',
+      data: { required: richText('r'), body: link('https://payloadcms.com') },
+    },
+    { name: 'block with id', data: { required: richText('r'), body: block } },
+    {
+      name: 'nested and rows',
+      data: { required: richText('r'), nested: { text: list }, items: [{ text: richText('i') }] },
+    },
+    {
+      name: 'nested and rows, no lists',
+      data: {
+        required: richText('r'),
+        nested: { text: headings },
+        items: [{ text: richText('i') }, {}],
+      },
+    },
+    { name: 'headings and quotes', data: { required: headings, body: headings } },
+    {
+      name: 'invalid heading tag',
+      data: {
+        required: {
+          root: { type: 'root', children: [{ type: 'heading', tag: 'h9', children: [] }] },
+        },
+      },
+    },
+    {
+      name: 'list without tag, deep',
+      data: {
+        required: richText('r'),
+        nested: {
+          text: {
+            root: {
+              type: 'root',
+              children: [{ type: 'quote', children: [{ type: 'list', children: [] }] }],
+            },
+          },
+        },
+      },
+    },
+    {
+      name: 'list item value string',
+      data: {
+        required: {
+          root: {
+            type: 'root',
+            children: [
+              {
+                type: 'list',
+                tag: 'ol',
+                children: [{ type: 'listitem', value: '1', children: [] }],
+              },
+            ],
+          },
+        },
+      },
+    },
+    { name: 'string state', data: { required: JSON.stringify(richText('s')) } },
+    { name: 'null state', data: { required: richText('r'), body: null } },
+    { name: 'root without children', data: { required: { root: { type: 'root' } } } },
+  ].map((c) => ({ ...c, collection: 'rich' }))
+
+const richUpdates = (): Case[] =>
+  [
+    {
+      name: 'replace',
+      data: { required: richText('new') },
+      seed: { data: { required: richText('old') } },
+    },
+    {
+      name: 'other field',
+      data: { items: [] },
+      seed: { data: { required: richText('r'), body: richText('b') } },
+    },
+    {
+      name: 'stored block with id',
+      data: { required: richText('x') },
+      seed: { data: { required: richText('r'), body: block } },
+    },
+    {
+      name: 'raw: numbers as doubles',
+      data: { body: richText('b') },
+      seed: {
+        raw: {
+          required: {
+            root: {
+              type: 'root',
+              children: [
+                { type: 'paragraph', children: [{ type: 'text', text: 't', version: 1.5 }] },
+              ],
+            },
+          },
+        },
+      },
+    },
+  ].map((c) => ({ ...c, collection: 'rich' }))
+
 const kindsUpdates = (f: Fixtures): Case[] =>
   [
     {
@@ -397,6 +615,18 @@ test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
     const f = await fixtures(payload)
     await runAll(payload, 'kinds create', kindsCreates(f), f)
     finish('kinds create')
+  })
+
+  test('rich creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'rich create', richCreates(), f)
+    finish('rich create')
+  })
+
+  test('rich updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'rich update', richUpdates(), f)
+    finish('rich update')
   })
 
   test('kinds updates', async ({ payload }) => {

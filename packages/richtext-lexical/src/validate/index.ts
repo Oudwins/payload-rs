@@ -1,6 +1,8 @@
 import type { SerializedEditorState } from 'lexical'
 import type { RichTextField, Validate } from 'payload'
 
+import { registerPayloadOwnFunction } from 'payload/internal'
+
 import type { SanitizedServerEditorConfig } from '../lexical/config/types.js'
 
 import { hasText } from './hasText.js'
@@ -42,5 +44,7 @@ export const richTextValidateHOC = ({
     return true
   }
 
-  return richTextValidate
+  // Payload's own (payload `payloadOwnFunctions`): the fused write lanes validate the editor
+  // state themselves while no node type of the editor config has validations
+  return registerPayloadOwnFunction(richTextValidate, { editorConfig, kind: 'lexicalValidate' })
 }

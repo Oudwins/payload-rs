@@ -1,4 +1,5 @@
 import { mongooseAdapter } from '@payloadcms/db-mongodb'
+import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { fileURLToPath } from 'node:url'
 import path from 'path'
 
@@ -12,7 +13,9 @@ const statuses = ['draft', 'review', 'published', 'archived']
 /**
  * The write-side corpus of the fused MongoDB writes (packages/engine-rs/FUSED_WRITES.md section
  * 12), run on the TS engine (`PAYLOAD_ENGINE=ts`): `minimal` and `typical` are the perf suite's post shapes (test/__rs/perf/configs.mjs)
- * without rich text, `kinds` covers every field type and validator option the library models.
+ * (`typical` with lexical's default features, like the perf suite's editor; `rich` with the test
+ * suites' editor and its blocks, links and uploads), `kinds` covers every field type and validator
+ * option the library models.
  */
 export default buildConfigWithDefaults({
   suite: 'fuse-writes',
@@ -59,6 +62,7 @@ export default buildConfigWithDefaults({
           { name: 'author', type: 'relationship', relationTo: 'authors' },
           { name: 'slug', type: 'text', index: true, unique: true },
           { name: 'excerpt', type: 'textarea' },
+          { name: 'content', type: 'richText', editor: lexicalEditor() },
           {
             name: 'stage',
             type: 'select',
@@ -77,6 +81,23 @@ export default buildConfigWithDefaults({
               { name: 'title', type: 'text' },
               { name: 'description', type: 'textarea' },
             ],
+          },
+        ],
+      },
+      {
+        slug: 'rich',
+        fields: [
+          { name: 'body', type: 'richText' },
+          { name: 'required', type: 'richText', editor: lexicalEditor(), required: true },
+          {
+            name: 'nested',
+            type: 'group',
+            fields: [{ name: 'text', type: 'richText', editor: lexicalEditor() }],
+          },
+          {
+            name: 'items',
+            type: 'array',
+            fields: [{ name: 'text', type: 'richText', editor: lexicalEditor() }],
           },
         ],
       },

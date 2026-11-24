@@ -44,6 +44,8 @@ pub struct Run<'e> {
   pub errors: RefCell<Vec<FieldError>>,
   /// `req.context._submittedAuthorshipFields` once set (a heap object).
   pub submitted: Cell<Option<Ref>>,
+  /// `req.context.internal` once lexical's `beforeValidate` created it (a heap object).
+  pub internal: Cell<Option<Ref>>,
   /// The top-level `data` of the running `beforeChange`.
   pub root_data: Cell<Option<Ref>>,
   /// `req.context._isNewDoc` once set.

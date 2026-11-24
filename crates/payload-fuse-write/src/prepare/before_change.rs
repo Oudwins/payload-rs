@@ -10,7 +10,7 @@ use payload_engine::js::{JsVal, Obj as JsObj};
 use super::before_validate::{Task, existing_row_doc};
 use super::exec::{tick, ticks};
 use super::heap::{Heap, Ref, V};
-use super::plan::{Authorship, Field, Kind, Label, OwnHook, RelationTo, Tab, Validate};
+use super::plan::{Authorship, Field, Kind, Label, Lexical, NodeValidation, OwnHook, RelationTo, Tab, Validate};
 use super::run::{Operation, S};
 use super::{Bail, FieldError, IdUse};
 
@@ -203,6 +203,15 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
         // `getTranslatedLabel(field?.label || '')`: tabs carry no label in the modelled configs
         s.exec.spawn(traverse_tabs(s.clone(), &field.tabs, level.clone())).wait().await;
       }
+      Kind::RichText => {
+        // lexical's editor `beforeChange` hook: without node ids (beforeValidate bailed on them)
+        // its `originalNodeIDMap` is empty and it returns `value`
+        tick().await;
+        let value = run.get(&level.data, name);
+        if !value.is_undef() && run.check(run.set(sd, name, value)).is_none() {
+          return;
+        }
+      }
       _ => {}
     }
   })
@@ -306,7 +315,12 @@ async fn validate(s: &S<'_, '_>, field: &Field, value: &V, path: &str) -> Option
       Some(None)
     }
     Validate::Default(validator, field_options) => {
-      let (result, job_ticks) = match run_validator(s, *validator, field_options, value, path) {
+      let outcome = if *validator == Validator::RichText {
+        lexical_validate(s, field, field_options, value)
+      } else {
+        run_validator(s, *validator, field_options, value, path)
+      };
+      let (result, job_ticks) = match outcome {
         Ok(result) => result,
         Err(bail) => {
           run.fail(bail);
@@ -369,6 +383,129 @@ fn run_validator(
     1
   };
   Ok((result, jobs))
+}
+
+/// lexical's `richTextValidate` (richtext-lexical validate/) behind payload's `validations.richText`:
+/// the result and the jobs `await validate(...)` takes. `validations.richText` returns the editor's
+/// promise from an async function (resolved one job after `max(R, 1)`, R being when the editor's
+/// promise settles), and `validateNodes` awaits itself once per node with `children`.
+fn lexical_validate(s: &S<'_, '_>, field: &Field, field_options: &JsVal, value: &V) -> Result<(ValidationResult, usize), Bail> {
+  let run = s.run;
+  let lexical = field.lexical.as_ref().ok_or_else(|| Bail::new("lexical:plan"))?;
+  let heap = run.heap.borrow();
+  if !value.is_nullish() && !heap.is_obj(value) {
+    return Err(Bail::new("lexical:value"));
+  }
+  let root = heap.get(value, "root");
+  if !root.is_nullish() && !heap.is_obj(&root) {
+    return Err(Bail::new("lexical:root"));
+  }
+  let children = heap.get(&root, "children");
+  if !children.is_nullish() && !heap.is_arr(&children) {
+    return Err(Bail::new("lexical:children"));
+  }
+  if field_options.get("required").truthy() && !has_text(&heap, &children)? {
+    let message = translate(s, "validation:required")?;
+    return Ok((ValidationResult::Invalid(message), 3));
+  }
+  let (settled, result) = match children.as_ref().and_then(|r| heap.arr(r)) {
+    Some(nodes) if !nodes.is_empty() => {
+      let (jobs, failure) = validate_nodes(&heap, nodes, lexical)?;
+      (jobs + 1, failure.map_or(ValidationResult::Valid, ValidationResult::Invalid))
+    }
+    _ => (0, ValidationResult::Valid),
+  };
+  Ok((result, settled.max(1) + 2))
+}
+
+/// `hasText(value)` of the root's `children` (an array or nullish).
+fn has_text(heap: &Heap, children: &V) -> Result<bool, Bail> {
+  let Some(nodes) = children.as_ref().and_then(|r| heap.arr(r)) else {
+    return Ok(false);
+  };
+  if nodes.is_empty() {
+    return Ok(false);
+  }
+  if nodes.len() == 1 && matches!(heap.get(&nodes[0], "type"), V::Str(t) if &*t == "paragraph") {
+    let paragraph_children = heap.get(&nodes[0], "children");
+    match paragraph_children.as_ref().and_then(|r| heap.arr(r)) {
+      None if paragraph_children.is_nullish() => return Ok(false),
+      None => return Err(Bail::new("lexical:paragraph")),
+      Some(items) if items.is_empty() => return Ok(false),
+      Some(items) if items.len() == 1 && matches!(heap.get(&items[0], "type"), V::Str(t) if &*t == "text") => {
+        let text = heap.get(&items[0], "text");
+        return match text {
+          V::Str(t) => Ok(!t.is_empty()),
+          V::Undef | V::Null => Ok(false),
+          _ => Err(Bail::new("lexical:text")),
+        };
+      }
+      Some(_) => {}
+    }
+  }
+  Ok(true)
+}
+
+/// `validateNodes({ nodes, nodeValidations })`: when it settles (jobs after its call) and its
+/// failure message; a node type whose validations are not ported bails.
+fn validate_nodes(heap: &Heap, nodes: &[V], lexical: &Lexical) -> Result<(usize, Option<String>), Bail> {
+  let mut jobs = 0;
+  for node in nodes {
+    if !heap.is_obj(node) {
+      return Err(Bail::new("lexical:node"));
+    }
+    let node_type = match heap.get(node, "type") {
+      V::Str(t) if lexical.validated.iter().any(|v| v == &*t) => return Err(Bail::new("lexical:validatedNode")),
+      V::Str(t) => Some(t),
+      V::Undef => None,
+      _ => return Err(Bail::new("lexical:nodeType")),
+    };
+    for validation in node_type.as_ref().and_then(|t| lexical.node_validations.get(&**t)).into_iter().flatten() {
+      // `await validation({ node, ... })` of a synchronous validation
+      jobs += 1;
+      if let Some(message) = node_validation(heap, node, validation)? {
+        let node_type = node_type.as_deref().unwrap_or_default();
+        return Ok((jobs, Some(format!("{node_type} node failed to validate: {message}"))));
+      }
+    }
+    let children = heap.get(node, "children");
+    if heap.has(node, "children") && children.truthy() {
+      let Some(items) = children.as_ref().and_then(|r| heap.arr(r)) else {
+        return Err(Bail::new("lexical:children"));
+      };
+      let (child_jobs, failure) = validate_nodes(heap, items, lexical)?;
+      jobs += child_jobs + 1;
+      if failure.is_some() {
+        return Ok((jobs, failure));
+      }
+    }
+  }
+  Ok((jobs, None))
+}
+
+/// richtext-lexical's `headingValidation` / `listValidation` / `listItemValidation`: `None` when
+/// valid.
+fn node_validation(heap: &Heap, node: &V, validation: &NodeValidation) -> Result<Option<String>, Bail> {
+  Ok(match validation {
+    NodeValidation::Heading(allowed) => {
+      let tag = heap.get(node, "tag");
+      if tag.as_str().is_some_and(|t| allowed.iter().any(|a| a == t)) {
+        None
+      } else if allowed.is_empty() {
+        Some("Headings are not enabled.".to_string())
+      } else {
+        Some(format!("Heading tag must be one of {}.", allowed.join(", ")))
+      }
+    }
+    NodeValidation::List => match heap.get(node, "tag") {
+      V::Str(t) if matches!(&*t, "ol" | "ul") => None,
+      _ => Some("List tag must be one of ol, ul.".to_string()),
+    },
+    NodeValidation::ListItem => match heap.get(node, "value") {
+      V::Num(n) if n.is_finite() => None,
+      _ => Some("List item value must be a finite number.".to_string()),
+    },
+  })
 }
 
 /// `req.t`, or an error when the caller gave none (the failure then bails).
