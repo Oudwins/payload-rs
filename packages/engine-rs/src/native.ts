@@ -127,14 +127,6 @@ export const assertEngineAddon = ({
   }
 }
 
-/**
- * Marks engine-rs as loaded in this process: db-sqlite's `connect` only considers the Rust libsql
- * client for an adapter wrapped outside its own `PAYLOAD_ENGINE=rs` path (a harness calling
- * `withRustEngine`, which imports this module) when this is set, so it never imports engine-rs
- * otherwise.
- */
-;(globalThis as Record<symbol, unknown>)[Symbol.for('@payloadcms/engine-rs')] ??= true
-
 let native: NativeEngine | undefined
 
 /**

@@ -96,7 +96,7 @@ export const setRustEngineClient = (client: RustEngineClient): void => {
 }
 
 /**
- * Whether `@payloadcms/engine-rs` is loaded in this process (its `native.ts` sets the global): a
+ * Whether `@payloadcms/engine-rs` is loaded in this process (its `adapter/index.ts` sets the global): a
  * harness may wrap an adapter with `withRustEngine` itself, without the flag. Never true unless
  * engine-rs was imported by someone.
  */

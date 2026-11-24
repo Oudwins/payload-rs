@@ -25,6 +25,14 @@ import {
   initWithEngineSchema,
 } from './schema.js'
 
+/**
+ * Marks the sqlite engine adapter as loaded in this process: db-sqlite's `connect` only considers
+ * the Rust libsql client for an adapter wrapped outside its own `PAYLOAD_ENGINE=rs` path (a harness
+ * calling `withRustEngine`, from this module) when this is set, so it never imports engine-rs
+ * otherwise.
+ */
+;(globalThis as Record<symbol, unknown>)[Symbol.for('@payloadcms/engine-rs')] ??= true
+
 type AnyObject = Record<PropertyKey, any>
 
 /** Adapter methods served by `SqliteEngine.call` (method name = adapter property). */
