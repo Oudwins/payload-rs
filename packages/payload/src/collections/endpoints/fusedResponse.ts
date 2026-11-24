@@ -78,7 +78,11 @@ const isCompileGuardOn = Boolean(process.env.PAYLOAD_FN_COMPILE_GUARD)
  * `operationArgs` are the arguments the handler passes to the operation; the exact path receives
  * them unchanged. The collection's read access is decided here when that is side-effect free
  * (`isAccessGranted`), so the lane can serve the call as with `overrideAccess` when every other
- * effect of `overrideAccess: false` is a no-op for it (`isAccessFusable`).
+ * effect of `overrideAccess: false` is a no-op for it (`isAccessFusable`). The lane runs first and
+ * access is decided only for a call it served: a served fused read runs no JS and has no other
+ * effect, so its text is simply dropped (and the exact path runs) unless the access is `true`.
+ * Requests the lane cannot serve (no fused backend for the database, a guard) pay no access
+ * evaluation.
  */
 export const fusedResponse = async ({
   exact,
@@ -100,12 +104,15 @@ export const fusedResponse = async ({
   let text: string | undefined
 
   try {
-    const laneArgs = isAccessFusable({ operation, operationArgs })
-      ? { ...operationArgs, overrideAccess: true }
-      : operationArgs
+    const isFusable = isAccessFusable({ operation, operationArgs })
+    const laneArgs = isFusable ? { ...operationArgs, overrideAccess: true } : operationArgs
     const pending = lane({ operation, operationArgs: laneArgs })
 
     text = typeof pending === 'string' || pending === undefined ? pending : await pending
+
+    if (text !== undefined && isFusable && !isAccessGranted({ operation, operationArgs })) {
+      text = undefined
+    }
   } catch {
     text = undefined
   }
@@ -124,11 +131,11 @@ export const fusedResponse = async ({
 }
 
 /**
- * Whether a read without `overrideAccess` behaves exactly like one with it, given the request:
+ * Whether a read without `overrideAccess` behaves exactly like one with it, given the request and
+ * a read access that grants it with `true` (`isAccessGranted`, decided after the lane ran; the
+ * exact path would call the access once and continue with `combineQueries(where, true)`, i.e. the
+ * same `where`):
  *
- * - the collection's read access grants this request with `true` (`isAccessGranted`; the exact
- *   path would call it once and continue with `combineQueries(where, true)`, i.e. the same
- *   `where`);
  * - no field has read access (with `overrideAccess: false` afterRead and path validation read it);
  * - `where` and the effective sort (`sort || defaultSort`) only name top-level fields that are not
  *   relationship / upload / join fields, nor `hash` / `salt` (path validation without
@@ -144,7 +151,7 @@ const isAccessFusable = ({
   operation: FusedOperation
   operationArgs: ReadOperationArgs
 }) => {
-  const { collection, joins, overrideAccess, req, sort, where } = operationArgs
+  const { collection, joins, overrideAccess, sort, where } = operationArgs
 
   if (overrideAccess || joins !== undefined) {
     return false
@@ -162,19 +169,10 @@ const isAccessFusable = ({
     }
   }
 
-  if (
-    operation === 'find' &&
-    !isPlainSort({ fields: config.flattenedFields, sort: sort || config.defaultSort })
-  ) {
-    return false
-  }
-
-  return isAccessGranted({
-    id: operation === 'findByID' ? operationArgs.id : undefined,
-    slug: config.slug,
-    access: config.access?.read,
-    req,
-  })
+  return (
+    operation !== 'find' ||
+    isPlainSort({ fields: config.flattenedFields, sort: sort || config.defaultSort })
+  )
 }
 
 /**
@@ -191,16 +189,17 @@ const isAccessFusable = ({
  * to the exact path, which calls the access function as before.
  */
 const isAccessGranted = ({
-  id,
-  slug,
-  access,
-  req,
+  operation,
+  operationArgs,
 }: {
-  access: Access | undefined
-  id: unknown
-  req: PayloadRequest
-  slug: string
+  operation: FusedOperation
+  operationArgs: ReadOperationArgs
 }) => {
+  const { collection, req } = operationArgs
+  const { slug, access: accessConfig } = collection.config
+  const access = accessConfig?.read
+  const id = operation === 'findByID' ? operationArgs.id : undefined
+
   if (access === defaultAccess) {
     return defaultAccess({ req }) === true
   }
