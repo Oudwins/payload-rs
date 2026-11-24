@@ -5,13 +5,16 @@ Binding interface of the fused read lanes (RUST_PERF_PLAN.md S1, work package A)
 | part                           | where                                                          |
 | ------------------------------ | -------------------------------------------------------------- |
 | core (backend-agnostic)        | `crates/payload-fuse`                                          |
+| population (dataloader)        | `crates/payload-fuse/src/populate.rs`, `src/fuse/populate.ts`  |
 | SQLite backend                 | `crates/payload-fuse-sqlite`                                   |
+| MongoDB backend                | `crates/payload-fuse-mongo`, `src/fuse/mongo.ts`               |
 | napi binding                   | `crates/payload-node/src/fuse.rs` (`fuseBinding()`)            |
 | TS dispatch, plans, guards     | `packages/engine-rs/src/fuse/`, called from `src/ops/index.ts` |
 | SQLite target lookup (adapter) | `getFusedSqliteTarget` in `packages/engine-rs/src/adapter`     |
+| MongoDB target lookup          | `registerFusedMongoTarget`, called by the driver lane          |
 
-A backend (MongoDB: work package B) implements [`FusedBackend`](#the-fusedbackend-trait) and a TS
-target lookup; everything else is shared. Breaking changes are written here first.
+A backend implements [`FusedBackend`](#6-the-fusedbackend-trait) and a TS target lookup;
+everything else is shared. Breaking changes are written here first.
 
 ## 1. What a fused call is
 
@@ -59,9 +62,12 @@ A collection is eligible for reads when:
   has no feature-level `afterRead` hooks; the node types with node hooks or sub fields are listed in
   the plan, and a document holding one of them bails (custom features fall off the lane);
 - no join fields (v1), no drafts (`versions.drafts`, v1), no `select` config function;
-- the collection read access is only reached with `overrideAccess` truthy. Compiled access
-  functions (work package D) plug in here: `fuse/compiled.ts` `isCompiledAccess(fn)` returns
-  `false` until D provides its registry, so every user function is non-eligible.
+- without `overrideAccess` the collection read access must be compiled by the function compiler
+  (FN_COMPILE_CONTRACT.md): it runs in the lane only while call-site guards are installed (payload's
+  `init` installs sampled guards with the Rust core) and `fnIrLaneShouldVerify` does not ask for
+  the call; its result is `true` (no constraint) or a where constraint combined like
+  `executeAccess`' result; falsy, a bail, a de-optimised function or field `access.read` run the
+  exact lane. `where` paths are then `id` only and no `sort` (field permission checks).
 
 ## 3. Guards (per call)
 
@@ -80,10 +86,15 @@ A collection is eligible for reads when:
   a non-hidden, non-virtual field through groups, tabs, arrays and one string relationship hop,
   operators are valid, `like` / `contains` values are not objects; anything else (the exact lane
   would throw a `QueryError` or rewrite the query) runs on the exact lane;
-- options the v1 core does not implement send the call to the exact lane: `includeLockStatus`,
-  `draft` with drafts, `joins` with values, `data` (findByID), `disableErrors` misses,
-  population (`depth && currentDepth <= depth` with relationship fields in the plan), `locale`
-  `'all'` with localized blocks.
+- options the core does not implement send the call to the exact lane: `includeLockStatus`,
+  `draft` with drafts, `joins` with values, `data` (findByID), `disableErrors` misses, `locale`
+  `'all'` with localized blocks;
+- `req` is a plain object, a web `Request` carrying Payload's properties, or Payload's own
+  `isolateObjectProperty` proxy of either (the proxies are recorded in a `globalThis` `WeakMap`,
+  `Symbol.for('payload.isolateObjectProperty')`);
+- population (`depth && currentDepth <= depth` with relationship fields in the plan) only with
+  `overrideAccess: true`, no localization, `req.i18n` set, no `transactionID` and a fresh payload
+  dataloader (section 9); the text lane (`fusedOperationText`) does not populate.
 
 ## 4. Request (JS → native)
 
@@ -207,3 +218,59 @@ Counters (`PAYLOAD_RS_FUSE_STATS_DIR=<dir>`: `fuse-<pid>.json`, throttled + at e
 `guards[reason]`, `diffs` (shadow, with the first differing path per case written to
 `fuse-diffs-<pid>.jsonl`). A suite run proves the lane ran by non-zero `hits` per file that
 reads. `PAYLOAD_RS_FUSE=off` disables the lanes; unset (or `on`) is the default.
+
+## 8. The MongoDB backend
+
+`registerFusedMongoTarget` (src/fuse/mongo.ts) runs when the driver lane is installed
+(MONGO_DRIVER_CONTRACT.md); per call its lookup requires the adapter's read methods to still be
+the driver lane's, a driver client, no tracing / lane verify mode, no mongoose setting the lane
+refuses. The target's `encode` turns the `payload.db.find` / `findOne` / `count` args into the
+reads the driver lane would send, without mongoose:
+
+- upstream's planning: `buildSortParam` (no relationship sort: `sortAggregation` stays empty),
+  `buildProjectionFromSelect`, `sanitizeQueryValue`, and `parseParams` / `buildAndOrConditions` /
+  `buildSearchParam` re-stated synchronously without their sub-query branches (relationship /
+  join hops, nested relationship queries, `near` / geo / `all` / `not_like` run the exact lane);
+- mongoose's casting (`cast.js`) re-stated for the cases where it is the identity (a string on a
+  String path, a finite number on a Number path, an ObjectId on an ObjectId path, a valid Date on
+  a Date path, a boolean on a Boolean path, `null` / `undefined`, Mixed paths, prefix paths of
+  sub-schemas and arrays) or converts 24-digit hex strings on ObjectId paths; setters other than
+  `_id`'s `resetId`, embedded discriminators in a path, `strictQuery` and anything else run the
+  exact lane. The projection mongoose executes with (`_optionsForExec`: schema-level projections,
+  embedded discriminator keys) is computed by mongoose once per model and projection (a query
+  that is never executed) and cached;
+- mongoose-paginate-v2's count / find decisions (estimated count for an empty filter, custom
+  counts, `skip` / `limit`, collation) and result `meta`.
+
+The reads (js-bson, the driver lane's `ReadArgs` plus `op` and `meta`) and the request go to
+`fuseRunMongo(client, transformPlan, requestJson, reads) -> Promise<string>`: on the driver
+runtime it runs the count and find (both in flight), decodes and transforms the documents (the
+driver crate's `transform_read`) into the core's values and runs the core (`afterRead`,
+population, result JSON). Shadow mode also runs the exact lane traced and compares its driver
+operations (filter, sort, projection, skip, limit, hint, collation as js-bson serializes them)
+with the fused reads.
+
+## 9. Population (depth >= 1)
+
+Upstream populates through the request dataloader (`relationshipPopulationPromise`,
+`batchAndLoadDocs`): the loads of one level form one batch in load order (a repeated key is served
+from the cache: the same object), grouped by everything in the key but the id (first appearance
+order) into one nested `payload.find({ where: { id: { in } }, pagination: false })` each, one after
+the other, each nested find populating the next level before it returns. The core reproduces it
+(`populate.rs`): `afterRead` records the loads (paths of the slots, the dataloader keys), the
+batches run depth first through `ReadSession::populate_find` (SQLite: the engine's `find`; MongoDB:
+the cast `{ $and: [{ _id: { $in } }] }` with the collection's sort and projection), the nested
+documents get their own `afterRead`, documents are matched to keys by id, missing ones keep the
+id, trashed ones become `null`, hasMany arrays drop `null`s.
+
+The request carries `"pop": { draft, joins, locale, req, related: { [slug]: { plan, select,
+selectMode, sort, trash, numberID, auth, backend } } }` for the collections the levels can reach
+(an unlisted one bails). A populated result is `#` plus `{ r, x, p, k, n }`: the result with each
+document written once (`p`: the other paths that hold the same object), documents only the
+dataloader holds (`x`, e.g. trashed ones), the dataloader entries in cache insertion order (`k`:
+`[slug, id, depth, currentDepth, path | null]`) and the nested finds (`n`: their depth). JS
+(`fuse/populate.ts`) restores the shared objects, primes `req.payloadDataLoader` with
+`createDataloaderCacheKey` keys and those objects (the cache upstream leaves: same keys, same
+order, same objects), and replays the nested finds' `req` mutations (`req.transactionID = null`,
+`createPayloadRequest({ depth, ... })`). Shadow mode compares the keys, the cached objects' places
+in the result and the `req` state with what the exact lane left.

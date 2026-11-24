@@ -17,6 +17,14 @@ export type FusedTarget = {
     method: 'count' | 'find' | 'findOne',
     args: Record<string, unknown>,
   ) => { db: string; payload: unknown } | string
+  /**
+   * Population: what the backend's nested finds of collection `slug` need besides their args
+   * (`Related.backend` natively), or the reason they cannot run fused.
+   */
+  relatedBackend?: (
+    slug: string,
+    args: { locale: unknown; select: unknown; sort: unknown },
+  ) => { backend: unknown } | string
   /** Runs one fused request (JSON), returning the result JSON or `!<reason>`. */
   run: (requestJson: string, payload?: unknown) => Promise<string> | string
   /**

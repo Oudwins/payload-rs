@@ -8,6 +8,7 @@ pub mod after_read;
 pub mod backend;
 pub mod json;
 pub mod plan;
+mod populate;
 pub mod write;
 
 use std::sync::Arc;
@@ -16,9 +17,10 @@ use serde_json::Value as Json;
 
 use payload_engine::js::{JsVal, decode_graph_typed};
 
-pub use backend::{Bail, DirectRead, FuseResult, FusedBackend, Job, ReadSession};
+pub use backend::{Bail, DirectRead, FuseResult, FusedBackend, Job, Population, ReadSession, Related};
 
-use after_read::{Fallback, ReadArgs, SelectMode, after_read, obj_mut};
+use after_read::{Fallback, ReadArgs, SelectMode, after_read_populating, obj_mut};
+use populate::{PopRun, resolve_level, write_result};
 use plan::CollectionPlan;
 
 /// `Object.prototype` property names: a document or config key with one of these names is read
@@ -62,6 +64,7 @@ struct Request {
   auth: bool,
   /// RUST_HTTP_LANES.md 3.1: the result as canonical text.
   canonical: bool,
+  population: Option<Population>,
 }
 
 fn decode_request(text: &str) -> FuseResult<Request> {
@@ -111,10 +114,10 @@ fn decode_request_value(request: &JsVal, db: Option<JsVal>) -> FuseResult<Reques
     JsVal::Undefined | JsVal::Null => None,
     value => Some(value.clone()),
   };
-  let select_mode = match request.get("selectMode").as_str() {
-    Some("include") => Some(SelectMode::Include),
-    Some("exclude") => Some(SelectMode::Exclude),
-    _ => None,
+  let select_mode = select_mode_of(request.get("selectMode"));
+  let population = match request.get("pop") {
+    JsVal::Undefined | JsVal::Null => None,
+    pop => Some(decode_population(pop)?),
   };
   Ok(Request {
     op,
@@ -131,6 +134,51 @@ fn decode_request_value(request: &JsVal, db: Option<JsVal>) -> FuseResult<Reques
     select_mode,
     auth: flag("auth"),
     canonical: flag("canonical"),
+    population,
+  })
+}
+
+fn select_mode_of(value: &JsVal) -> Option<SelectMode> {
+  match value.as_str() {
+    Some("include") => Some(SelectMode::Include),
+    Some("exclude") => Some(SelectMode::Exclude),
+    _ => None,
+  }
+}
+
+/// `"pop": { draft, joins, locale, req, related: { [slug]: { plan, select, selectMode, sort,
+/// trash, numberID, auth, backend } } }`
+fn decode_population(pop: &JsVal) -> FuseResult<Population> {
+  let JsVal::Obj(entries) = pop.get("related") else { return Err(Bail::new("request:pop")) };
+  let mut related = std::collections::HashMap::with_capacity(entries.len());
+  for (slug, entry) in entries.iter() {
+    let plan_id = entry.get("plan").as_num().filter(|n| *n >= 0.0 && n.fract() == 0.0).ok_or_else(|| Bail::new("request:pop"))?;
+    let plan = plan::plan(plan_id as u32).ok_or_else(|| Bail::new("request:pop"))?;
+    let select = match entry.get("select") {
+      JsVal::Undefined | JsVal::Null => None,
+      value => Some(value.clone()),
+    };
+    let flag = |key: &str| matches!(entry.get(key), JsVal::Bool(true));
+    related.insert(
+      slug.clone(),
+      Related {
+        plan,
+        select,
+        select_mode: select_mode_of(entry.get("selectMode")),
+        sort: entry.get("sort").clone(),
+        trash: flag("trash"),
+        number_id: flag("numberID"),
+        auth: flag("auth"),
+        backend: entry.get("backend").clone(),
+      },
+    );
+  }
+  Ok(Population {
+    draft: matches!(pop.get("draft"), JsVal::Bool(true)),
+    joins: pop.get("joins").clone(),
+    locale: pop.get("locale").clone(),
+    req: pop.get("req").clone(),
+    related,
   })
 }
 
@@ -161,7 +209,13 @@ fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<St
   };
   let select = request.select.as_ref();
   if matches!(request.op, Op::Find | Op::FindByID) {
-    let direct = DirectRead { read: &args, select, select_mode: request.select_mode, auth: request.auth };
+    let direct = DirectRead {
+      read: &args,
+      select,
+      select_mode: request.select_mode,
+      auth: request.auth,
+      population: request.population.as_ref(),
+    };
     if let Some(result) = session.find_json(&request.db, matches!(request.op, Op::FindByID), &direct) {
       return result;
     }
@@ -169,18 +223,23 @@ fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<St
   match request.op {
     Op::Find => {
       let mut result = session.find(&request.db)?;
+      let mut run = request.population.as_ref().map(PopRun::new);
       let page = obj_mut(&mut result).ok_or_else(|| Bail::new("find:result"))?;
       let docs = match page.get_mut("docs") {
         Some(JsVal::Arr(docs)) => Arc::make_mut(docs),
         _ => return Err(Bail::new("find:docs")),
       };
+      let mut loads = Vec::with_capacity(docs.len());
       for doc in docs.iter_mut() {
         if request.auth {
           add_collection(doc, &request.plan.slug)?;
         }
-        after_read(&args, doc, select, request.select_mode)?;
+        loads.push(after_read_populating(&args, doc, select, request.select_mode, run.as_mut())?);
       }
-      write::to_json(&result)
+      if let Some(run) = run.as_mut() {
+        resolve_level(run, session, &args, docs, loads)?;
+      }
+      write_result(&result, run.as_ref())
     }
     Op::FindByID => {
       let mut doc = session.find_one(&request.db)?;
@@ -190,15 +249,19 @@ fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<St
       if request.auth {
         add_collection(&mut doc, &request.plan.slug)?;
       }
-      after_read(&args, &mut doc, select, request.select_mode)?;
-      write::to_json(&doc)
+      let mut run = request.population.as_ref().map(PopRun::new);
+      let loads = after_read_populating(&args, &mut doc, select, request.select_mode, run.as_mut())?;
+      if let Some(run) = run.as_mut() {
+        resolve_level(run, session, &args, std::slice::from_mut(&mut doc), vec![loads])?;
+      }
+      write_result(&doc, run.as_ref())
     }
     Op::Count => write::to_json(&session.count(&request.db)?),
   }
 }
 
 /// `{ ...doc, collection: slug }`
-fn add_collection(doc: &mut JsVal, slug: &str) -> FuseResult<()> {
+pub(crate) fn add_collection(doc: &mut JsVal, slug: &str) -> FuseResult<()> {
   let props = obj_mut(doc).ok_or_else(|| Bail::new("doc:not-object"))?;
   props.insert("collection".to_string(), JsVal::str(slug));
   Ok(())

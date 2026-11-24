@@ -27,6 +27,13 @@ import { getNativeEngine } from '../native.js'
 import { createFunctionRegistry, serializeForEngine } from '../serialize.js'
 import { hasDataProperties, isInertTree, isPlainDataObject, isPlainObject } from './inert.js'
 import { getCollectionPlan } from './plan.js'
+import {
+  comparePopulated,
+  materializePopulated,
+  populatedResult,
+  type PopulationContext,
+  populationRequest,
+} from './populate.js'
 import { canonical, firstDifference } from './shadow.js'
 import { count, recordDiff, stats } from './stats.js'
 import { getFusedTarget } from './targets.js'
@@ -55,7 +62,14 @@ type Op = 'count' | 'find' | 'findByID'
  * A call the fused lane serves: its request (FUSE_CONTRACT.md section 4), its backend and what
  * the backend's `run` takes besides the request.
  */
-type Fused = { op: Op; payload: unknown; request: string; target: FusedTarget }
+type Fused = {
+  op: Op
+  payload: unknown
+  /** set when the operation populates relationships */
+  population?: PopulationContext
+  request: string
+  target: FusedTarget
+}
 
 type NativeFuse = { fuseRegisterPlan: (json: string) => number }
 
@@ -469,8 +483,12 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   if (!Number.isFinite(depth) || typeof currentDepth !== 'number') {
     return guard('depth')
   }
-  if (depth && currentDepth <= depth && plan.hasRelations) {
-    return guard('populate')
+  const population =
+    depth && currentDepth <= depth && plan.hasRelations
+      ? populationRequest({ args, currentDepth, depth, draft, payload, plan, req, target })
+      : undefined
+  if (typeof population === 'string') {
+    return guard(population)
   }
 
   const usePagination = pagination && limit !== 0
@@ -505,8 +523,8 @@ const buildFindRequest = (args: Any): Fused | undefined => {
     req,
     select,
     showHiddenFields: Boolean(showHiddenFields),
-  })}`
-  return { op: 'find', payload: db.payload, request, target }
+  }).slice(0, -1)}${population ? `,"pop":${population.json}` : ''}}`
+  return { op: 'find', payload: db.payload, population: population?.context, request, target }
 }
 
 export const fuseFind = (args: Any, exact: Exact): Promise<Any> | undefined => {
@@ -571,8 +589,21 @@ const buildFindByIDRequest = (args: Any): Fused | undefined => {
   if (!Number.isFinite(depth) || typeof currentDepth !== 'number') {
     return guard('depth')
   }
-  if (depth && currentDepth <= depth && plan.hasRelations) {
-    return guard('populate')
+  const population =
+    depth && currentDepth <= depth && plan.hasRelations
+      ? populationRequest({
+          args,
+          currentDepth,
+          depth,
+          draft: replaceWithVersion,
+          payload,
+          plan,
+          req,
+          target,
+        })
+      : undefined
+  if (typeof population === 'string') {
+    return guard(population)
   }
   const fullWhere = appendNonTrashedFilter({
     enableTrash: config.trash,
@@ -600,8 +631,8 @@ const buildFindByIDRequest = (args: Any): Fused | undefined => {
     req,
     select,
     showHiddenFields: Boolean(showHiddenFields),
-  })}`
-  return { op: 'findByID', payload: db.payload, request, target }
+  }).slice(0, -1)}${population ? `,"pop":${population.json}` : ''}}`
+  return { op: 'findByID', payload: db.payload, population: population?.context, request, target }
 }
 
 export const fuseFindByID = (args: Any, exact: Exact): Promise<Any> | undefined => {
@@ -671,26 +702,33 @@ const runNative = ({
 }
 
 const runFused = (fused: Fused, args: Any, exact: Exact): Promise<Any> | undefined => {
-  const { op } = fused
   if (mode === 'shadow') {
     return shadow(fused, args, exact)
   }
   const text = runNative(fused)
   if (typeof text !== 'string') {
     // an asynchronous backend: a bail continues on the exact lane
-    return text.then((resolved) => settle(op, resolved) ?? exact())
+    return text.then((resolved) => settle(fused, resolved) ?? exact())
   }
-  return settle(op, text)
+  return settle(fused, text)
 }
 
-const settle = (op: Op, text: string): Promise<Any> | undefined => {
+const settle = ({ op, population }: Fused, text: string): Promise<Any> | undefined => {
   if (text.charCodeAt(0) === 33 /* ! */) {
     count(stats.bails, text.slice(1))
     return undefined
   }
   count(stats.hits, op)
+  if (text.charCodeAt(0) === 35 /* # */) {
+    count(stats.populated, op)
+    return Promise.resolve(materializePopulated(text, population!))
+  }
   return Promise.resolve(JSON.parse(text))
 }
+
+/** The result of a fused text without its side effects (shadow mode). */
+const parseResult = (text: string) =>
+  text.charCodeAt(0) === 35 /* # */ ? populatedResult(text) : JSON.parse(text)
 
 /** The caller-provided parts of the args (what the exact lane could mutate). */
 const argsSnapshot = (args: Any) =>
@@ -722,11 +760,18 @@ const shadow = async (fused: Fused, args: Any, exact: Exact): Promise<Any> => {
   }
   if (!isBail) {
     const exactText = canonical(result)
-    const fusedText = canonical(JSON.parse(text))
+    const fusedText = canonical(parseResult(text))
+    if (text.charCodeAt(0) === 35 /* # */) {
+      count(stats.populated, op)
+      const difference = await comparePopulated(text, fused.population!, result)
+      if (difference) {
+        recordDiff({ ...difference, op, request })
+      }
+    }
     if (exactText !== fusedText) {
       // a concurrent write between the two reads: compare with a fused read made now
       const again = await runNative(fused)
-      if (again.charCodeAt(0) === 33 || canonical(JSON.parse(again)) !== exactText) {
+      if (again.charCodeAt(0) === 33 || canonical(parseResult(again)) !== exactText) {
         recordDiff({ kind: 'result', op, request, ...firstDifference(exactText, fusedText) })
       } else {
         count(stats.bails, 'shadow:unstable')
@@ -773,6 +818,10 @@ export const fusedOperationText = ({
   }
   if (!fused) {
     return undefined
+  }
+  if (fused.population) {
+    // the dataloader / request state of a populated result needs its objects
+    return guard('populate:text')
   }
   const request = `${fused.request.slice(0, -1)},"canonical":true}`
   const finish = (text: string): string | undefined => {

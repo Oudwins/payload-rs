@@ -12,9 +12,10 @@
 use std::sync::Mutex;
 
 use payload_engine::js::{JsVal, Obj as JsObj};
-use payload_fuse::{Bail, FuseResult, FusedBackend, Job, ReadSession};
+use payload_fuse::{Bail, FuseResult, FusedBackend, Job, ReadSession, Related};
 use payload_mongo_driver::client::{DriverClient, client, plan};
 use payload_mongo_driver::mongodb::Collection;
+use payload_mongo_driver::mongodb::bson::oid::ObjectId;
 use payload_mongo_driver::mongodb::bson::{Bson, Document, RawDocument, RawDocumentBuf};
 use payload_mongo_driver::mongodb::options::{CountOptions, EstimatedDocumentCountOptions, FindOneOptions, FindOptions};
 use payload_mongo_driver::transform::{Plan, ReadShape, transform_read};
@@ -94,7 +95,8 @@ pub async fn run(client_id: u32, plan_id: u32, reads: MongoReads, request_json: 
     Ok(plan) => plan,
     Err(_) => return "!mongo:plan".to_string(),
   };
-  let backend = MongoBackend { loaded: Mutex::new(Some(loaded)), plan, flags: reads.flags };
+  let backend = MongoBackend { client: client_id, database: reads.database, loaded: Mutex::new(Some(loaded)), plan, flags: reads.flags };
+  // nested finds of relationship population block this worker (`block_in_place`)
   payload_fuse::run(&backend, 0, &request_json)
 }
 
@@ -159,6 +161,8 @@ async fn load(client_id: u32, reads: &MongoReads) -> Result<Loaded, LaneError> {
 
 /// The fused core's view of the loaded reads: each read is served once, in the operation's order.
 struct MongoBackend {
+  client: u32,
+  database: Option<String>,
   loaded: Mutex<Option<Loaded>>,
   plan: std::sync::Arc<Plan>,
   flags: Flags,
@@ -171,12 +175,13 @@ impl FusedBackend for MongoBackend {
 
   fn run(&self, _conn: u32, job: Job) -> FuseResult<String> {
     let loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner()).take();
-    let mut session = MongoSession { loaded, plan: &self.plan, flags: self.flags };
+    let mut session = MongoSession { backend: self, loaded, plan: &self.plan, flags: self.flags };
     job(&mut session)
   }
 }
 
 struct MongoSession<'p> {
+  backend: &'p MongoBackend,
   loaded: Option<Loaded>,
   plan: &'p Plan,
   flags: Flags,
@@ -217,6 +222,78 @@ impl ReadSession for MongoSession<'_> {
     let mut out = JsObj::new();
     out.insert("totalDocs".to_string(), JsVal::Num(total as f64));
     Ok(JsVal::obj(out))
+  }
+
+  /// db-mongodb `find` of a nested find (`pagination: false`, `where: { and: [{ id: { in } }] }`):
+  /// mongoose-paginate-v2's `Model.find(query, projection, { limit: 0 })` with the cast filter
+  /// `{ $and: [{ _id: { $in: [ObjectId...] } }] }` and the sort / projection the TS side cast for
+  /// the collection (`related.backend`: `{ collection, plan, sort, projection }`).
+  fn populate_find(&mut self, _args: &JsVal, related: &Related, ids: &[JsVal]) -> FuseResult<Vec<JsVal>> {
+    let backend = &related.backend;
+    let collection_name = backend.get("collection").as_str().ok_or_else(|| bail("populate:backend"))?.to_string();
+    let plan_id = backend.get("plan").as_num().ok_or_else(|| bail("populate:backend"))? as u32;
+    let plan = plan(plan_id).map_err(|_| bail("plan"))?;
+    let mut in_ids = Vec::with_capacity(ids.len());
+    for id in ids {
+      // `Types.ObjectId.isValid` strings become ObjectIds; only canonical hex ids are fused
+      let hex = id.as_str().filter(|s| s.len() == 24 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+      let oid = hex.and_then(|hex| ObjectId::parse_str(hex).ok()).ok_or_else(|| bail("populate:id"))?;
+      in_ids.push(Bson::ObjectId(oid));
+    }
+    let mut id_condition = Document::new();
+    id_condition.insert("$in", Bson::Array(in_ids));
+    let mut condition = Document::new();
+    condition.insert("_id", id_condition);
+    let mut filter = Document::new();
+    filter.insert("$and", Bson::Array(vec![Bson::Document(condition)]));
+    let find = FindSpec {
+      filter,
+      sort: to_document(backend.get("sort"))?,
+      projection: to_document(backend.get("projection"))?,
+      skip: None,
+      limit: Some(0),
+      collation: None,
+      hint: None,
+    };
+    let state = client(self.backend.client).map_err(|_| bail("client"))?;
+    let coll = collection(&state, self.backend.database.as_deref(), &collection_name);
+    let raws = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(run_find(&coll, Some(&find))))
+      .map_err(|error| match error {
+        LaneError::Bail(reason) => bail(reason),
+        LaneError::Driver(_) => bail("driver"),
+      })?;
+    raws
+      .iter()
+      .map(|raw| {
+        let mut doc = decode_document(raw).map_err(|b| bail(b.0))?;
+        transform_read(&plan, self.flags, ReadShape { lean_with_id: true }, &mut doc).map_err(|b| bail(b.0))?;
+        to_js(V::Obj(doc), 0)
+      })
+      .collect()
+  }
+}
+
+/// A JSON-like sort / projection as js-bson serializes it (integers as int32).
+fn to_document(value: &JsVal) -> FuseResult<Option<Document>> {
+  match value {
+    JsVal::Undefined | JsVal::Null => Ok(None),
+    JsVal::Obj(props) => {
+      let mut out = Document::new();
+      for (key, value) in props.iter() {
+        let bson = match value {
+          JsVal::Bool(b) => Bson::Boolean(*b),
+          JsVal::Num(n) if n.fract() == 0.0 && *n >= i32::MIN as f64 && *n <= i32::MAX as f64 && !(*n == 0.0 && n.is_sign_negative()) => {
+            Bson::Int32(*n as i32)
+          }
+          JsVal::Num(n) => Bson::Double(*n),
+          JsVal::Str(s) => Bson::String(s.to_string()),
+          _ => return Err(bail("populate:backend")),
+        };
+        out.insert(key.clone(), bson);
+      }
+      Ok(Some(out))
+    }
+    _ => Err(bail("populate:backend")),
   }
 }
 

@@ -27,6 +27,8 @@ export type CollectionPlan =
       /** The registered native plan, created on first use (`registerPlan`). */
       id?: number
       json: string
+      /** The collections relationship / upload fields point to. */
+      relations: string[]
       volatile: Volatile[]
     }
   | { eligible: false; reason: string; volatile: Volatile[] }
@@ -46,6 +48,7 @@ type Builder = {
   hasFieldAccess: boolean
   hasRelations: boolean
   payload: Any
+  relations: Set<string>
   volatile: Volatile[]
 }
 
@@ -213,11 +216,15 @@ const fieldPlan = (builder: Builder, field: Any): Record<string, unknown> => {
       const relationTo = watch(builder, field, 'relationTo')
       if (typeof relationTo === 'string') {
         out.r = relationTo
+        builder.relations.add(relationTo)
       } else if (
         Array.isArray(relationTo) &&
         relationTo.every((slug) => typeof slug === 'string')
       ) {
         out.r = [...relationTo]
+        for (const slug of relationTo) {
+          builder.relations.add(slug)
+        }
       } else {
         return ineligible('relationship:relationTo')
       }
@@ -279,6 +286,7 @@ export const buildCollectionPlan = (collection: Any): CollectionPlan => {
     hasFieldAccess: false,
     hasRelations: false,
     payload,
+    relations: new Set(),
     volatile: [],
   }
   try {
@@ -316,6 +324,7 @@ export const buildCollectionPlan = (collection: Any): CollectionPlan => {
       hasFieldAccess: builder.hasFieldAccess,
       hasRelations: builder.hasRelations,
       json,
+      relations: [...builder.relations],
       volatile: builder.volatile,
     }
   } catch (error) {

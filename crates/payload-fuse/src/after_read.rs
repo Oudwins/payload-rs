@@ -14,6 +14,7 @@ use indexmap::IndexMap;
 use payload_engine::js::{JsVal, Obj};
 
 use crate::backend::{Bail, FuseResult};
+use crate::populate::{DocLoads, PopRun};
 use crate::plan::{CollectionPlan, DefaultValue, Field, Kind, RelationTo};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +46,7 @@ pub struct ReadArgs<'a> {
 }
 
 #[derive(Clone, Debug)]
-enum Seg {
+pub(crate) enum Seg {
   Key(String),
   Index(usize),
 }
@@ -56,28 +57,45 @@ struct Deferred {
   value: JsVal,
 }
 
-struct Walk<'a, 'r> {
+struct Walk<'a, 'r, 'w, 'p> {
   args: &'r ReadArgs<'a>,
   deferred: Vec<Deferred>,
   path: Vec<Seg>,
+  /// Relationship population: the loads of the call (`None`: a population bails).
+  pop: Option<&'w mut PopRun<'p>>,
+  /// The population slots / hasMany filters of this document.
+  loads: DocLoads,
 }
 
 /// Runs the traversal on `doc` (a document object) with the root `select`.
 pub fn after_read(args: &ReadArgs<'_>, doc: &mut JsVal, select: Option<&JsVal>, select_mode: Option<SelectMode>) -> FuseResult<()> {
+  after_read_populating(args, doc, select, select_mode, None).map(|_| ())
+}
+
+/// [`after_read`] that records the relationships it would populate in `pop` (dataloader loads,
+/// in upstream's load order) instead of bailing; the returned slots are filled once the loads
+/// resolved ([`crate::populate`]).
+pub(crate) fn after_read_populating(
+  args: &ReadArgs<'_>,
+  doc: &mut JsVal,
+  select: Option<&JsVal>,
+  select_mode: Option<SelectMode>,
+  pop: Option<&mut PopRun<'_>>,
+) -> FuseResult<DocLoads> {
   if !matches!(doc, JsVal::Obj(_)) {
     return Err(Bail::new("doc:not-object"));
   }
-  let mut walk = Walk { args, deferred: Vec::new(), path: Vec::new() };
+  let mut walk = Walk { args, deferred: Vec::new(), path: Vec::new(), pop, loads: DocLoads::default() };
   let fields = &args.plan.fields;
   walk.traverse(fields, doc, true, false, select, select_mode)?;
   for Deferred { path, key, value } in walk.deferred {
     let target = resolve(doc, &path).ok_or_else(|| Bail::new("default:target"))?;
     obj_mut(target).ok_or_else(|| Bail::new("default:target"))?.insert(key, value);
   }
-  Ok(())
+  Ok(walk.loads)
 }
 
-fn resolve<'v>(mut value: &'v mut JsVal, path: &[Seg]) -> Option<&'v mut JsVal> {
+pub(crate) fn resolve<'v>(mut value: &'v mut JsVal, path: &[Seg]) -> Option<&'v mut JsVal> {
   for seg in path {
     value = match (seg, value) {
       (Seg::Key(key), JsVal::Obj(o)) => std::sync::Arc::make_mut(o).get_mut(key.as_str())?,
@@ -136,7 +154,7 @@ fn deep_copy(value: &JsVal) -> JsVal {
   }
 }
 
-impl Walk<'_, '_> {
+impl Walk<'_, '_, '_, '_> {
   /// `traverseFields(...)`: one `promise()` per field, in order.
   fn traverse(
     &mut self,
@@ -619,7 +637,9 @@ impl Walk<'_, '_> {
             let rows = std::sync::Arc::make_mut(rows);
             for row in rows.iter_mut() {
               let data = row.clone();
-              ctx.populate(&data, row)?;
+              if ctx.populate(&data, row)?.is_some() {
+                return Err(Bail::new("populate:locales"));
+              }
             }
           }
         }
@@ -627,7 +647,8 @@ impl Walk<'_, '_> {
         match doc.get_mut(name) {
           Some(JsVal::Arr(rows)) => {
             let rows = std::sync::Arc::make_mut(rows);
-            for row in rows.iter_mut() {
+            let mut loaded = false;
+            for (index, row) in rows.iter_mut().enumerate() {
               if !row.truthy() {
                 continue;
               }
@@ -636,7 +657,18 @@ impl Walk<'_, '_> {
                 _ => None,
               };
               let data = id.unwrap_or_else(|| row.clone());
-              ctx.populate(&data, row)?;
+              if let Some((relation, id)) = ctx.populate(&data, row)? {
+                let mut path = self.path.clone();
+                path.push(Seg::Key(name.to_string()));
+                path.push(Seg::Index(index));
+                self.load(relation, id, depth, path, poly)?;
+                loaded = true;
+              }
+            }
+            if loaded {
+              let mut path = self.path.clone();
+              path.push(Seg::Key(name.to_string()));
+              self.loads.filters.push((path, poly));
             }
           }
           Some(JsVal::Obj(o)) if matches!(o.get("docs"), Some(JsVal::Arr(_))) => return Err(Bail::new("relationship:docs")),
@@ -670,13 +702,29 @@ impl Walk<'_, '_> {
       let o = std::sync::Arc::make_mut(o);
       for (_key, value) in o.iter_mut() {
         let data = value.clone();
-        ctx.populate(&data, value)?;
+        if ctx.populate(&data, value)?.is_some() {
+          return Err(Bail::new("populate:locales"));
+        }
       }
     } else if truthy(doc.get(name)) {
       let data = doc.get(name).cloned().unwrap_or_default();
       let slot = doc.get_mut(name).ok_or_else(|| Bail::new("relationship:slot"))?;
-      ctx.populate(&data, slot)?;
+      if let Some((relation, id)) = ctx.populate(&data, slot)? {
+        let mut path = self.path.clone();
+        path.push(Seg::Key(name.to_string()));
+        self.load(relation, id, depth, path, poly)?;
+      }
     }
+    Ok(())
+  }
+
+  /// `req.payloadDataLoader.load(key)` of `populate()`: the slot at `path` (its `.value` for a
+  /// polymorphic relationship) takes the result once the loads resolved.
+  fn load(&mut self, relation: String, id: JsVal, depth: f64, path: Vec<Seg>, poly: bool) -> FuseResult<()> {
+    let current_depth = self.args.current_depth + 1.0;
+    let Some(pop) = self.pop.as_deref_mut() else { return Err(Bail::new("populate")) };
+    let key = pop.load(&relation, id, depth, current_depth)?;
+    self.loads.slots.push((path, key, poly));
     Ok(())
   }
 }
@@ -690,8 +738,9 @@ struct Populate<'f, 'a, 'r> {
 
 impl Populate<'_, '_, '_> {
   /// `populate({ data, ... })` where `slot` is the value upstream assigns to
-  /// (`dataToUpdate[field.name]...`, or its `.value` for polymorphic relationships).
-  fn populate(&self, data: &JsVal, slot: &mut JsVal) -> FuseResult<()> {
+  /// (`dataToUpdate[field.name]...`, or its `.value` for polymorphic relationships). A relationship
+  /// to populate is returned (the related slug and the id) and `slot` is left as it is.
+  fn populate(&self, data: &JsVal, slot: &mut JsVal) -> FuseResult<Option<(String, JsVal)>> {
     let relation = match (&self.field.relation_to, self.poly) {
       (RelationTo::One(slug), false) => Some(slug.as_str()),
       (_, true) => match get(Some(data), "relationTo") {
@@ -701,17 +750,17 @@ impl Populate<'_, '_, '_> {
       },
       _ => return Err(Bail::new("relationship:relationTo")),
     };
-    let Some(relation) = relation else { return Ok(()) };
+    let Some(relation) = relation else { return Ok(None) };
     if !self.args.plan.collections.contains(relation) {
       if crate::OBJECT_PROTOTYPE_KEYS.contains(&relation) {
         return Err(Bail::new("relationship:relationTo"));
       }
-      return Ok(());
+      return Ok(None);
     }
     let id = if self.poly { get(Some(data), "value").cloned().unwrap_or_default() } else { data.clone() };
     let should_populate = self.depth != 0.0 && !self.depth.is_nan() && self.args.current_depth <= self.depth;
     if should_populate {
-      return Err(Bail::new("populate"));
+      return Ok(Some((relation.to_string(), id)));
     }
     let id = match id {
       JsVal::Bool(b) => JsVal::str(if b { "true" } else { "false" }),
@@ -725,7 +774,7 @@ impl Populate<'_, '_, '_> {
     } else {
       *slot = id;
     }
-    Ok(())
+    Ok(None)
   }
 }
 

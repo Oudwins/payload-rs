@@ -16,9 +16,18 @@ export type FuseStats = {
   hits: Record<string, number>
   /** Collections whose plan is ineligible, per reason (counted per call). */
   ineligible: Record<string, number>
+  /** Fused results that populated relationships (a subset of `hits`), per operation. */
+  populated: Record<string, number>
 }
 
-export const stats: FuseStats = { bails: {}, diffs: 0, guards: {}, hits: {}, ineligible: {} }
+export const stats: FuseStats = {
+  bails: {},
+  diffs: 0,
+  guards: {},
+  hits: {},
+  ineligible: {},
+  populated: {},
+}
 
 const statsDir = process.env.PAYLOAD_RS_FUSE_STATS_DIR
 let lastWrite = 0

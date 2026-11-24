@@ -10,4 +10,4 @@ indexmap.workspace = true
 payload-engine = { path = "../payload-engine" }
 payload-fuse = { path = "../payload-fuse" }
 payload-mongo-driver = { path = "../payload-mongo-driver" }
-tokio = { version = "1", features = ["macros"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

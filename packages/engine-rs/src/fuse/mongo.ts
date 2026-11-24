@@ -103,6 +103,7 @@ export const registerFusedMongoTarget = ({
     const target: FusedTarget = {
       backend: 'mongodb',
       encode: (method, args) => encode(lane, method, args),
+      relatedBackend: (slug, args) => relatedBackend(lane, slug, args),
       run: (requestJson, payload) => {
         const { bytes, client, plan } = payload as MongoPayload
         return fuseRunMongo(client, plan, requestJson, bytes)
@@ -180,6 +181,64 @@ const entity = (lane: DriverLane, collectionSlug: string) => {
     unsupported('joins')
   }
   return { adapter, collectionConfig, Model, plan }
+}
+
+/**
+ * A nested find of relationship population on collection `slug` (`payload.db.find` with
+ * `pagination: false`, `limit: 0`, `where: { and: [{ id: { in: ids } }] }`): the reads the driver
+ * lane would send, but the filter (built natively from the ids: `{ $and: [{ _id: { $in } }] }`).
+ */
+const relatedBackend = (
+  lane: DriverLane,
+  slug: string,
+  { locale, select, sort: sortArg }: { locale: Any; select: Any; sort: Any },
+): { backend: unknown } | string => {
+  try {
+    mongooseTypes = lane.mongoose.Types
+    const { adapter, collectionConfig, Model, plan } = entity(lane, slug)
+    if (adapter.payload.collections[slug]?.customIDType) {
+      return 'mongo:populate:custom-id'
+    }
+    if (adapter.collation) {
+      return 'mongo:populate:collation'
+    }
+    const sortAggregation: Any[] = []
+    const sort = buildSortParam({
+      adapter,
+      config: adapter.payload.config,
+      fields: collectionConfig.flattenedFields,
+      locale,
+      sort: sortArg || collectionConfig.defaultSort,
+      sortAggregation,
+      timestamps: collectionConfig.timestamps || false,
+    })
+    if (sortAggregation.length > 0) {
+      return 'mongo:sort:aggregation'
+    }
+    const projection = select
+      ? buildProjectionFromSelect({
+          adapter,
+          fields: collectionConfig.flattenedFields,
+          select,
+        })
+      : undefined
+    return {
+      backend: {
+        collection: Model.collection.collectionName,
+        plan,
+        projection: projectionForExec(Model, 'find', projection) ?? null,
+        sort: castSort(sort),
+      },
+    }
+  } catch (error) {
+    if (error instanceof Unsupported) {
+      return `mongo:${error.message}`
+    }
+    if (error instanceof Fallback) {
+      return `mongo:${error.reason}`
+    }
+    return 'mongo:error'
+  }
 }
 
 /** db-mongodb `find` up to `Model.paginate`, then mongoose-paginate-v2 up to its queries. */
@@ -970,7 +1029,8 @@ const shadowExact = async <T>(
   const expected = expectedOperations(reads)
   const serialize = (value: unknown) =>
     Buffer.from(lane.BSON.serialize({ value }, { ignoreUndefined: false })).toString('hex')
-  const actual = operations.map((event) => {
+  // the operation's own reads come first (population's nested finds follow)
+  const actual = operations.slice(0, expected.length).map((event) => {
     const { args, collection, op } = event as { args: Any[]; collection: unknown; op: string }
     return { collection, op, spec: serialize(operationSpec(op, args)) }
   })

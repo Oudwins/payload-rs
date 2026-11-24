@@ -163,9 +163,18 @@ const batchAndLoadDocs =
     return docs as TypeWithID[]
   }
 
+/**
+ * The dataloaders `getDataLoader` created (a `WeakSet` on `globalThis`, shared by every copy of
+ * this module). The Rust engine's fused read lanes populate relationships only through a request
+ * dataloader known to be this one, unused so far, and prime it as these loads would have.
+ */
+const dataLoaders = ((globalThis as Record<symbol, unknown>)[Symbol.for('payload.dataLoaders')] ??=
+  new WeakSet()) as WeakSet<object>
+
 export const getDataLoader = (req: PayloadRequest) => {
   const findQueries = new Map()
   const dataLoader = new DataLoader(batchAndLoadDocs(req)) as PayloadRequest['payloadDataLoader']
+  dataLoaders.add(dataLoader)
 
   dataLoader.find = ((args: FindArgs) => {
     const key = createFindDataloaderCacheKey(args)
