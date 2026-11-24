@@ -9,7 +9,7 @@
  *   pnpm vitest run --config test/__rs/http-lanes/vitest.config.ts --project http-lanes-unit
  */
 import { createHmac } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { jwtVerify } from '../../../packages/payload/node_modules/jose/dist/webapi/jwt/verify.js'
 import { jwtSign } from '../../../packages/payload/src/auth/jwt.js'
@@ -133,6 +133,41 @@ describe('verifyJWTSync vs jose', () => {
 
     expect((await decide({ token: hs384 })).isJoseOk).toBe(true)
     expect((await decide({ token: hs512 })).isJoseOk).toBe(true)
+  })
+
+  it('should decide a remembered token like the first time, with fresh objects', async () => {
+    const token = craft({ payload: { id: 'memo', collection: 'users', exp: now() + 3600 } })
+    const first = verifyJWTSync({ secret, token })
+    const second = verifyJWTSync({ secret, token })
+
+    expect(second).toEqual(first)
+    expect(second?.payload).not.toBe(first?.payload)
+    expect(await decide({ token })).toEqual({ isDecided: true, isJoseOk: true })
+    expect(verifyJWTSync({ secret: 'another secret entirely', token })).toBeUndefined()
+  })
+
+  it('should check the time claims of a remembered token on every call', () => {
+    const issuedAt = now()
+    const token = craft({ payload: { id: 'expiring', exp: issuedAt + 2, nbf: issuedAt } })
+
+    expect(verifyJWTSync({ secret, token })).toBeDefined()
+
+    vi.useFakeTimers({ now: (issuedAt + 5) * 1000 })
+    try {
+      expect(verifyJWTSync({ secret, token })).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const early = craft({ payload: { id: 'early', nbf: issuedAt + 60 } })
+    vi.useFakeTimers({ now: (issuedAt + 120) * 1000 })
+    try {
+      expect(verifyJWTSync({ secret, token: early })).toBeDefined()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(verifyJWTSync({ secret, token: early })).toBeUndefined()
   })
 
   it('should leave tokens undecided for an empty secret', async () => {

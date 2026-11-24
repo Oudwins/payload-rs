@@ -13,6 +13,16 @@ const textEncoder = new TextEncoder()
 const keysBySecret = new Map<string, KeyObject | null>()
 
 /**
+ * Tokens whose signature verified, per secret: the decoded JSON text of their header and claims
+ * set (both parse to plain objects, the header is `alg: HS256` without `crit`). Signature, base64url
+ * and UTF-8 checks are pure functions of (secret, token), so a repeated token skips them; the
+ * objects are parsed again per call and the time claims are checked per call. Only tokens signed
+ * with the secret get here, at most `maxVerifiedTokens` per secret (oldest evicted first).
+ */
+const verifiedTokensBySecret = new Map<string, Map<string, { header: string; payload: string }>>()
+const maxVerifiedTokens = 1000
+
+/**
  * Synchronous verification of the tokens Payload issues: compact, HS256, no `crit` header, a
  * canonically encoded signature. Returns what `jwtVerify(token, secretBytes)` (jose, no options)
  * returns when it can tell that jose would succeed, and `undefined` otherwise: the caller then
@@ -27,6 +37,15 @@ const keysBySecret = new Map<string, KeyObject | null>()
  */
 export const verifyJWTSync = ({ secret, token }: { secret: string; token: string }) => {
   try {
+    const verified = verifiedTokensBySecret.get(secret)?.get(token)
+
+    if (verified) {
+      return withValidClaims({
+        payload: JSON.parse(verified.payload),
+        protectedHeader: JSON.parse(verified.header),
+      })
+    }
+
     const [encodedHeader, encodedPayload, signature, ...rest] = token.split('.')
 
     if (
@@ -56,33 +75,78 @@ export const verifyJWTSync = ({ secret, token }: { secret: string; token: string
       return undefined
     }
 
-    const protectedHeader = parseJSONSegment(encodedHeader)
+    const headerJSON = decodeJSONSegment(encodedHeader)
+    const payloadJSON = decodeJSONSegment(encodedPayload)
+
+    if (headerJSON === undefined || payloadJSON === undefined) {
+      return undefined
+    }
+
+    const protectedHeader = parsePlainObject(headerJSON)
 
     if (!protectedHeader || protectedHeader.alg !== 'HS256' || protectedHeader.crit !== undefined) {
       return undefined
     }
 
-    const payload = parseJSONSegment(encodedPayload)
+    const payload = parsePlainObject(payloadJSON)
 
     if (!payload) {
       return undefined
     }
 
-    const now = Math.floor(Date.now() / 1000)
-    const { exp, iat, nbf } = payload
+    rememberVerifiedToken({ header: headerJSON, payload: payloadJSON, secret, token })
 
-    if (
-      (iat !== undefined && typeof iat !== 'number') ||
-      (nbf !== undefined && (typeof nbf !== 'number' || nbf > now)) ||
-      (exp !== undefined && (typeof exp !== 'number' || exp <= now))
-    ) {
-      return undefined
-    }
-
-    return { payload, protectedHeader }
+    return withValidClaims({ payload, protectedHeader })
   } catch {
     return undefined
   }
+}
+
+/** The verified token when its `iat` / `nbf` / `exp` pass jose's checks now, else `undefined`. */
+const withValidClaims = ({
+  payload,
+  protectedHeader,
+}: {
+  payload: DecodedJWTPayload
+  protectedHeader: DecodedJWTPayload
+}) => {
+  const now = Math.floor(Date.now() / 1000)
+  const { exp, iat, nbf } = payload
+
+  if (
+    (iat !== undefined && typeof iat !== 'number') ||
+    (nbf !== undefined && (typeof nbf !== 'number' || nbf > now)) ||
+    (exp !== undefined && (typeof exp !== 'number' || exp <= now))
+  ) {
+    return undefined
+  }
+
+  return { payload, protectedHeader }
+}
+
+const rememberVerifiedToken = ({
+  header,
+  payload,
+  secret,
+  token,
+}: {
+  header: string
+  payload: string
+  secret: string
+  token: string
+}) => {
+  let verifiedTokens = verifiedTokensBySecret.get(secret)
+
+  if (!verifiedTokens) {
+    verifiedTokens = new Map()
+    verifiedTokensBySecret.set(secret, verifiedTokens)
+  }
+
+  if (verifiedTokens.size >= maxVerifiedTokens) {
+    verifiedTokens.delete(verifiedTokens.keys().next().value!)
+  }
+
+  verifiedTokens.set(token, { header, payload })
 }
 
 const getKey = (secret: string) => {
@@ -98,11 +162,21 @@ const getKey = (secret: string) => {
   return key
 }
 
-const parseJSONSegment = (segment: string) => {
+/** A segment's text: jose's base64url decoder, then a fatal UTF-8 decoder. */
+const decodeJSONSegment = (segment: string) => {
+  try {
+    return strictDecoder.decode(decodeBase64url(segment))
+  } catch {
+    return undefined
+  }
+}
+
+/** `JSON.parse`, when the result is a plain object. */
+const parsePlainObject = (json: string) => {
   let parsed: unknown
 
   try {
-    parsed = JSON.parse(strictDecoder.decode(decodeBase64url(segment)))
+    parsed = JSON.parse(json)
   } catch {
     return undefined
   }
