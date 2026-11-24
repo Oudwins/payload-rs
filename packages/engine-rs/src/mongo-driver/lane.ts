@@ -6,11 +6,14 @@
  * the method would build, cast with `_castConditions` and read with `_optionsForExec`), and with
  * the I/O step (`Model.paginate` / `Model.findOne` / `Model.countDocuments` /
  * `Model.estimatedDocumentCount`) plus the read `transform` served by the Rust driver: the
- * transformed documents come back as JSON text and are materialized with one `JSON.parse`.
+ * transformed documents come back as JSON text and are materialized with one `JSON.parse`. Inside
+ * a mongoose transaction (`req.transactionID`: sessions belong to mongoose) the I/O runs on the
+ * Node driver in that session (`raw: true`) and the documents go through the same Rust transform.
  *
  * A call stays on the mongoose lane (the live engine's method, `fallback`) when:
  *
- * - it runs inside a transaction (`req.transactionID`: sessions belong to mongoose),
+ * - it runs inside a transaction and `PAYLOAD_MONGO_DRIVER_SESSION_IO=false`, or it needs an
+ *   estimated count there (the `count` command is not allowed in a transaction),
  * - the model is not pristine (a spied / replaced `paginate`, `find`, `findOne`, `countDocuments`,
  *   `estimatedDocumentCount` or `aggregate`, query middleware, patched collection methods),
  * - mongoose would apply something the lane does not reproduce (debug mode, global `maxTimeMS` /
@@ -283,11 +286,10 @@ const serializeArgs = (lane: DriverLane, args: Record<string, unknown>) =>
   })
 
 /**
- * `PAYLOAD_MONGO_DRIVER_SESSION_IO=true` (experimental, off by default): reads inside a mongoose
- * transaction stay on the lane with Node driver I/O in the session instead of running on the
- * mongoose lane.
+ * Reads inside a mongoose transaction stay on the lane, with Node driver I/O in the session
+ * (`PAYLOAD_MONGO_DRIVER_SESSION_IO=false`: they run on the mongoose lane instead).
  */
-const isSessionIoEnabled = process.env.PAYLOAD_MONGO_DRIVER_SESSION_IO === 'true'
+const isSessionIoEnabled = process.env.PAYLOAD_MONGO_DRIVER_SESSION_IO !== 'false'
 
 /** The Rust-owned transaction of `req` (rustTxn.ts, prototype), if any. */
 const rustSessionOf = (lane: DriverLane, req: Any) => {

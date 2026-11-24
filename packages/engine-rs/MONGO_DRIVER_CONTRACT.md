@@ -69,9 +69,8 @@ The call is handed to the method installed before (the live engine, which runs o
 the same `this` and arguments, before any observable step, or re-run there after a Rust bail
 (reads are idempotent; the mongoose lane produces upstream's result or error):
 
-- the call runs inside a transaction: `getSession(adapter, req)` (upstream's, awaiting a promise
-  `req.transactionID`) returns a session (sessions are mongoose's, see "Transactions"); a
-  `transactionID` promise resolving to `null` (transactions disabled) is no transaction,
+- the call runs inside a transaction (see "Transactions") and needs an estimated count, or
+  `PAYLOAD_MONGO_DRIVER_SESSION_IO=false`,
 - the model is not pristine: an own property shadows `aggregate` / `countDocuments` /
   `estimatedDocumentCount` / `find` / `findOne` (`vi.spyOn`), `paginate` is not
   mongoose-paginate-v2's, the collection has own `aggregate` / `countDocuments` /
@@ -167,23 +166,26 @@ missing until something has touched mongoose and the open has completed.
 ## Transactions
 
 Transactions stay on mongoose (owner decision). `beginTransaction` opens mongoose first (one
-await) and returns a mongoose `ClientSession` id; every read whose `req` has a session runs on the
-mongoose lane; `payload.db.sessions[id]` is the mongoose session users may pass to models. A
-process that writes inside transactions (every Payload write on a replica set, unless
-`disableTransaction`) therefore opens mongoose at its first write. Without a replica set (or with
-`transactionOptions: false`) no session exists and every read is served by the lane.
+await) and returns a mongoose `ClientSession` id; `payload.db.sessions[id]` is the mongoose session
+users may pass to models. A process that writes inside transactions (every Payload write on a
+replica set, unless `disableTransaction`) therefore opens mongoose at its first write. Without a
+replica set (or with `transactionOptions: false`) no session exists.
 
-Two measurement switches, both off by default (they change what this section states, so they
-need an owner decision before either could become a default):
+A read whose `req` has a session (`getSession(adapter, req)`, upstream's: a pending
+`req.transactionID` is awaited, one resolving to `null` is no transaction) stays on the lane (owner
+decision, 2026-11-24): it is planned and cast like any other lane read, but its I/O runs on the Node
+driver in that session: the mongoose collection calls the replaced query would make
+(`Model.collection.find` / `findOne` / `countDocuments` / `aggregate` with the cast filter,
+mongoose's options and the session, count and find both in flight in upstream's order) with
+`raw: true`, and the raw documents go through the lane's Rust transform and JSON materialization
+(`mongoDriverTransform`, synchronous). An estimated count (the `count` command is not allowed in a
+transaction) or a Rust bail runs the call on the mongoose lane. Counters: `driverLane.inTransaction`.
+`PAYLOAD_MONGO_DRIVER_SESSION_IO=false` runs every read inside a transaction on the mongoose lane
+(fallback reason `transaction`).
 
-- `PAYLOAD_MONGO_DRIVER_SESSION_IO=true`: a read whose `req` has a session is planned and cast
-  like any other lane read, but its I/O runs on the Node driver in that session: the mongoose
-  collection calls the replaced query would make (`Model.collection.find` / `findOne` /
-  `countDocuments` / `aggregate` with the cast filter, mongoose's options and the session, count and
-  find both in flight in upstream's order) with `raw: true`, and the raw documents go through the
-  lane's Rust transform and JSON materialization (`mongoDriverTransform`, synchronous). An
-  estimated count (the `count` command is not allowed in a transaction) or a Rust bail runs the call
-  on the mongoose lane. Counters: `driverLane.inTransaction`.
+A measurement switch, off by default (it changes what this section states, so it needs an owner
+decision before it could become a default):
+
 - `PAYLOAD_MONGO_RUST_TXN=true` (prototype of RUST_PERF_PLAN.md D4, `mongo-driver/rustTxn.ts`):
   write operations without collection / root hooks and with `overrideAccess` run in a transaction
   the Rust client owns (`mongoDriverTxnBegin` / `mongoDriverTxnCommand` / `mongoDriverTxnEnd`);

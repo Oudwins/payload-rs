@@ -4,8 +4,9 @@
  *
  * - every read method is served by the Rust driver (hit counters) and, with the lane differential
  *   in strict mode, equals the mongoose lane's result for the same call (key order, types),
- * - calls the lane must not serve (spied models, transactions, values JSON cannot carry) run on the
- *   mongoose lane, with the counters naming why,
+ * - calls the lane must not serve (spied models, values JSON cannot carry) run on the mongoose lane,
+ *   with the counters naming why; reads inside a mongoose transaction stay on the lane, with their
+ *   I/O on the Node driver in the transaction's session,
  * - mongoose stays unopened until something touches it; indexes and collections exist anyway
  *   (created through the Rust client) and mongoose works once touched.
  *
@@ -255,7 +256,7 @@ describe('driver lane', () => {
     expect(Object.values(verifyStats.divergent).reduce((a, b) => a + b, 0)).toBe(divergentBefore)
   })
 
-  it('runs spied models and transactions on the mongoose lane', async () => {
+  it('runs spied models on the mongoose lane and reads inside transactions in their session', async () => {
     const payload = await start()
     await seed(payload)
     // authors has no join field: upstream's find calls Model.paginate
@@ -272,12 +273,17 @@ describe('driver lane', () => {
       typeof createPayloadRequest
     >[0])
     await initTransaction(req)
-    const inTransaction = fallbacks('find')
+    const fallbacksBefore = fallbacks('find')
     const servedBefore = served()
-    await payload.find({ collection: 'posts', depth: 0, limit: 3, req })
-    expect(delta(inTransaction, fallbacks('find'))).toEqual({ transaction: 1 })
-    expect(delta(servedBefore, served())).toEqual({})
+    const inTransactionBefore = { ...getDriverLaneStats().inTransaction }
+    const inTransaction = await payload.find({ collection: 'posts', depth: 0, limit: 3, req })
+    expect(delta(fallbacksBefore, fallbacks('find'))).toEqual({})
+    expect(delta(servedBefore, served())).toEqual({ find: 1 })
+    expect(delta(inTransactionBefore, { ...getDriverLaneStats().inTransaction })).toEqual({
+      find: 1,
+    })
     await killTransaction(req)
+    expect(inTransaction).toEqual(await payload.find({ collection: 'posts', depth: 0, limit: 3 }))
   })
 
   it('re-runs reads whose documents hold values JSON cannot carry on the mongoose lane', async () => {
