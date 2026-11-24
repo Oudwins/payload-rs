@@ -18,7 +18,7 @@ Scope: ideation only, nothing in the repo was changed. Numbers marked "measured 
   - **Max-versions check skipped** on creates with a generated id (one statement fewer, same database effects).
   - **In-transaction reads on the driver lane by default** (Node driver I/O in mongoose's session).
   - **Upstream's mongoose write methods allowed for the default rs writes.**
-  - **Test changes:** only our own specs `test/__rs/mongo-driver/lane.int.spec.ts` and `test/__rs/mongo-adapter/live.int.spec.ts` may change to assert the new wiring. Upstream tests stay unmodified.
+  - **Test changes:** only our own specs `test/__rs/mongo-driver/lane.int.spec.ts` and `test/__rs/mongo-adapter/live.int.spec.ts` may change to assert the new wiring, and `test/__rs/mongo-harness/parity.int.spec.ts` may accept exactly the missing max-versions `findVersions` after a create with a generated id (goldens stay TS-recorded and unchanged). Upstream tests stay unmodified.
 - Every work package must keep: the full upstream suite on MongoDB / SQLite / PostgreSQL equal to the TS baselines, shadow mode at 0 divergences, and add lane-specific differential checks (fast lane vs exact lane) with hit counters proving the fast lane ran.
 
 ## 1. Bottom line

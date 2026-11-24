@@ -23,6 +23,11 @@ type Args<T extends JsonObject = JsonObject> = {
   req?: PayloadRequest
   returning?: boolean
   select?: SelectType
+  /**
+   * Internal: the caller proved that the parent has no other versions (a create whose id the
+   * database adapter generated), so `enforceMaxVersions` cannot find anything to delete.
+   */
+  skipMaxVersions?: boolean
   unpublish?: boolean
 }
 
@@ -47,6 +52,7 @@ export async function saveVersion<TData extends JsonObject = JsonObject>({
   req,
   returning,
   select,
+  skipMaxVersions,
   unpublish,
 }: Args<TData>): Promise<JsonObject | null> {
   assertNoValidationWrite(req)
@@ -137,7 +143,7 @@ export async function saveVersion<TData extends JsonObject = JsonObject>({
 
   const max = getVersionsMax(collection || global!)
 
-  if (createdNewVersion && max > 0) {
+  if (createdNewVersion && max > 0 && !skipMaxVersions) {
     await enforceMaxVersions({
       id,
       collection,

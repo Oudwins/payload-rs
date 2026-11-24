@@ -65,6 +65,68 @@ const tick = () => {
 const ids: Record<string, Array<number | string>> = {}
 const id = (collection: string, index: number) => ids[collection]![index]!
 
+type TraceEntry = { firstAwait?: Any[]; method?: string }
+type Any = any
+
+/**
+ * The one relaxation of the trace goldens (owner decision 2026-11-24, RUST_PERF_PLAN.md section 0,
+ * "Max-versions check skipped"): the Rust engine skips `enforceMaxVersions` after a create whose id
+ * the adapter generated, so the golden `findVersions` of that check (page = maxPerDoc + 1,
+ * limit 1, pagination false, sort -updatedAt, where parent = the parent of the `createVersion`
+ * right before it, which directly follows a `create` without an `id` in its data) may be absent.
+ * The goldens stay TS-recorded; every other entry must match. Returns the actual trace with such
+ * golden entries put back where they are missing.
+ */
+const withSkippedMaxVersions = (
+  payload: Payload,
+  section: string,
+  name: string,
+  actual: TraceEntry[],
+) => {
+  const file = path.join(dirname, 'golden', 'trace', `${section}.json`)
+  const expected: TraceEntry[] | undefined = fs.existsSync(file)
+    ? JSON.parse(fs.readFileSync(file, 'utf8'))[name]
+    : undefined
+  if (!Array.isArray(expected) || !Array.isArray(actual)) {
+    return actual
+  }
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+  const isSkippedCheck = (index: number) => {
+    const [check, version, create] = [expected[index], expected[index - 1], expected[index - 2]]
+    const args = check?.firstAwait?.[0]
+    const versionArgs = version?.firstAwait?.[0]
+    const data = create?.firstAwait?.[0]?.data?.$obj?.value
+    const maxPerDoc = payload.collections[args?.collection]?.config.versions?.maxPerDoc
+    return (
+      check?.method === 'findVersions' &&
+      version?.method === 'createVersion' &&
+      create?.method === 'create' &&
+      data !== undefined &&
+      !('id' in data) &&
+      typeof maxPerDoc === 'number' &&
+      args.page === maxPerDoc + 1 &&
+      args.limit === 1 &&
+      args.pagination === false &&
+      args.sort === '-updatedAt' &&
+      same(Object.keys(args.where?.$obj?.value ?? {}), ['parent']) &&
+      args.where.$obj.value.parent?.$obj?.value?.equals === versionArgs?.parent
+    )
+  }
+  const out: TraceEntry[] = []
+  let j = 0
+  for (let i = 0; i < expected.length; i++) {
+    if (j < actual.length && same(expected[i], actual[j])) {
+      out.push(actual[j++]!)
+    } else if (isSkippedCheck(i)) {
+      out.push(expected[i]!)
+    } else {
+      // a real difference: compare the rest unchanged
+      return [...out, ...actual.slice(j)]
+    }
+  }
+  return [...out, ...actual.slice(j)]
+}
+
 type Ctx = { payload: Payload; tick: typeof tick }
 const step = (section: string, name: string, fn: (ctx: Ctx) => Promise<unknown> | unknown) =>
   test(`${section} > ${name}`, async ({ payload }) => {
@@ -75,7 +137,11 @@ const step = (section: string, name: string, fn: (ctx: Ctx) => Promise<unknown> 
       { idName: (hex) => normaliseTrace.idName(hex) ?? normalise.idName(hex) },
     )
     golden.check(section, name, result)
-    traceGolden.check(section, name, numberEmbeddedIDs(normaliseTrace(entries)))
+    traceGolden.check(
+      section,
+      name,
+      withSkippedMaxVersions(payload, section, name, numberEmbeddedIDs(normaliseTrace(entries))),
+    )
   })
 
 const richText = (text: string) => ({

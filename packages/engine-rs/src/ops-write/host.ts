@@ -136,6 +136,21 @@ const uploadLocale = (locale: Any, config: Any) =>
       : undefined
     : locale
 
+/**
+ * Whether the MongoDB adapter generated the id of a document `create` just inserted (owner
+ * decision 2026-11-24: then the new parent has exactly one version and `enforceMaxVersions` is
+ * skipped): no custom ID field and no `allowIDOnCreate` (db-mongodb's create.ts assigns `_id` only
+ * in those cases; otherwise mongoose generates an ObjectId). `PAYLOAD_RS_SKIP_MAX_VERSIONS=false`
+ * runs the check anyway.
+ */
+const isMaxVersionsSkip = process.env.PAYLOAD_RS_SKIP_MAX_VERSIONS !== 'false'
+
+const hasGeneratedMongoID = (payload: Any, collection: Any) =>
+  isMaxVersionsSkip &&
+  payload.db.name === 'mongoose' &&
+  !payload.db.allowIDOnCreate &&
+  !payload.collections[collection.slug]?.customIDType
+
 export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<string, unknown> => ({
   traversals,
 
@@ -669,6 +684,7 @@ export const createOpsWriteHost = (traversals?: Record<string, Any>): Record<str
       payload,
       req,
       returning: false,
+      skipMaxVersions: hasGeneratedMongoID(payload, collection),
     }),
   createStatusAfterBeforeChange: (
     publicationData: Any,
