@@ -7,7 +7,10 @@ import {
   beforeChangeTraverseFields as upstreamBeforeChangeTraverseFields,
   beforeValidateTraverseFields as upstreamBeforeValidateTraverseFields,
 } from 'payload'
-import { isRustCoreEngine as selectsRustCoreEngine } from 'payload/internal'
+import {
+  registerPayloadOwnFunction,
+  isRustCoreEngine as selectsRustCoreEngine,
+} from 'payload/internal'
 
 import type { SanitizedServerEditorConfig } from './lexical/config/types.js'
 
@@ -100,10 +103,24 @@ const markLexicalAfterRead = (
     value: editorConfig,
   })
 
+/**
+ * Registers the editor hooks as Payload's own functions (payload's `payloadOwnFunctions`, owner
+ * decision 2026-11-24): the Rust engine's fused write lanes run them only when the editor config's
+ * features add no hooks of their own.
+ */
+const registerLexicalHooks = (editorConfig: SanitizedServerEditorConfig, hooks: RichTextHooks) => {
+  for (const hook of ['afterChange', 'afterRead', 'beforeChange', 'beforeValidate'] as const) {
+    for (const fn of hooks[hook] ?? []) {
+      registerPayloadOwnFunction(fn, { editorConfig, hook, kind: 'lexicalHook' })
+    }
+  }
+  return hooks
+}
+
 export const getLexicalHooks: (args: {
   editorConfig: SanitizedServerEditorConfig
 }) => RichTextHooks = ({ editorConfig }) => {
-  return {
+  return registerLexicalHooks(editorConfig, {
     afterChange: [
       async (args) => {
         const {
@@ -715,7 +732,7 @@ export const getLexicalHooks: (args: {
         return value
       },
     ],
-  }
+  })
 }
 
 /**

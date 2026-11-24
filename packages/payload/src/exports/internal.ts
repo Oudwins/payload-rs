@@ -13,6 +13,11 @@ export { createCLI } from '../cli/index.js'
 export { getCommandInput } from '../cli/runtime/getCommandInput.js'
 export { createSchemaBuildContext } from '../database/createSchemaBuildContext.js'
 export type { SchemaBuildContext } from '../database/createSchemaBuildContext.js'
+export {
+  payloadOwnFunctions,
+  registerPayloadOwnFunction,
+} from '../fields/config/payloadOwnFunctions.js'
+export type { PayloadOwnFunction } from '../fields/config/payloadOwnFunctions.js'
 export { getLLMInstructions } from '../llm-instructions/getInstructions.js'
 export { assertClientUploadAccess } from '../uploads/assertClientUploadAccess.js'
 export { assertClientUploadAllowed } from '../uploads/assertClientUploadAllowed.js'

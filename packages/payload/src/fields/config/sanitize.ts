@@ -30,6 +30,7 @@ import { getFieldPaths } from '../getFieldPaths.js'
 import { setDefaultBeforeDuplicate } from '../setDefaultBeforeDuplicate.js'
 import { validations } from '../validations.js'
 import { defaultFieldValidators } from './defaultFieldValidators.js'
+import { registerPayloadOwnFunction } from './payloadOwnFunctions.js'
 import {
   reservedAPIKeyFieldNames,
   reservedBaseAuthFieldNames,
@@ -314,12 +315,16 @@ export const sanitizeField = ({
       field.hooks = {}
     }
 
+    const slugOptions = {
+      name: field.name,
+      localized: field.localized,
+      slugify: field.slugify,
+      useAsSlug,
+    }
     field.hooks.beforeChange = [
-      generateSlug({
-        name: field.name,
-        localized: field.localized,
-        slugify: field.slugify,
-        useAsSlug,
+      registerPayloadOwnFunction(generateSlug(slugOptions), {
+        kind: 'slugBeforeChange',
+        options: slugOptions,
       }),
       ...(field.hooks.beforeChange || []),
     ]
@@ -328,7 +333,10 @@ export const sanitizeField = ({
     // generic ` - Copy` default, which isn't collision-safe across repeated duplicates of the same
     // source. Runs per-locale for a localized slug.
     field.hooks.beforeDuplicate = [
-      generateSlugBeforeDuplicate({ name: field.name }),
+      registerPayloadOwnFunction(generateSlugBeforeDuplicate({ name: field.name }), {
+        kind: 'slugBeforeDuplicate',
+        options: { name: field.name },
+      }),
       ...(field.hooks.beforeDuplicate || []),
     ]
   }

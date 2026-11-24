@@ -3,6 +3,8 @@ import type { PayloadRequest } from '../../../types/index.js'
 import type { FieldHook, PolymorphicRelationshipField } from '../../config/types.js'
 import type { Authorship, SanitizedAuthorship } from './types.js'
 
+import { registerPayloadOwnFunction } from '../../config/payloadOwnFunctions.js'
+
 export type { Authorship, SanitizedAuthorship }
 
 /**
@@ -40,15 +42,17 @@ type SubmittedAuthorshipFields = Partial<Record<AuthorshipFieldName, boolean>>
 const getSubmittedAuthorship = (context: RequestContext): SubmittedAuthorshipFields | undefined =>
   context[SUBMITTED_AUTHORSHIP_CONTEXT_KEY] as SubmittedAuthorshipFields | undefined
 
-const recordSubmittedAuthorship =
-  (fieldName: AuthorshipFieldName): FieldHook =>
-  ({ context, siblingData }) => {
-    const submitted = getSubmittedAuthorship(context) ?? {}
-    // `null` is a submitted value (an explicit clear); only an absent key means "not supplied".
-    submitted[fieldName] = (siblingData as Record<string, unknown>)[fieldName] !== undefined
-    context[SUBMITTED_AUTHORSHIP_CONTEXT_KEY] = submitted
-    return undefined
-  }
+const recordSubmittedAuthorship = (fieldName: AuthorshipFieldName): FieldHook =>
+  registerPayloadOwnFunction<FieldHook>(
+    ({ context, siblingData }) => {
+      const submitted = getSubmittedAuthorship(context) ?? {}
+      // `null` is a submitted value (an explicit clear); only an absent key means "not supplied".
+      submitted[fieldName] = (siblingData as Record<string, unknown>)[fieldName] !== undefined
+      context[SUBMITTED_AUTHORSHIP_CONTEXT_KEY] = submitted
+      return undefined
+    },
+    { field: fieldName, kind: 'authorshipBeforeValidate' },
+  )
 
 const wasAuthorshipSubmitted = (fieldName: AuthorshipFieldName, context: RequestContext): boolean =>
   getSubmittedAuthorship(context)?.[fieldName] === true
@@ -115,6 +119,17 @@ const clearCreatedByOnDuplicate: FieldHook = ({ siblingData }) => {
 const clearUpdatedByOnDuplicate: FieldHook = ({ siblingData }) => {
   delete siblingData.updatedBy
 }
+
+registerPayloadOwnFunction(setCreatedBy, { field: 'createdBy', kind: 'authorshipBeforeChange' })
+registerPayloadOwnFunction(setUpdatedBy, { field: 'updatedBy', kind: 'authorshipBeforeChange' })
+registerPayloadOwnFunction(clearCreatedByOnDuplicate, {
+  field: 'createdBy',
+  kind: 'authorshipBeforeDuplicate',
+})
+registerPayloadOwnFunction(clearUpdatedByOnDuplicate, {
+  field: 'updatedBy',
+  kind: 'authorshipBeforeDuplicate',
+})
 
 export type AuthorshipFieldArgs = {
   /**
