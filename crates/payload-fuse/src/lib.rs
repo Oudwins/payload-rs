@@ -302,6 +302,8 @@ pub fn after_read_original(request_json: &str, doc: &mut JsVal) -> FuseResult<()
     show_hidden: true,
     depth: 0.0,
     current_depth: 1.0,
+    // `overrideAccess: true`: no field access applies
+    field_access: None,
   };
   after_read::after_read(&args, doc, None, None)
 }
