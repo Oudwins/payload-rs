@@ -714,7 +714,14 @@ the related collections' compiled read access where they run (`false`, e.g. the 
 access for an anonymous request, reads nothing; FUSE_CONTRACT.md sections 2, 3 and 9). The
 `read` guard no longer stops REST creates / updates whose result populates the users; guard
 sampling of those functions bails the write (transaction aborted, exact lane) on the calls it
-samples. No change to the write side: `src/fuse-write` is untouched.
+samples. No change to the write side: `src/fuse-write` is untouched. Measured (full MongoDB
+harness, `--fuse shadow --fuse-writes shadow`, 0 lane differences): the write guard `read` drops
+from 326 to 73 (the rest: relationships' `transaction`); collections-rest's REST writes now reach
+the prepare and stop at `plan:tabs:named` instead. Reads: the `populate:access` (261) and
+`access:field:args` (22) guards are gone, fused read hits 3441 -> 3467. Perf suite (MongoDB, 1k
+posts, typical, 3 runs, `ts/rs` geometric means): REST create 1.21, update 1.25, partial-update
+1.68, delete 1.16; auth and reads unchanged within the run-to-run spread (`auth (JWT)` and
+`meUser` are bimodal per process on both trees).
 
 **update-many and delete-many** (WP-K, driver `crates/payload-fuse-write/src/bulk.rs`, TS
 `runBulk` / `prepareBulk` in `src/fuse-write/mongo.ts`, dispatch `fuseBulk` in `index.ts`). Two
