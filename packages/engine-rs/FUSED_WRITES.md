@@ -287,7 +287,9 @@ pub fn write_plan(id: u32) -> Option<Arc<WritePlan>>;
 
 The JSON (`v: 1`) holds:
 
-- `slug`, `localization` (`null` or `{ defaultLocale, localeCodes }`), `timestamps`, `versions` (`null` or `{ max }`: `getVersionsMax`), `defaultIDType`,
+- `slug`, `localization` (`null` or `{ defaultLocale, localeCodes }`), `timestamps`, `versions` (`null` or `{ max }`: `getVersionsMax`), `drafts` (`null` or
+  `{ autosave, localizeStatus, validate }` of the sanitized `versions.drafts`; added 2026-11-25 by
+  WP-L), `defaultIDType`,
   `defaultMaxTextLength`, `relations` (`{ [slug]: { customIDType } }` of every collection a
   relationship field reaches, for the validators and the write transform);
 - `fields`: `collection.fields` in config order, each with its type, name, `required`, `hasMany`,
@@ -304,7 +306,7 @@ The JSON (`v: 1`) holds:
 Ineligible (the plan builder returns a reason): user functions anywhere on the write path that are
 not in `payloadOwnFunctions` / `defaultFieldValidators` (hooks, `validate`, `defaultValue`,
 `access`, `admin.condition`, `filterOptions`), custom ID fields, `localization.filterAvailableLocales`,
-drafts, upload / auth collections, join fields, blocks (until their discriminators are modelled),
+`drafts.schedulePublish`, upload / auth collections, join fields, blocks (until their discriminators are modelled),
 point / json / code / radio / upload fields, rich text other than lexical with default features
 (step 3), `timezone` dates, mongoose schema features the casting does not model (setters other
 than `_id`'s, discriminators, maps, `Decimal128`, `Buffer`, `BigInt`, non-strict schemas).
@@ -329,6 +331,10 @@ pub struct WriteCtx<'a> {
   pub fallback_language: &'a [String],
   /// Clock and ObjectId readings (12.3).
   pub entropy: &'a mut dyn Entropy,
+  /// The operation's `draft` / `autosave` arguments (added 2026-11-25, WP-L, drafts): with
+  /// drafts `draft` decides `isSavingDraft`; `autosave` is the version's `autosave`.
+  pub draft: bool,
+  pub autosave: bool,
 }
 ```
 
@@ -361,7 +367,7 @@ replays them one to one:
   setters, so `_id` is the first key), then with versions `saveVersion`'s `now` and the version
   `_id`;
 - updateByID: row ids, `dataToUpdate.updatedAt`, then with versions `saveVersion`'s `now` and the
-  version `_id`.
+  version `_id`; a draft save (`isSavingDraft`, no `updateOne`) takes no `updatedAt`.
 
 The lock check (`checkDocumentLockStatus`), `getLatestCollectionVersion`, `enforceMaxVersions`,
 population and afterRead stay with WP-H's drivers and take no readings here.
@@ -401,6 +407,9 @@ pub struct PreparedWrite {
   pub doc: bson::Document,
   /// update: the document `findAndModify` returns (`stored` with the `$set` applied).
   pub stored_after: Option<bson::Document>,
+  /// update: a draft save (added 2026-11-25, WP-L): no main statement (`doc` empty,
+  /// `stored_after` `None`), the version built from beforeChange's result.
+  pub draft: bool,
   /// With versions: `documents[0]` of `insert _<slug>_versions` and the latest-flip
   /// `updateMany` (`q`, `u`) createVersion sends after it.
   pub version: Option<VersionWrite>,
@@ -425,6 +434,24 @@ anything is observable: the library never touches its inputs (it works on its ow
 `flip_update` is empty when mongoose's cast drops every key of `{ $unset: { latest: 1 } }` (no
 `latest` path: collections without drafts); mongoose then sends no `update` command at all, so the
 driver sends the flip only when `flip_update` is not empty.
+
+Drafts (WP-L, 2026-11-25). `isSavingDraft` is the prepare's: create `draft && drafts`, update
+`draft && drafts && data._status !== 'published'` (`publishAllLocales` is then false; the
+argument itself is guarded by the dispatch). A draft save first writes `data._status = 'draft'`
+(create: into the caller's data, part of `caller_data`), then skips every validation unless
+`drafts.validate`. beforeValidate's `onFieldAccess` result for the path `_status` decides
+create's `docWithLocalesForFields` (`{}` when reached and allowed, else `{ _status: {} }`, which
+also decides `_isNewDoc`). A draft-save update builds the version from beforeChange's result
+with `versionData.updatedAt = now` (timestamps) and returns `draft: true`; the version's
+`autosave` is `ctx.autosave` (`updateLatestVersion` is not modelled: the dispatch guards
+`autosave`). Bails: a localized config with drafts whose operation would publish all locales
+(`!draft && !(localizeStatus && locale !== 'all')`: upstream then runs
+`validateLocalWithLocaleKeyedData`, `drafts:localizedPublish`); with `localizeStatus` a
+beforeChange `_status` that is a string (`drafts:statusString`) and an update that is not a
+draft save and publishes the request's locale (`buildLocalizedPublishData` reads the main
+document, `drafts:localePublish`). For an update the caller passes `docWithLocales` /
+`originalDoc` of the stored document upstream reads (with drafts the latest version, see
+section 13) and `stored` the main document the `$set` applies to.
 
 Which data reaches `prepare_create`: the operation's `args.data`. The Local API hands the
 operation `deepCopyObjectSimple(data)`, so `caller_data` is what upstream leaves in that copy
@@ -498,9 +525,9 @@ Corpus (TS engine as reference; `test/__rs/fuse-writes/int.spec.ts` and `localiz
 the `minimal` and `typical` perf shapes (typical with lexical content), `kinds`, `rich`, `pages`
 (blocks) and a localized config (localized scalars, relationships, rich text, groups, arrays and
 blocks, localized fields in non-localized containers; creates and updates in en / de / fr, stored
-documents with every locale filled, unknown locale keys). 191 cases: 178 equal (127 written, 51
-invalid; compared: insert / findAndModify BSON bytes, the stored document, the version insert,
-`req.context`, the operation's data, the error's message and data), 13 bails, 0 differences.
+documents with every locale filled, unknown locale keys), and since WP-L collections with drafts
+(both configs). 214 cases: 199 equal (145 written, 54 invalid; compared: insert / findAndModify BSON bytes, the stored document, the version insert,
+`req.context`, the operation's data, the error's message and data), 15 bails, 0 differences.
 Crate unit tests: `cargo test -p payload-fuse-write`.
 
 Bails (the exact lane runs): data holding `id` / `_id` on create, dotted keys (`unflattenData`),
@@ -515,14 +542,22 @@ field and takes `getFallbackValue({ isDocumentValueAllowed })` as upstream), an 
 violation, operator values (`$inc`, `$push`, `$remove`), any validation failure without `ctx.t`,
 rich text given as a string, nodes with ids, link / block node types.
 
-Not yet: drafts and autosave, update-many, named tabs, global block references, link and block
-node validations (form state).
+Drafts (WP-L): creates (published, default status, draft saves with and without draft
+validation), draft-save updates, publishes over a latest draft, a localized `_status`
+(`localizeStatus`) in one locale, collections with drafts but no localized fields on a localized
+config (draft saves); corpus groups `drafts` (14: 11 written, 3 invalid) and `localized drafts`
+(9: 7 written, 2 bails by design: `drafts:localePublish`, `drafts:localizedPublish`).
+
+Not yet: autosave (`updateLatestVersion`), publishing all locales of a localized config
+(`validateLocalWithLocaleKeyedData`), a locale publish with `localizeStatus`
+(`buildLocalizedPublishData`), named tabs, global block references, link and block node
+validations (form state).
 
 For WP-H, per operation: lexical's `afterChange` hook is the identity for every input the library
 accepts (no node ids, so its `originalNodeIDMap` is empty); the field `afterChange` traversal has
 no other own hooks on eligible collections.
 
-## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, status 2026-11-25)
+## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, status 2026-11-25)
 
 Built and on by default since WP-K (`PAYLOAD_RS_FUSE_WRITES=off` restores the exact lane for
 every write; WP-J's default-on commit was held until update-many / delete-many were fused, see
@@ -550,9 +585,10 @@ prepare is never a default: it exists to prove the drivers, the transaction and 
 **Eligibility** (plan, per collection): no collection hooks on any write path, no root
 `afterError`; every field hook / `defaultValue` function in `payloadOwnFunctions`, every
 `validate` in `defaultFieldValidators`; no `filterOptions` function, join, point, virtual field,
-block references; not upload, auth, drafts, custom ID, localization (later slices), no `select`
-function; WP-A's read plan eligible. **Guards** (per call): inert args and `data` (no Dates yet),
-accepted `req` kinds, no `transactionID`, no `disableTransaction`, no `draft` / `autosave` /
+block references; not upload, auth, scheduled publish (`drafts.schedulePublish`), custom ID,
+no `select` function; WP-A's read plan eligible. **Guards** (per call): inert args and `data` (no Dates yet),
+accepted `req` kinds, no `transactionID`, no `disableTransaction`, no `autosave` (`draft` since
+WP-L, see Drafts below) /
 `duplicateFromID` / `publishAllLocales` / `selectedLocales` / `select` / `req.file`, no `id` in
 data; `overrideAccess` or `access.create` compiled and truthy; the result read must be
 buildable (checked before the prepare: field read access compiled per call, population's nested
@@ -639,8 +675,8 @@ tapes need the reading), with versions `saveVersion`'s `now` and the version's `
 takes none (the lock check's clock reading only happens when a lock exists, which bails).
 
 Guards besides the create's: a 24-hex lowercase id, no `trash` argument and no `deletedAt` in the
-data of a trash collection, no `draft` / `autosave` / `publishAllLocales` /
-`unpublishAllLocales`, a plain `req.context`, and without `overrideAccess` an `access.update` /
+data of a trash collection, no `autosave` / `publishAllLocales` / `unpublishAllLocales`
+(`draft` allowed since WP-L), deletes of a collection with `schedulePublish` guarded, a plain `req.context`, and without `overrideAccess` an `access.update` /
 `access.delete` that compiles to `true` (a where constraint would change the stored-document
 read). State reads add the locked documents of the id (`document.value` as ObjectId or string)
 and, for deletes, the preferences key.
@@ -748,12 +784,77 @@ release addon, mongod 8.2 rs0):
   lane 4/4, glue 33/33 (`PAYLOAD_ENGINE=ts`), the fuse-writes corpus 12/12 (`PAYLOAD_ENGINE=ts`),
   the lane suites 29/29 (default and shadow), packaging OK.
 
-Remaining bails in the shadow harness, largest first: `plan:localization:filterAvailableLocales`
-149, `plan:field:json` 141, `plan:field:upload` 117, `plan:date:timezone` 112, `mongo:model` 71,
-`plan:tabs:named` 59, `prepare:relationship:numberIDs` 49, `plan:field:slug` 48, `plan:field:ui`
-38, `populate:related` 37; guards: `transaction` 763, `file` 605, `args:options` 515,
-`access:fields` 473, `disableTransaction` 292, `trash` 167, `data:id` 152; ineligible: `drafts`
-1319 (section 12's "not yet"), `hooks:beforeRead` 768, `hooks:afterRead` 608.
+**Drafts** (WP-L, 2026-11-25). Collections with `versions.drafts` are eligible (not with
+`schedulePublish`); WP-I's prepare models `isSavingDraft` (section 12.4). Per operation:
+
+- create: `draft` is no longer a guard (`autosave` is: `updateLatestVersion`). The statements
+  are the create's; the version's `autosave` is the argument's, and the latest flip now sends
+  its update (the version schema has `latest`). The result read passes `draft` to the
+  population only: `fusedFindByIDRequest` (an operation's result) no longer refuses `draft` on a
+  collection with drafts, since afterRead runs on the written document.
+- updateByID: the stored-document read is `getLatestCollectionVersion`'s: first the parent's
+  latest version (template `lv`: updateByID's where with `appendVersionToQueryKey`, combined
+  with `parent` and `latest: true`, db-mongodb `findVersions` with `limit: 1`, `-updatedAt`,
+  cast like `mf`), in the transaction; when it finds one, `docWithLocales` / `originalDoc` come
+  from its `version` with `_id = parent` (the read transform's trailing `id` is upstream's
+  `version.id = id`); otherwise the result read's `findOne` as before. A draft save then sends
+  no `findAndModify`: the lock check, the version insert, the latest flip, `enforceMaxVersions`'
+  find; its readings are row ids, `saveVersion`'s `now` and the version `_id` (no
+  `dataToUpdate.updatedAt`, no mongoose `now`). A publish whose inputs came from the latest
+  version sends the `findAndModify` built from them and runs the prepare again with the
+  returned main document as `stored` (same inputs and readings: its `$set` must equal the first
+  one byte for byte, its `stored_after` the returned document), so the version is built from
+  the main document upstream's `updateOne` returns, without a read upstream does not send.
+- deleteByID / delete-many: unchanged statements (`deleteCollectionVersions` covers drafts).
+- update-many: as before (`draft` stays a guard: upstream then reads `queryDrafts`); its
+  documents are the main documents (update.ts reads `payload.db.find`).
+- Guards: `drafts:localizedPublish` (a localized config, drafts, and `!draft && !(localizeStatus
+  && locale !== 'all')`: upstream validates every locale with
+  `validateLocalWithLocaleKeyedData`); the prepare bails `drafts:localePublish` (with
+  `localizeStatus` an update that is not a draft save and publishes the request's locale) and
+  `drafts:statusString`.
+
+Verification: corpus groups `drafts` / `localized drafts` (section 12.6), lane suites
+`drafts.int.spec.ts` (published / default / draft creates, draft validation, draft saves,
+publish over a latest draft, a draft update sending `published`, population of a draft save,
+`maxPerDoc`, deletes) and `drafts-localized.int.spec.ts` (localized status, a draft in another
+locale, a locale update left as a draft, a locale publish, a collection without localized
+fields), 0 differences in shadow.
+
+The MongoDB harness with `--fuse shadow --fuse-writes shadow` (WP-L's final tree, release
+addon): 3330 / 164 / 422, equal to `.rs-baseline/mongodb-all.json` (test/cli differs by the
+worktree path; storage emulators and hmr absent), 0 lane-shadow differences, 0 fused-write
+differences. Fused writes compared: 3247 creates, 85 updateByID, 229 deleteByID, 4 update-many,
+207 delete-many (WP-K: 2983 / 71 / 162 / 3 / 185, so drafts add 264 creates, 14 updateByID, 67
+deleteByID, 1 update-many, 22 delete-many). The 1319 `drafts` ineligible calls are gone; what
+stays on the exact lane: the guard `drafts:localizedPublish` 599 (creates and updates that
+publish all locales of a localized config: `validateLocalWithLocaleKeyedData`), the prepare's
+`drafts:localePublish` 13, `args:options` 115 (incl. `autosave`, `publishAllLocales`); the
+collections with `schedulePublish` in the harness also have function `filterOptions`
+(`field:filterOptions` 554, previously counted under `drafts`).
+The harness with `--engine default` (fused writes on): 3330 / 164 / 422, equal to the baseline
+(the plugin-ecommerce settlement test passed); fused writes served: 3246 creates, 85
+updateByID, 229 deleteByID, 4 update-many, 207 delete-many.
+
+Remaining bails in the shadow harness, largest first (WP-L's run):
+`plan:localization:filterAvailableLocales` 189, `plan:field:json` 141, `plan:date:timezone` 131,
+`plan:field:upload` 107, `plan:field:slug` 78, `plan:tabs:named` 76,
+`prepare:relationship:numberIDs` 49, `populate:related` 46, `plan:field:condition` 43,
+`plan:field:ui` 38; guards: `transaction` 753, `drafts:localizedPublish` 599, `file` 464, `read`
+326, `disableTransaction` 292, `access:verify` 176, `trash` 167, `data:id` 158, `args:options`
+115; ineligible: `hooks:beforeRead` 666, `field:filterOptions` 554, `hooks:afterRead` 521,
+`hooks:beforeOperation` 371, `joins` 269, `auth` 254. (WP-K's run had `drafts` 1319 ineligible.)
+
+What is left for drafts, largest first: publishing all locales of a localized config (599 calls:
+`validateLocalWithLocaleKeyedData` runs a second validation lifecycle per locale with a cloned
+`req.context`; a port would rerun beforeValidate / beforeChange on the locale-keyed data and
+bail on any error), autosave (`updateLatestVersion`: the latest version's find, then either
+`updateVersion`'s `findOneAndUpdate` with the found version's `createdAt`, or a new version;
+the version `_id` reading is only taken on the second branch, so the dispatch cannot take it
+ahead of the native call as the other readings are; it needs the readings taken at the
+decision, or a second native call), a locale publish with `localizeStatus` (13:
+`buildLocalizedPublishData` on the main document read with `locale: 'all'`), update-many with
+`draft` (`queryDrafts`).
 
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
