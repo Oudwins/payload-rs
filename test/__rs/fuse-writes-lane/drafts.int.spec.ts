@@ -240,6 +240,27 @@ test.suite('fuse-writes drafts', { config: './drafts.config.ts' }, () => {
     expect(deleted.docs).toHaveLength(2)
   })
 
+  test('should write a collection with scheduled publish', async ({ payload }) => {
+    const doc = await payload.create({
+      collection: 'scheduled',
+      data: { title: 's1' },
+      overrideAccess: true,
+    })
+
+    const draft = await payload.update({
+      id: doc.id,
+      collection: 'scheduled',
+      data: { title: 's2' },
+      draft: true,
+      overrideAccess: true,
+    })
+    await payload.delete({ id: doc.id, collection: 'scheduled', overrideAccess: true })
+    const remaining = await payload.find({ collection: 'scheduled', overrideAccess: true })
+
+    expect(draft).toMatchObject({ _status: 'draft', title: 's2' })
+    expect(remaining.totalDocs).toBe(0)
+  })
+
   test('should have served writes without lane differences', () => {
     if (process.env.PAYLOAD_RS_FUSE_WRITES === 'off' || process.env.PAYLOAD_ENGINE === 'ts') {
       return

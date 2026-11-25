@@ -115,9 +115,7 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
     }
     const drafts =
       config.versions && typeof config.versions === 'object' ? config.versions.drafts : undefined
-    if (drafts && (typeof drafts !== 'object' || drafts.schedulePublish)) {
-      ineligible('drafts:schedulePublish')
-    }
+    // (`drafts.schedulePublish` only changes deletes: deleteScheduledPublishJobs)
     if (collection.customIDType) {
       ineligible('customID')
     }

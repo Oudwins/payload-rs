@@ -6,8 +6,8 @@
  *
  * Eligible: no collection hooks on the write paths and no root `afterError` hooks; every field
  * function on the path is Payload's own (`payloadOwnFunctions`, `defaultFieldValidators`); no
- * upload / auth collection, no joins, no scheduled publish, no custom ID (localization and drafts:
- * WP-I's prepare and WP-A's read plan decide).
+ * upload / auth collection, no joins, no custom ID (localization and drafts: WP-I's prepare and
+ * WP-A's read plan decide; deletes guard scheduled publish).
  */
 import { defaultFieldValidators } from '../../../payload/src/fields/config/defaultFieldValidators.js'
 import { payloadOwnFunctions } from '../../../payload/src/fields/config/payloadOwnFunctions.js'
@@ -22,6 +22,8 @@ export type WritePlan =
       /** `access.create` / `access.update` / `access.delete` (only reached without `overrideAccess`). */
       access: Record<'create' | 'delete' | 'update', unknown>
       eligible: true
+      /** `versions.drafts.schedulePublish`: deletes also delete the scheduled publish jobs. */
+      hasScheduledPublish: boolean
       slug: string
       volatile: Volatile[]
     }
@@ -193,10 +195,7 @@ export const buildWritePlan = (collection: Any, payload: Any): WritePlan => {
     }
     const versions = watch(builder, config, 'versions')
     const drafts = versions ? watch(builder, versions, 'drafts') : undefined
-    if (drafts && watch(builder, drafts, 'schedulePublish')) {
-      // scheduled publish jobs (deleteScheduledPublishJobs, the jobs queue)
-      ineligible('drafts:schedulePublish')
-    }
+    const hasScheduledPublish = Boolean(drafts && watch(builder, drafts, 'schedulePublish'))
     const accessObject = watch(builder, config, 'access') ?? {}
     const access = {
       create: watch(builder, accessObject, 'create'),
@@ -208,6 +207,7 @@ export const buildWritePlan = (collection: Any, payload: Any): WritePlan => {
       slug: config.slug,
       access,
       eligible: true,
+      hasScheduledPublish,
       volatile: builder.volatile,
     }
   } catch (error) {

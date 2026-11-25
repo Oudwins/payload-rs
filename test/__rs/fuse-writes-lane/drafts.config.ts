@@ -8,7 +8,8 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 /**
  * Collections with drafts for the fused writes (packages/engine-rs/FUSED_WRITES.md sections 12
  * and 13): `drafts` (drafts without draft validation, a relationship, array rows), `validated`
- * (`drafts.validate`), `capped` (`maxPerDoc: 2`).
+ * (`drafts.validate`), `scheduled` (`schedulePublish`: deletes stay on the exact lane), `capped`
+ * (`maxPerDoc: 2`).
  */
 export default buildConfigWithDefaults({
   suite: 'fuse-writes-lane-drafts',
@@ -37,6 +38,11 @@ export default buildConfigWithDefaults({
         slug: 'validated',
         fields: [{ name: 'title', type: 'text', required: true }],
         versions: { drafts: { validate: true } },
+      },
+      {
+        slug: 'scheduled',
+        fields: [{ name: 'title', type: 'text' }],
+        versions: { drafts: { schedulePublish: true } },
       },
       {
         slug: 'capped',

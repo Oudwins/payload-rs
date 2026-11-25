@@ -578,6 +578,10 @@ const checkByID = (name: ByIDName, args: Any) => {
     count(stats.ineligible, plan.reason)
     return undefined
   }
+  if (!isUpdate && plan.hasScheduledPublish) {
+    // deleteByID's deleteScheduledPublishJobs (the jobs collection)
+    return guard('drafts:schedulePublish')
+  }
   const readPlan = getCollectionPlan(collection, payload)
   if (!readPlan.eligible) {
     count(stats.ineligible, `read:${readPlan.reason}`)
@@ -914,6 +918,10 @@ const checkBulk = (name: BulkName, args: Any) => {
   if (!plan.eligible) {
     count(stats.ineligible, plan.reason)
     return undefined
+  }
+  if (!isUpdate && plan.hasScheduledPublish) {
+    // delete.ts's deleteScheduledPublishJobs (the jobs collection)
+    return guard('drafts:schedulePublish')
   }
   const readPlan = getCollectionPlan(collection, payload)
   if (!readPlan.eligible) {
