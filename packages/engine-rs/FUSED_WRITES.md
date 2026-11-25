@@ -521,8 +521,10 @@ no other own hooks on eligible collections.
 
 ## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, status 2026-11-25)
 
-Built (on by default since WP-J; create, updateByID and deleteByID run on WP-I's prepare,
-section 12):
+Built (off by default, `PAYLOAD_RS_FUSE_WRITES=on` turns it on: WP-J's default-on commit is held
+until update-many / delete-many are fused, because with only the by-id writes fused the bulk
+operations' idle mongoose connection makes them slower, 0.77-0.91x; create, updateByID and
+deleteByID run on WP-I's prepare, section 12):
 
 | part                   | where                                                                                         |
 | ---------------------- | --------------------------------------------------------------------------------------------- |
