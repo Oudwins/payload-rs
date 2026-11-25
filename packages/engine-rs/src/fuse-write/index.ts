@@ -6,7 +6,7 @@
  * `fuseWrite` returns the operation's promise, or `undefined` when the call runs on the exact lane
  * (a guard failed or the collection is ineligible; nothing observable ran).
  *
- * `PAYLOAD_RS_FUSE_WRITES`: `off` (default until the Rust prepare lands and the bars hold), `on`,
+ * `PAYLOAD_RS_FUSE_WRITES`: `on` (unset: the default), `off`,
  * `shadow` (write lane-shadow, section 9: the fused lane runs in its transaction and reads the
  * touched collections before aborting, then the exact lane runs with the fused lane's clock and
  * ObjectId readings replayed and its result is returned; results, raw BSON state, the caller's
@@ -53,11 +53,11 @@ export { registerFusedWriteTarget } from './targets.js'
 type Mode = 'off' | 'on' | 'shadow'
 
 const mode: Mode =
-  process.env.PAYLOAD_RS_FUSE_WRITES === 'on'
-    ? 'on'
+  process.env.PAYLOAD_RS_FUSE_WRITES === 'off'
+    ? 'off'
     : process.env.PAYLOAD_RS_FUSE_WRITES === 'shadow'
       ? 'shadow'
-      : 'off'
+      : 'on'
 
 type Exact = () => Promise<Any>
 

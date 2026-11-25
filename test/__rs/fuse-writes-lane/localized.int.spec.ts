@@ -153,7 +153,7 @@ test.suite('fuse-writes-lane localized', { config: './localized.config.ts' }, ()
   })
 
   test('should have served writes without lane differences', () => {
-    if (!process.env.PAYLOAD_RS_FUSE_WRITES || process.env.PAYLOAD_RS_FUSE_WRITES === 'off') {
+    if (process.env.PAYLOAD_RS_FUSE_WRITES === 'off' || process.env.PAYLOAD_ENGINE === 'ts') {
       return
     }
     const stats = fuseWriteStats()

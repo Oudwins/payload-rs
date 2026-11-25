@@ -521,9 +521,10 @@ no other own hooks on eligible collections.
 
 ## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, status 2026-11-25)
 
-Built (off by default, `PAYLOAD_RS_FUSE_WRITES=on` turns it on: WP-J's default-on commit was
-held until update-many / delete-many were fused, which WP-K did, see below; create, updateByID,
-deleteByID, update-many and delete-many run on WP-I's prepare, section 12):
+Built and on by default since WP-K (`PAYLOAD_RS_FUSE_WRITES=off` restores the exact lane for
+every write; WP-J's default-on commit was held until update-many / delete-many were fused, see
+below). create, updateByID, deleteByID, update-many and delete-many run on WP-I's prepare,
+section 12:
 
 | part                   | where                                                                                          |
 | ---------------------- | ---------------------------------------------------------------------------------------------- |
@@ -537,7 +538,7 @@ deleteByID, update-many and delete-many run on WP-I's prepare, section 12):
 | bindings               | `fuseWriteMongoOp`, `fuseWriteMongoFind`, `fuseWriteMongoState` (`payload-node/fuse_write.rs`) |
 | harness                | `runSuites.mjs --fuse-writes <mode> --fuse-writes-prepare <ts\|rs>`; `test/__rs/fuse-writes`   |
 
-Switches: `PAYLOAD_RS_FUSE_WRITES=off|on|shadow` (default `off`);
+Switches: `PAYLOAD_RS_FUSE_WRITES=off|on|shadow` (default `on` since WP-K, 2026-11-25);
 `PAYLOAD_RS_FUSE_WRITES_PREPARE=ts` selects the **temporary TS prepare** (upstream's own
 `beforeValidate` / `beforeChange`, db-mongodb `create` / `createVersion` and mongoose's document
 casting, without their I/O); otherwise WP-I's Rust prepare (`fuseWritePrepare`). The TS
@@ -733,29 +734,38 @@ Remaining bails in the shadow harness, largest first: `plan:localization:filterA
 38, `populate:related` 36; guards: `file` 595, `args:options` 509, `access:fields` 465,
 `transaction` 307, `disableTransaction` 289, `data:id` 152.
 
-Perf suite (2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install verified
-against the tarballs; `ts/rs` median ratios, geometric mean per category; `off` is the engine
-variant `rs-fused-off`):
+Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
+verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
+byte-identical; `ts/rs` ratios, per scenario the median of 3 processes per variant, geometric
+mean per category; `off` is the engine variant `rs-fused-off`, `on` the default):
 
-| shape   | surface | create      | update      | partial-update | delete      |
-| ------- | ------- | ----------- | ----------- | -------------- | ----------- |
-| typical | local   | 1.10 → 1.25 | 1.00 → 1.27 | 1.00 → 1.52    | 0.97 → 1.00 |
-| typical | rest    | 0.62 → 0.59 | 1.04 → 0.95 | 0.40 → 0.39    | 0.90 → 0.84 |
-| typical | graphql | 1.11 → 0.93 | -           | 1.02 → 1.00    | 1.00 → 0.97 |
-| complex | local   | 1.08 → 1.07 | 1.03 → 1.03 | 1.05 → 1.02    | 1.00 → 1.00 |
-| hooks   | local   | 1.07 → 1.07 | 0.95 → 1.00 | 0.96 → 0.99    | 0.95 → 0.96 |
+| shape   | surface | create      | update      | partial-update | delete      | globals     |
+| ------- | ------- | ----------- | ----------- | -------------- | ----------- | ----------- |
+| typical | local   | 1.14 → 1.70 | 0.98 → 2.00 | 0.97 → 2.24    | 0.97 → 1.66 | 1.22 → 1.25 |
+| typical | rest    | 0.98 → 0.93 | 0.98 → 0.98 | 0.86 → 0.81    | 0.94 → 0.94 | 1.24 → 1.31 |
+| typical | graphql | 1.11 → 1.09 | -           | 1.00 → 0.94    | 0.97 → 0.95 | 1.07 → 1.13 |
+| complex | local   | 1.00 → 1.00 | 0.96 → 0.98 | 0.97 → 0.97    | 0.91 → 0.94 | 1.11 → 1.23 |
+| complex | rest    | 0.89 → 0.94 | 0.98 → 0.97 | 0.88 → 0.91    | 0.85 → 0.97 | 1.16 → 1.28 |
+| complex | graphql | 1.03 → 1.04 | -           | 1.05 → 1.04    | 0.90 → 1.00 | 1.12 → 1.05 |
+| hooks   | local   | 1.03 → 1.04 | 0.93 → 0.97 | 0.96 → 0.99    | 0.95 → 0.98 | 1.21 → 1.21 |
+| hooks   | rest    | 0.99 → 1.00 | 0.98 → 0.98 | 0.95 → 0.94    | 0.98 → 0.96 | 1.22 → 1.37 |
+| hooks   | graphql | 1.02 → 1.07 | -           | 0.90 → 0.99    | -           | 1.14 → 0.95 |
 
-Per scenario (typical, Local API): update by id 1.44-1.56x (off ~1.0x), create 1.27-1.47x,
-delete by id 1.30x (off 0.95x). complex and hooks are ineligible (user hooks, where-constraint
-access), REST and GraphQL calls do not reach the lanes (request guards), which is the next
-widening; REST `POST` / `PATCH /:id` are ~0.4x on both variants (not a fused-writes effect). The
-bulk `update many` (0.91x vs 1.02x) and `delete many` (0.77x vs 0.99x) are not fused and got
-slower with the lane on: a micro-benchmark shows no difference between deletes after fused and
-exact creates, but a 20 ms idle gap before the timed delete doubles its latency, so the likely
-cause is that the bulk operation's Node driver connection sat idle while the setup's writes went
-through the Rust client; fusing `update` / `delete` (many) removes it. The section 8 estimates
-(1.7-2.3x) are not reached on the perf suite: its update path still pays the stored-document
-read, the lock delete outside the transaction and the commit.
+complex `locale` (local / rest / graphql): 1.33 → 1.29, 1.31 → 1.21, 1.41 → 1.29 (reads and a
+localized `PATCH`, not fused); `versions`: 1.01 → 0.97, 1.05 → 1.04, 0.93 → 0.99.
+
+Per scenario (typical, Local API, off → on): update many (10 by where) 0.99x → 2.33x (52.9 →
+22.5 ms), delete many (5 by where) 1.00x → 1.50x (8.8 → 5.9 ms), update by id 0.94-1.00x →
+1.68-2.03x, partial updates 0.96-1.26x → 2.04-2.71x, create 1.11-1.22x → 2.00-2.10x, delete by id
+0.94x → 1.83x. Only the typical shape's Local API calls reach the lanes: complex and hooks are
+ineligible (user hooks, where-constraint access), REST and GraphQL writes are refused by the
+request guards (WP-C). On those paths on and off run the same code; their differences are within
+the run-to-run spread (single processes on a shared machine, up to ~10% between the three runs),
+the largest being REST / GraphQL calls of the typical shape (0.93-0.94 vs 0.98-1.00), consistent
+with the idle-wake effect above after the setups' fused Local API writes.
+
+WP-J's measurement with only the by-id writes fused (bulk update 0.91x, delete many 0.77x) is
+superseded by the table above.
 
 Measured (2026-11-24, creates, WP-I's prepare, release addon, mongod 8.2 rs0 on loopback, cores
 22-31; vitest micro-benchmark of 300 creates after 30 warm-up, p50, not the perf suite):

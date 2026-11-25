@@ -671,7 +671,7 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
   test('should have served writes without lane differences', async () => {
     const stats = fuseWriteStats()
 
-    if (!process.env.PAYLOAD_RS_FUSE_WRITES || process.env.PAYLOAD_RS_FUSE_WRITES === 'off') {
+    if (process.env.PAYLOAD_RS_FUSE_WRITES === 'off' || process.env.PAYLOAD_ENGINE === 'ts') {
       return
     }
 
