@@ -144,7 +144,7 @@ async fn run(
     BulkRequest::Update { docs, entries } => {
       let mut results = Vec::with_capacity(docs.len());
       for (stored, entry) in docs.iter().zip(&entries) {
-        match update_document(client, txn, entry, read, stored, is_shadow, true).await {
+        match update_document(client, txn, entry, read, stored, is_shadow, true, false).await {
           // The documents share `req.context`: upstream's later documents find the keys an
           // earlier one wrote (authorship's submitted marks, `_isNewDoc`, lexical's
           // `internal.richText`) and overwrite them, and its readers see the last write. Each

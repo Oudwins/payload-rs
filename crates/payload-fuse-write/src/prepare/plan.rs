@@ -275,6 +275,15 @@ pub struct Schema {
   pub minimize: bool,
 }
 
+/// `versions.drafts` (sanitized).
+#[derive(Debug)]
+pub struct Drafts {
+  pub autosave: bool,
+  pub localize_status: bool,
+  /// `drafts.validate`: drafts are validated too.
+  pub validate: bool,
+}
+
 #[derive(Debug)]
 pub struct Versions {
   pub max: f64,
@@ -304,6 +313,8 @@ pub struct WritePlan {
   pub relations: HashMap<String, Option<String>>,
   pub schema: Schema,
   pub versions: Option<Versions>,
+  /// `versions.drafts`: `None` without drafts.
+  pub drafts: Option<Drafts>,
   /// `req.payload.config` as the validators read it (`defaultMaxTextLength`).
   pub validate_config: JsVal,
   /// `req.payload.collections` as the validators read it (`{ [slug]: { config, customIDType } }`).
@@ -348,6 +359,13 @@ pub fn decode(text: &str) -> Result<WritePlan, String> {
       schema: decode_schema(v.get("schema").ok_or_else(|| bad("versions.schema"))?)?,
     }),
   };
+  let drafts = match json.get("drafts") {
+    None | Some(Json::Null) => None,
+    Some(d) => {
+      let flag = |key: &str| d.get(key).and_then(Json::as_bool).ok_or_else(|| bad("drafts"));
+      Some(Drafts { autosave: flag("autosave")?, localize_status: flag("localizeStatus")?, validate: flag("validate")? })
+    }
+  };
   let localization = match json.get("localization") {
     None | Some(Json::Null) => None,
     Some(l) => Some(Localization {
@@ -360,6 +378,7 @@ pub fn decode(text: &str) -> Result<WritePlan, String> {
   };
   Ok(WritePlan {
     localization,
+    drafts,
     allow_additional_keys: flag("allowAdditionalKeys"),
     allow_id_on_create: flag("allowIDOnCreate"),
     default_id_type: json.get("defaultIDType").map(JsVal::from_json).unwrap_or_default(),

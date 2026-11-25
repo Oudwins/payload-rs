@@ -113,8 +113,10 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
     if (config.upload) {
       ineligible('upload')
     }
-    if (config.versions && typeof config.versions === 'object' && config.versions.drafts) {
-      ineligible('drafts')
+    const drafts =
+      config.versions && typeof config.versions === 'object' ? config.versions.drafts : undefined
+    if (drafts && (typeof drafts !== 'object' || drafts.schedulePublish)) {
+      ineligible('drafts:schedulePublish')
     }
     if (collection.customIDType) {
       ineligible('customID')
@@ -178,6 +180,14 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
       timestamps: config.timestamps !== false,
       v: 1,
       versions,
+      // `versions.drafts` (sanitized): `validate` (draft validation), `autosave`, `localizeStatus`
+      drafts: drafts
+        ? {
+            autosave: Boolean(drafts.autosave),
+            localizeStatus: Boolean(drafts.localizeStatus),
+            validate: Boolean(drafts.validate),
+          }
+        : null,
     })
     return { fieldAccess: builder.fieldAccess, json, volatile: builder.volatile }
   } catch (error) {
@@ -318,7 +328,7 @@ const fieldPlan = (builder: Builder, field: Any) => {
       const options: Record<string, unknown> = {}
       for (const key of validatorOptionKeys) {
         if (key in field) {
-          const value = field[key]
+          const value = key === 'options' ? selectOptionsPlan(field[key]) : field[key]
           if (typeof value === 'function' || !isInertTree(value, false)) {
             return ineligible(`field:${key}`)
           }
@@ -404,6 +414,20 @@ const fieldPlan = (builder: Builder, field: Any) => {
   }
   return out
 }
+
+/**
+ * A select's `options` as its validator reads them (`option.value`, never the label): an option
+ * whose label is a function (drafts' `_status`, `({ t }) => t('version:draft')`) keeps only its
+ * `value`; anything else as configured.
+ */
+const selectOptionsPlan = (options: unknown) =>
+  Array.isArray(options)
+    ? options.map((option) =>
+        typeof option === 'object' && option !== null && typeof option.label === 'function'
+          ? { value: option.value }
+          : option,
+      )
+    : options
 
 /** The editor hooks upstream runs on the create / update path, and its `validate`. */
 const lexicalHookNames = ['beforeValidate', 'beforeChange', 'afterChange'] as const

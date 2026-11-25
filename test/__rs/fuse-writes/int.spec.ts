@@ -573,7 +573,90 @@ const kindsUpdates = (f: Fixtures): Case[] =>
     },
   ].map((c) => ({ ...c, collection: 'kinds' }))
 
+/** Collections with drafts: creates, draft saves (version only), publishes over drafts. */
+const draftCases = (f: Fixtures): Case[] => [
+  { name: 'create, default status', collection: 'drafts', data: { title: 'a' } },
+  {
+    name: 'create published',
+    collection: 'drafts',
+    data: { _status: 'published', author: f.author, items: [{ label: 'x' }], title: 'b' },
+  },
+  { name: 'create draft without title', collection: 'drafts', data: { views: 3 }, draft: true },
+  {
+    name: 'create draft with status published',
+    collection: 'drafts',
+    data: { _status: 'published', title: 'c' },
+    draft: true,
+  },
+  { name: 'create invalid (publish)', collection: 'drafts', data: { views: 1 } },
+  {
+    name: 'create draft, validated, invalid',
+    collection: 'validatedDrafts',
+    data: { count: 11 },
+    draft: true,
+  },
+  {
+    name: 'create draft, validated',
+    collection: 'validatedDrafts',
+    data: { title: 'v' },
+    draft: true,
+  },
+  {
+    name: 'draft save over published',
+    collection: 'drafts',
+    data: { items: [{ label: 'new' }], title: 'next' },
+    draft: true,
+    seed: { data: { _status: 'published', items: [{ label: 'old' }], title: 'live' } },
+  },
+  {
+    name: 'draft save over a draft',
+    collection: 'drafts',
+    data: { meta: { note: 'n' } },
+    draft: true,
+    seed: { data: { title: 'd1' }, draft: true, updates: [{ data: { title: 'd2' }, draft: true }] },
+  },
+  {
+    name: 'draft save without required title',
+    collection: 'drafts',
+    data: { title: null },
+    draft: true,
+    seed: { data: { title: 'x' } },
+  },
+  {
+    name: 'publish over the latest draft',
+    collection: 'drafts',
+    data: { _status: 'published' },
+    seed: { data: { title: 'p1' }, updates: [{ data: { title: 'p2', views: 7 }, draft: true }] },
+  },
+  {
+    name: 'draft update sending published',
+    collection: 'drafts',
+    data: { _status: 'published', title: 'q2' },
+    draft: true,
+    seed: { data: { title: 'q1' } },
+  },
+  {
+    name: 'update without draft keeps the draft status',
+    collection: 'drafts',
+    data: { views: 9 },
+    seed: { data: { title: 'r1' }, updates: [{ data: { title: 'r2' }, draft: true }] },
+  },
+  {
+    name: 'validated draft save, invalid',
+    collection: 'validatedDrafts',
+    data: { count: 12 },
+    draft: true,
+    seed: { data: { title: 'w' } },
+  },
+]
+
 test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
+  test('drafts creates and updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'drafts', draftCases(f), f)
+    finish('drafts')
+  })
+
   test('minimal creates', async ({ payload }) => {
     const f = await fixtures(payload)
     await runAll(payload, 'minimal create', minimalCreates(f), f)

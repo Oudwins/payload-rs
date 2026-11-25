@@ -18,7 +18,13 @@ use super::run::{Operation, Run, S};
 use super::transform::{iso, transform_write};
 use super::{Bail, IdUse, Invalid, Prepared, PreparedWrite, UpdateInput, VersionWrite, WriteCtx};
 
-fn new_run<'e>(plan: &'e WritePlan, ctx: &'e mut WriteCtx<'_>, operation: Operation, id: Option<JsVal>) -> Result<Run<'e>, Bail> {
+fn new_run<'e>(
+  plan: &'e WritePlan,
+  ctx: &'e mut WriteCtx<'_>,
+  operation: Operation,
+  id: Option<JsVal>,
+  saving_draft: bool,
+) -> Result<Run<'e>, Bail> {
   if !ctx.context.is_nullish() && !matches!(ctx.context, JsVal::Obj(_)) {
     return Err(Bail::new("context:shape"));
   }
@@ -31,6 +37,15 @@ fn new_run<'e>(plan: &'e WritePlan, ctx: &'e mut WriteCtx<'_>, operation: Operat
   }
   if plan.localization.is_some() != ctx.locale.is_some() {
     return Err(Bail::new("locale:missing"));
+  }
+  if let Some(drafts) = &plan.drafts {
+    // `config.localization && hasDraftsEnabled && publishAllLocales`: the operation then runs
+    // `validateLocalWithLocaleKeyedData` (a second validation lifecycle, not modelled).
+    // `publishAllLocales = !draft && !(localizeStatus && locale !== 'all')` (no
+    // `publishAllLocales` argument: the dispatch guards it; `locale: 'all'` bailed above)
+    if plan.localization.is_some() && !ctx.draft && !drafts.localize_status {
+      return Err(Bail::new("drafts:localizedPublish"));
+    }
   }
   Ok(Run {
     locale: ctx.locale.map(str::to_string),
@@ -54,7 +69,40 @@ fn new_run<'e>(plan: &'e WritePlan, ctx: &'e mut WriteCtx<'_>, operation: Operat
     submitted: Cell::new(None),
     t: ctx.t,
     user: ctx.user.clone(),
+    status_field_access: Cell::new(false),
+    saving_draft,
+    autosave: ctx.autosave,
   })
+}
+
+/// `isSavingDraft`'s data write (create.ts / utilities/update.ts: `data._status = 'draft'`, before
+/// beforeValidate).
+fn mark_draft(run: &Run<'_>, data: Ref) -> Result<(), Bail> {
+  if run.saving_draft { run.heap.borrow_mut().set(data, "_status", V::str("draft")) } else { Ok(()) }
+}
+
+/// With `localizeStatus` (a localized `_status`): what create.ts / update.ts do with
+/// beforeChange's `_status` for one locale and no all-locales publication. A string (beforeChange
+/// did not localize it) is expanded by upstream, not modelled; an update that is not a draft save
+/// and publishes this locale reads the main document and writes `buildLocalizedPublishData`'s
+/// merge (not modelled).
+fn check_localized_status(run: &Run<'_>, result: Ref) -> Result<(), Bail> {
+  if !run.plan.drafts.as_ref().is_some_and(|d| d.localize_status) || run.plan.localization.is_none() {
+    return Ok(());
+  }
+  let heap = run.heap.borrow();
+  let status = heap.get(&V::Ref(result), "_status");
+  if status.as_str().is_some() {
+    return Err(Bail::new("drafts:statusString"));
+  }
+  if run.operation == Operation::Update && !run.saving_draft && heap.is_obj(&status) {
+    if let Some(locale) = run.locale.as_deref() {
+      if heap.get(&status, locale).as_str() == Some("published") {
+        return Err(Bail::new("drafts:localePublish"));
+      }
+    }
+  }
+  Ok(())
 }
 
 /// Runs one traversal to completion on a fresh executor.
@@ -101,22 +149,28 @@ fn import_obj(run: &Run<'_>, value: &JsVal, what: &str) -> Result<Ref, Bail> {
 
 /// `payload.create` (collections/operations/create.ts) of an eligible collection.
 pub fn prepare_create(plan: &WritePlan, data: &JsVal, ctx: &mut WriteCtx<'_>) -> Result<Prepared, Bail> {
-  let run = new_run(plan, ctx, Operation::Create, None)?;
+  // `isSavingDraft = draft && hasDraftsEnabled && !publishAllLocales` (`draft` makes
+  // `publishAllLocales` false)
+  let saving_draft = ctx.draft && plan.drafts.is_some();
+  let run = new_run(plan, ctx, Operation::Create, None, saving_draft)?;
   let data = import_obj(&run, data, "data")?;
   if run.heap.borrow().has(&V::Ref(data), "id") {
     return Err(Bail::new("create:id"));
   }
+  mark_draft(&run, data)?;
   // `duplicatedFromDoc` (not duplicating) is the `doc` of both traversals
   let doc = run.heap.borrow_mut().new_obj();
   drive(&run, |s| before_validate(s, data, doc))?;
   let caller_data = run.heap.borrow().export(&V::Ref(data));
-  // `docWithLocalesForFields`: `{ ...duplicatedFromDocWithLocales, _status: {} }` (no `_status`
-  // field access was recorded)
+  // `docWithLocalesForFields`: `!statusFieldAccess ? { ...duplicatedFromDocWithLocales, _status:
+  // {} } : duplicatedFromDocWithLocales` (`{}`: not duplicating)
   let doc_with_locales = {
     let mut heap = run.heap.borrow_mut();
-    let status = heap.new_obj();
     let r = heap.new_obj();
-    heap.set(r, "_status", V::Ref(status))?;
+    if !run.status_field_access.get() {
+      let status = heap.new_obj();
+      heap.set(r, "_status", V::Ref(status))?;
+    }
     r
   };
   let copy = {
@@ -129,6 +183,7 @@ pub fn prepare_create(plan: &WritePlan, data: &JsVal, ctx: &mut WriteCtx<'_>) ->
   if let Some(invalid) = invalid(&run) {
     return Ok(Prepared { caller_data: Some(caller_data), context_writes, outcome: Err(invalid) });
   }
+  check_localized_status(&run, copy)?;
   let write = create_statements(&run, copy)?;
   Ok(Prepared { caller_data: Some(caller_data), context_writes, outcome: Ok(write) })
 }
@@ -154,21 +209,29 @@ fn create_statements(run: &Run<'_>, data: Ref) -> Result<PreparedWrite, Bail> {
     }
     None => None,
   };
-  Ok(PreparedWrite { doc, stored_after: None, version })
+  Ok(PreparedWrite { doc, stored_after: None, draft: false, version })
 }
 
-/// `saveVersion` + db-mongodb `createVersion` (no drafts, not autosave): the version insert and
-/// the latest-flip `updateMany` (none when mongoose's cast leaves its update empty).
+/// `saveVersion` + db-mongodb `createVersion` (a new version; `updateLatestVersion` is not
+/// modelled): the version insert and the latest-flip `updateMany` (none when mongoose's cast
+/// leaves its update empty). `result` is saveVersion's `docWithLocales`: the stored document
+/// after the write, or for a draft save beforeChange's result (then `versionData.updatedAt =
+/// now` with timestamps).
 fn version_statements(run: &Run<'_>, heap: &mut Heap, result: Ref) -> Result<VersionWrite, Bail> {
   let plan = run.plan;
   let versions = plan.versions.as_ref().ok_or_else(|| Bail::new("versions"))?;
   let now = iso(run.now()?)?;
   let version_data = heap.deep_copy(&V::Ref(result));
-  heap.delete(version_data.as_ref().unwrap_or_default(), "_id");
+  let version_ref = version_data.as_ref().ok_or_else(|| Bail::new("version:data"))?;
+  if plan.timestamps && run.saving_draft && run.operation == Operation::Update {
+    // saveVersion's `draft` is `isSavingDraft` for updates (create passes none)
+    heap.set(version_ref, "updatedAt", V::str(&now))?;
+  }
+  heap.delete(version_ref, "_id");
   let parent = heap.get(&V::Ref(result), "id");
   let data = heap.new_obj();
   for (key, value) in [
-    ("autosave", V::Bool(false)),
+    ("autosave", V::Bool(run.autosave)),
     ("createdAt", V::str(&now)),
     ("latest", V::Bool(true)),
     ("parent", parent),
@@ -205,9 +268,13 @@ fn version_statements(run: &Run<'_>, heap: &mut Heap, result: Ref) -> Result<Ver
 /// `payload.update({ id })` / `updateByID` (collections/operations/updateByID.ts,
 /// utilities/update.ts) of an eligible collection, after the lock check, on the stored document.
 pub fn prepare_update(plan: &WritePlan, id: &JsVal, data: &JsVal, input: &UpdateInput, ctx: &mut WriteCtx<'_>) -> Result<Prepared, Bail> {
-  let run = new_run(plan, ctx, Operation::Update, Some(id.clone()))?;
+  // `isSavingDraft = draft && hasDraftsEnabled && data._status !== 'published' &&
+  // !publishAllLocales` (`draft` makes `publishAllLocales` false)
+  let saving_draft = ctx.draft && plan.drafts.is_some() && data.get("_status").as_str() != Some("published");
+  let run = new_run(plan, ctx, Operation::Update, Some(id.clone()), saving_draft)?;
   // updateByID: `deepCopyObjectSimple(data)`; the caller's object is not touched
   let data = import_obj(&run, data, "data")?;
+  mark_draft(&run, data)?;
   let original_doc = import_obj(&run, &input.original_doc, "originalDoc")?;
   let doc_with_locales = import_obj(&run, &input.doc_with_locales, "docWithLocales")?;
   drive(&run, |s| before_validate(s, data, original_doc))?;
@@ -225,7 +292,8 @@ pub fn prepare_update(plan: &WritePlan, id: &JsVal, data: &JsVal, input: &Update
   if let Some(invalid) = invalid(&run) {
     return Ok(Prepared { caller_data: None, context_writes, outcome: Err(invalid) });
   }
-  let write = update_statements(&run, copy, &input.stored)?;
+  check_localized_status(&run, copy)?;
+  let write = if run.saving_draft { draft_statements(&run, copy)? } else { update_statements(&run, copy, &input.stored)? };
   Ok(Prepared { caller_data: None, context_writes, outcome: Ok(write) })
 }
 
@@ -246,5 +314,16 @@ fn update_statements(run: &Run<'_>, result: Ref, stored: &Document) -> Result<Pr
     }
     None => None,
   };
-  Ok(PreparedWrite { doc: update, stored_after: Some(after), version })
+  Ok(PreparedWrite { doc: update, stored_after: Some(after), draft: false, version })
+}
+
+/// utilities/update.ts `writeDocument` of a draft save: no `updateOne`, saveVersion on
+/// beforeChange's `result`.
+fn draft_statements(run: &Run<'_>, result: Ref) -> Result<PreparedWrite, Bail> {
+  let mut heap = run.heap.borrow_mut();
+  let version = match &run.plan.versions {
+    Some(_) => Some(version_statements(run, &mut heap, result)?),
+    None => return Err(Bail::new("drafts:versions")),
+  };
+  Ok(PreparedWrite { doc: Document::new(), stored_after: None, draft: true, version })
 }

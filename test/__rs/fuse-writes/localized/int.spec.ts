@@ -211,6 +211,65 @@ const updates = (f: Fixtures): Case[] =>
   ].map((c) => ({ ...c, collection: 'posts' }))
 
 test.suite('fused writes: localized write-side corpus', { config: './config.ts' }, () => {
+  test('localized drafts', async ({ payload }) => {
+    const f = await fixtures(payload)
+    const cases: Case[] = [
+      { name: 'ls create en', collection: 'articles', data: { title: 'hello' }, locale: 'en' },
+      {
+        name: 'ls create de draft',
+        collection: 'articles',
+        data: { tags: [{ tag: 't' }] },
+        draft: true,
+        locale: 'de',
+      },
+      {
+        name: 'ls create en published',
+        collection: 'articles',
+        data: { _status: 'published', title: 'p' },
+        locale: 'en',
+      },
+      {
+        name: 'ls draft save de over en',
+        collection: 'articles',
+        data: { title: 'hallo' },
+        draft: true,
+        locale: 'de',
+        seed: { data: { title: 'hello' } },
+      },
+      {
+        name: 'ls update en left draft',
+        collection: 'articles',
+        data: { views: 4 },
+        locale: 'en',
+        seed: { data: { title: 'one' }, updates: [{ data: { title: 'two' }, draft: true }] },
+      },
+      {
+        name: 'ls publish en (bails)',
+        collection: 'articles',
+        data: { _status: 'published' },
+        locale: 'en',
+        seed: { data: { title: 'pub' } },
+      },
+      { name: 'notes create draft', collection: 'notes', data: {}, draft: true, locale: 'en' },
+      {
+        name: 'notes create publish (bails)',
+        collection: 'notes',
+        data: { title: 'n' },
+        locale: 'en',
+      },
+      {
+        name: 'notes draft save',
+        collection: 'notes',
+        data: { title: 'n2' },
+        draft: true,
+        locale: 'en',
+        seed: { data: { title: 'n1' } },
+      },
+    ]
+    await runAll(payload, 'localized drafts', cases, f)
+    finish('localized drafts')
+  })
+
   test('localized creates', async ({ payload }) => {
     const f = await fixtures(payload)
     await runAll(payload, 'localized create', creates(f), f)

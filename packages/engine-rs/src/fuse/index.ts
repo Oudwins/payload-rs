@@ -542,7 +542,9 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
   if (includeLockStatus) {
     return guard('includeLockStatus')
   }
-  if (replaceWithVersion && hasDraftsEnabled(config)) {
+  // a write operation's own `afterRead` runs on the document it wrote: `draft` only reaches the
+  // population (and the stored-document read of the fused writes never passes it)
+  if (replaceWithVersion && hasDraftsEnabled(config) && !isOperationResult) {
     return guard('draft')
   }
   const isValidID =

@@ -173,14 +173,17 @@ const checkCreate = (args: Any) => {
   if (req.file !== undefined) {
     return guard('file')
   }
+  // `draft` (with drafts `isSavingDraft`) is the prepare's; `autosave` runs updateLatestVersion
   if (
-    args.draft ||
     args.autosave ||
     args.duplicateFromID !== undefined ||
     args.publishAllLocales !== undefined ||
     args.selectedLocales !== undefined
   ) {
     return guard('args:options')
+  }
+  if (isLocalizedPublish(args)) {
+    return guard('drafts:localizedPublish')
   }
   if (args.select !== undefined && args.select !== null) {
     return guard('select')
@@ -242,6 +245,22 @@ const resultRead = (args: Any, id: string) =>
     req: args.req,
     showHiddenFields: args.showHiddenFields,
   })
+
+/**
+ * Whether a create / update of a collection with drafts on a localized config publishes all
+ * locales (`config.localization && hasDraftsEnabled && publishAllLocales`, `publishAllLocales`
+ * without the argument: `!draft && !(localizeStatus && locale !== 'all')`): upstream then runs
+ * `validateLocalWithLocaleKeyedData`, which the prepare does not model (it bails there too).
+ */
+const isLocalizedPublish = (args: Any) => {
+  const drafts = args.collection.config.versions?.drafts
+  return Boolean(
+    drafts &&
+    args.req.payload.config.localization &&
+    !args.draft &&
+    !(drafts.localizeStatus && args.req.locale !== 'all'),
+  )
+}
 
 /** Applies the state of `source` to `target` in place (upstream's in-place `beforeValidate`). */
 const replayInto = (target: Any, source: Any) => {
@@ -537,12 +556,7 @@ const checkByID = (name: ByIDName, args: Any) => {
     if (req.file !== undefined) {
       return guard('file')
     }
-    if (
-      args.draft ||
-      args.autosave ||
-      args.publishAllLocales !== undefined ||
-      args.unpublishAllLocales
-    ) {
+    if (args.autosave || args.publishAllLocales !== undefined || args.unpublishAllLocales) {
       return guard('args:options')
     }
     if (!isPlainObject(data) || !isInertTree(data, false)) {
@@ -553,6 +567,9 @@ const checkByID = (name: ByIDName, args: Any) => {
     }
     if (collection.config.trash && 'deletedAt' in data) {
       return guard('trash')
+    }
+    if (isLocalizedPublish(args)) {
+      return guard('drafts:localizedPublish')
     }
   }
   const payload = req.payload

@@ -109,6 +109,11 @@ pub struct WriteCtx<'a> {
   pub language: &'a str,
   pub fallback_language: &'a [String],
   pub entropy: &'a mut dyn Entropy,
+  /// The operation's `draft` argument (truthy); with drafts it decides `isSavingDraft`. Added
+  /// 2026-11-25 (drafts).
+  pub draft: bool,
+  /// The operation's `autosave` argument (the version's `autosave`).
+  pub autosave: bool,
 }
 
 /// The input of `prepare_update` from the operation's first statement (12.4).
@@ -137,6 +142,9 @@ pub struct PreparedWrite {
   pub doc: Document,
   /// update: the document the findAndModify returns.
   pub stored_after: Option<Document>,
+  /// update: a draft save (`isSavingDraft`): no main statement (`doc` is empty, `stored_after`
+  /// `None`), the version is built from beforeChange's result.
+  pub draft: bool,
   pub version: Option<VersionWrite>,
 }
 

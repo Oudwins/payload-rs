@@ -45,6 +45,25 @@ export default buildConfigWithDefaults({
         fields: [{ name: 'title', type: 'text', required: true }],
       },
       {
+        slug: 'drafts',
+        fields: [
+          { name: 'title', type: 'text', required: true },
+          { name: 'views', type: 'number', defaultValue: 0 },
+          { name: 'author', type: 'relationship', relationTo: 'authors' },
+          { name: 'items', type: 'array', fields: [{ name: 'label', type: 'text' }] },
+          { name: 'meta', type: 'group', fields: [{ name: 'note', type: 'text' }] },
+        ],
+        versions: { drafts: true },
+      },
+      {
+        slug: 'validatedDrafts',
+        fields: [
+          { name: 'title', type: 'text', required: true },
+          { name: 'count', type: 'number', max: 10 },
+        ],
+        versions: { drafts: { validate: true } },
+      },
+      {
         slug: 'minimal',
         fields: [
           { name: 'title', type: 'text', index: true, required: true },

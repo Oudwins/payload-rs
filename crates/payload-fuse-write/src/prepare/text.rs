@@ -3,12 +3,12 @@
 //!
 //! Request: `{ op: 'create' | 'update', data, id?, originalDoc?, docWithLocales?, user?:
 //! [collection, id], overrideAccess, context, language, fallbackLanguage, translations?, clock:
-//! [ms], ids: [['row' | 'document' | 'version', hex]] }`, values in the boundary's tree
+//! [ms], ids: [['row' | 'document' | 'version', hex]], draft?, autosave? }`, values in the boundary's tree
 //! encoding (`decode_value_bson`); `stored` (update) is the stored document's BSON.
 //!
 //! Result: `{ bail }` or `{ callerData, contextWrites: [[key, value]], invalid?: { collection,
-//! errors }, doc?, storedAfter?, version?: { doc, flipFilter, flipUpdate }, clockLeft, idsLeft }`
-//! with BSON documents as hex.
+//! errors }, doc?, storedAfter?, draft?: true (a draft save: no `doc`), version?: { doc,
+//! flipFilter, flipUpdate }, clockLeft, idsLeft }` with BSON documents as hex.
 
 use serde_json::{Value as Json, json};
 
@@ -54,6 +54,8 @@ struct Request {
   locale: Option<String>,
   override_access: bool,
   field_access: Vec<Option<bool>>,
+  draft: bool,
+  autosave: bool,
 }
 
 fn parse(request_json: &str) -> Result<Request, Bail> {
@@ -102,7 +104,9 @@ fn parse(request_json: &str) -> Result<Request, Bail> {
       .collect::<Result<_, _>>()?,
     Some(_) => return Err(Bail::new("request:fieldAccess")),
   };
-  Ok(Request { json: request, entropy, user, i18n, context, language, fallback_language, data, locale, override_access, field_access })
+  let draft = request.get("draft").and_then(Json::as_bool).unwrap_or(false);
+  let autosave = request.get("autosave").and_then(Json::as_bool).unwrap_or(false);
+  Ok(Request { json: request, entropy, user, i18n, context, language, fallback_language, data, locale, override_access, field_access, draft, autosave })
 }
 
 impl Request {
@@ -117,6 +121,8 @@ impl Request {
       field_access: &self.field_access,
       t: self.i18n.as_ref().map(|i| i as &dyn payload_core_validate::Translate),
       user: self.user.clone(),
+      draft: self.draft,
+      autosave: self.autosave,
     }
   }
 
@@ -183,6 +189,15 @@ fn run(plan_json: &str, request_json: &str, stored: Option<&[u8]>) -> Result<Str
       let errors: Vec<Json> =
         invalid.errors.iter().map(|e| json!({ "label": e.label, "message": e.message, "path": e.path })).collect();
       out.insert("invalid".to_string(), json!({ "collection": invalid.collection, "errors": errors }));
+    }
+    Ok(write) if write.draft => {
+      out.insert("draft".to_string(), Json::Bool(true));
+      if let Some(version) = &write.version {
+        out.insert(
+          "version".to_string(),
+          json!({ "doc": hex(&version.doc)?, "flipFilter": hex(&version.flip_filter)?, "flipUpdate": hex(&version.flip_update)? }),
+        );
+      }
     }
     Ok(write) => {
       out.insert("doc".to_string(), Json::String(hex(&write.doc)?));

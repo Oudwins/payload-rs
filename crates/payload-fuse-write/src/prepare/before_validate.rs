@@ -137,6 +137,10 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
           }
         }
       }
+      // `onFieldAccess({ accessResult, path })`
+      if path == "_status" {
+        run.status_field_access.set(access_result);
+      }
       if run.get(&sibling_data, name).is_undef() && !run.restoring_version {
         let is_document_value_allowed = run.operation == Operation::Update || access_result;
         let value = match fallback {

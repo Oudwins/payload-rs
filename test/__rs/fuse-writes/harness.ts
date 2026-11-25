@@ -13,6 +13,7 @@ import { buildWritePlan } from '../../../packages/engine-rs/src/fuse-write/write
 import { deserializeFromEngine } from '../../../packages/engine-rs/src/serialize.js'
 import { afterRead } from '../../../packages/payload/src/fields/hooks/afterRead/index.js'
 import { deepCopyObjectSimple } from '../../../packages/payload/src/utilities/deepCopyObject.js'
+import { getLatestCollectionVersion } from '../../../packages/payload/src/versions/getLatestCollectionVersion.js'
 
 /**
  * The differential harness of the write-side library (packages/engine-rs/FUSED_WRITES.md section
@@ -230,6 +231,8 @@ export const ensureMonitoring = (payload: Payload) => {
 type CaseArgs = {
   collection: string
   data: Record<string, unknown>
+  /** The operation's `draft` argument. */
+  draft?: boolean
   id?: number | string
   /** `req.locale` (localized configs). */
   locale?: string
@@ -252,6 +255,7 @@ const makeReq = async ({
 export const runCase = async ({
   collection,
   data,
+  draft,
   id,
   locale,
   overrideAccess = true,
@@ -271,7 +275,13 @@ export const runCase = async ({
       .collection(payload.db.collections[collection]!.collection.name)
       .findOne({ _id: new BSON.ObjectId(String(id)) }, { raw: true } as any)
     stored = raw as unknown as Buffer
-    docWithLocales = await payload.db.findOne({ collection, where: { id: { equals: id } } })
+    // updateByID's stored-document read (with drafts: the latest version)
+    docWithLocales = await getLatestCollectionVersion({
+      id: id!,
+      config: payload.collections[collection]!.config,
+      payload,
+      query: { collection, locale: locale!, where: { and: [{ id: { equals: id } }] } },
+    })
     const readReq = await makeReq({ locale, payload, user })
     originalDoc = await afterRead({
       collection: payload.collections[collection]!.config,
@@ -295,12 +305,14 @@ export const runCase = async ({
         ? createOperation({
             collection: payload.collections[collection]!,
             data: callerData as any,
+            draft,
             overrideAccess,
             req,
           })
         : updateByIDOperation({
             collection: payload.collections[collection]!,
             data: callerData as any,
+            draft,
             id: id!,
             overrideAccess,
             req,
@@ -327,6 +339,7 @@ export const runCase = async ({
     context: encode(contextBefore),
     data: encode(inputData),
     docWithLocales: op === 'update' ? encode(docWithLocales) : undefined,
+    draft: Boolean(draft),
     fallbackLanguage: req.i18n.fallbackLanguage,
     id: op === 'update' ? encode(id) : undefined,
     ids,
@@ -401,11 +414,15 @@ export const runCase = async ({
     diffs.push(`rust invalid ${canon(out.invalid.errors)}; upstream wrote`)
     return { diffs, kind: 'diff' }
   }
-  if (!main) {
+  if (out.draft) {
+    // a draft save sends no findAndModify
+    if (main) {
+      diffs.push('rust: draft save; upstream sent the main statement')
+    }
+  } else if (!main) {
     diffs.push('no main statement captured')
     return { diffs, kind: 'diff' }
-  }
-  if (op === 'create') {
+  } else if (op === 'create') {
     check('insert', canonOf(main.command.documents[0]), canonHex(out.doc))
     check('insert bytes', hex(main.command.documents[0]), out.doc)
   } else {

@@ -12,10 +12,20 @@ import { BSON, type CaseResult, ensureMonitoring, runCase } from './harness.js'
 export type Case = {
   collection: string
   data: Record<string, unknown>
+  /** The operation's `draft` argument. */
+  draft?: boolean
   locale?: string
   name: string
-  /** A raw stored document (inserted through the driver) or Payload data to create first. */
-  seed?: { data?: Record<string, unknown>; raw?: Record<string, unknown> }
+  /**
+   * A raw stored document (inserted through the driver) or Payload data to create first (with
+   * `draft`: as a draft), then `updates` applied to it (drafts: versions after the main document).
+   */
+  seed?: {
+    data?: Record<string, unknown>
+    draft?: boolean
+    raw?: Record<string, unknown>
+    updates?: { data: Record<string, unknown>; draft?: boolean }[]
+  }
   user?: boolean
 }
 
@@ -79,9 +89,21 @@ export const runAll = async (payload: Payload, group: string, cases: Case[], f: 
       const seeded = await payload.create({
         collection: c.collection as any,
         data: c.seed.data as any,
+        draft: c.seed.draft,
+        locale: c.locale,
         overrideAccess: true,
       })
       id = String(seeded.id)
+      for (const update of c.seed.updates ?? []) {
+        await payload.update({
+          id,
+          collection: c.collection as any,
+          data: update.data as any,
+          draft: update.draft,
+          locale: c.locale,
+          overrideAccess: true,
+        })
+      }
     } else if (c.seed?.raw) {
       const _id = new BSON.ObjectId()
       await payload.db.connection
@@ -92,6 +114,7 @@ export const runAll = async (payload: Payload, group: string, cases: Case[], f: 
     const result = await runCase({
       collection: c.collection,
       data: c.data,
+      draft: c.draft,
       id,
       locale: c.locale,
       payload,

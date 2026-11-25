@@ -48,7 +48,8 @@ pub fn before_change<'r, 'e: 'r>(s: S<'r, 'e>, data: Ref, doc: V, doc_with_local
       label_path: Some(String::new()),
       parent_is_localized: false,
       parent_path: String::new(),
-      skip_validation: false,
+      // `skipValidation: isSavingDraft && !hasDraftValidationEnabled(collectionConfig)`
+      skip_validation: run.saving_draft && run.plan.drafts.as_ref().is_some_and(|d| !d.validate),
     };
     s.exec.spawn(traverse_fields(s.clone(), &run.plan.fields, level)).wait().await;
     if run.failed() || !run.errors.borrow().is_empty() {

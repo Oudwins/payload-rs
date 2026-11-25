@@ -30,15 +30,21 @@ import { buildSortParam } from '../../../db-mongodb/src/queries/buildSortParam.j
 import { buildProjectionFromSelect } from '../../../db-mongodb/src/utilities/buildProjectionFromSelect.js'
 import { getCollection } from '../../../db-mongodb/src/utilities/getEntity.js'
 import { transform } from '../../../db-mongodb/src/utilities/transform.js'
+import { combineQueries } from '../../../payload/src/database/combineQueries.js'
 import { beforeChange } from '../../../payload/src/fields/hooks/beforeChange/index.js'
 import { beforeValidate } from '../../../payload/src/fields/hooks/beforeValidate/index.js'
 import { lockedDocumentsCollectionSlug } from '../../../payload/src/locked-documents/config.js'
 import { preferencesCollectionSlug } from '../../../payload/src/preferences/config.js'
+import { appendNonTrashedFilter } from '../../../payload/src/utilities/appendNonTrashedFilter.js'
 import { deepCopyObjectSimple } from '../../../payload/src/utilities/deepCopyObject.js'
-import { getVersionsMax } from '../../../payload/src/utilities/getVersionsConfig.js'
+import {
+  getVersionsMax,
+  hasDraftsEnabled,
+} from '../../../payload/src/utilities/getVersionsConfig.js'
 import { sanitizeInternalFields } from '../../../payload/src/utilities/sanitizeInternalFields.js'
 import { buildAllLocalesPublicationHookDoc } from '../../../payload/src/versions/allLocalesPublicationStatus.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
+import { appendVersionToQueryKey } from '../../../payload/src/versions/drafts/appendVersionToQueryKey.js'
 import { loadCoreRuntimeAddon } from '../addon.js'
 import { evaluateRequestOnlyAccess } from '../fuse/access.js'
 import {
@@ -459,6 +465,7 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
     request = JSON.stringify({
       context: encodeTree(context),
       data: encodeTree(data),
+      draft: Boolean(args.draft),
       fallbackLanguage: req.i18n?.fallbackLanguage,
       fieldAccess,
       language: req.i18n?.language ?? 'en',
@@ -584,7 +591,9 @@ const byIDTemplates = new WeakMap<object, Promise<string | Template>>()
  * `q` the `{ id: { equals } }` of `updateOne` / `deleteOne`, `lf` the locks of
  * `checkDocumentLockStatus`, `mf` `enforceMaxVersions`' find (db-mongodb `findVersions` with
  * `limit: 1, page: max + 1, pagination: false, sort: '-updatedAt'`, as the driver lane sends it),
- * `vq` `deleteCollectionVersions`' filter, `pf` `deleteUserPreferences`' filter (non-auth).
+ * `vq` `deleteCollectionVersions`' filter, `pf` `deleteUserPreferences`' filter (non-auth), with
+ * drafts `lv` `getLatestCollectionVersion`'s find of the latest version (db-mongodb
+ * `findVersions` with `limit: 1, pagination: false, sort: '-updatedAt'`).
  */
 const byIDTemplate = (lane: DriverLane, slug: string, Model: Any) => {
   let template = byIDTemplates.get(Model)
@@ -637,11 +646,13 @@ const buildByIDTemplate = async (lane: DriverLane, slug: string): Promise<string
     const parent = await buildQuery({ adapter, fields, where: { parent: { equals: sentinelHex } } })
     parts.vq = castFilter(VersionModel, parent)
     const max = getVersionsMax(collectionConfig)
-    if (max > 0) {
-      if (adapter.collation || lane.paginate.options !== undefined) {
-        return 'template:max-versions'
-      }
-      // the driver lane's `laneFindVersions` / `lanePaginate` with `pagination: false`
+    const isDrafts = hasDraftsEnabled(collectionConfig)
+    if ((max > 0 || isDrafts) && (adapter.collation || lane.paginate.options !== undefined)) {
+      return 'template:max-versions'
+    }
+    // the driver lane's `laneFindVersions` / `lanePaginate` with `pagination: false`, `limit: 1`
+    // and `sort: '-updatedAt'`
+    const versionsFind = (filter: Any, skip: number | undefined) => {
       const sort = buildSortParam({
         adapter,
         config,
@@ -651,15 +662,31 @@ const buildByIDTemplate = async (lane: DriverLane, slug: string): Promise<string
         timestamps: true,
       })
       const projection = buildProjectionFromSelect({ adapter, fields, select: undefined })
-      const query = VersionModel.find(parent, projection, {
-        limit: 1,
-        session: undefined,
-        skip: max,
-      })
+      const query = VersionModel.find(filter, projection, { limit: 1, session: undefined, skip })
       query.select('')
       query.sort(sort)
       query.lean(true)
-      parts.mf = findSpec(castQuery(query, findOptionKeys))
+      return findSpec(castQuery(query, findOptionKeys))
+    }
+    if (max > 0) {
+      parts.mf = versionsFind(parent, max)
+    }
+    if (isDrafts) {
+      // getLatestCollectionVersion: updateByID's where (access `true`, no trash) with the version
+      // keys, and the parent's latest version
+      const where = appendNonTrashedFilter({
+        enableTrash: collectionConfig.trash,
+        trash: false,
+        where: combineQueries({ id: { equals: sentinelHex } }, true),
+      })
+      const latest = await buildQuery({
+        adapter,
+        fields,
+        where: combineQueries(appendVersionToQueryKey(where), {
+          and: [{ parent: { equals: sentinelHex } }, { latest: { equals: true } }],
+        }),
+      })
+      parts.lv = versionsFind(latest, undefined)
     }
   }
   const preferences = adapter.payload.collections[preferencesCollectionSlug]
@@ -697,13 +724,18 @@ const pristineModel = (lane: DriverLane, slug: string) => {
  * (beforeValidate), `dataToUpdate.updatedAt`, mongoose's `now` of the `findOneAndUpdate` (its
  * `_setTimestampsOnUpdate` pre hook on schemas with timestamps: the value is unused, upstream
  * passes `timestamps: false`, but the reading is taken), with versions `saveVersion`'s `now` and
- * the version's `_id`. `clock` holds the readings the prepare uses.
+ * the version's `_id`. A draft save (`isSavingDraft`) sends no `updateOne`: neither of the first
+ * two. `clock` holds the readings the prepare uses.
  */
 const captureUpdateReadings = (
   lane: DriverLane,
   fields: Any[],
   data: Any,
-  { hasTimestamps, hasVersions }: { hasTimestamps: boolean; hasVersions: boolean },
+  {
+    hasTimestamps,
+    hasVersions,
+    isSavingDraft,
+  }: { hasTimestamps: boolean; hasVersions: boolean; isSavingDraft: boolean },
 ) => {
   const rows = countMissingRowIds(fields, data)
   if (rows === undefined) {
@@ -714,9 +746,12 @@ const captureUpdateReadings = (
   for (let i = 0; i < rows; i++) {
     ids.push(['row', new RowId().toHexString()])
   }
-  const clock = [Date.now()]
-  if (hasTimestamps) {
-    Date.now()
+  const clock: number[] = []
+  if (!isSavingDraft) {
+    clock.push(Date.now())
+    if (hasTimestamps) {
+      Date.now()
+    }
   }
   if (hasVersions) {
     clock.push(Date.now())
@@ -781,9 +816,14 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
     if (typeof timestamps === 'object' && timestamps !== null && 'currentTime' in timestamps) {
       return 'mongo:currentTime'
     }
+    // utilities/update.ts `isSavingDraft` (no `publishAllLocales`: guarded)
+    const isSavingDraft = Boolean(
+      args.draft && hasDraftsEnabled(collectionConfig) && args.data._status !== 'published',
+    )
     const readings = captureUpdateReadings(lane, collectionConfig.fields, args.data, {
       hasTimestamps: Boolean(timestamps),
       hasVersions: Boolean(VersionModel),
+      isSavingDraft,
     })
     if (!readings) {
       return 'ctx:rows'
@@ -794,6 +834,7 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
         clock: readings.clock,
         context: encodeTree(req.context),
         data: encodeTree(args.data),
+        draft: Boolean(args.draft),
         fallbackLanguage: req.i18n?.fallbackLanguage,
         fieldAccess,
         ids: readings.ids,

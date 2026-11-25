@@ -6,7 +6,8 @@
  *
  * Eligible: no collection hooks on the write paths and no root `afterError` hooks; every field
  * function on the path is Payload's own (`payloadOwnFunctions`, `defaultFieldValidators`); no
- * upload / auth collection, no joins, no drafts, no custom ID (localization: WP-I's prepare and WP-A's read plan decide).
+ * upload / auth collection, no joins, no scheduled publish, no custom ID (localization and drafts:
+ * WP-I's prepare and WP-A's read plan decide).
  */
 import { defaultFieldValidators } from '../../../payload/src/fields/config/defaultFieldValidators.js'
 import { payloadOwnFunctions } from '../../../payload/src/fields/config/payloadOwnFunctions.js'
@@ -191,8 +192,10 @@ export const buildWritePlan = (collection: Any, payload: Any): WritePlan => {
       ineligible('select:function')
     }
     const versions = watch(builder, config, 'versions')
-    if (versions && watch(builder, versions, 'drafts')) {
-      ineligible('drafts')
+    const drafts = versions ? watch(builder, versions, 'drafts') : undefined
+    if (drafts && watch(builder, drafts, 'schedulePublish')) {
+      // scheduled publish jobs (deleteScheduledPublishJobs, the jobs queue)
+      ineligible('drafts:schedulePublish')
     }
     const accessObject = watch(builder, config, 'access') ?? {}
     const access = {

@@ -42,6 +42,22 @@ export default buildConfigWithDefaults({
         fields: [{ name: 'title', type: 'text', required: true }],
       },
       {
+        // localized fields: `_status` is localized (`localizeStatus`)
+        slug: 'articles',
+        fields: [
+          { name: 'title', type: 'text', localized: true, required: true },
+          { name: 'views', type: 'number', defaultValue: 0 },
+          { name: 'tags', type: 'array', fields: [{ name: 'tag', type: 'text' }] },
+        ],
+        versions: { drafts: true },
+      },
+      {
+        // no localized fields: a publish validates all locales (the prepare bails), drafts do not
+        slug: 'notes',
+        fields: [{ name: 'title', type: 'text', required: true }],
+        versions: { drafts: true },
+      },
+      {
         slug: 'posts',
         fields: [
           { name: 'title', type: 'text', localized: true, required: true },

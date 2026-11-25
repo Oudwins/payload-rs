@@ -58,6 +58,13 @@ pub struct Run<'e> {
   pub is_new_doc: Cell<Option<bool>>,
   /// The order the context keys were first set.
   pub context_order: RefCell<Vec<&'static str>>,
+  /// The `onFieldAccess` result beforeValidate reported for the path `_status` (create.ts /
+  /// update.ts `statusFieldAccess`; `false` when the field was never reached).
+  pub status_field_access: Cell<bool>,
+  /// `isSavingDraft` of the operation.
+  pub saving_draft: bool,
+  /// The operation's `autosave` argument.
+  pub autosave: bool,
 }
 
 impl<'e> Run<'e> {
