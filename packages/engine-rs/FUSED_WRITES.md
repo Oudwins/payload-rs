@@ -836,6 +836,33 @@ The harness with `--engine default` (fused writes on): 3330 / 164 / 422, equal t
 (the plugin-ecommerce settlement test passed); fused writes served: 3246 creates, 85
 updateByID, 229 deleteByID, 4 update-many, 207 delete-many.
 
+Perf (WP-L, test/__rs/perf, MongoDB 1k posts, release addon, packed install verified against
+the builds: engine-rs dist, payload and db-mongodb dist and the addon identical; `ts/rs`, `off`
+= `rs-fused-off` → `on`; per scenario the median of 3 passes, geometric mean per category):
+
+| shape   | surface | create      | update      | partial-update | delete      | versions    |
+| ------- | ------- | ----------- | ----------- | -------------- | ----------- | ----------- |
+| typical | local   | 1.17 → 1.32 | 1.05 → 1.89 | 1.04 → 1.68    | 1.00 → 0.97 | -           |
+| typical | rest    | 1.06 → 1.07 | 0.98 → 0.93 | 0.94 → 0.91    | 0.93 → 0.73 | -           |
+| typical | graphql | 1.06 → 0.92 | -           | 0.99 → 1.46    | 1.01 → 1.16 | -           |
+| complex | local   | 1.05 → 1.06 | 1.01 → 1.03 | 1.02 → 1.04    | 0.99 → 1.02 | 1.04 → 1.14 |
+| complex | rest    | 1.00 → 0.99 | 1.03 → 1.05 | 1.01 → 1.03    | 0.95 → 0.91 | 1.11 → 1.11 |
+| complex | graphql | 1.06 → 1.06 | -           | 1.06 → 1.08    | 0.96 → 0.99 | 1.18 → 1.20 |
+| hooks   | local   | 1.06 → 1.09 | 0.97 → 0.99 | 0.97 → 0.98    | 0.96 → 0.97 | -           |
+| hooks   | rest    | 0.98 → 1.02 | 1.01 → 0.99 | 0.97 → 0.96    | 0.86 → 0.95 | -           |
+| hooks   | graphql | 1.03 → 1.06 | -           | 0.97 → 0.99    | -           | -           |
+
+The perf suite's drafts (`complex`: `save draft`, `publish`, the REST draft `PATCH`) stay on the
+exact lane: the complex shape has a named tab and a user `validate` (`plan:tabs:named`,
+`field:validate`), and its publishes would validate all locales. The passes disagree far more
+than the code paths do: typical `delete by id` was 0.89 → 2.01 in the first pass (WP-K: 1.83)
+and 0.98 → 1.04, 1.12 → 1.10 in the next two (and 0.96 → 0.91 in a fourth), with the TS times
+the same in all four (6.7-7.8 ms) and the same installed builds; the fused deletes ran (the
+harness counts them). The first pass ran right after the verification runs, the later ones on
+an idle machine: this is WP-K's idle-wake effect (the JS thread idles while the Rust runtime
+works, and the next statement pays the wake-up), so single-machine ratios of the fused lanes
+are only comparable under the same load.
+
 Remaining bails in the shadow harness, largest first (WP-L's run):
 `plan:localization:filterAvailableLocales` 189, `plan:field:json` 141, `plan:date:timezone` 131,
 `plan:field:upload` 107, `plan:field:slug` 78, `plan:tabs:named` 76,
