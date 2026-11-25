@@ -71,19 +71,31 @@ A collection is eligible for reads when:
   `executeAccess`' result; falsy, a bail or a de-optimised function run the exact lane. `where`
   paths are then `id` only and no `sort` (field permission checks).
 - **Compiled user functions: field `access.read`** without `overrideAccess` (find / findByID;
-  count runs no afterRead): every function of `plan.fieldAccess` must be compiled with `argKeys`
-  reading nothing but `req` (`[]` or `[['req']]`), so its result is the same for every document,
-  field and locale of the call; each is evaluated once per call, after every other guard passed,
-  through `evaluateOnLane` (guards
-  installed, active, `lane_should_verify` false: the first 32 checked calls and then 1 in 256
-  lane calls run the exact lane, where the call-site guard verifies the JS result). The results
-  go to the request as `fieldAccess: [bool]`, and the core's afterRead applies them where
-  upstream calls the function (after hooks, before default values): falsy removes the field and
-  skips its default. A function reading `doc`, `siblingData`, `data`, `id` or the whole argument,
-  a bail, a sampled call or a de-optimised function run the exact lane (guard reasons
-  `access:field:*`). Population needs `overrideAccess` (section 9), so related plans never
-  evaluate field access. The SQLite fast afterRead does not apply them: such reads use the core's
-  generic path.
+  count runs no afterRead): every function of `plan.fieldAccess` (and of the related plans
+  population can reach, section 9) must be compiled, with guards installed and active
+  (`laneFieldAccess`, `compile/index.ts` `laneFunction`). The request carries their `FnId`s
+  (`fieldAccess: [id]`, per plan) and `req` as the compiled functions see it (`accessReq`:
+  `snapshotRequest(req)` as `encodeSnapshot` JSON, `payload_fn_ir::lanes::from_typed`). Guard
+  sampling happens where the core first calls a function in the operation (`after_read::lane_call`:
+  one lane call per function and operation; `lane_should_verify` true, i.e. the first 32 checked
+  calls and then 1 in 256 lane calls, bails with `access:field:verify` and the exact lane runs,
+  where the call-site guard verifies the JS results of the calls it samples). Functions the
+  operation never calls (a related collection nothing loads) do not count. The core's afterRead (`after_read.rs`) evaluates each
+  function where upstream calls it, per document and per field occurrence (array rows, blocks,
+  locales), with upstream's argument object `{ id: doc.id, blockData, collection, data: doc,
+  doc, req, siblingData, skipCompilation }` built from the document as it is at that moment
+  (`collection` is the partial `{ slug }`; raw leaves are opaque); a function reading nothing but
+  `req` (`argKeys`) is evaluated once per afterRead. Falsy removes the field and skips its default.
+  Upstream resumes the rest of such a field (the removal, its default, its relationship's load,
+  its sub fields) one microtask tick after the call: the core queues that work for the next tick
+  (FIFO per tick, every document of a find per tick in order), so key order, population load order
+  and the documents the later calls see stay upstream's; a function whose JS call would take more
+  than one tick (an `await` in it, an adopted promise: `payload_fn_ir::evaluate_ticks`) bails, as
+  does any evaluation bail (`access:field:*`). The nested finds of population see
+  `req.query.depth` set to their depth (`createPayloadRequest`); population without
+  `overrideAccess` needs `req.user` set (with its `collection`) and `req.headers` (else
+  `populate:access:req`). The SQLite fast afterRead does not apply field access: such reads use
+  the core's generic path.
 - collection and field read hooks (`beforeOperation`, `beforeRead`, `afterRead`,
   `afterOperation`) still keep a collection off the lanes, compiled or not: a compiled hook would
   have to run per document (and per field) on the document's values inside the core's afterRead,
@@ -117,9 +129,11 @@ A collection is eligible for reads when:
 - population (`depth && currentDepth <= depth` with relationship fields in the plan) only with
   `req.i18n` set, no `transactionID`, a fresh payload dataloader and, with localization, one locale
   and a fallback the nested finds' `createPayloadRequest` keeps (section 9); without
-  `overrideAccess` every collection the levels can load must grant read access with `true`
-  through a compiled function (`executeAccess` of the nested finds, `evaluateOnLane`), have no
-  field read access and no `defaultSort` (sort path validation checks field permissions), else
+  `overrideAccess` every collection the levels can load must have compiled read access (its `FnId`
+  goes to the request; the core evaluates it like the nested find's `executeAccess({ slug,
+  disableErrors: true, req })` when the nested find runs: `true` reads, `false` returns no
+  documents without a read, anything else bails `populate:access:*`), compiled field read access
+  only (section 2) and no `defaultSort` (sort path validation checks field permissions), else
   `populate:access`; the text lane (`fusedOperationText`) does not populate.
 - a write operation's own result read (`fusedFindByIDRequest`, src/fuse-write) does not check the
   collection's read access (the operations do not); its field read access and population follow
@@ -300,8 +314,10 @@ documents get their own `afterRead`, documents are matched to keys by id, missin
 id, trashed ones become `null`, hasMany arrays drop `null`s.
 
 The request carries `"pop": { draft, joins, locale, req, related: { [slug]: { plan, select,
-selectMode, sort, trash, numberID, auth, backend } } }` for the collections the levels can reach
-(an unlisted one bails). A populated result is `#` plus `{ r, x, p, k, n }`: the result with each
+selectMode, sort, trash, numberID, auth, backend, access, fieldAccess } } }` for the collections
+the levels can reach (an unlisted one bails; `access` / `fieldAccess`: their compiled read access
+and field read access without `overrideAccess`, section 3 and 2, evaluated with the request's
+`accessReq`). A populated result is `#` plus `{ r, x, p, k, n }`: the result with each
 document written once (`p`: the other paths that hold the same object), documents only the
 dataloader holds (`x`, e.g. trashed ones), the dataloader entries in cache insertion order (`k`:
 `[slug, id, depth, currentDepth, path | null]`) and the nested finds (`n`: their depth). JS

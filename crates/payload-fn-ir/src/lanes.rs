@@ -27,8 +27,14 @@ impl Value {
   /// to one object holds); typed values (dates, bigints, BSON), host objects and functions are
   /// opaque. Objects are closed.
   pub fn from_js_val(v: &JsVal) -> Value {
+    Value::from_js_val_with(v, &|_| false)
+  }
+
+  /// [`Value::from_js_val`] where `is_opaque` also makes values opaque (a lane's placeholders
+  /// for values it holds elsewhere).
+  pub fn from_js_val_with(v: &JsVal, is_opaque: &dyn Fn(&JsVal) -> bool) -> Value {
     let mut shared = HashMap::new();
-    from_js_val(v, &mut shared, 0)
+    from_js_val(v, &mut shared, 0, is_opaque)
   }
 
   /// Converts a result to a core value; `None` when it holds something without a core
@@ -56,8 +62,8 @@ impl Value {
   }
 }
 
-fn from_js_val(v: &JsVal, shared: &mut HashMap<usize, Value>, depth: u32) -> Value {
-  if depth > MAX_DEPTH || v.typed().is_some() || v.bson().is_some() || v.as_host_object().is_some() {
+fn from_js_val(v: &JsVal, shared: &mut HashMap<usize, Value>, depth: u32, is_opaque: &dyn Fn(&JsVal) -> bool) -> Value {
+  if depth > MAX_DEPTH || v.typed().is_some() || v.bson().is_some() || v.as_host_object().is_some() || is_opaque(v) {
     return Value::Opaque(OpaqueKind::Object);
   }
   if let Some(id) = v.identity()
@@ -71,11 +77,11 @@ fn from_js_val(v: &JsVal, shared: &mut HashMap<usize, Value>, depth: u32) -> Val
     JsVal::Bool(b) => Value::Bool(*b),
     JsVal::Num(n) => Value::Number(*n),
     JsVal::Str(s) => Value::String(s.clone()),
-    JsVal::Arr(items) => Value::Array(Arc::new(items.iter().map(|i| from_js_val(i, shared, depth + 1)).collect())),
+    JsVal::Arr(items) => Value::Array(Arc::new(items.iter().map(|i| from_js_val(i, shared, depth + 1, is_opaque)).collect())),
     JsVal::Obj(props) => {
       let mut o = Object::closed();
       for (k, val) in props.iter() {
-        o.set(Arc::from(k.as_str()), from_js_val(val, shared, depth + 1));
+        o.set(Arc::from(k.as_str()), from_js_val(val, shared, depth + 1, is_opaque));
       }
       Value::Object(Arc::new(o))
     }
@@ -85,6 +91,75 @@ fn from_js_val(v: &JsVal, shared: &mut HashMap<usize, Value>, depth: u32) -> Val
     shared.insert(id, out.clone());
   }
   out
+}
+
+/// Decodes a JS snapshot sent as JSON text (`packages/engine-rs/src/compile/snapshot.ts`
+/// `typedSnapshot`): `null`, booleans, strings and numbers other than `-0` are themselves; every
+/// other value is a `[tag, payload]` pair: `["u"]` undefined, `["n", "NaN" | "Infinity" |
+/// "-Infinity" | "-0"]`, `["a", [items]]`, `["o" | "z" | "p", [[key, value], ...]]` (closed, closed
+/// with a `null` prototype, partial object), `["h", [[name, value], ...]]` (headers), `["x",
+/// "object" | "function" | "primitive"]` (opaque). `None`: not such an encoding.
+pub fn from_typed(v: &JsVal) -> Option<Value> {
+  from_typed_at(v, 0)
+}
+
+fn from_typed_at(v: &JsVal, depth: u32) -> Option<Value> {
+  if depth > MAX_DEPTH {
+    return None;
+  }
+  let items = match v {
+    JsVal::Null => return Some(Value::Null),
+    JsVal::Bool(b) => return Some(Value::Bool(*b)),
+    JsVal::Num(n) => return Some(Value::Number(*n)),
+    JsVal::Str(s) => return Some(Value::String(s.clone())),
+    JsVal::Arr(items) => items,
+    _ => return None,
+  };
+  let payload = items.get(1);
+  Some(match (items.first()?.as_str()?, items.len()) {
+    ("u", 1) => Value::Undefined,
+    ("n", 2) => Value::Number(match payload?.as_str()? {
+      "NaN" => f64::NAN,
+      "Infinity" => f64::INFINITY,
+      "-Infinity" => f64::NEG_INFINITY,
+      "-0" => -0.0,
+      _ => return None,
+    }),
+    ("a", 2) => Value::Array(Arc::new(payload?.as_arr()?.iter().map(|item| from_typed_at(item, depth + 1)).collect::<Option<_>>()?)),
+    (tag @ ("o" | "z" | "p"), 2) => {
+      let mut o = Object { closed: tag != "p", null_proto: tag == "z", ..Object::default() };
+      for (k, value) in typed_entries(payload)? {
+        o.set(k, from_typed_at(value, depth + 1)?);
+      }
+      Value::Object(Arc::new(o))
+    }
+    ("h", 2) => {
+      let entries = typed_entries(payload)?
+        .into_iter()
+        .map(|(k, value)| Some((k, value.as_str().map(Arc::from)?)))
+        .collect::<Option<Vec<_>>>()?;
+      Value::Headers(Arc::new(crate::value::HeadersValue { entries }))
+    }
+    ("x", 2) => Value::Opaque(match payload?.as_str()? {
+      "object" => OpaqueKind::Object,
+      "function" => OpaqueKind::Function,
+      "primitive" => OpaqueKind::Primitive,
+      _ => return None,
+    }),
+    _ => return None,
+  })
+}
+
+/// `[[key, value], ...]` of a typed snapshot.
+fn typed_entries(payload: Option<&JsVal>) -> Option<Vec<(Arc<str>, &JsVal)>> {
+  payload?
+    .as_arr()?
+    .iter()
+    .map(|pair| match pair.as_arr()? {
+      [JsVal::Str(k), value] => Some((k.clone(), value)),
+      _ => None,
+    })
+    .collect()
 }
 
 /// What a lane knows about the request (`packages/engine-rs/src/compile/snapshot.ts`

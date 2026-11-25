@@ -295,3 +295,53 @@ export const snapshotArgs = (args: unknown[], argKeys: (null | string[])[]): unk
     // With an explicit key list the function reads nothing else, so the object is closed.
     return complete ? out : new Partial(out)
   })
+
+/**
+ * A snapshot (`snapshot` / `snapshotRequest`) as JSON for a lane that evaluates compiled functions
+ * in Rust (`payload_fn_ir::lanes::from_typed`): `null`, booleans, strings and finite numbers other
+ * than `-0` as themselves, every other value a `[tag, payload]` pair (`u` undefined, `n` a
+ * non-finite number or `-0`, `a` an array, `o` / `z` / `p` an object, one with a `null`
+ * prototype, a partial one, `h` headers, `x` opaque).
+ */
+export const encodeSnapshot = (value: unknown): unknown => {
+  switch (typeof value) {
+    case 'boolean':
+    case 'string':
+      return value
+    case 'number':
+      return Number.isFinite(value) && !Object.is(value, -0)
+        ? value
+        : ['n', Object.is(value, -0) ? '-0' : String(value)]
+    case 'object':
+      break
+    case 'undefined':
+      return ['u']
+    default:
+      return ['x', 'primitive']
+  }
+  if (value === null) {
+    return null
+  }
+  if (value === opaqueObject) {
+    return ['x', 'object']
+  }
+  if (value === opaqueFunction || value instanceof FnRef) {
+    return ['x', 'function']
+  }
+  if (value === opaquePrimitive) {
+    return ['x', 'primitive']
+  }
+  if (value instanceof Partial) {
+    return ['p', encodeEntries(value.value)]
+  }
+  if (value instanceof HeadersSnapshot) {
+    return ['h', value.entries]
+  }
+  if (Array.isArray(value)) {
+    return ['a', value.map(encodeSnapshot)]
+  }
+  return [Object.getPrototypeOf(value) === null ? 'z' : 'o', encodeEntries(value)]
+}
+
+const encodeEntries = (value: object) =>
+  Object.entries(value).map(([key, item]) => [key, encodeSnapshot(item)])

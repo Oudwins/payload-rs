@@ -18,9 +18,10 @@ import { combineQueries } from '../../../payload/src/database/combineQueries.js'
 import { appendNonTrashedFilter } from '../../../payload/src/utilities/appendNonTrashedFilter.js'
 import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../../payload/src/utilities/getVersionsConfig.js'
+import { encodeSnapshot, snapshotRequest } from '../compile/index.js'
 import { getNativeEngine } from '../native.js'
 import { createFunctionRegistry, serializeForEngine } from '../serialize.js'
-import { compiledAccess, evaluateRequestOnlyAccess } from './access.js'
+import { compiledAccess, laneFieldAccess } from './access.js'
 import { hasDataProperties, isInertTree, isPlainDataObject, isPlainObject } from './inert.js'
 import { getCollectionPlan } from './plan.js'
 import {
@@ -269,31 +270,21 @@ const prepare = (op: Op, args: Any, isOperationResult = false): Prepared | undef
 const config = (collection: Any): Any => collection.config
 
 /**
- * The `field.access.read` results of a find / findByID (afterRead's `overrideAccess ? true :
+ * The `field.access.read` functions of a find / findByID (afterRead's `overrideAccess ? true :
  * await field.access.read({ id, blockData, collection, data, doc, req, siblingData,
- * skipCompilation })`, falsy: the field is removed and gets no default), one per function of
- * `plan.fieldAccess`, or the guard reason; `undefined` with `overrideAccess` or without such
- * functions. Only compiled functions that read nothing but `req` (`argKeys`): their result is the
- * same for every document and field of the call, so each is evaluated once, after every other
- * guard passed (`evaluateOnLane`: guard sampling as for collection access).
+ * skipCompilation })`, falsy: the field is removed and gets no default) as `FnId`s, one per
+ * function of `plan.fieldAccess`, or the guard reason; `undefined` with `overrideAccess` or
+ * without such functions. The core evaluates them where upstream calls them, after every other
+ * guard passed (`laneFieldAccess`: guard sampling as for collection access).
  */
-const compiledFieldAccess = ({
-  overrideAccess,
-  plan,
-  req,
-}: Pick<Prepared, 'overrideAccess' | 'plan' | 'req'>): boolean[] | string | undefined => {
+const compiledFieldAccess = (
+  { overrideAccess, plan }: Pick<Prepared, 'overrideAccess' | 'plan'>,
+  fieldAccessIDs: Map<unknown, number>,
+) => {
   if (overrideAccess || plan.fieldAccess.length === 0) {
     return undefined
   }
-  const results: boolean[] = []
-  for (const fn of plan.fieldAccess) {
-    const result = evaluateRequestOnlyAccess(fn, req)
-    if (typeof result === 'string') {
-      return result
-    }
-    results.push(result)
-  }
-  return results
+  return laneFieldAccess(plan.fieldAccess, fieldAccessIDs)
 }
 
 /** `afterRead`'s `depth` (`parseInt(String(depth))`, `defaultDepth`, capped at `maxDepth`). */
@@ -333,11 +324,16 @@ const isSelectTree = (select: unknown, depth = 16): boolean => {
   return isInertTree(select, false)
 }
 
-/** The `afterRead` part of a request: everything after `"db":<tree>`. */
+/**
+ * The `afterRead` part of a request: everything after `"db":<tree>`. With compiled functions to
+ * evaluate natively (field read access, population's access: `fieldAccessIDs`) `accessReq` is
+ * `req` as they see it (`encodeSnapshot`).
+ */
 const readRequest = ({
   currentDepth,
   depth,
   fieldAccess,
+  fieldAccessIDs,
   flattenLocales,
   payload,
   plan,
@@ -347,7 +343,8 @@ const readRequest = ({
 }: {
   currentDepth: number
   depth: number
-  fieldAccess: boolean[] | undefined
+  fieldAccess: number[] | undefined
+  fieldAccessIDs: Map<unknown, number>
   flattenLocales: boolean
   payload: Any
   plan: { eligible: true } & CollectionPlan
@@ -356,6 +353,7 @@ const readRequest = ({
   showHiddenFields: boolean
 }): string =>
   JSON.stringify({
+    accessReq: fieldAccessIDs.size > 0 ? encodeSnapshot(snapshotRequest(req)) : undefined,
     auth: plan.auth,
     currentDepth,
     depth,
@@ -460,9 +458,20 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   if (!Number.isFinite(depth) || typeof currentDepth !== 'number') {
     return guard('depth')
   }
+  const fieldAccessIDs = new Map<unknown, number>()
   const population =
     depth && currentDepth <= depth && plan.hasRelations
-      ? populationRequest({ args, currentDepth, depth, draft, payload, plan, req, target })
+      ? populationRequest({
+          args,
+          currentDepth,
+          depth,
+          draft,
+          fieldAccessIDs,
+          payload,
+          plan,
+          req,
+          target,
+        })
       : undefined
   if (typeof population === 'string') {
     return guard(population)
@@ -491,7 +500,7 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   if (typeof db === 'string') {
     return guard(db)
   }
-  const fieldAccess = compiledFieldAccess(prepared)
+  const fieldAccess = compiledFieldAccess(prepared, fieldAccessIDs)
   if (typeof fieldAccess === 'string') {
     return guard(fieldAccess)
   }
@@ -499,6 +508,7 @@ const buildFindRequest = (args: Any): Fused | undefined => {
     currentDepth,
     depth,
     fieldAccess,
+    fieldAccessIDs,
     flattenLocales: true,
     payload,
     plan,
@@ -573,6 +583,7 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
   if (!Number.isFinite(depth) || typeof currentDepth !== 'number') {
     return guard('depth')
   }
+  const fieldAccessIDs = new Map<unknown, number>()
   const population =
     depth && currentDepth <= depth && plan.hasRelations
       ? populationRequest({
@@ -580,6 +591,7 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
           currentDepth,
           depth,
           draft: replaceWithVersion,
+          fieldAccessIDs,
           payload,
           plan,
           req,
@@ -606,7 +618,7 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
   if (typeof db === 'string') {
     return guard(db)
   }
-  const fieldAccess = compiledFieldAccess(prepared)
+  const fieldAccess = compiledFieldAccess(prepared, fieldAccessIDs)
   if (typeof fieldAccess === 'string') {
     return guard(fieldAccess)
   }
@@ -614,6 +626,7 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
     currentDepth,
     depth,
     fieldAccess,
+    fieldAccessIDs,
     flattenLocales: flattenLocales === undefined ? true : flattenLocales,
     payload,
     plan,
@@ -827,9 +840,20 @@ export const fusedPageRequest = (
   if (!Number.isFinite(depth)) {
     return 'page:depth'
   }
+  const fieldAccessIDs = new Map<unknown, number>()
   const population =
     depth && 1 <= depth && plan.hasRelations
-      ? populationRequest({ args, currentDepth: 1, depth, draft, payload, plan, req, target })
+      ? populationRequest({
+          args,
+          currentDepth: 1,
+          depth,
+          draft,
+          fieldAccessIDs,
+          payload,
+          plan,
+          req,
+          target,
+        })
       : undefined
   if (typeof population === 'string') {
     return population
@@ -842,6 +866,7 @@ export const fusedPageRequest = (
     currentDepth: 1,
     depth,
     fieldAccess: undefined,
+    fieldAccessIDs,
     flattenLocales: true,
     payload,
     plan,

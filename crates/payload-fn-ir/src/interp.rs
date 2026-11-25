@@ -17,6 +17,9 @@ pub(crate) struct Interp {
   /// The slots of every frame, one contiguous stack (a frame's start is `Frame::base`).
   stack: Vec<Option<Value>>,
   next_frame: u64,
+  /// Since the last [`Interp::reset`]: `await`s evaluated and promises an async function adopted
+  /// (`return promise`), the microtask ticks a JS call takes beyond its first.
+  pub(crate) extra_ticks: u32,
 }
 
 struct Frame {
@@ -33,7 +36,7 @@ enum Flow {
 
 impl Interp {
   pub(crate) fn new() -> Self {
-    Interp { frames: Vec::with_capacity(8), stack: Vec::with_capacity(64), next_frame: 0 }
+    Interp { frames: Vec::with_capacity(8), stack: Vec::with_capacity(64), next_frame: 0, extra_ticks: 0 }
   }
 
   /// Calls compiled function `id` with `args`; a promise result (an async helper's, or an async
@@ -71,6 +74,7 @@ impl Interp {
     if installed.def.is_async {
       if let Value::Promise(_) = value {
         // `return promise` from an async function adopts it.
+        self.extra_ticks += 1;
         return Ok(value);
       }
       return Ok(Value::Promise(Arc::new(value)));
@@ -117,6 +121,7 @@ impl Interp {
   pub(crate) fn reset(&mut self) {
     self.frames.clear();
     self.stack.clear();
+    self.extra_ticks = 0;
   }
 
   fn bind(&mut self, pattern: &Pattern, value: Value) -> R<()> {
@@ -386,6 +391,7 @@ impl Interp {
       Expr::RegExp { source, flags } => builtins::regexp(source, flags),
       Expr::Await(inner) => {
         let v = self.eval(inner)?;
+        self.extra_ticks += 1;
         match v {
           Value::Promise(inner) => Ok((*inner).clone()),
           Value::Object(o) if o.has("then") || !o.closed => Err(Bail::Unsupported("await of a thenable")),

@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use payload_engine::js::{JsVal, Obj, write_json_string};
 
-use crate::after_read::{ReadArgs, Seg, after_read_populating, obj_mut, resolve};
+use crate::after_read::{FieldAccess, ReadArgs, Seg, after_read_docs, lane_call, obj_mut, resolve};
 use crate::backend::{Bail, FuseResult, Population, ReadSession};
 use crate::write;
 
@@ -60,6 +60,8 @@ enum Loaded {
 /// The dataloader of one fused call.
 pub(crate) struct PopRun<'p> {
   request: &'p Population,
+  /// the compiled functions the operation used (`after_read::lane_call`)
+  checked: &'p std::sync::Mutex<Vec<payload_fn_ir::FnId>>,
   keys: Vec<Key>,
   ids: Vec<JsVal>,
   index: HashMap<Key, usize>,
@@ -75,9 +77,10 @@ fn number_key(n: f64) -> u64 {
 }
 
 impl<'p> PopRun<'p> {
-  pub fn new(request: &'p Population) -> Self {
+  pub fn new(request: &'p Population, checked: &'p std::sync::Mutex<Vec<payload_fn_ir::FnId>>) -> Self {
     Self {
       request,
+      checked,
       keys: Vec::new(),
       ids: Vec::new(),
       index: HashMap::new(),
@@ -206,11 +209,23 @@ fn nested_find(run: &mut PopRun<'_>, session: &mut dyn ReadSession, args: &ReadA
   run.nested.push(depth);
   let ids: Vec<JsVal> = group.iter().map(|&k| run.ids[k].clone()).collect();
   let db_args = nested_args(request, &first.slug, related, &ids);
-  let mut docs = session.populate_find(&db_args, related, &ids)?;
+  let req = match (&related.access, &related.field_access) {
+    (None, None) => None,
+    _ => Some(nested_request(request.access_req.as_ref().ok_or_else(|| Bail::new("request:accessReq"))?, depth)?),
+  };
+  let can_read = match (related.access, &req) {
+    (Some(id), Some(req)) => nested_access(run.checked, id, &first.slug, req)?,
+    _ => true,
+  };
+  // `find` with read access `false` and `disableErrors`: empty results, no database call
+  let mut docs = if can_read { session.populate_find(&db_args, related, &ids)? } else { Vec::new() };
+  let field_access = match (&related.field_access, req) {
+    (Some(functions), Some(req)) => Some(FieldAccess { functions, req, checked: run.checked }),
+    _ => None,
+  };
   let nested_args = ReadArgs {
     plan: &related.plan,
-    // population runs only with `overrideAccess` (src/fuse/populate.ts)
-    field_access: None,
+    field_access,
     locale: args.locale.clone(),
     fallback: args.fallback.clone(),
     localization: args.localization,
@@ -219,13 +234,12 @@ fn nested_find(run: &mut PopRun<'_>, session: &mut dyn ReadSession, args: &ReadA
     depth,
     current_depth,
   };
-  let mut loads = Vec::with_capacity(docs.len());
-  for doc in docs.iter_mut() {
-    if related.auth {
+  if related.auth {
+    for doc in docs.iter_mut() {
       crate::add_collection(doc, &related.plan.slug)?;
     }
-    loads.push(after_read_populating(&nested_args, doc, related.select.as_ref(), related.select_mode, Some(&mut *run))?);
   }
+  let loads = after_read_docs(&nested_args, &mut docs, related.select.as_ref(), related.select_mode, Some(&mut *run))?;
   resolve_level(run, session, &nested_args, &mut docs, loads)?;
   for doc in docs {
     let id = match (doc.get("id"), related.number_id) {
@@ -429,5 +443,46 @@ impl SharedWriter {
       }
       other => write::write(other, out, depth),
     }
+  }
+}
+
+/// `req` as the field access of a nested find sees it: its `createPayloadRequest({ depth, req,
+/// ... })` (local `payload.find`) ran `req.query = req.query || {}; req.query.depth = depth`. The
+/// other properties it sets keep their values on the fused lanes (src/fuse/populate.ts).
+fn nested_request(req: &payload_fn_ir::Value, depth: f64) -> FuseResult<payload_fn_ir::Value> {
+  use payload_fn_ir::Value;
+  let Value::Object(props) = req else { return Err(Bail::new("populate:req")) };
+  let query = match props.get("query") {
+    // not captured: reading it bails
+    None | Some(Value::Opaque(_)) => return Ok(req.clone()),
+    Some(Value::Object(query)) => {
+      let mut query = (**query).clone();
+      query.set(Arc::from("depth"), Value::Number(depth));
+      Value::Object(Arc::new(query))
+    }
+    Some(value) if matches!(value.truthy(), Ok(false)) => Value::object(vec![("depth", Value::Number(depth))]),
+    Some(_) => return Err(Bail::new("populate:req-query")),
+  };
+  let mut props = (**props).clone();
+  props.set(Arc::from("query"), query);
+  Ok(Value::Object(Arc::new(props)))
+}
+
+/// `executeAccess({ slug, disableErrors: true, req }, collection.access.read)` of a nested find:
+/// `true` reads (no constraint), `false` returns no documents; anything else (a where constraint,
+/// another falsy value, a bail, a call guard mode wants to see) bails.
+fn nested_access(
+  checked: &std::sync::Mutex<Vec<payload_fn_ir::FnId>>,
+  id: payload_fn_ir::FnId,
+  slug: &str,
+  req: &payload_fn_ir::Value,
+) -> FuseResult<bool> {
+  use payload_fn_ir::Value;
+  lane_call(checked, id, "populate:access:verify")?;
+  let args = payload_fn_ir::lanes::collection_access_args(Value::Undefined, slug, Value::Undefined, req.clone());
+  match payload_fn_ir::evaluate(id, &[args]) {
+    Ok(Value::Bool(can_read)) => Ok(can_read),
+    Ok(_) => Err(Bail::new("populate:access:result")),
+    Err(bail) => Err(Bail::new(format!("populate:access:bail:{}", bail.reason()))),
   }
 }

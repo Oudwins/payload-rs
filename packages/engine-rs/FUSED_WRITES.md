@@ -708,6 +708,14 @@ reach the lane; REST writes at the default depth 2 still guard on `read`: their 
 (`user?.id === doc?.id`). The lane-shadow's replay of the fused copies onto the caller's `data`
 now also reproduces key order (a denied field is deleted and re-added after the others).
 
+**REST writes at depth 2 (WP-M, 2026-11-25)**: the result read's `afterRead` now evaluates
+document-reading field read access per document in Rust, and population's nested finds evaluate
+the related collections' compiled read access where they run (`false`, e.g. the users' default
+access for an anonymous request, reads nothing; FUSE_CONTRACT.md sections 2, 3 and 9). The
+`read` guard no longer stops REST creates / updates whose result populates the users; guard
+sampling of those functions bails the write (transaction aborted, exact lane) on the calls it
+samples. No change to the write side: `src/fuse-write` is untouched.
+
 **update-many and delete-many** (WP-K, driver `crates/payload-fuse-write/src/bulk.rs`, TS
 `runBulk` / `prepareBulk` in `src/fuse-write/mongo.ts`, dispatch `fuseBulk` in `index.ts`). Two
 native calls on one Rust-owned transaction, because the per-document statements need the ids the

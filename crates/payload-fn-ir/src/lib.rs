@@ -81,6 +81,14 @@ impl Bail {
 /// partial object ([`Value::partial_object`]) holding only what was captured (`user`, `locale`,
 /// `fallbackLocale`, `context`, `query`): reading any other `req` property bails.
 pub fn evaluate(id: FnId, args: &[Value]) -> Result<Value, Bail> {
+  evaluate_ticks(id, args).map(|(value, _)| value)
+}
+
+/// [`evaluate`], also saying whether `await fn(...args)` in JS resumes after exactly one microtask
+/// tick: no `await` ran and no async function returned a promise, so every promise involved was
+/// already settled when awaited. Lanes that order work by ticks (the fused `afterRead`) bail on
+/// `false`.
+pub fn evaluate_ticks(id: FnId, args: &[Value]) -> Result<(Value, bool), Bail> {
   let installed = registry::installed(id).ok_or(Bail::NotCompiled)?;
   // One interpreter per thread, reused (its frame and slot stacks keep their capacity).
   // Evaluation never re-enters itself (no JS runs), so the borrow cannot conflict.
@@ -95,10 +103,11 @@ pub fn evaluate(id: FnId, args: &[Value]) -> Result<Value, Bail> {
       }
     };
     let result = interp.call_top(installed, args);
+    let one_tick = interp.extra_ticks == 0;
     interp.reset();
     match result {
       Err(Bail::ShortCircuit) => Err(Bail::Unsupported("short circuit outside a chain")),
-      other => other,
+      other => other.map(|value| (value, one_tick)),
     }
   })
 }

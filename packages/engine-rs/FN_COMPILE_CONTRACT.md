@@ -84,6 +84,13 @@ if registry::is_active(id) && !guard::lane_should_verify(id) {
   `skipCompilation` (an opaque function): `collection_access_args` (`executeAccess`),
   `field_read_access_args` (afterRead field `access.read`, collection fields). The IR never sees
   `this`.
+- Snapshots taken in JS for a lane that evaluates in Rust (the fused afterRead's `req`) travel as
+  JSON: `encodeSnapshot` (`compile/snapshot.ts`) and `lanes::from_typed` (tagged values for
+  `undefined`, non-finite numbers, `-0`, partial / null-prototype objects, headers, opaque values).
+  `Value::from_js_val_with` converts core documents with extra opaque values (a lane's raw leaves).
+- Ticks: `evaluate_ticks(id, args)` also says whether `await fn(...args)` in JS resumes after
+  exactly one microtask tick (no `await` evaluated, no promise adopted by an async function); a
+  lane that orders work by ticks (the fused afterRead) bails otherwise.
 - Thread safety: `evaluate` can run on any thread (the IR is immutable in a lock-free,
   append-only registry; values are `Arc`ed; each thread reuses its own interpreter).
 - Speed (release, `cargo run --release -p payload-fn-ir --example bench`, one shared core):

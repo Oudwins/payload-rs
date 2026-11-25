@@ -7,4 +7,5 @@ version.workspace = true
 [dependencies]
 indexmap.workspace = true
 payload-engine = { path = "../payload-engine" }
+payload-fn-ir = { path = "../payload-fn-ir" }
 serde_json.workspace = true

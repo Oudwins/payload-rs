@@ -27,7 +27,7 @@ export type { CompiledFunction } from './compileFunction.js'
 export { compileFunction, getCompiledFunction } from './compileFunction.js'
 export { configFunctions } from './configFunctions.js'
 export { compileGuardsInstalled, guardStats, installCompileGuards } from './guard.js'
-export { capturedRequest } from './snapshot.js'
+export { capturedRequest, encodeSnapshot, snapshotRequest } from './snapshot.js'
 
 /** Whether `fn` was compiled and is still active (not de-optimised by guard mode). */
 export const isCompiled = (fn: AnyFunction): boolean => {
@@ -80,17 +80,11 @@ export const evaluateOnLane = (
   fn: AnyFunction,
   args: unknown[],
 ): { ok: false; reason: string } | { ok: true; value: unknown } => {
-  if (!compileGuardsInstalled()) {
-    return { ok: false, reason: 'no-guards' }
-  }
-  const entry = getCompiledFunction(fn)
-  if (!entry?.ok) {
-    return { ok: false, reason: 'not-compiled' }
+  const { entry, reason } = laneFunction(fn)
+  if (!entry) {
+    return { ok: false, reason }
   }
   const fnIr = getFnIr()
-  if (!fnIr.fnIrIsActive(entry.id)) {
-    return { ok: false, reason: 'deoptimized' }
-  }
   if (fnIr.fnIrLaneShouldVerify(entry.id)) {
     return { ok: false, reason: 'verify' }
   }
@@ -99,4 +93,25 @@ export const evaluateOnLane = (
     return { ok: false, reason: `bail:${result}` }
   }
   return { ok: true, value: fnIr.fnIrResultToJs(result) }
+}
+
+/**
+ * `evaluateOnLane`'s checks for a lane that evaluates `fn` in Rust itself (the fused `afterRead`'s
+ * field read access and population's nested access, crates/payload-fuse): guards installed,
+ * compiled, active. The lane asks `lane_should_verify` itself when the operation first calls the
+ * function (`after_read::lane_call`). `{ reason }`: the call runs on the exact lane.
+ */
+export const laneFunction = (fn: AnyFunction) => {
+  if (!compileGuardsInstalled()) {
+    return { reason: 'no-guards' }
+  }
+  const entry = getCompiledFunction(fn)
+  if (!entry?.ok) {
+    return { reason: 'not-compiled' }
+  }
+  const fnIr = getFnIr()
+  if (!fnIr.fnIrIsActive(entry.id)) {
+    return { reason: 'deoptimized' }
+  }
+  return { entry }
 }

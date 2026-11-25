@@ -12,7 +12,10 @@ export const isReader = ({ req: { user } }: any) => user?.email === 'reader@payl
  * Compiled access on the fused read lanes (packages/engine-rs/FUSE_CONTRACT.md section 2): a
  * where-returning collection read access and field `access.read` functions that only read `req`
  * at every nesting the plan has (group, array, named and unnamed tabs, blocks), with defaults on
- * denied fields; `doc-access` reads the document, which keeps its reads on the exact lane.
+ * denied fields; `doc-access` and `row-access` read the document, its sibling data, its block
+ * data and its id (evaluated per document and field inside the fused afterRead); `authored` has
+ * the default authorship relationships to the users, whose `sessions` field access reads the
+ * document.
  */
 export default buildConfigWithDefaults({
   suite: 'fuse-access',
@@ -132,6 +135,80 @@ export default buildConfigWithDefaults({
             type: 'text',
             access: { read: ({ doc }) => doc?.title === 'show' },
           },
+        ],
+      },
+      {
+        slug: 'row-access',
+        access: { read: () => true },
+        authorship: false,
+        fields: [
+          { name: 'title', type: 'text' },
+          {
+            // denied: removed one tick after the access call, then refilled with `[]`, after the
+            // later fields' synchronous work and before their defaults
+            name: 'denied',
+            type: 'array',
+            access: { read: ({ doc }) => doc?.title === 'never' },
+            fields: [{ name: 'value', type: 'text' }],
+          },
+          { name: 'later', type: 'group', fields: [{ name: 'value', type: 'text' }] },
+          { name: 'afterDefault', type: 'text', defaultValue: 'after' },
+          {
+            name: 'rows',
+            type: 'array',
+            fields: [
+              { name: 'visible', type: 'checkbox' },
+              {
+                name: 'secret',
+                type: 'text',
+                access: { read: ({ siblingData }) => siblingData?.visible === true },
+                defaultValue: 'secret default',
+              },
+            ],
+          },
+          {
+            name: 'layout',
+            type: 'blocks',
+            blocks: [
+              {
+                slug: 'card',
+                fields: [
+                  { name: 'public', type: 'checkbox' },
+                  {
+                    name: 'inner',
+                    type: 'group',
+                    fields: [
+                      {
+                        name: 'note',
+                        type: 'text',
+                        access: { read: ({ blockData }) => blockData?.public === true },
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            name: 'signedInWithID',
+            type: 'text',
+            access: { read: ({ id, req: { user } }) => Boolean(user) && typeof id === 'string' },
+          },
+          {
+            name: 'first',
+            type: 'relationship',
+            relationTo: 'tags',
+            access: { read: ({ doc }) => typeof doc?.id === 'string' },
+          },
+          { name: 'second', type: 'relationship', relationTo: 'links' },
+        ],
+      },
+      {
+        slug: 'authored',
+        access: { create: () => true, read: () => true, update: () => true },
+        fields: [
+          { name: 'title', type: 'text' },
+          { name: 'parent', type: 'relationship', relationTo: 'authored' },
         ],
       },
     ],

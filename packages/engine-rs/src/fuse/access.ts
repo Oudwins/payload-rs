@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- sanitized config and request shapes */
 import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.js'
 import { getCompiledFunction } from '../compile/compileFunction.js'
-import { evaluateOnLane } from '../compile/index.js'
+import { evaluateOnLane, laneFunction } from '../compile/index.js'
 import { isInertTree } from './inert.js'
 
 type Any = any
@@ -76,4 +76,41 @@ export const evaluateRequestOnlyAccess = (fn: Any, req: Any): boolean | string =
 const readsOnlyReq = (argKeys: (null | string[])[]) => {
   const [keys] = argKeys
   return argKeys.length <= 1 && keys !== null && (keys ?? []).every((key) => key === 'req')
+}
+
+/**
+ * The `FnId` of compiled function `fn` for a lane that evaluates it in Rust (the fused
+ * `afterRead`'s field read access, population's nested access), or the guard reason: compiled
+ * and active (`laneFunction`). Guard sampling is the lane's: the first call of each function in an
+ * operation asks `lane_should_verify` (the first 32 checked calls, then 1 in 256 lane calls bail
+ * to the exact lane, where the call-site guard verifies the JS result). `ids`: the functions of
+ * this operation (the request then carries `accessReq`).
+ */
+export const laneFunctionID = (fn: Any, ids: Map<unknown, number>) => {
+  const known = ids.get(fn)
+  if (known !== undefined) {
+    return known
+  }
+  if (typeof fn !== 'function') {
+    return 'shape'
+  }
+  const { entry, reason } = laneFunction(fn)
+  if (!entry) {
+    return reason
+  }
+  ids.set(fn, entry.id)
+  return entry.id
+}
+
+/** `laneFunctionID` of a plan's field `access.read` functions (`plan.fieldAccess`). */
+export const laneFieldAccess = (functions: Any[], ids: Map<unknown, number>) => {
+  const out: number[] = []
+  for (const fn of functions) {
+    const id = laneFunctionID(fn, ids)
+    if (typeof id === 'string') {
+      return `access:field:${id}`
+    }
+    out.push(id)
+  }
+  return out
 }

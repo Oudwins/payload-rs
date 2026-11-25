@@ -1,17 +1,24 @@
 //! Upstream's `afterRead` field traversal (packages/payload/src/fields/hooks/afterRead) on an
-//! owned document, for configs without user functions on the read path (FUSE_CONTRACT.md
-//! section 2).
+//! owned document, for configs whose only user functions on the read path are compiled field
+//! read access functions (FUSE_CONTRACT.md section 2).
 //!
-//! Upstream mutates the document in place, field by field, inside `async` functions. Everything
-//! it does synchronously happens here in the same order (deletes, `{}` / `[]` fills, locale
-//! hoisting, point and depth-0 relationship normalization); assignments upstream makes after an
-//! `await` (default values) are queued and applied after the traversal in the order their
-//! promises started, which is the order they settle in (each takes the same single tick). Key
-//! insertion order therefore matches upstream. Branches whose order or result would depend on
-//! more than that bail.
+//! Upstream mutates the document in place, field by field, inside `async` functions. The
+//! traversal reproduces their microtask order: what a field's `promise()` does synchronously
+//! happens in the same order (deletes, `{}` / `[]` fills, locale hoisting, point and depth-0
+//! relationship normalization, the field's `access.read` call), and the work upstream does after
+//! an `await` is a job queued for the tick it resumes in (FIFO within a tick, like the microtask
+//! queue): a default value's assignment one tick after its `getDefaultValue` call, and the rest of
+//! a field with read access (the removal of a denied value, its default, its relationship and its
+//! sub fields) one tick after the access call. `find` runs each tick for every document in
+//! order, like its concurrent per-document `afterRead`s. Key insertion order, population load
+//! order and the arguments the access functions see therefore match upstream. Branches whose
+//! order or result would depend on more than that bail.
+
+use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 use payload_engine::js::{JsVal, Obj};
+use payload_fn_ir::{FnId, Value as FnValue, guard, lanes};
 
 use crate::backend::{Bail, FuseResult};
 use crate::populate::{DocLoads, PopRun};
@@ -31,13 +38,48 @@ pub enum Fallback {
   Many(Vec<String>),
 }
 
+/// A compiled `field.access.read` function of a call without `overrideAccess`.
+#[derive(Clone, Copy, Debug)]
+pub struct AccessFn {
+  pub id: FnId,
+  /// It reads nothing but `req` (`argKeys`): one result for every call of one `afterRead`.
+  pub request_only: bool,
+}
+
+/// The field read access of an `afterRead` without `overrideAccess` (FUSE_CONTRACT.md "Compiled
+/// user functions"): evaluated where upstream calls it, with upstream's arguments
+/// (`{ id, blockData, collection, data, doc, req, siblingData, skipCompilation }`).
+#[derive(Clone)]
+pub struct FieldAccess<'a> {
+  /// `[i]`: the function of the plan's `Field::read_access == Some(i)`
+  pub functions: &'a [AccessFn],
+  /// `req` as compiled functions see it during this `afterRead` (`lanes::request` shape)
+  pub req: FnValue,
+  /// the compiled functions this operation already used ([`lane_call`])
+  pub checked: &'a Mutex<Vec<FnId>>,
+}
+
+/// The first use of compiled function `id` in an operation is one lane call
+/// (FN_COMPILE_CONTRACT.md "Lanes"): when guard mode wants to see it, the operation bails (its
+/// exact lane calls the JS function, where the call-site guard verifies it). Only functions the
+/// operation actually calls count, so a related collection nothing loads never holds calls back.
+pub fn lane_call(checked: &Mutex<Vec<FnId>>, id: FnId, reason: &str) -> FuseResult<()> {
+  let mut checked = checked.lock().unwrap_or_else(|e| e.into_inner());
+  if checked.contains(&id) {
+    return Ok(());
+  }
+  checked.push(id);
+  if guard::lane_should_verify(id) {
+    return Err(Bail::new(reason));
+  }
+  Ok(())
+}
+
 /// The per-operation inputs of `afterRead` (its args after destructuring, `depth` resolved).
 pub struct ReadArgs<'a> {
   pub plan: &'a CollectionPlan,
-  /// `field.access.read` results of the call without `overrideAccess` (FUSE_CONTRACT.md "Compiled
-  /// user functions"): `[i]` for the plan's `Field::read_access == Some(i)`. `None`:
-  /// `overrideAccess` (access is not called).
-  pub field_access: Option<&'a [bool]>,
+  /// `field.access.read` of the call; `None`: `overrideAccess` (access is not called).
+  pub field_access: Option<FieldAccess<'a>>,
   /// `req.locale` when it is a string
   pub locale: Option<String>,
   pub fallback: Fallback,
@@ -55,55 +97,125 @@ pub(crate) enum Seg {
   Index(usize),
 }
 
-struct Deferred {
+/// Work upstream does after an `await`, queued for the tick it resumes in.
+enum Job<'a> {
+  /// `siblingDoc[key] = await getDefaultValue(...)`
+  Default { path: Vec<Seg>, key: String, value: JsVal },
+  /// a field's `promise()` after `await field.access.read(...)`
+  Rest(Rest<'a>),
+}
+
+struct Rest<'a> {
+  /// the sibling document
   path: Vec<Seg>,
-  key: String,
-  value: JsVal,
+  block: Option<Vec<Seg>>,
+  field: &'a Field,
+  at_root: bool,
+  parent_localized: bool,
+  select: Option<JsVal>,
+  select_mode: Option<SelectMode>,
+  state: FieldState,
+}
+
+/// What a field's `promise()` decided before its access call.
+#[derive(Clone, Copy)]
+struct FieldState {
+  removed: bool,
+  hoist: bool,
+  should_localize: bool,
+  can_read: bool,
+}
+
+/// The jobs of one document by tick (`[t]` in FIFO order) and its population loads.
+#[derive(Default)]
+struct DocState<'a> {
+  queue: Vec<Vec<Job<'a>>>,
+  loads: DocLoads,
 }
 
 struct Walk<'a, 'r, 'w, 'p> {
   args: &'r ReadArgs<'a>,
-  deferred: Vec<Deferred>,
+  /// the sibling document of the field being visited, from the document root
   path: Vec<Seg>,
+  /// the nearest block row above it (`blockData`), from the document root
+  block: Option<Vec<Seg>>,
+  tick: usize,
+  doc: DocState<'a>,
   /// Relationship population: the loads of the call (`None`: a population bails).
   pop: Option<&'w mut PopRun<'p>>,
-  /// The population slots / hasMany filters of this document.
-  loads: DocLoads,
+  /// results of the request-only access functions (by `Field::read_access`)
+  request_only: Vec<Option<bool>>,
+  /// `collection` of the access arguments: what the lane knows of the config (`{ slug }`)
+  collection: Option<FnValue>,
 }
 
 /// Runs the traversal on `doc` (a document object) with the root `select`.
 pub fn after_read(args: &ReadArgs<'_>, doc: &mut JsVal, select: Option<&JsVal>, select_mode: Option<SelectMode>) -> FuseResult<()> {
-  after_read_populating(args, doc, select, select_mode, None).map(|_| ())
+  after_read_docs(args, std::slice::from_mut(doc), select, select_mode, None).map(|_| ())
 }
 
-/// [`after_read`] that records the relationships it would populate in `pop` (dataloader loads,
-/// in upstream's load order) instead of bailing; the returned slots are filled once the loads
-/// resolved ([`crate::populate`]).
-pub(crate) fn after_read_populating(
-  args: &ReadArgs<'_>,
-  doc: &mut JsVal,
+/// [`after_read`] of each of `docs`, interleaved by tick like upstream's concurrent
+/// `docs.map((doc) => afterRead(...))`, recording the relationships it would populate in `pop`
+/// (dataloader loads, in upstream's load order) instead of bailing; the returned slots (per
+/// document) are filled once the loads resolved ([`crate::populate`]).
+pub(crate) fn after_read_docs<'a>(
+  args: &ReadArgs<'a>,
+  docs: &mut [JsVal],
   select: Option<&JsVal>,
   select_mode: Option<SelectMode>,
   pop: Option<&mut PopRun<'_>>,
-) -> FuseResult<DocLoads> {
-  if !matches!(doc, JsVal::Obj(_)) {
-    return Err(Bail::new("doc:not-object"));
+) -> FuseResult<Vec<DocLoads>> {
+  let mut walk = Walk {
+    args,
+    path: Vec::new(),
+    block: None,
+    tick: 0,
+    doc: DocState::default(),
+    pop,
+    request_only: Vec::new(),
+    collection: None,
+  };
+  let fields: &'a [Field] = &args.plan.fields;
+  let mut states = Vec::with_capacity(docs.len());
+  for doc in docs.iter_mut() {
+    if !matches!(doc, JsVal::Obj(_)) {
+      return Err(Bail::new("doc:not-object"));
+    }
+    walk.traverse(fields, doc, true, false, select, select_mode)?;
+    states.push(std::mem::take(&mut walk.doc));
   }
-  let mut walk = Walk { args, deferred: Vec::new(), path: Vec::new(), pop, loads: DocLoads::default() };
-  let fields = &args.plan.fields;
-  walk.traverse(fields, doc, true, false, select, select_mode)?;
-  for Deferred { path, key, value } in walk.deferred {
-    let target = resolve(doc, &path).ok_or_else(|| Bail::new("default:target"))?;
-    obj_mut(target).ok_or_else(|| Bail::new("default:target"))?.insert(key, value);
+  let mut tick = 1;
+  while states.iter().any(|state| state.queue.len() > tick) {
+    for (doc, state) in docs.iter_mut().zip(states.iter_mut()) {
+      let Some(jobs) = state.queue.get_mut(tick).map(std::mem::take) else { continue };
+      std::mem::swap(&mut walk.doc, state);
+      walk.tick = tick;
+      for job in jobs {
+        walk.run(job, doc)?;
+      }
+      std::mem::swap(&mut walk.doc, state);
+    }
+    tick += 1;
   }
-  Ok(walk.loads)
+  Ok(states.into_iter().map(|state| state.loads).collect())
 }
 
 pub(crate) fn resolve<'v>(mut value: &'v mut JsVal, path: &[Seg]) -> Option<&'v mut JsVal> {
   for seg in path {
     value = match (seg, value) {
-      (Seg::Key(key), JsVal::Obj(o)) => std::sync::Arc::make_mut(o).get_mut(key.as_str())?,
-      (Seg::Index(i), JsVal::Arr(a)) => std::sync::Arc::make_mut(a).get_mut(*i)?,
+      (Seg::Key(key), JsVal::Obj(o)) => Arc::make_mut(o).get_mut(key.as_str())?,
+      (Seg::Index(i), JsVal::Arr(a)) => Arc::make_mut(a).get_mut(*i)?,
+      _ => return None,
+    };
+  }
+  Some(value)
+}
+
+fn resolve_ref<'v>(mut value: &'v JsVal, path: &[Seg]) -> Option<&'v JsVal> {
+  for seg in path {
+    value = match (seg, value) {
+      (Seg::Key(key), JsVal::Obj(o)) => o.get(key.as_str())?,
+      (Seg::Index(i), JsVal::Arr(a)) => a.get(*i)?,
       _ => return None,
     };
   }
@@ -112,11 +224,10 @@ pub(crate) fn resolve<'v>(mut value: &'v mut JsVal, path: &[Seg]) -> Option<&'v 
 
 pub(crate) fn obj_mut(value: &mut JsVal) -> Option<&mut Obj> {
   match value {
-    JsVal::Obj(o) => Some(&mut **std::sync::Arc::make_mut(o)),
+    JsVal::Obj(o) => Some(&mut **Arc::make_mut(o)),
     _ => None,
   }
 }
-
 
 fn is_undefined(value: Option<&JsVal>) -> bool {
   matches!(value, None | Some(JsVal::Undefined))
@@ -158,19 +269,33 @@ fn deep_copy(value: &JsVal) -> JsVal {
   }
 }
 
-impl Walk<'_, '_, '_, '_> {
-  /// `traverseFields(...)`: one `promise()` per field, in order.
+/// A raw leaf ([`crate::RawLeaves`]): its value is not in the document, so compiled functions see
+/// it as opaque (reading it bails).
+fn is_raw_leaf(value: &JsVal) -> bool {
+  match value {
+    JsVal::Obj(o) => crate::write::raw_text(o, |_| ()).is_some(),
+    _ => false,
+  }
+}
+
+fn sibling_at<'v>(root: &'v mut JsVal, path: &[Seg]) -> FuseResult<&'v mut Obj> {
+  resolve(root, path).and_then(obj_mut).ok_or_else(|| Bail::new("sibling:not-object"))
+}
+
+impl<'a> Walk<'a, '_, '_, '_> {
+  /// `traverseFields(...)`: one `promise()` per field, in order, on the sibling document at
+  /// `self.path`.
   fn traverse(
     &mut self,
-    fields: &[Field],
-    sibling: &mut JsVal,
+    fields: &'a [Field],
+    root: &mut JsVal,
     at_root: bool,
     parent_localized: bool,
     select: Option<&JsVal>,
     select_mode: Option<SelectMode>,
   ) -> FuseResult<()> {
     for field in fields {
-      self.field(field, sibling, at_root, parent_localized, select, select_mode)?;
+      self.field(field, root, at_root, parent_localized, select, select_mode)?;
     }
     Ok(())
   }
@@ -182,11 +307,35 @@ impl Walk<'_, '_, '_, '_> {
     out
   }
 
-  /// `promise()` of one field.
+  /// Queues `job` for `delay` ticks after the current one.
+  fn enqueue(&mut self, delay: usize, job: Job<'a>) {
+    let tick = self.tick + delay;
+    if self.doc.queue.len() <= tick {
+      self.doc.queue.resize_with(tick + 1, Vec::new);
+    }
+    self.doc.queue[tick].push(job);
+  }
+
+  fn run(&mut self, job: Job<'a>, root: &mut JsVal) -> FuseResult<()> {
+    match job {
+      Job::Default { path, key, value } => {
+        let target = resolve(root, &path).ok_or_else(|| Bail::new("default:target"))?;
+        obj_mut(target).ok_or_else(|| Bail::new("default:target"))?.insert(key, value);
+        Ok(())
+      }
+      Job::Rest(rest) => {
+        self.path = rest.path;
+        self.block = rest.block;
+        self.rest(rest.field, root, rest.at_root, rest.parent_localized, rest.select.as_ref(), rest.select_mode, rest.state)
+      }
+    }
+  }
+
+  /// `promise()` of one field up to its access call (the rest: [`Walk::rest`]).
   fn field(
     &mut self,
-    field: &Field,
-    sibling: &mut JsVal,
+    field: &'a Field,
+    root: &mut JsVal,
     at_root: bool,
     parent_localized: bool,
     select: Option<&JsVal>,
@@ -197,7 +346,7 @@ impl Walk<'_, '_, '_, '_> {
     let name = field.name.as_deref().unwrap_or("");
     let is_top_level_id = ad && name == "id" && at_root;
     let path_is_id = field.name.is_some() && name == "id" && at_root;
-    let doc = obj_mut(sibling).ok_or_else(|| Bail::new("sibling:not-object"))?;
+    let doc = sibling_at(root, &self.path)?;
     let mut removed = false;
 
     if ad && field.hidden && !is_undefined(doc.get(name)) && !args.show_hidden && !is_top_level_id {
@@ -285,16 +434,49 @@ impl Walk<'_, '_, '_, '_> {
       _ => {}
     }
 
+    // field hooks: none on a fused path; virtual: none
+    let mut state = FieldState { removed, hoist, should_localize, can_read: true };
+    if let (true, Some(index), Some(_)) = (ad, field.read_access, &args.field_access) {
+      // `overrideAccess ? true : await field.access.read(...)`: called now, the rest of the field
+      // resumes one tick later
+      state.can_read = self.can_read(root, index)?;
+      let rest = Rest {
+        path: self.path.clone(),
+        block: self.block.clone(),
+        field,
+        at_root,
+        parent_localized,
+        select: select.cloned(),
+        select_mode,
+        state,
+      };
+      self.enqueue(1, Job::Rest(rest));
+      return Ok(());
+    }
+    self.rest(field, root, at_root, parent_localized, select, select_mode, state)
+  }
+
+  /// `promise()` of one field from its access result on.
+  #[allow(clippy::too_many_arguments)]
+  fn rest(
+    &mut self,
+    field: &'a Field,
+    root: &mut JsVal,
+    at_root: bool,
+    parent_localized: bool,
+    select: Option<&JsVal>,
+    select_mode: Option<SelectMode>,
+    state: FieldState,
+  ) -> FuseResult<()> {
+    let FieldState { removed, hoist, should_localize, can_read } = state;
+    let ad = field.affects_data;
+    let name = field.name.as_deref().unwrap_or("");
     if ad {
-      // field hooks: none on a fused path; virtual: none
+      let doc = sibling_at(root, &self.path)?;
       let mut allow_default = true;
-      if let (Some(index), Some(field_access)) = (field.read_access, args.field_access) {
-        // `overrideAccess ? true : await field.access.read(...)`: decided by the dispatch (compiled
-        // functions reading only `req`, so one result per call)
-        if !*field_access.get(index).ok_or_else(|| Bail::new("access:field"))? {
-          allow_default = false;
-          doc.shift_remove(name);
-        }
+      if !can_read {
+        allow_default = false;
+        doc.shift_remove(name);
       }
       if !removed && allow_default && is_undefined(doc.get(name)) {
         match &field.default {
@@ -305,12 +487,14 @@ impl Walk<'_, '_, '_, '_> {
               return Err(Bail::new("default:container"));
             }
             if !matches!(value, JsVal::Undefined) {
-              self.deferred.push(Deferred { path: self.path.clone(), key: name.to_string(), value: deep_copy(value) });
+              let job = Job::Default { path: self.path.clone(), key: name.to_string(), value: deep_copy(value) };
+              self.enqueue(1, job);
             }
           }
         }
       }
       if field.kind == Kind::Relationship {
+        let doc = sibling_at(root, &self.path)?;
         self.relationship(field, doc, parent_localized)?;
       } else if field.kind == Kind::Join {
         return Err(Bail::new("join"));
@@ -318,23 +502,23 @@ impl Walk<'_, '_, '_, '_> {
     }
 
     match field.kind {
-      Kind::Array => self.array(field, sibling, parent_localized, hoist, select, select_mode)?,
-      Kind::Blocks => self.blocks(field, sibling, parent_localized, hoist, select, select_mode)?,
-      Kind::Row => self.traverse(&field.fields, sibling, at_root, parent_localized, select, select_mode)?,
+      Kind::Array => self.array(field, root, parent_localized, hoist, select, select_mode)?,
+      Kind::Blocks => self.blocks(field, root, parent_localized, hoist, select, select_mode)?,
+      Kind::Row => self.traverse(&field.fields, root, at_root, parent_localized, select, select_mode)?,
       Kind::Group | Kind::Tab if ad => {
-        let doc = obj_mut(sibling).ok_or_else(|| Bail::new("sibling:not-object"))?;
         let nested_select = match select_get(select, name) {
           Some(v @ (JsVal::Obj(_) | JsVal::Arr(_) | JsVal::Null)) => Some(v),
           _ => None,
         };
         let child_localized = parent_localized || field.localized;
         if should_localize && !hoist {
-          self.localized_values(field, doc, child_localized, nested_select, select_mode)?;
+          self.localized_values(field, root, child_localized, nested_select, select_mode)?;
         } else {
-          match doc.get_mut(name) {
-            Some(target @ JsVal::Obj(_)) => {
-              let target: &mut JsVal = target;
-              self.with_seg(Seg::Key(name.to_string()), |w| w.traverse(&field.fields, target, false, child_localized, nested_select, select_mode))?;
+          match sibling_at(root, &self.path)?.get(name) {
+            Some(JsVal::Obj(_)) => {
+              self.with_seg(Seg::Key(name.to_string()), |w| {
+                w.traverse(&field.fields, root, false, child_localized, nested_select, select_mode)
+              })?;
             }
             // `typeof value !== 'object' ? {} : value`: a fresh object nobody sees
             Some(JsVal::Bool(_) | JsVal::Num(_) | JsVal::Str(_) | JsVal::Undefined) | None => {}
@@ -343,13 +527,11 @@ impl Walk<'_, '_, '_, '_> {
           }
         }
       }
-      Kind::Group => self.traverse(&field.fields, sibling, at_root, parent_localized, select, select_mode)?,
-      Kind::Tab => {
-        self.traverse(&field.fields, sibling, at_root, parent_localized || field.localized, select, select_mode)?
-      }
-      Kind::Tabs => self.traverse(&field.tabs, sibling, at_root, parent_localized, select, select_mode)?,
+      Kind::Group => self.traverse(&field.fields, root, at_root, parent_localized, select, select_mode)?,
+      Kind::Tab => self.traverse(&field.fields, root, at_root, parent_localized || field.localized, select, select_mode)?,
+      Kind::Tabs => self.traverse(&field.tabs, root, at_root, parent_localized, select, select_mode)?,
       Kind::RichText => {
-        let doc = obj_mut(sibling).ok_or_else(|| Bail::new("sibling:not-object"))?;
+        let doc = sibling_at(root, &self.path)?;
         self.rich_text(field, doc, should_localize, hoist)?
       }
       _ => {}
@@ -357,51 +539,103 @@ impl Walk<'_, '_, '_, '_> {
     Ok(())
   }
 
+  /// `await field.access.read({ id: doc.id, blockData, collection, data: doc, doc, req,
+  /// siblingData: siblingDoc, skipCompilation })` (truthy: the field stays), evaluated on the
+  /// document as it is now. A function reading nothing but `req` is evaluated once per
+  /// `afterRead`. Bails when the compiled function does, or when JS would resume after more than
+  /// one tick (an `await` inside it).
+  fn can_read(&mut self, root: &JsVal, index: usize) -> FuseResult<bool> {
+    let args = self.args;
+    let Some(access) = &args.field_access else { return Ok(true) };
+    let function = *access.functions.get(index).ok_or_else(|| Bail::new("access:field"))?;
+    if function.request_only {
+      if let Some(Some(cached)) = self.request_only.get(index) {
+        return Ok(*cached);
+      }
+    }
+    let collection = self
+      .collection
+      .get_or_insert_with(|| FnValue::partial_object(vec![("slug", FnValue::str(&args.plan.slug))]))
+      .clone();
+    lane_call(access.checked, function.id, "access:field:verify")?;
+    let call_args = if function.request_only {
+      lanes::field_read_access_args(FnValue::Undefined, FnValue::Undefined, collection, FnValue::Undefined, access.req.clone(), FnValue::Undefined)
+    } else {
+      let sibling = resolve_ref(root, &self.path).ok_or_else(|| Bail::new("access:field:sibling"))?;
+      let block = match &self.block {
+        Some(path) => resolve_ref(root, path).ok_or_else(|| Bail::new("access:field:block"))?.clone(),
+        None => JsVal::Undefined,
+      };
+      // one conversion: `doc`, `siblingData` and `blockData` share their objects like in JS
+      let values = FnValue::from_js_val_with(&JsVal::arr(vec![root.clone(), sibling.clone(), block]), &is_raw_leaf);
+      let FnValue::Array(values) = values else { return Err(Bail::new("access:field:args")) };
+      let [doc, sibling, block] = values.as_slice() else { return Err(Bail::new("access:field:args")) };
+      let id = match doc {
+        FnValue::Object(o) => o.get("id").cloned().unwrap_or(FnValue::Undefined),
+        _ => return Err(Bail::new("access:field:args")),
+      };
+      lanes::field_read_access_args(id, block.clone(), collection, doc.clone(), access.req.clone(), sibling.clone())
+    };
+    let (result, one_tick) = payload_fn_ir::evaluate_ticks(function.id, &[call_args])
+      .map_err(|bail| Bail::new(format!("access:field:bail:{}", bail.reason())))?;
+    if !one_tick {
+      return Err(Bail::new("access:field:ticks"));
+    }
+    let can_read = result.truthy().map_err(|_| Bail::new("access:field:result"))?;
+    if function.request_only {
+      if self.request_only.len() <= index {
+        self.request_only.resize(index + 1, None);
+      }
+      self.request_only[index] = Some(can_read);
+    }
+    Ok(can_read)
+  }
+
   /// `Object.values(siblingDoc[name] || {}).forEach((localizedData) => traverseFields(...))` of
   /// localized groups and named tabs.
   fn localized_values(
     &mut self,
-    field: &Field,
-    doc: &mut Obj,
+    field: &'a Field,
+    root: &mut JsVal,
     child_localized: bool,
     select: Option<&JsVal>,
     select_mode: Option<SelectMode>,
   ) -> FuseResult<()> {
     let name = field.name.as_deref().unwrap_or("");
-    let Some(value) = doc.get_mut(name) else { return Ok(()) };
-    match value {
-      JsVal::Obj(o) => {
-        let o = std::sync::Arc::make_mut(o);
-        for (key, localized) in o.iter_mut() {
+    let keys: Vec<String> = match sibling_at(root, &self.path)?.get(name) {
+      None => return Ok(()),
+      Some(JsVal::Obj(o)) => {
+        let mut keys = Vec::with_capacity(o.len());
+        for (key, localized) in o.iter() {
           match localized {
-            JsVal::Obj(_) => {
-              let key = key.clone();
-              self.with_seg(Seg::Key(name.to_string()), |w| {
-                w.with_seg(Seg::Key(key), |w| w.traverse(&field.fields, localized, false, child_localized, select, select_mode))
-              })?;
-            }
+            JsVal::Obj(_) => keys.push(key.clone()),
             v if !v.truthy() => {}
             _ => return Err(Bail::new("localized:value")),
           }
         }
-        Ok(())
+        keys
       }
-      v if !v.truthy() => Ok(()),
-      _ => Err(Bail::new("localized:value")),
+      Some(v) if !v.truthy() => return Ok(()),
+      Some(_) => return Err(Bail::new("localized:value")),
+    };
+    for key in keys {
+      self.with_seg(Seg::Key(name.to_string()), |w| {
+        w.with_seg(Seg::Key(key), |w| w.traverse(&field.fields, root, false, child_localized, select, select_mode))
+      })?;
     }
+    Ok(())
   }
 
   fn array(
     &mut self,
-    field: &Field,
-    sibling: &mut JsVal,
+    field: &'a Field,
+    root: &mut JsVal,
     parent_localized: bool,
     hoist: bool,
     select: Option<&JsVal>,
     select_mode: Option<SelectMode>,
   ) -> FuseResult<()> {
     let name = field.name.as_deref().unwrap_or("");
-    let doc = obj_mut(sibling).ok_or_else(|| Bail::new("sibling:not-object"))?;
     let child_localized = parent_localized || field.localized;
     // `{ ...arraySelect, id: true }` in include mode
     let array_select_owned;
@@ -420,29 +654,33 @@ impl Walk<'_, '_, '_, '_> {
       Some(v @ (JsVal::Obj(_) | JsVal::Arr(_) | JsVal::Null)) => Some(v),
       _ => None,
     };
-    match doc.get_mut(name) {
+    let doc = sibling_at(root, &self.path)?;
+    match doc.get(name) {
       Some(JsVal::Arr(rows)) if !rows.is_empty() => {
-        let rows = std::sync::Arc::make_mut(rows);
-        self.with_seg(Seg::Key(name.to_string()), |w| w.rows(&field.fields, rows, child_localized, row_select, select_mode))
+        let count = rows.len();
+        self.with_seg(Seg::Key(name.to_string()), |w| w.rows(&field.fields, root, count, child_localized, row_select, select_mode))
       }
       Some(value @ (JsVal::Obj(_) | JsVal::Arr(_))) if !hoist => {
         // locale-keyed rows: no select, no select mode
-        if let JsVal::Obj(o) = value {
-          let o = std::sync::Arc::make_mut(o);
-          for (key, locale_rows) in o.iter_mut() {
-            if let JsVal::Arr(rows) = locale_rows {
-              let rows = std::sync::Arc::make_mut(rows);
-              let key = key.clone();
-              self.with_seg(Seg::Key(name.to_string()), |w| {
-                w.with_seg(Seg::Key(key), |w| w.rows(&field.fields, rows, child_localized, None, None))
-              })?;
-            }
-          }
+        let locales: Vec<(String, usize)> = match value {
+          JsVal::Obj(o) => o
+            .iter()
+            .filter_map(|(key, rows)| match rows {
+              JsVal::Arr(rows) => Some((key.clone(), rows.len())),
+              _ => None,
+            })
+            .collect(),
+          _ => Vec::new(),
+        };
+        for (key, count) in locales {
+          self.with_seg(Seg::Key(name.to_string()), |w| {
+            w.with_seg(Seg::Key(key), |w| w.rows(&field.fields, root, count, child_localized, None, None))
+          })?;
         }
         Ok(())
       }
       rows => {
-        let is_empty = match rows.as_deref() {
+        let is_empty = match rows {
           None => true,
           Some(v) if !v.truthy() => true,
           Some(JsVal::Arr(a)) => a.is_empty(),
@@ -459,59 +697,86 @@ impl Walk<'_, '_, '_, '_> {
     }
   }
 
-  /// `rows.forEach((row, rowIndex) => traverseFields({ siblingDoc: row || {}, ... }))`
+  /// `rows.forEach((row, rowIndex) => traverseFields({ siblingDoc: row || {}, ... }))` of the
+  /// `count` rows at `self.path`.
   fn rows(
     &mut self,
-    fields: &[Field],
-    rows: &mut [JsVal],
+    fields: &'a [Field],
+    root: &mut JsVal,
+    count: usize,
     child_localized: bool,
     select: Option<&JsVal>,
     select_mode: Option<SelectMode>,
   ) -> FuseResult<()> {
-    for (index, row) in rows.iter_mut().enumerate() {
-      match row {
-        JsVal::Obj(_) => self.with_seg(Seg::Index(index), |w| w.traverse(fields, row, false, child_localized, select, select_mode))?,
-        v if !v.truthy() => {}
-        _ => return Err(Bail::new("row:not-object")),
-      }
+    for index in 0..count {
+      self.path.push(Seg::Index(index));
+      let row = resolve(root, &self.path).ok_or_else(|| Bail::new("row:path"));
+      let outcome = match row {
+        Ok(JsVal::Obj(_)) => self.traverse(fields, root, false, child_localized, select, select_mode),
+        Ok(v) if !v.truthy() => Ok(()),
+        Ok(_) => Err(Bail::new("row:not-object")),
+        Err(bail) => Err(bail),
+      };
+      self.path.pop();
+      outcome?;
     }
     Ok(())
   }
 
-  fn block_fields(&self, field: &Field, block_type: Option<&JsVal>) -> FuseResult<Option<std::sync::Arc<Vec<Field>>>> {
+  fn block_fields(&self, field: &'a Field, block_type: Option<&JsVal>) -> FuseResult<Option<&'a [Field]>> {
     let slug = match block_type {
       None | Some(JsVal::Undefined) => return Ok(None),
       Some(JsVal::Str(s)) => s,
       Some(_) => return Err(Bail::new("blocks:blockType")),
     };
-    if let Some(fields) = self.args.plan.global_blocks.get(&**slug) {
-      return Ok(Some(fields.clone()));
+    let plan: &'a CollectionPlan = self.args.plan;
+    if let Some(fields) = plan.global_blocks.get(&**slug) {
+      return Ok(Some(fields.as_slice()));
     }
     if crate::OBJECT_PROTOTYPE_KEYS.contains(&&**slug) {
       return Err(Bail::new("blocks:blockType"));
     }
-    Ok(field.blocks.iter().find(|(s, _)| **s == **slug).map(|(_, f)| f.clone()))
+    Ok(field.blocks.iter().find(|(s, _)| **s == **slug).map(|(_, f)| f.as_slice()))
+  }
+
+  /// `traverseFields({ blockData: row, siblingDoc: row, ... })` of the block row at `self.path`.
+  fn block_row(
+    &mut self,
+    fields: &'a [Field],
+    root: &mut JsVal,
+    child_localized: bool,
+    select: Option<&JsVal>,
+    select_mode: Option<SelectMode>,
+  ) -> FuseResult<()> {
+    let outer = self.block.replace(self.path.clone());
+    let outcome = self.traverse(fields, root, false, child_localized, select, select_mode);
+    self.block = outer;
+    outcome
   }
 
   fn blocks(
     &mut self,
-    field: &Field,
-    sibling: &mut JsVal,
+    field: &'a Field,
+    root: &mut JsVal,
     parent_localized: bool,
     hoist: bool,
     select: Option<&JsVal>,
     select_mode: Option<SelectMode>,
   ) -> FuseResult<()> {
     let name = field.name.as_deref().unwrap_or("");
-    let doc = obj_mut(sibling).ok_or_else(|| Bail::new("sibling:not-object"))?;
     let child_localized = parent_localized || field.localized;
     let field_select = select_get(select, name);
-    match doc.get_mut(name) {
+    let doc = sibling_at(root, &self.path)?;
+    match doc.get(name) {
       Some(JsVal::Arr(rows)) if !rows.is_empty() => {
-        let rows = std::sync::Arc::make_mut(rows);
-        for (index, row) in rows.iter_mut().enumerate() {
-          let JsVal::Obj(o) = &*row else { return Err(Bail::new("block:not-object")) };
-          let block_type = o.get("blockType").cloned();
+        let block_types: Vec<Option<JsVal>> = rows
+          .iter()
+          .map(|row| match row {
+            JsVal::Obj(o) => Ok(o.get("blockType").cloned()),
+            _ => Err(Bail::new("block:not-object")),
+          })
+          .collect::<FuseResult<_>>()?;
+        for (index, block_type) in block_types.into_iter().enumerate() {
           let block = self.block_fields(field, block_type.as_ref())?;
           // getBlockSelect
           let (block_select, block_mode) = match field_select {
@@ -554,34 +819,32 @@ impl Walk<'_, '_, '_, '_> {
             _ => None,
           };
           self.with_seg(Seg::Key(name.to_string()), |w| {
-            w.with_seg(Seg::Index(index), |w| w.traverse(&block, row, false, child_localized, row_select, block_mode))
+            w.with_seg(Seg::Index(index), |w| w.block_row(block, root, child_localized, row_select, block_mode))
           })?;
         }
         Ok(())
       }
       Some(value @ (JsVal::Obj(_) | JsVal::Arr(_))) if !hoist => {
+        let mut rows: Vec<(String, usize, Option<JsVal>)> = Vec::new();
         if let JsVal::Obj(o) = value {
-          let o = std::sync::Arc::make_mut(o);
-          for (key, locale_rows) in o.iter_mut() {
-            let JsVal::Arr(rows) = locale_rows else { continue };
-            let rows = std::sync::Arc::make_mut(rows);
-            for (index, row) in rows.iter_mut().enumerate() {
-              let JsVal::Obj(r) = &*row else { return Err(Bail::new("block:not-object")) };
-              let block_type = r.get("blockType").cloned();
-              let Some(block) = self.block_fields(field, block_type.as_ref())? else { continue };
-              let key = key.clone();
-              self.with_seg(Seg::Key(name.to_string()), |w| {
-                w.with_seg(Seg::Key(key), |w| {
-                  w.with_seg(Seg::Index(index), |w| w.traverse(&block, row, false, child_localized, None, None))
-                })
-              })?;
+          for (key, locale_rows) in o.iter() {
+            let JsVal::Arr(items) = locale_rows else { continue };
+            for (index, row) in items.iter().enumerate() {
+              let JsVal::Obj(r) = row else { return Err(Bail::new("block:not-object")) };
+              rows.push((key.clone(), index, r.get("blockType").cloned()));
             }
           }
+        }
+        for (key, index, block_type) in rows {
+          let Some(block) = self.block_fields(field, block_type.as_ref())? else { continue };
+          self.with_seg(Seg::Key(name.to_string()), |w| {
+            w.with_seg(Seg::Key(key), |w| w.with_seg(Seg::Index(index), |w| w.block_row(block, root, child_localized, None, None)))
+          })?;
         }
         Ok(())
       }
       rows => {
-        let is_empty = match rows.as_deref() {
+        let is_empty = match rows {
           None => true,
           Some(v) if !v.truthy() => true,
           Some(JsVal::Arr(a)) => a.is_empty(),
@@ -681,7 +944,7 @@ impl Walk<'_, '_, '_, '_> {
             if loaded {
               let mut path = self.path.clone();
               path.push(Seg::Key(name.to_string()));
-              self.loads.filters.push((path, poly));
+              self.doc.loads.filters.push((path, poly));
             }
           }
           Some(JsVal::Obj(o)) if matches!(o.get("docs"), Some(JsVal::Arr(_))) => return Err(Bail::new("relationship:docs")),
@@ -737,7 +1000,7 @@ impl Walk<'_, '_, '_, '_> {
     let current_depth = self.args.current_depth + 1.0;
     let Some(pop) = self.pop.as_deref_mut() else { return Err(Bail::new("populate")) };
     let key = pop.load(&relation, id, depth, current_depth)?;
-    self.loads.slots.push((path, key, poly));
+    self.doc.loads.slots.push((path, key, poly));
     Ok(())
   }
 }

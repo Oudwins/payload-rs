@@ -16,7 +16,7 @@ import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../../payload/src/utilities/getVersionsConfig.js'
 import { sanitizeFallbackLocale } from '../../../payload/src/utilities/sanitizeFallbackLocale.js'
 import { getNativeEngine } from '../native.js'
-import { compiledAccess } from './access.js'
+import { laneFieldAccess, laneFunctionID } from './access.js'
 import { isInertTree, isPlainObject } from './inert.js'
 import { getCollectionPlan } from './plan.js'
 
@@ -76,12 +76,15 @@ const isSelect = (value: unknown, depth = 16): boolean => {
  * only calls whose request state they can reproduce qualify: `overrideAccess: true`,
  * `req.i18n` set (`createPayloadRequest` runs synchronously), no transaction, a
  * fresh payload dataloader; with localization one locale and a fallback the nested finds keep.
+ * Without `overrideAccess` the related collections' read access and field read access go to the
+ * request as `FnId`s (`laneFunctionID`; `fieldAccessIDs`: the operation's compiled functions).
  */
 export const populationRequest = ({
   args,
   currentDepth,
   depth,
   draft,
+  fieldAccessIDs,
   payload,
   plan,
   req,
@@ -91,6 +94,7 @@ export const populationRequest = ({
   currentDepth: number
   depth: number
   draft: unknown
+  fieldAccessIDs: Map<unknown, number>
   payload: Any
   plan: { eligible: true } & CollectionPlan
   req: Any
@@ -114,11 +118,11 @@ export const populationRequest = ({
   ) {
     return 'populate:arg'
   }
-  const related: Record<string, unknown> = {}
+  const related: Record<string, Record<string, unknown>> = {}
   const selects: Record<string, unknown> = {}
   const seen = new Set<string>()
-  /** Without `overrideAccess`: the read access each loadable collection's nested finds check. */
-  const accessChecks: { config: Any; plan: { eligible: true } & CollectionPlan }[] = []
+  /** Without `overrideAccess`: the collections whose nested finds run access functions. */
+  const accessChecks: { plan: { eligible: true } & CollectionPlan; slug: string }[] = []
   // the collections the levels currentDepth..depth can load
   let frontier: ({ eligible: true } & CollectionPlan)[] = [plan]
   for (let level = currentDepth; level <= depth && frontier.length > 0; level++) {
@@ -139,17 +143,30 @@ export const populationRequest = ({
           selects[slug] = entry.select
           next.push(entry.plan)
           if (!overrideAccess) {
-            accessChecks.push({ config: entry.config, plan: entry.plan })
+            accessChecks.push({ slug, plan: entry.plan })
           }
         }
       }
     }
     frontier = next
   }
-  // after the cheap checks above: compiled read access granting with `true` (no constraint)
-  for (const { config, plan: relatedPlan } of accessChecks) {
-    if (compiledAccess(relatedPlan.access, undefined, config, req).value !== true) {
-      return 'populate:access'
+  // after the cheap checks above: the compiled read access and field read access the nested
+  // finds run (evaluated natively where they run: `true` reads, `false` reads nothing)
+  if (accessChecks.length > 0 && !keepsAccessRequest(req)) {
+    return 'populate:access:req'
+  }
+  for (const { slug, plan: relatedPlan } of accessChecks) {
+    const access = laneFunctionID(relatedPlan.access, fieldAccessIDs)
+    if (typeof access === 'string') {
+      return `populate:access:${access}`
+    }
+    const fieldAccess = laneFieldAccess(relatedPlan.fieldAccess, fieldAccessIDs)
+    if (typeof fieldAccess === 'string') {
+      return `populate:${fieldAccess}`
+    }
+    related[slug]!.access = access
+    if (fieldAccess.length > 0) {
+      related[slug]!.fieldAccess = fieldAccess
     }
   }
   const json = JSON.stringify({
@@ -164,6 +181,17 @@ export const populationRequest = ({
     json,
   }
 }
+
+/**
+ * Whether the nested finds' `createPayloadRequest` leaves the `req` properties access functions
+ * may read as they are, besides `req.query.depth` (set by the core, crates/payload-fuse
+ * `nested_request`) and the locales (`keepsLocales`): `req.user` set and with its `collection`
+ * (else `null` / a copy with `collection`), `req.headers` set (else a new `Headers`).
+ */
+const keepsAccessRequest = (req: Any) =>
+  req.user !== undefined &&
+  (!req.user || (typeof req.user === 'object' && Boolean(req.user.collection))) &&
+  Boolean(req.headers)
 
 /**
  * Whether the nested finds' `createPayloadRequest({ fallbackLocale, locale })` (the key's values:
@@ -182,9 +210,10 @@ const keepsLocales = (req: Any, localization: Any) => {
 /**
  * A related collection nested finds may read (`undefined`: a load of it bails natively). Without
  * `overrideAccess` the nested finds run `executeAccess` with the collection's read access, which
- * must be compiled and grant with `true` (no constraint) for this request (checked by the caller),
- * and the afterRead of the loaded documents its field read access (none allowed) and without a
- * default sort (sort path validation checks field permissions); `'access'` otherwise.
+ * must be compiled (evaluated natively: `true` reads, `false` returns no documents) and the
+ * afterRead of the loaded documents runs their compiled field read access (both checked by the
+ * caller); without a default sort (sort path validation checks field permissions), `'access'`
+ * otherwise.
  */
 const relatedEntry = ({
   slug,
@@ -217,7 +246,7 @@ const relatedEntry = ({
   if (draft && hasDraftsEnabled(config)) {
     return undefined
   }
-  if (!overrideAccess && (plan.fieldAccess.length > 0 || config.defaultSort !== undefined)) {
+  if (!overrideAccess && config.defaultSort !== undefined) {
     return 'access'
   }
   const select = populate?.[slug] ?? config.defaultPopulate

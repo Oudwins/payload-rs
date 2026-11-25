@@ -20,7 +20,7 @@ use payload_engine::js::{JsVal, decode_graph_typed};
 pub use backend::{Bail, DirectRead, FuseResult, FusedBackend, Job, Population, ReadSession, Related};
 pub use write::RawLeaves;
 
-use after_read::{Fallback, ReadArgs, SelectMode, after_read_populating, obj_mut};
+use after_read::{AccessFn, Fallback, FieldAccess, ReadArgs, SelectMode, after_read_docs, obj_mut};
 use populate::{PopRun, resolve_level, write_result};
 use plan::CollectionPlan;
 
@@ -66,8 +66,12 @@ struct Request {
   /// RUST_HTTP_LANES.md 3.1: the result as canonical text.
   canonical: bool,
   population: Option<Population>,
-  /// `fieldAccess`: the field `access.read` results (`ReadArgs::field_access`)
-  field_access: Option<Vec<bool>>,
+  /// `fieldAccess`: the compiled field `access.read` functions (`ReadArgs::field_access`)
+  field_access: Option<Vec<AccessFn>>,
+  /// `accessReq`: `req` as compiled functions see it (`lanes::from_typed`)
+  access_req: Option<payload_fn_ir::Value>,
+  /// the compiled functions the operation used (`after_read::lane_call`)
+  checked: std::sync::Mutex<Vec<payload_fn_ir::FnId>>,
 }
 
 fn decode_request(text: &str) -> FuseResult<Request> {
@@ -118,24 +122,15 @@ fn decode_request_value(request: &JsVal, db: Option<JsVal>) -> FuseResult<Reques
     value => Some(value.clone()),
   };
   let select_mode = select_mode_of(request.get("selectMode"));
+  let access_req = match request.get("accessReq") {
+    JsVal::Undefined => None,
+    req => Some(payload_fn_ir::lanes::from_typed(req).ok_or_else(|| Bail::new("request:accessReq"))?),
+  };
   let population = match request.get("pop") {
     JsVal::Undefined | JsVal::Null => None,
-    pop => Some(decode_population(pop)?),
+    pop => Some(decode_population(pop, access_req.clone())?),
   };
-  let field_access = match request.get("fieldAccess") {
-    JsVal::Undefined | JsVal::Null => None,
-    results => Some(
-      results
-        .as_arr()
-        .ok_or_else(|| Bail::new("request:fieldAccess"))?
-        .iter()
-        .map(|result| match result {
-          JsVal::Bool(can_read) => Ok(*can_read),
-          _ => Err(Bail::new("request:fieldAccess")),
-        })
-        .collect::<FuseResult<Vec<_>>>()?,
-    ),
-  };
+  let field_access = decode_access(request.get("fieldAccess"))?;
   Ok(Request {
     op,
     plan,
@@ -153,7 +148,32 @@ fn decode_request_value(request: &JsVal, db: Option<JsVal>) -> FuseResult<Reques
     canonical: flag("canonical"),
     population,
     field_access,
+    access_req,
+    checked: Default::default(),
   })
+}
+
+/// `fieldAccess`: the `FnId`s of the plan's field `access.read` functions, or absent.
+fn decode_access(value: &JsVal) -> FuseResult<Option<Vec<AccessFn>>> {
+  let items = match value {
+    JsVal::Undefined | JsVal::Null => return Ok(None),
+    JsVal::Arr(items) => items,
+    _ => return Err(Bail::new("request:fieldAccess")),
+  };
+  let functions = items
+    .iter()
+    .map(|item| {
+      let id = item.as_num().filter(|n| *n >= 0.0 && n.fract() == 0.0).ok_or_else(|| Bail::new("request:fieldAccess"))? as u32;
+      let meta = payload_fn_ir::registry::meta(id).ok_or_else(|| Bail::new("access:field:not-compiled"))?;
+      let request_only = match meta.arg_keys.as_slice() {
+        [] => true,
+        [Some(keys)] => keys.iter().all(|key| key == "req"),
+        _ => false,
+      };
+      Ok(AccessFn { id, request_only })
+    })
+    .collect::<FuseResult<Vec<_>>>()?;
+  Ok(Some(functions))
 }
 
 fn select_mode_of(value: &JsVal) -> Option<SelectMode> {
@@ -166,7 +186,7 @@ fn select_mode_of(value: &JsVal) -> Option<SelectMode> {
 
 /// `"pop": { draft, joins, locale, req, related: { [slug]: { plan, select, selectMode, sort,
 /// trash, numberID, auth, backend } } }`
-fn decode_population(pop: &JsVal) -> FuseResult<Population> {
+fn decode_population(pop: &JsVal, access_req: Option<payload_fn_ir::Value>) -> FuseResult<Population> {
   let JsVal::Obj(entries) = pop.get("related") else { return Err(Bail::new("request:pop")) };
   let mut related = std::collections::HashMap::with_capacity(entries.len());
   for (slug, entry) in entries.iter() {
@@ -188,6 +208,11 @@ fn decode_population(pop: &JsVal) -> FuseResult<Population> {
         number_id: flag("numberID"),
         auth: flag("auth"),
         backend: entry.get("backend").clone(),
+        field_access: decode_access(entry.get("fieldAccess"))?,
+        access: match entry.get("access") {
+          JsVal::Undefined | JsVal::Null => None,
+          id => Some(id.as_num().filter(|n| *n >= 0.0 && n.fract() == 0.0).ok_or_else(|| Bail::new("request:pop"))? as u32),
+        },
       },
     );
   }
@@ -197,6 +222,7 @@ fn decode_population(pop: &JsVal) -> FuseResult<Population> {
     locale: pop.get("locale").clone(),
     req: pop.get("req").clone(),
     related,
+    access_req,
   })
 }
 
@@ -222,9 +248,14 @@ pub fn peek_request(request_json: &str) -> Option<(Arc<CollectionPlan>, bool)> {
 }
 
 fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<String> {
+  let field_access = match (&request.field_access, &request.access_req) {
+    (None, _) => None,
+    (Some(functions), Some(req)) => Some(FieldAccess { functions, req: req.clone(), checked: &request.checked }),
+    (Some(_), None) => return Err(Bail::new("request:accessReq")),
+  };
   let args = ReadArgs {
     plan: &request.plan,
-    field_access: request.field_access.as_deref(),
+    field_access,
     locale: request.locale.clone(),
     fallback: request.fallback.clone(),
     localization: request.localization,
@@ -249,19 +280,18 @@ fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<St
   match request.op {
     Op::Find => {
       let mut result = session.find_planned(&request.db, &request.plan)?;
-      let mut run = request.population.as_ref().map(PopRun::new);
+      let mut run = request.population.as_ref().map(|pop| PopRun::new(pop, &request.checked));
       let page = obj_mut(&mut result).ok_or_else(|| Bail::new("find:result"))?;
       let docs = match page.get_mut("docs") {
         Some(JsVal::Arr(docs)) => Arc::make_mut(docs),
         _ => return Err(Bail::new("find:docs")),
       };
-      let mut loads = Vec::with_capacity(docs.len());
-      for doc in docs.iter_mut() {
-        if request.auth {
+      if request.auth {
+        for doc in docs.iter_mut() {
           add_collection(doc, &request.plan.slug)?;
         }
-        loads.push(after_read_populating(&args, doc, select, request.select_mode, run.as_mut())?);
       }
+      let loads = after_read_docs(&args, docs, select, request.select_mode, run.as_mut())?;
       if let Some(run) = run.as_mut() {
         resolve_level(run, session, &args, docs, loads)?;
       }
@@ -275,10 +305,10 @@ fn execute_in(request: &Request, session: &mut dyn ReadSession) -> FuseResult<St
       if request.auth {
         add_collection(&mut doc, &request.plan.slug)?;
       }
-      let mut run = request.population.as_ref().map(PopRun::new);
-      let loads = after_read_populating(&args, &mut doc, select, request.select_mode, run.as_mut())?;
+      let mut run = request.population.as_ref().map(|pop| PopRun::new(pop, &request.checked));
+      let loads = after_read_docs(&args, std::slice::from_mut(&mut doc), select, request.select_mode, run.as_mut())?;
       if let Some(run) = run.as_mut() {
-        resolve_level(run, session, &args, std::slice::from_mut(&mut doc), vec![loads])?;
+        resolve_level(run, session, &args, std::slice::from_mut(&mut doc), loads)?;
       }
       write_result(&doc, run.as_ref())
     }

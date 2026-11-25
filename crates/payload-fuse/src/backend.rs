@@ -83,6 +83,8 @@ pub struct Population {
   pub req: JsVal,
   /// the collections population may reach, by slug (absent: a load of it bails)
   pub related: std::collections::HashMap<String, Related>,
+  /// the request's `accessReq`: `req` for the nested finds' access functions
+  pub access_req: Option<payload_fn_ir::Value>,
 }
 
 /// One collection nested finds may read.
@@ -102,6 +104,13 @@ pub struct Related {
   /// What the backend needs for this collection's nested finds besides their `payload.db.find`
   /// args (MongoDB: the collection name, transform plan, cast sort and projection).
   pub backend: JsVal,
+  /// `fieldAccess`: the compiled `field.access.read` functions of the nested finds' `afterRead`
+  /// without `overrideAccess` (`None`: `overrideAccess`)
+  pub field_access: Option<Vec<crate::after_read::AccessFn>>,
+  /// `access`: the compiled collection read access the nested finds run without
+  /// `overrideAccess` (`executeAccess({ slug, disableErrors: true, req })`): `true` reads, `false`
+  /// returns no documents without a read, anything else bails
+  pub access: Option<payload_fn_ir::FnId>,
 }
 
 /// A job of one fused operation: everything after the request was decoded, run with the

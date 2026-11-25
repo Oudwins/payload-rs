@@ -2,7 +2,23 @@ import type { Payload } from 'payload'
 
 import { expect } from 'vitest'
 
+import { fuseStats } from '../../../packages/engine-rs/src/fuse/index.js'
 import { test } from '../../__helpers/int/vitest.js'
+
+type FuseWriteStats = {
+  diffs: number
+  guards: Record<string, number>
+  hits: Record<string, number>
+}
+
+const fuseWriteStats = (): FuseWriteStats | undefined =>
+  Reflect.get(globalThis, Symbol.for('@payloadcms/engine-rs/fuse-write-stats'))
+
+/** Whether the fused lanes run in this process (the Rust engine with them on). */
+const isFused = () => process.env.PAYLOAD_ENGINE !== 'ts' && process.env.PAYLOAD_RS_FUSE !== 'off'
+
+const total = (counts: Record<string, number> | undefined) =>
+  Object.values(counts ?? {}).reduce((sum, n) => sum + n, 0)
 
 /**
  * Field and collection access without `overrideAccess` (reads, and the fused writes' field write
@@ -231,6 +247,184 @@ test.suite('fuse-access', { config: './config.ts' }, () => {
 
       expect(byTitle.show!.onlyWhenShown).toBe('a')
       expect(byTitle.hide).not.toHaveProperty('onlyWhenShown')
+    }
+  })
+
+  test('should apply document, sibling and block field access in upstream order', async ({
+    payload,
+  }) => {
+    const hitsBefore = total(fuseStats.hits)
+    const tag = await payload.create({
+      collection: 'tags',
+      data: { name: 'tag' },
+      overrideAccess: true,
+    })
+    const link = await payload.create({
+      collection: 'links',
+      data: { title: 'link' },
+      overrideAccess: true,
+    })
+    const created = await payload.create({
+      overrideAccess: true,
+      collection: 'row-access',
+      data: {
+        denied: [{ value: 'stored' }],
+        layout: [
+          { blockType: 'card', inner: { note: 'shown note' }, public: true },
+          { blockType: 'card', inner: { note: 'hidden note' }, public: false },
+        ],
+        rows: [
+          { secret: 'shown secret', visible: true },
+          { secret: 'hidden secret', visible: false },
+        ],
+        first: tag.id,
+        second: link.id,
+        title: 'doc',
+      },
+    })
+    // a document stored before `later` and `afterDefault` existed: `later` is filled with `{}`
+    // synchronously, `afterDefault` one tick after its default call
+    await Reflect.get(payload.db, 'collections')['row-access'].updateOne(
+      { _id: created.id },
+      { $unset: { afterDefault: '', later: '' } },
+    )
+    const reader = await payload.create({
+      overrideAccess: true,
+      collection: 'users',
+      data: { email: 'rows@payloadcms.com', password: 'test' },
+    })
+
+    for (let i = 0; i < rounds; i++) {
+      const [doc] = (
+        await payload.find({ collection: 'row-access', depth: 0, overrideAccess: false })
+      ).docs
+      const byID = await payload.findByID({
+        id: created.id,
+        collection: 'row-access',
+        depth: 0,
+        overrideAccess: false,
+        user: reader,
+      })
+
+      expect(doc!.denied).toEqual([])
+      // `denied` is refilled one tick after its access call: after `later` (synchronous) and
+      // before the default of `afterDefault`
+      const keys = Object.keys(doc!)
+      expect(keys.indexOf('later')).toBeLessThan(keys.indexOf('denied'))
+      expect(keys.indexOf('denied')).toBeLessThan(keys.indexOf('afterDefault'))
+      expect(doc!.afterDefault).toBe('after')
+      expect(doc!.rows!.map((row) => row.secret)).toEqual(['shown secret', undefined])
+      expect(Object.keys(doc!.rows![1]!)).toEqual(['visible', 'id'])
+      expect(doc!.layout!.map((block) => block.inner?.note)).toEqual(['shown note', undefined])
+      expect(doc).not.toHaveProperty('signedInWithID')
+      expect(byID.signedInWithID).toBeUndefined()
+      expect(Object.keys(byID)).toEqual(Object.keys(doc!))
+
+      // `first` loads one tick after its access call, after `second`
+      const populated = await payload.find({
+        collection: 'row-access',
+        depth: 1,
+        overrideAccess: false,
+      })
+
+      expect(populated.docs[0]!.first).toEqual(expect.objectContaining({ id: tag.id }))
+      expect(populated.docs[0]!.second).toEqual(expect.objectContaining({ id: link.id }))
+    }
+
+    if (isFused()) {
+      expect(total(fuseStats.hits) - hitsBefore).toBeGreaterThan(rounds)
+    }
+  })
+
+  test('should read auth collections with the sessions field access', async ({ payload }) => {
+    const hitsBefore = total(fuseStats.hits)
+    const me = await payload.create({
+      overrideAccess: true,
+      collection: 'users',
+      data: { email: 'me@payloadcms.com', password: 'test' },
+    })
+    await payload.create({
+      overrideAccess: true,
+      collection: 'users',
+      data: { email: 'someone@payloadcms.com', password: 'test' },
+    })
+    await payload.login({ collection: 'users', data: { email: me.email, password: 'test' } })
+    await payload.login({
+      collection: 'users',
+      data: { email: 'someone@payloadcms.com', password: 'test' },
+    })
+
+    for (let i = 0; i < rounds; i++) {
+      const found = await payload.find({
+        collection: 'users',
+        depth: 0,
+        overrideAccess: false,
+        sort: undefined,
+        user: me,
+      })
+      const mine = found.docs.find((doc) => doc.id === me.id)!
+      const theirs = found.docs.find((doc) => doc.id !== me.id)!
+
+      expect(mine.sessions).toHaveLength(1)
+      expect(theirs.sessions).toEqual([])
+    }
+
+    if (isFused()) {
+      expect(total(fuseStats.hits) - hitsBefore).toBeGreaterThan(0)
+    }
+  })
+
+  test('should populate the users at depth 2 without overrideAccess', async ({
+    payload,
+    restClient,
+  }) => {
+    const writeHitsBefore = fuseWriteStats()?.hits.create ?? 0
+    const me = await payload.create({
+      overrideAccess: true,
+      collection: 'users',
+      data: { email: 'author@payloadcms.com', password: 'test' },
+    })
+    await restClient.login({
+      slug: 'users',
+      credentials: { email: 'author@payloadcms.com', password: 'test' },
+    })
+
+    for (let i = 0; i < rounds; i++) {
+      const local = await payload.create({
+        collection: 'authored',
+        data: { title: `local ${i}` },
+        overrideAccess: false,
+        user: me,
+      })
+      const response = await restClient.POST('/authored', {
+        body: JSON.stringify({ title: `rest ${i}` }),
+      })
+      const { doc: rest } = await response.json()
+
+      expect(local.createdBy).toEqual({
+        relationTo: 'users',
+        value: expect.objectContaining({ id: me.id }),
+      })
+      expect(response.status).toBe(201)
+      expect(rest.createdBy.value).toEqual(expect.objectContaining({ id: me.id }))
+      expect(rest.createdBy.value.sessions).toHaveLength(1)
+
+      // anonymous: the users' read access is `false`, so the nested find of `createdBy` (depth 2)
+      // returns no documents and the relationship keeps its id
+      const anonymous = await payload.create({
+        collection: 'authored',
+        data: { parent: local.id, title: `anonymous ${i}` },
+        overrideAccess: false,
+      })
+
+      expect(anonymous.createdBy).toBeUndefined()
+      expect(anonymous.parent).toEqual(
+        expect.objectContaining({ createdBy: { relationTo: 'users', value: me.id }, id: local.id }),
+      )
+    }
+
+    if (isFused() && process.env.PAYLOAD_RS_FUSE_WRITES !== 'off') {
+      expect((fuseWriteStats()?.hits.create ?? 0) - writeHitsBefore).toBeGreaterThan(0)
     }
   })
 })
