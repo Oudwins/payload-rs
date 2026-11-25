@@ -37,7 +37,8 @@ type Tape = {
 
 const tapeContext = new AsyncLocalStorage<Tape>()
 
-const DRIVER_FRAME = /[\\/]node_modules[\\/]mongodb[\\/]lib[\\/]/
+// `src/` when the stack is source-mapped (the driver ships its TypeScript sources)
+const DRIVER_FRAME = /[\\/]node_modules[\\/]mongodb[\\/](?:lib|src)[\\/]/
 
 /** Whether the code calling `reader` is the MongoDB driver (see the module comment). */
 const isReadByDriver = (reader: (...args: never[]) => unknown) => {

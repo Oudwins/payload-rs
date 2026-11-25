@@ -927,7 +927,8 @@ const checkBulk = (name: BulkName, args: Any) => {
   const db: Record<string, unknown> = isUpdate
     ? {
         collection: config.slug,
-        limit: args.limit ?? 0,
+        // update.ts destructures `limit = 0` (a `null` stays)
+        limit: args.limit === undefined ? 0 : args.limit,
         locale: req.locale,
         pagination: false,
         req,
