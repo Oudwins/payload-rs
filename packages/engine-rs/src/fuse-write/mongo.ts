@@ -748,14 +748,14 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
     return `mongo:${template}`
   }
   // checkDocumentLockStatus: locking needs the collection and `lockDocuments !== false`
-  const isLocking = Boolean(locks) && collectionConfig.lockDocuments !== false
+  const lockModel = collectionConfig.lockDocuments !== false ? locks : undefined
   const request: Record<string, unknown> = {
     c: Model.collection.collectionName,
     op: name,
     t: withID(template, id),
   }
-  if (isLocking) {
-    request.lc = locks.collection.collectionName
+  if (lockModel) {
+    request.lc = lockModel.collection.collectionName
     request.lfind = args.overrideLock === false
   }
   if (VersionModel) {
@@ -817,10 +817,10 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
     ...(VersionModel
       ? [{ c: VersionModel.collection.collectionName, f: { parent: objectID }, s: { _id: 1 } }]
       : []),
-    ...(isLocking
+    ...(lockModel
       ? [
           {
-            c: locks.collection.collectionName,
+            c: lockModel.collection.collectionName,
             f: { 'document.relationTo': slug, 'document.value': { $in: [objectID, id] } },
             s: { _id: 1 },
           },

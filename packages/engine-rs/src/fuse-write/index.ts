@@ -904,7 +904,8 @@ const checkBulk = (name: BulkName, args: Any) => {
     return undefined
   }
   if (!args.overrideAccess) {
-    if (plan.hasFieldAccess || readPlan.fieldAccess.length > 0) {
+    // field write access is evaluated per call in each document's prepare (`fieldAccessRequest`)
+    if (readPlan.fieldAccess.length > 0) {
       return guard('access:fields')
     }
     if (readPlan.hasRelations) {
