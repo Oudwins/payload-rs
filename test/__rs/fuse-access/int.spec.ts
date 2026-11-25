@@ -5,7 +5,8 @@ import { expect } from 'vitest'
 import { test } from '../../__helpers/int/vitest.js'
 
 /**
- * Field and collection read access without `overrideAccess`, read often enough that the compiled
+ * Field and collection access without `overrideAccess` (reads, and the fused writes' field write
+ * access and population), run often enough that the compiled
  * functions pass guard mode's first verified calls and the fused lanes serve the rest
  * (FUSE_CONTRACT.md section 2). Run with `PAYLOAD_RS_FUSE=shadow` (the runners' `--fuse shadow`)
  * every fused read is also compared with the exact lane.
@@ -129,6 +130,82 @@ test.suite('fuse-access', { config: './config.ts' }, () => {
 
       expect(anonymous.totalDocs).toBe(1)
       expect(asReader.totalDocs).toBe(2)
+    }
+  })
+
+  test('should apply field write access and populate without overrideAccess', async ({
+    payload,
+  }) => {
+    const { reader } = await seed(payload)
+    const tag = await payload.create({
+      collection: 'tags',
+      data: { name: 'tag' },
+      overrideAccess: true,
+    })
+
+    for (let i = 0; i < rounds; i++) {
+      const created = await payload.create({
+        collection: 'entries',
+        data: { locked: 'sent', signedInOnly: 'first', tag: tag.id, title: `entry ${i}` },
+        depth: i % 2,
+        overrideAccess: false,
+        user: reader,
+      })
+      const updated = await payload.update({
+        id: created.id,
+        collection: 'entries',
+        data: { locked: 'changed', signedInOnly: 'second' },
+        depth: 0,
+        overrideAccess: false,
+        user: reader,
+      })
+      const anonymous = await payload.update({
+        id: created.id,
+        collection: 'entries',
+        data: { signedInOnly: 'third', title: 'renamed' },
+        depth: 1,
+        overrideAccess: false,
+      })
+
+      expect(created.locked).toBe('locked default')
+      expect(created.signedInOnly).toBe('first')
+      expect(created.tag).toEqual(i % 2 ? expect.objectContaining({ name: 'tag' }) : tag.id)
+      expect(updated.locked).toBe('locked default')
+      expect(updated.signedInOnly).toBe('second')
+      expect(anonymous.signedInOnly).toBe('second')
+      expect(anonymous.title).toBe('renamed')
+      expect(anonymous.tag).toEqual(expect.objectContaining({ name: 'tag' }))
+    }
+  })
+
+  test('should populate without overrideAccess', async ({ payload }) => {
+    const { reader } = await seed(payload)
+    const tag = await payload.create({
+      collection: 'tags',
+      data: { name: 'tag' },
+      overrideAccess: true,
+    })
+
+    for (let i = 0; i < rounds; i++) {
+      const created = await payload.create({
+        collection: 'links',
+        data: { tag: tag.id, title: `link ${i}` },
+        depth: 1,
+        overrideAccess: false,
+        user: reader,
+      })
+      const found = await payload.find({ collection: 'links', depth: 1, overrideAccess: false })
+      const byID = await payload.findByID({
+        id: created.id,
+        collection: 'links',
+        depth: 1,
+        overrideAccess: false,
+        user: reader,
+      })
+
+      expect(created.tag).toEqual(expect.objectContaining({ id: tag.id, name: 'tag' }))
+      expect(found.docs.every((doc) => typeof doc.tag === 'object')).toBe(true)
+      expect(byID.tag).toEqual(expect.objectContaining({ id: tag.id }))
     }
   })
 

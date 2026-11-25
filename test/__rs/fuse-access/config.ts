@@ -91,6 +91,38 @@ export default buildConfigWithDefaults({
         ],
       },
       {
+        slug: 'tags',
+        access: { read: () => true },
+        fields: [{ name: 'name', type: 'text' }],
+      },
+      {
+        // field write access without overrideAccess (the fused writes' `fieldAccess`)
+        slug: 'entries',
+        access: { create: () => true, read: () => true, update: () => true },
+        fields: [
+          { name: 'title', type: 'text' },
+          {
+            name: 'locked',
+            type: 'text',
+            access: { create: () => false, update: () => false },
+            defaultValue: 'locked default',
+          },
+          { name: 'signedInOnly', type: 'text', access: { update: isSignedIn } },
+          { name: 'tag', type: 'relationship', relationTo: 'tags' },
+        ],
+      },
+      {
+        // population without overrideAccess: `tags` grants read with `true` and has no field
+        // access (no authorship relationship to the users either)
+        slug: 'links',
+        access: { create: () => true, read: () => true },
+        authorship: false,
+        fields: [
+          { name: 'title', type: 'text' },
+          { name: 'tag', type: 'relationship', relationTo: 'tags' },
+        ],
+      },
+      {
         slug: 'doc-access',
         access: { read: () => true },
         fields: [

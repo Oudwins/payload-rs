@@ -115,8 +115,15 @@ A collection is eligible for reads when:
   `isolateObjectProperty` proxy of either (the proxies are recorded in a `globalThis` `WeakMap`,
   `Symbol.for('payload.isolateObjectProperty')`);
 - population (`depth && currentDepth <= depth` with relationship fields in the plan) only with
-  `overrideAccess: true`, `req.i18n` set, no `transactionID`, a fresh payload dataloader and, with
-  localization, one locale and a fallback the nested finds' `createPayloadRequest` keeps (section 9); the text lane (`fusedOperationText`) does not populate.
+  `req.i18n` set, no `transactionID`, a fresh payload dataloader and, with localization, one locale
+  and a fallback the nested finds' `createPayloadRequest` keeps (section 9); without
+  `overrideAccess` every collection the levels can load must grant read access with `true`
+  through a compiled function (`executeAccess` of the nested finds, `evaluateOnLane`), have no
+  field read access and no `defaultSort` (sort path validation checks field permissions), else
+  `populate:access`; the text lane (`fusedOperationText`) does not populate.
+- a write operation's own result read (`fusedFindByIDRequest`, src/fuse-write) does not check the
+  collection's read access (the operations do not); its field read access and population follow
+  the operation's `overrideAccess` like any read.
 
 ## 4. Request (JS → native)
 

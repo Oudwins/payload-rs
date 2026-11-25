@@ -506,8 +506,11 @@ Crate unit tests: `cargo test -p payload-fuse-write`.
 Bails (the exact lane runs): data holding `id` / `_id` on create, dotted keys (`unflattenData`),
 `null` / non-object array or block rows (upstream logs a warning), `null` / non-object groups,
 relationship values that are not 24-hex strings at the write transform (upstream throws the BSON
-error), number custom IDs on related collections, field access functions without
-`overrideAccess`, an existing `req.context._submittedAuthorshipFields` or `req.context.internal`,
+error), number custom IDs on related collections, field `access.create` / `.update` without
+`overrideAccess` other than compiled functions reading only `req` (the dispatch evaluates each
+once per call, `evaluateRequestOnlyAccess`, and sends `fieldAccess`: per write-plan `access`
+index the operation's result, `null` without a function; beforeValidate then deletes a denied
+field and takes `getFallbackValue({ isDocumentValueAllowed })` as upstream), an existing `req.context._submittedAuthorshipFields` or `req.context.internal`,
 `req.locale` `'all'`, `Date` values a validator stringifies, a cast mongoose rejects, an enum
 violation, operator values (`$inc`, `$push`, `$remove`), any validation failure without `ctx.t`,
 rich text given as a string, nodes with ids, link / block node types.
@@ -551,8 +554,9 @@ block references; not upload, auth, drafts, custom ID, localization (later slice
 function; WP-A's read plan eligible. **Guards** (per call): inert args and `data` (no Dates yet),
 accepted `req` kinds, no `transactionID`, no `disableTransaction`, no `draft` / `autosave` /
 `duplicateFromID` / `publishAllLocales` / `selectedLocales` / `select` / `req.file`, no `id` in
-data; `overrideAccess` or `access.create` compiled and truthy (then no field access and no
-population: nested finds would check read access); target: write and read methods unchanged since
+data; `overrideAccess` or `access.create` compiled and truthy; the result read must be
+buildable (checked before the prepare: field read access compiled per call, population's nested
+finds only on collections that grant read with `true`, see FUSE_CONTRACT.md section 3); target: write and read methods unchanged since
 the lane was installed, a replica set, `transactionOptions !== false`, no tracing / verify.
 
 **create** (driver `ops.rs`): `insert` of the document, then with versions `insert` of the
@@ -655,6 +659,18 @@ relationship's static `filterOptions` (a where, `true`, `false`) reaches the val
 `validateFilterOptions` returns `true` without I/O for an empty value (no awaits, so the tick
 count is unchanged), and any other value reaches `payloadDataLoader.find`, which the prepare's
 `NoHost` refuses (a bail). Function `filterOptions` stay ineligible.
+
+**Widened for REST and GraphQL (WP-C, 2026-11-25)**: calls without `overrideAccess` used to stop
+at `access:fields` for every collection (sanitization gives every field an `access` object with a
+`validate` key, and authorship adds `createdBy` / `updatedBy` with `create` / `update: () =>
+false`) and at `access:populate` for any relationship field. Now field write access runs in the
+prepare from the dispatch's per-call results (above), the population guard applies only when the
+result read populates, and population without `overrideAccess` is fused when the loaded
+collections grant read with `true` (FUSE_CONTRACT.md section 3). GraphQL mutations (depth 0)
+reach the lane; REST writes at the default depth 2 still guard on `read`: their result populates
+`createdBy` from the users collection, whose `sessions` field has a document-reading read access
+(`user?.id === doc?.id`). The lane-shadow's replay of the fused copies onto the caller's `data`
+now also reproduces key order (a denied field is deleted and re-added after the others).
 
 **update-many and delete-many** (WP-K, driver `crates/payload-fuse-write/src/bulk.rs`, TS
 `runBulk` / `prepareBulk` in `src/fuse-write/mongo.ts`, dispatch `fuseBulk` in `index.ts`). Two

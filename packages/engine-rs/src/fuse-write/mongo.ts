@@ -40,6 +40,7 @@ import { sanitizeInternalFields } from '../../../payload/src/utilities/sanitizeI
 import { buildAllLocalesPublicationHookDoc } from '../../../payload/src/versions/allLocalesPublicationStatus.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
 import { loadCoreRuntimeAddon } from '../addon.js'
+import { evaluateRequestOnlyAccess } from '../fuse/access.js'
 import {
   castQuery,
   findOptionKeys,
@@ -400,6 +401,36 @@ const writePlanOf = (collection: Any, payload: Any) => {
   return plan
 }
 
+/**
+ * The prepare request's `fieldAccess` without `overrideAccess`: per entry of the write plan's
+ * `fieldAccess` (writePlan.ts), `field.access[operation]`'s result for the call (`null`: no
+ * function for the operation), from compiled functions that read only `req`
+ * (`evaluateRequestOnlyAccess`); a string: the reason the call runs on the exact lane.
+ */
+const fieldAccessRequest = (
+  plan: { fieldAccess: Record<'create' | 'update', unknown>[] },
+  operation: 'create' | 'update',
+  args: Any,
+): (boolean | null)[] | string | undefined => {
+  if (args.overrideAccess || plan.fieldAccess.length === 0) {
+    return undefined
+  }
+  const results: (boolean | null)[] = []
+  for (const access of plan.fieldAccess) {
+    const fn = access[operation]
+    if (!fn) {
+      results.push(null)
+      continue
+    }
+    const result = evaluateRequestOnlyAccess(fn, args.req)
+    if (typeof result === 'string') {
+      return result
+    }
+    results.push(result)
+  }
+  return results
+}
+
 const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any) => {
   const resolved = entity(lane, args.collection.config.slug)
   if (typeof resolved === 'string') {
@@ -414,6 +445,10 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
   if (plan.json === undefined) {
     return `plan:${plan.reason}`
   }
+  const fieldAccess = fieldAccessRequest(plan, 'create', args)
+  if (typeof fieldAccess === 'string') {
+    return fieldAccess
+  }
   const { fuseWritePrepare } = loadCoreRuntimeAddon() as FuseWriteAddon
   if (typeof fuseWritePrepare !== 'function') {
     return 'prepare:addon'
@@ -425,6 +460,7 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
       context: encodeTree(context),
       data: encodeTree(data),
       fallbackLanguage: req.i18n?.fallbackLanguage,
+      fieldAccess,
       language: req.i18n?.language ?? 'en',
       // `req.locale` exactly when the config is localized (the prepare bails otherwise)
       locale:
@@ -733,6 +769,10 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
     if (plan.json === undefined) {
       return `plan:${plan.reason}`
     }
+    const fieldAccess = fieldAccessRequest(plan, 'update', args)
+    if (typeof fieldAccess === 'string') {
+      return fieldAccess
+    }
     const planID = writePlanID(plan, plan.json)
     if (planID === undefined) {
       return 'prepare:addon'
@@ -755,6 +795,7 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
         context: encodeTree(req.context),
         data: encodeTree(args.data),
         fallbackLanguage: req.i18n?.fallbackLanguage,
+        fieldAccess,
         ids: readings.ids,
         language: req.i18n?.language ?? 'en',
         locale:

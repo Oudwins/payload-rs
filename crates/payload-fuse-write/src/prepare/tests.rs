@@ -73,6 +73,7 @@ fn create_builds_the_insert_in_mongoose_order() {
     fallback_language: &[],
     language: "en",
     override_access: true,
+    field_access: &[],
     t: Some(&t),
     user: None,
   };
@@ -106,6 +107,7 @@ fn create_reports_upstreams_validation_error() {
     fallback_language: &[],
     language: "en",
     override_access: true,
+    field_access: &[],
     t: Some(&t),
     user: None,
   };
@@ -125,7 +127,7 @@ fn a_validation_failure_without_translations_bails() {
   let mut entropy = RecordedEntropy::default();
   let context = JsVal::Undefined;
   let mut ctx =
-    WriteCtx { context: &context, locale: None, entropy: &mut entropy, fallback_language: &[], language: "en", override_access: true, t: None, user: None };
+    WriteCtx { context: &context, locale: None, entropy: &mut entropy, fallback_language: &[], language: "en", override_access: true, field_access: &[], t: None, user: None };
   assert!(prepare_create(&plan, &data(json!({})), &mut ctx).is_err());
 }
 
@@ -142,6 +144,7 @@ fn a_missing_reading_bails() {
     fallback_language: &[],
     language: "en",
     override_access: true,
+    field_access: &[],
     t: Some(&t),
     user: None,
   };
@@ -166,6 +169,7 @@ fn update_casts_the_set_in_reverse_key_order_and_applies_it() {
     fallback_language: &[],
     language: "en",
     override_access: true,
+    field_access: &[],
     t: Some(&t),
     user: None,
   };

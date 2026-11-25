@@ -30,6 +30,8 @@ pub struct Run<'e> {
   pub plan: &'e WritePlan,
   pub operation: Operation,
   pub override_access: bool,
+  /// `WriteCtx::field_access`
+  pub field_access: &'e [Option<bool>],
   /// `req.context?.isRestoringVersion`
   pub restoring_version: bool,
   /// `req.user` as `{ relationTo, value }` parts.

@@ -16,6 +16,7 @@ import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../../payload/src/utilities/getVersionsConfig.js'
 import { sanitizeFallbackLocale } from '../../../payload/src/utilities/sanitizeFallbackLocale.js'
 import { getNativeEngine } from '../native.js'
+import { compiledAccess } from './access.js'
 import { isInertTree, isPlainObject } from './inert.js'
 import { getCollectionPlan } from './plan.js'
 
@@ -95,9 +96,7 @@ export const populationRequest = ({
   req: Any
   target: FusedTarget
 }): { context: PopulationContext; json: string } | string => {
-  if (args.overrideAccess !== true) {
-    return 'populate:access'
-  }
+  const overrideAccess = Boolean(args.overrideAccess)
   const localization = payload.config.localization
   if (localization && !keepsLocales(req, localization)) {
     return 'populate:localization'
@@ -118,6 +117,8 @@ export const populationRequest = ({
   const related: Record<string, unknown> = {}
   const selects: Record<string, unknown> = {}
   const seen = new Set<string>()
+  /** Without `overrideAccess`: the read access each loadable collection's nested finds check. */
+  const accessChecks: { config: Any; plan: { eligible: true } & CollectionPlan }[] = []
   // the collections the levels currentDepth..depth can load
   let frontier: ({ eligible: true } & CollectionPlan)[] = [plan]
   for (let level = currentDepth; level <= depth && frontier.length > 0; level++) {
@@ -128,15 +129,28 @@ export const populationRequest = ({
           continue
         }
         seen.add(slug)
-        const entry = relatedEntry({ slug, draft, payload, populate, req, target })
+        const entry = relatedEntry({ slug, draft, overrideAccess, payload, populate, req, target })
+        if (entry === 'access') {
+          // decided by the request: guarded here rather than bailing after the root read
+          return 'populate:access'
+        }
         if (entry) {
           related[slug] = entry.json
           selects[slug] = entry.select
           next.push(entry.plan)
+          if (!overrideAccess) {
+            accessChecks.push({ config: entry.config, plan: entry.plan })
+          }
         }
       }
     }
     frontier = next
+  }
+  // after the cheap checks above: compiled read access granting with `true` (no constraint)
+  for (const { config, plan: relatedPlan } of accessChecks) {
+    if (compiledAccess(relatedPlan.access, undefined, config, req).value !== true) {
+      return 'populate:access'
+    }
   }
   const json = JSON.stringify({
     draft: Boolean(draft),
@@ -165,16 +179,24 @@ const keepsLocales = (req: Any, localization: Any) => {
   return JSON.stringify([sanitized]) === JSON.stringify([req.fallbackLocale])
 }
 
-/** A related collection nested finds may read (`undefined`: a load of it bails natively). */
+/**
+ * A related collection nested finds may read (`undefined`: a load of it bails natively). Without
+ * `overrideAccess` the nested finds run `executeAccess` with the collection's read access, which
+ * must be compiled and grant with `true` (no constraint) for this request (checked by the caller),
+ * and the afterRead of the loaded documents its field read access (none allowed) and without a
+ * default sort (sort path validation checks field permissions); `'access'` otherwise.
+ */
 const relatedEntry = ({
   slug,
   draft,
+  overrideAccess,
   payload,
   populate,
   req,
   target,
 }: {
   draft: unknown
+  overrideAccess: boolean
   payload: Any
   populate: Any
   req: Any
@@ -194,6 +216,9 @@ const relatedEntry = ({
   const config = collection.config
   if (draft && hasDraftsEnabled(config)) {
     return undefined
+  }
+  if (!overrideAccess && (plan.fieldAccess.length > 0 || config.defaultSort !== undefined)) {
+    return 'access'
   }
   const select = populate?.[slug] ?? config.defaultPopulate
   if (select !== undefined && !isSelect(select)) {
@@ -221,6 +246,7 @@ const relatedEntry = ({
     plan.id = (getNativeEngine() as unknown as NativeFuse).fuseRegisterPlan(plan.json)
   }
   return {
+    config,
     json: {
       auth: Boolean(config.auth),
       backend,

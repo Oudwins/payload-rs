@@ -18,11 +18,9 @@ import { combineQueries } from '../../../payload/src/database/combineQueries.js'
 import { appendNonTrashedFilter } from '../../../payload/src/utilities/appendNonTrashedFilter.js'
 import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../../payload/src/utilities/getVersionsConfig.js'
-import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.js'
-import { getCompiledFunction } from '../compile/compileFunction.js'
-import { evaluateOnLane } from '../compile/index.js'
 import { getNativeEngine } from '../native.js'
 import { createFunctionRegistry, serializeForEngine } from '../serialize.js'
+import { compiledAccess, evaluateRequestOnlyAccess } from './access.js'
 import { hasDataProperties, isInertTree, isPlainDataObject, isPlainObject } from './inert.js'
 import { getCollectionPlan } from './plan.js'
 import {
@@ -197,7 +195,12 @@ type Prepared = {
   target: FusedTarget
 }
 
-const prepare = (op: Op, args: Any): Prepared | undefined => {
+/**
+ * `isOperationResult`: the read of a write operation's result (its own `afterRead`), whose
+ * collection read access the operation does not check; field read access and population follow
+ * `args.overrideAccess` as in any read.
+ */
+const prepare = (op: Op, args: Any, isOperationResult = false): Prepared | undefined => {
   if (!isPlainObject(args)) {
     return guard('args:object')
   }
@@ -230,7 +233,9 @@ const prepare = (op: Op, args: Any): Prepared | undefined => {
   }
   const overrideAccess = Boolean(args.overrideAccess)
   let accessResult: unknown
-  if (!overrideAccess) {
+  if (isOperationResult) {
+    accessResult = true
+  } else if (!overrideAccess) {
     const evaluated = compiledAccess(
       plan.access,
       op === 'findByID' ? args.id : undefined,
@@ -264,46 +269,6 @@ const prepare = (op: Op, args: Any): Prepared | undefined => {
 const config = (collection: Any): Any => collection.config
 
 /**
- * `executeAccess({ id, slug, req }, collectionConfig.access.read)` by the function compiler
- * (FN_COMPILE_CONTRACT.md): only with call-site guards installed, for an active compiled function
- * whose calls the guard does not need to see now (`lane_should_verify`). The result: `true` (no
- * constraint) or a where constraint; anything else (falsy: `Forbidden` or empty results, a bail,
- * no access function: the default `Boolean(req.user)` wrapper's absence) runs the exact lane.
- */
-const compiledAccess = (
-  access: Any,
-  id: unknown,
-  collectionConfig: Any,
-  req: Any,
-  data?: unknown,
-): { reason: string; value?: undefined } | { reason?: undefined; value: unknown } => {
-  if (typeof access !== 'function') {
-    return { reason: 'access:none' }
-  }
-  const evaluated = evaluateOnLane(access, [
-    {
-      id,
-      slug: collectionConfig.slug,
-      data,
-      isReadingStaticFile: false,
-      req,
-      skipCompilation,
-    },
-  ])
-  if (!evaluated.ok) {
-    return { reason: `access:${evaluated.reason}` }
-  }
-  const value = evaluated.value
-  if (!value) {
-    return { reason: 'access:denied' }
-  }
-  if (typeof value === 'object' && !isInertTree(value, true)) {
-    return { reason: 'access:where' }
-  }
-  return { value }
-}
-
-/**
  * The `field.access.read` results of a find / findByID (afterRead's `overrideAccess ? true :
  * await field.access.read({ id, blockData, collection, data, doc, req, siblingData,
  * skipCompilation })`, falsy: the field is removed and gets no default), one per function of
@@ -322,22 +287,13 @@ const compiledFieldAccess = ({
   }
   const results: boolean[] = []
   for (const fn of plan.fieldAccess) {
-    const compiled = getCompiledFunction(fn)
-    if (compiled?.ok && !readsOnlyReq(compiled.argKeys)) {
-      return 'access:field:args'
+    const result = evaluateRequestOnlyAccess(fn, req)
+    if (typeof result === 'string') {
+      return result
     }
-    const evaluated = evaluateOnLane(fn, [{ req }])
-    if (!evaluated.ok) {
-      return `access:field:${evaluated.reason}`
-    }
-    results.push(Boolean(evaluated.value))
+    results.push(result)
   }
   return results
-}
-
-const readsOnlyReq = (argKeys: (null | string[])[]) => {
-  const [keys] = argKeys
-  return argKeys.length <= 1 && keys !== null && (keys ?? []).every((key) => key === 'req')
 }
 
 /** `afterRead`'s `depth` (`parseInt(String(depth))`, `defaultDepth`, capped at `maxDepth`). */
@@ -561,8 +517,8 @@ export const fuseFind = (args: Any, exact: Exact): Promise<Any> | undefined => {
   return fused && runFused(fused, args, exact)
 }
 
-const buildFindByIDRequest = (args: Any): Fused | undefined => {
-  const prepared = prepare('findByID', args)
+const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | undefined => {
+  const prepared = prepare('findByID', args, isOperationResult)
   if (!prepared) {
     return undefined
   }
@@ -822,7 +778,7 @@ const shadow = async (fused: Fused, args: Any, exact: Exact): Promise<Any> => {
  * `run_document`), the accepted request kinds, compiled access, and the result's
  * materialization (with population's dataloader priming) or plain value (shadow mode).
  */
-export const fusedFindByIDRequest = (args: Any) => buildFindByIDRequest(args)
+export const fusedFindByIDRequest = (args: Any) => buildFindByIDRequest(args, true)
 export const isAcceptedRequest = (req: unknown) => {
   const kind = acceptedRequest(req, 0)
   return kind !== undefined && (kind === 'isolated' || hasDataProperties(req as object, reqKeys))

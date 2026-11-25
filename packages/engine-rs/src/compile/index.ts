@@ -94,10 +94,7 @@ export const evaluateOnLane = (
   if (fnIr.fnIrLaneShouldVerify(entry.id)) {
     return { ok: false, reason: 'verify' }
   }
-  // one `argKeys` entry per declared parameter; compiled functions have no rest parameter and no
-  // `arguments`, so later arguments are never read (and not snapshotted: e.g. `() => true`)
-  const declared = args.slice(0, entry.argKeys.length)
-  const result = fnIr.fnIrEvaluate(entry.id, snapshotArgs(declared, entry.argKeys))
+  const result = fnIr.fnIrEvaluate(entry.id, snapshotArgs(args, entry.argKeys))
   if (typeof result === 'string') {
     return { ok: false, reason: `bail:${result}` }
   }

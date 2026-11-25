@@ -203,13 +203,6 @@ const checkCreate = (args: Any) => {
     return undefined
   }
   if (!args.overrideAccess) {
-    if (plan.hasFieldAccess || readPlan.hasFieldAccess) {
-      return guard('access:fields')
-    }
-    if (readPlan.hasRelations) {
-      // population's nested finds would check read access (the fused reads need overrideAccess)
-      return guard('access:populate')
-    }
     const evaluated = evaluateCompiledAccess(plan.access.create, {
       id: undefined,
       collectionConfig: collection.config,
@@ -224,8 +217,16 @@ const checkCreate = (args: Any) => {
   if (typeof target === 'string') {
     return guard(target)
   }
+  // the result read's guards (population's access without `overrideAccess`, ...) depend on the
+  // call, not on the document: checked before the prepare
+  if (!resultRead(args, placeholderID)) {
+    return guard('read')
+  }
   return { payload, target }
 }
+
+/** A well-formed ObjectId for the create's result read checked before the document id exists. */
+const placeholderID = '000000000000000000000000'
 
 /** The fused `findByID` request of the created document (create's `afterRead`). */
 const resultRead = (args: Any, id: string) =>
@@ -234,8 +235,9 @@ const resultRead = (args: Any, id: string) =>
     collection: args.collection,
     depth: args.depth,
     draft: args.draft,
-    // the collection's read access is not checked by create (field access: guarded above)
-    overrideAccess: true,
+    // the operation's own afterRead: field read access and population's nested finds follow
+    // `overrideAccess` (the collection's read access is not checked, `fusedFindByIDRequest`)
+    overrideAccess: args.overrideAccess,
     populate: args.populate,
     req: args.req,
     showHiddenFields: args.showHiddenFields,
@@ -262,6 +264,19 @@ const replayInto = (target: Any, source: Any) => {
       replayInto(into, from)
     } else if (into !== from || !(key in target)) {
       target[key] = from
+    }
+  }
+  if (!Array.isArray(target)) {
+    // upstream deletes and re-adds keys in place (field access, `delete siblingData[name]` then
+    // the fallback value): the key order must be the source's too
+    const order = Object.keys(source)
+    const current = Object.keys(target)
+    if (order.some((key, index) => current[index] !== key)) {
+      for (const key of order) {
+        const value = target[key]
+        delete target[key]
+        target[key] = value
+      }
     }
   }
 }
@@ -552,12 +567,6 @@ const checkByID = (name: ByIDName, args: Any) => {
     return undefined
   }
   if (!args.overrideAccess) {
-    if (plan.hasFieldAccess || readPlan.hasFieldAccess) {
-      return guard('access:fields')
-    }
-    if (readPlan.hasRelations) {
-      return guard('access:populate')
-    }
     const evaluated = evaluateCompiledAccess(isUpdate ? plan.access.update : plan.access.delete, {
       id,
       collectionConfig: collection.config,
@@ -574,6 +583,9 @@ const checkByID = (name: ByIDName, args: Any) => {
   const target = getFusedWriteTarget(payload.db)
   if (typeof target === 'string') {
     return guard(target)
+  }
+  if (!resultRead(args, id)) {
+    return guard('read')
   }
   return { payload, target }
 }

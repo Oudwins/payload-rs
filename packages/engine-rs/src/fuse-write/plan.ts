@@ -21,8 +21,6 @@ export type WritePlan =
       /** `access.create` / `access.update` / `access.delete` (only reached without `overrideAccess`). */
       access: Record<'create' | 'delete' | 'update', unknown>
       eligible: true
-      /** Field-level access functions somewhere (the lane then needs `overrideAccess`). */
-      hasFieldAccess: boolean
       slug: string
       volatile: Volatile[]
     }
@@ -50,7 +48,7 @@ const ineligible = (reason: string): never => {
   throw new Ineligible(reason)
 }
 
-type Builder = { hasFieldAccess: boolean; volatile: Volatile[] }
+type Builder = { volatile: Volatile[] }
 
 const watch = (builder: Builder, object: Any, key: PropertyKey) => {
   const value = object[key]
@@ -129,10 +127,6 @@ const fieldWalk = (builder: Builder, field: Any) => {
   if (typeof watch(builder, field, 'filterOptions') === 'function') {
     ineligible('field:filterOptions')
   }
-  const access = watch(builder, field, 'access')
-  if (access && typeof access === 'object' && Object.keys(access).length > 0) {
-    builder.hasFieldAccess = true
-  }
   if (type === 'richText') {
     const editor = watch(builder, field, 'editor')
     const editorHooks =
@@ -169,7 +163,7 @@ const fieldWalk = (builder: Builder, field: Any) => {
 }
 
 export const buildWritePlan = (collection: Any, payload: Any): WritePlan => {
-  const builder: Builder = { hasFieldAccess: false, volatile: [] }
+  const builder: Builder = { volatile: [] }
   const config = collection.config
   try {
     watchEmptyHooks(builder, config, writeHooks)
@@ -211,7 +205,6 @@ export const buildWritePlan = (collection: Any, payload: Any): WritePlan => {
       slug: config.slug,
       access,
       eligible: true,
-      hasFieldAccess: builder.hasFieldAccess,
       volatile: builder.volatile,
     }
   } catch (error) {

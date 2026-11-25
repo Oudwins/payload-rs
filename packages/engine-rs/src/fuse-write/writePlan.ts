@@ -15,8 +15,15 @@ type Any = any
  * caller re-checks per call, like the fused read plans.
  */
 export type WritePlanResult =
-  | { json: string; reason?: undefined; volatile: Volatile[] }
+  | { fieldAccess: FieldAccess[]; json: string; reason?: undefined; volatile: Volatile[] }
   | { json?: undefined; reason: string; volatile: Volatile[] }
+
+/**
+ * A field's `access` object: a field's `access` in the plan is its index; without
+ * `overrideAccess` the request's `fieldAccess[access]` is `access[operation]`'s result for the call
+ * (`null`: no function for the operation).
+ */
+type FieldAccess = Record<'create' | 'update', unknown>
 
 type Volatile = [object: Any, key: PropertyKey, expected: unknown]
 
@@ -77,6 +84,7 @@ const collectionHookNames = [
 ] as const
 
 type Builder = {
+  fieldAccess: FieldAccess[]
   payload: Any
   relations: Set<string>
   volatile: Volatile[]
@@ -92,7 +100,7 @@ const watch = (builder: Builder, object: Any, key: PropertyKey) => {
 }
 
 export const buildWritePlan = ({ collection, payload }: { collection: Any; payload: Any }) => {
-  const builder: Builder = { payload, relations: new Set(), volatile: [] }
+  const builder: Builder = { fieldAccess: [], payload, relations: new Set(), volatile: [] }
   try {
     const config = collection.config
     const localization = payload.config.localization
@@ -171,7 +179,7 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
       v: 1,
       versions,
     })
-    return { json, volatile: builder.volatile }
+    return { fieldAccess: builder.fieldAccess, json, volatile: builder.volatile }
   } catch (error) {
     if (error instanceof Ineligible) {
       return { reason: error.message, volatile: builder.volatile }
@@ -279,7 +287,11 @@ const fieldPlan = (builder: Builder, field: Any) => {
     }
     const access = watch(builder, field, 'access')
     if (access && (access.create || access.update)) {
-      out.access = 1
+      out.access =
+        builder.fieldAccess.push({
+          create: watch(builder, access, 'create'),
+          update: watch(builder, access, 'update'),
+        }) - 1
     }
     const defaultValue = watch(builder, field, 'defaultValue')
     if (typeof defaultValue === 'function') {

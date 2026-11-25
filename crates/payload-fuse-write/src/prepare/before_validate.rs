@@ -14,7 +14,7 @@ use super::IdUse;
 use super::exec::tick;
 use super::heap::{Heap, Node, Ref, V};
 use super::plan::{DefaultValue, Field, Kind, OwnHook, RelationTo, Tab};
-use super::run::S;
+use super::run::{Operation, S};
 
 pub type Task<'r, T> = Pin<Box<dyn Future<Output = T> + 'r>>;
 
@@ -96,7 +96,7 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
       }
       let mut fallback: Option<V> = None;
       if run.get(&sibling_data, name).is_undef() && !run.restoring_version {
-        fallback = Some(s.exec.spawn(get_fallback_value(s.clone(), field, sibling_doc.clone())).wait().await);
+        fallback = Some(s.exec.spawn(get_fallback_value(s.clone(), field, sibling_doc.clone(), true)).wait().await);
         if run.failed() {
           return;
         }
@@ -121,13 +121,32 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
           _ => return run.fail(Bail::new("beforeValidate:hook")),
         }
       }
-      if field.access && !run.override_access {
-        return run.fail(Bail::new("beforeValidate:fieldAccess"));
+      let mut access_result = true;
+      if let Some(index) = field.access.filter(|_| !run.override_access) {
+        // `if (field.access && field.access[operation])`: `accessResult = await
+        // callUserFunction(field.access[operation], ...)`, decided by the dispatch (compiled
+        // functions reading only `req`); falsy: `delete siblingData[field.name]`
+        let Some(result) = run.field_access.get(index) else {
+          return run.fail(Bail::new("beforeValidate:fieldAccess"));
+        };
+        if let Some(result) = *result {
+          tick().await;
+          access_result = result;
+          if !access_result {
+            run.heap.borrow_mut().delete(sd, name);
+          }
+        }
       }
       if run.get(&sibling_data, name).is_undef() && !run.restoring_version {
+        let is_document_value_allowed = run.operation == Operation::Update || access_result;
         let value = match fallback {
-          Some(value) => value,
-          None => s.exec.spawn(get_fallback_value(s.clone(), field, sibling_doc.clone())).wait().await,
+          Some(value) if is_document_value_allowed => value,
+          _ => {
+            s.exec
+              .spawn(get_fallback_value(s.clone(), field, sibling_doc.clone(), is_document_value_allowed))
+              .wait()
+              .await
+          }
         };
         if run.check(run.set(sd, name, value)).is_none() {
           return;
@@ -364,12 +383,12 @@ pub fn strict_eq(a: &V, b: &V) -> Option<bool> {
 }
 
 /// `getFallbackValue({ field, req, siblingDoc })`.
-fn get_fallback_value<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_doc: V) -> Task<'r, V> {
+fn get_fallback_value<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_doc: V, is_document_value_allowed: bool) -> Task<'r, V> {
   Box::pin(async move {
     let run = s.run;
     let name = field.name.as_deref().unwrap_or_default();
     let doc_value = run.get(&sibling_doc, name);
-    if !doc_value.is_undef() {
+    if is_document_value_allowed && !doc_value.is_undef() {
       return match clone_data_from_original_doc(&mut run.heap.borrow_mut(), &doc_value) {
         Ok(value) => value,
         Err(bail) => {

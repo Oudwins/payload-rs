@@ -179,8 +179,10 @@ pub struct Field {
   pub default: DefaultValue,
   pub before_validate: Vec<OwnHook>,
   pub before_change: Vec<OwnHook>,
-  /// `field.access.create` / `.update` is set (a function): only runs without `overrideAccess`.
-  pub access: bool,
+  /// `field.access.create` / `.update` is set (a function): its index in the request's
+  /// `fieldAccess` (the results of the call's operation, decided by the dispatch); only read
+  /// without `overrideAccess`.
+  pub access: Option<usize>,
   pub validate: Validate,
   pub label: Label,
   pub fields: Vec<Field>,
@@ -509,7 +511,7 @@ fn decode_field(json: &Json) -> Result<Field, String> {
     None => None,
   };
   Ok(Field {
-    access: flag("access"),
+    access: json.get("access").and_then(Json::as_u64).map(|i| i as usize),
     before_change: decode_hooks(hooks.and_then(|h| h.get("beforeChange")))?,
     before_validate: decode_hooks(hooks.and_then(|h| h.get("beforeValidate")))?,
     default,

@@ -47,6 +47,7 @@ fn new_run<'e>(plan: &'e WritePlan, ctx: &'e mut WriteCtx<'_>, operation: Operat
     language: ctx.language,
     operation,
     override_access: ctx.override_access,
+    field_access: ctx.field_access,
     plan,
     restoring_version: ctx.context.get("isRestoringVersion").truthy(),
     root_data: Cell::new(None),

@@ -96,6 +96,9 @@ pub struct WriteCtx<'a> {
   /// `req.user` as authorship reads it: `Some((user.collection, user.id))` when both are set.
   pub user: Option<(String, JsVal)>,
   pub override_access: bool,
+  /// Without `overrideAccess`: per `Field::access` index, `field.access[operation]`'s result for
+  /// this call (`None`: the operation has no access function, upstream calls nothing).
+  pub field_access: &'a [Option<bool>],
   /// `req.context` at the start of the operation.
   pub context: &'a JsVal,
   /// `req.locale` (`None` without localization; `'all'` / `'*'` bail).

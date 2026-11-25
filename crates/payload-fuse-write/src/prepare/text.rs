@@ -53,6 +53,7 @@ struct Request {
   data: JsVal,
   locale: Option<String>,
   override_access: bool,
+  field_access: Vec<Option<bool>>,
 }
 
 fn parse(request_json: &str) -> Result<Request, Bail> {
@@ -89,7 +90,19 @@ fn parse(request_json: &str) -> Result<Request, Bail> {
   let data = value(&request, "data")?;
   let locale = request.get("locale").and_then(Json::as_str).map(str::to_string);
   let override_access = request.get("overrideAccess").and_then(Json::as_bool).unwrap_or(false);
-  Ok(Request { json: request, entropy, user, i18n, context, language, fallback_language, data, locale, override_access })
+  let field_access = match request.get("fieldAccess") {
+    None | Some(Json::Null) => Vec::new(),
+    Some(Json::Array(items)) => items
+      .iter()
+      .map(|item| match item {
+        Json::Null => Ok(None),
+        Json::Bool(result) => Ok(Some(*result)),
+        _ => Err(Bail::new("request:fieldAccess")),
+      })
+      .collect::<Result<_, _>>()?,
+    Some(_) => return Err(Bail::new("request:fieldAccess")),
+  };
+  Ok(Request { json: request, entropy, user, i18n, context, language, fallback_language, data, locale, override_access, field_access })
 }
 
 impl Request {
@@ -101,6 +114,7 @@ impl Request {
       fallback_language: &self.fallback_language,
       language: &self.language,
       override_access: self.override_access,
+      field_access: &self.field_access,
       t: self.i18n.as_ref().map(|i| i as &dyn payload_core_validate::Translate),
       user: self.user.clone(),
     }
