@@ -19,6 +19,9 @@ Scope: ideation only, nothing in the repo was changed. Numbers marked "measured 
   - **In-transaction reads on the driver lane by default** (Node driver I/O in mongoose's session).
   - **Upstream's mongoose write methods allowed for the default rs writes.**
   - **Test changes:** only our own specs `test/__rs/mongo-driver/lane.int.spec.ts` and `test/__rs/mongo-adapter/live.int.spec.ts` may change to assert the new wiring, and `test/__rs/mongo-harness/parity.int.spec.ts` may accept exactly the missing max-versions `findVersions` after a create with a generated id (goldens stay TS-recorded and unchanged). Upstream tests stay unmodified.
+- **2026-11-25:**
+  - **Parity bulk updates:** `test/__rs/mongo-harness/parity.int.spec.ts` compares the trace of the bulk-update steps whose documents upstream processes concurrently (`update > updateMany where`, `live > update many over several docs` / `drafts (versions)`) per document. Only the interleaving between documents is ignored; every entry and each document's call order must match, and the goldens stay TS-recorded.
+  - **D10, auxiliary MongoDB indexes: not built.** `packages/engine-rs/AUX_INDEXES_PROPOSAL.md` has the measurement: within noise at 1k documents, 2.3-5.1x on matched queries at 10k, two query shapes slower, and the same gain would apply to the TS engine.
 - Every work package must keep: the full upstream suite on MongoDB / SQLite / PostgreSQL equal to the TS baselines, shadow mode at 0 divergences, and add lane-specific differential checks (fast lane vs exact lane) with hit counters proving the fast lane ran.
 
 ## 1. Bottom line
