@@ -1,7 +1,7 @@
 import { appendFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { registerFlushOnFileEnd } from '../mongo-adapter/flushOnFileEnd.js'
+import { registerFlushOnFileEnd } from '../flushOnFileEnd.js'
 
 /**
  * Fused write counters (FUSED_WRITES.md section 9). With `PAYLOAD_RS_FUSE_STATS_DIR` set, every

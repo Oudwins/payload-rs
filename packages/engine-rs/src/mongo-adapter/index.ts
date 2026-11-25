@@ -14,8 +14,8 @@
 import { renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
+import { registerFlushOnFileEnd } from '../flushOnFileEnd.js'
 import { getDriverLaneStats, installDriverLane } from '../mongo-driver/index.js'
-import { registerFlushOnFileEnd } from './flushOnFileEnd.js'
 import { createLiveInit, getLiveDepsPorted, getLiveEngineCalls, installLiveEngine } from './live.js'
 
 type AnyObject = Record<PropertyKey, any>

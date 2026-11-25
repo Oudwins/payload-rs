@@ -45,7 +45,7 @@ import type { Difference } from '../shadow/compare.js'
 import type { ReportOption, ShadowContext, ShadowRecord } from '../shadow/report.js'
 import type { TraceEvent, TraceLog } from './trace.js'
 
-import { registerFlushOnFileEnd } from '../mongo-adapter/flushOnFileEnd.js'
+import { registerFlushOnFileEnd } from '../flushOnFileEnd.js'
 import { errorShape, toReportValue } from '../shadow/compare.js'
 import { createReporter, truncateForReport } from '../shadow/report.js'
 import { toComparable } from './comparable.js'
