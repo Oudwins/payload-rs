@@ -713,26 +713,31 @@ wait does not. The next statement after the process sat idle pays the wake-up (C
 scheduler); fused setups leave the JS thread idle while the Rust runtime works. Fusing the bulk
 writes themselves is the remedy.
 
-**Default on** (`PAYLOAD_RS_FUSE_WRITES` unset). Bars on the final tree (2026-11-25):
+**Default on** (`PAYLOAD_RS_FUSE_WRITES` unset, WP-K). Bars on the final tree (2026-11-25,
+release addon, mongod 8.2 rs0):
 
-- MongoDB harness, `--engine default`: 3329 / 165 / 422 against the baseline's 3330 / 164 / 422;
-  the one difference is test/plugin-ecommerce "should settle simultaneous confirmation requests
-  only once" (a 500 from the endpoint's 500 ms settlement deadline under the harness's load; its
-  solo rerun is clean, 3 full-file runs and 12 runs of the settlement tests with the lane on and
-  off pass, and it passed in both shadow harness runs). test/cli differs only by the worktree
-  path; storage emulators and hmr absent.
-- The harness with `--fuse shadow --fuse-writes shadow`: 3330 / 164 / 422, 2982 creates, 71
-  updateByID and 162 deleteByID compared, 0 lane-shadow differences.
-- The 8 shadow files: 971 / 0 / 46, 0 divergences. Parity 503/503 (two of three runs show only the
-  known bulk-update ordering flake). Driver lane 4/4, glue 33/33, the fuse-writes corpus 12/12,
-  the lane suites 23/23 (default and shadow), packaging OK (it needed the harness flush registry
-  moved out of `mongo-adapter/`: a SQLite-only install loaded it through `fuse-write/stats.ts`).
+- MongoDB harness, `--engine default`: 3330 / 164 / 422, equal to `.rs-baseline/mongodb-all.json`
+  (test/cli differs only by the worktree path; storage emulators and hmr absent; the
+  plugin-ecommerce settlement test passed). Fused writes served: 2983 creates, 71 updateByID, 162
+  deleteByID, 3 update-many, 188 delete-many.
+- The harness with `--fuse shadow --fuse-writes shadow`: 3330 / 164 / 422, the same calls
+  compared, 0 lane-shadow differences (an earlier run's one difference, test/cli's delete-many
+  of `payload-migrations`, was the replay counting the driver's own pool-event clock readings in
+  source-mapped stacks, `mongodb/src/`; replay.ts now skips those like `mongodb/lib/`).
+- The 8 shadow files: 971 / 0 / 46, 0 divergences. Parity 503/503 in two of three runs; the
+  third failed only `update > updateMany where` (per-document compare, the exact lane: tracing
+  keeps the fused lanes off; its `<oid:N>` numbering follows the documents' interleaving).
+  Parity and the golden dumps need `PAYLOAD_RS_MONGO_SERVER` set to the same server as
+  `MONGODB_URL` (else every dump reads the default server: 55 failures on any engine). Driver
+  lane 4/4, glue 33/33 (`PAYLOAD_ENGINE=ts`), the fuse-writes corpus 12/12 (`PAYLOAD_ENGINE=ts`),
+  the lane suites 29/29 (default and shadow), packaging OK.
 
 Remaining bails in the shadow harness, largest first: `plan:localization:filterAvailableLocales`
 149, `plan:field:json` 141, `plan:field:upload` 117, `plan:date:timezone` 112, `mongo:model` 71,
 `plan:tabs:named` 59, `prepare:relationship:numberIDs` 49, `plan:field:slug` 48, `plan:field:ui`
-38, `populate:related` 36; guards: `file` 595, `args:options` 509, `access:fields` 465,
-`transaction` 307, `disableTransaction` 289, `data:id` 152.
+38, `populate:related` 37; guards: `transaction` 763, `file` 605, `args:options` 515,
+`access:fields` 473, `disableTransaction` 292, `trash` 167, `data:id` 152; ineligible: `drafts`
+1319 (section 12's "not yet"), `hooks:beforeRead` 768, `hooks:afterRead` 608.
 
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
