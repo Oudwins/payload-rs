@@ -149,6 +149,73 @@ packaging and default-path check OK. The fused lanes made the core read operatio
 the sqlite adapter module (`switch.int.spec.ts` 9/9). Next: the fused lanes on MongoDB (over
 `payload-mongo-driver`), fused population, Mongo write overhead.
 
+Optimization round 4 (2026-11-24/25, MongoDB focus), all merged and verified together.
+
+What was merged:
+
+- **Fused MongoDB reads** (WP-A, `crates/payload-fuse-mongo`, FUSE_CONTRACT.md §8-9):
+  - `find` / `findByID` / `count` as one native call on the Rust driver, with no mongoose query.
+  - Population that reproduces upstream's dataloader.
+  - Compiled read access and field read access that reads only `req` (WP-C).
+  - Raw json / rich text subtrees converted in parallel on the driver's threads.
+- **Write path on the mongoose-backed lane** (WP-G):
+  - In-transaction reads stay on the driver lane.
+  - Collection writes use upstream's db-mongodb methods.
+  - The max-versions check is skipped after a create with a generated id.
+  - A registry of Payload's own field functions.
+- **Fused MongoDB writes, on by default** (WP-G executor, WP-I write-side library, WP-H / WP-J / WP-K drivers; FUSED_WRITES.md):
+  - create, updateByID, deleteByID, update-many and delete-many run in Rust: beforeValidate, validation, beforeChange, the db-mongodb transform, mongoose casting, the version write.
+  - They run inside a Rust-owned transaction (D4), and the result goes through the fused read.
+  - A write lane-shadow replays clock and ObjectId readings and compares raw BSON, results, errors and the caller's data.
+  - GraphQL writes reach the lane (WP-C).
+- **Exact-lane afterRead plan kinds** for localized fields, tabs, blocks and localized containers (WP-C).
+- **Auth compile guards:** they no longer snapshot arguments past a compiled function's parameters (WP-A). Auth went from 0.68x to 1.06x.
+- **Fixes:**
+  - The JWT verify cache.
+  - The engine-loaded marker moved to the sqlite adapter module.
+  - The perf runner's `--fuse` option.
+- **Parity spec:** its concurrent bulk-update steps now require the golden's entries in any order (owner decision, RUST_PERF_PLAN.md §0).
+
+Perf, MongoDB typical shape at 1k posts, Local API, ts / rs medians, fused writes off -> on:
+
+| write          | off   | on    |
+| -------------- | ----- | ----- |
+| create         | 1.14x | 1.70x |
+| update         | 0.98x | 2.00x |
+| partial update | 0.97x | 2.24x |
+| delete         | 0.97x | 1.66x |
+| update many    | 0.99x | 2.33x |
+| delete many    | 1.00x | 1.50x |
+
+- GraphQL writes: 1.5-1.9x.
+- Complex reads: `find` limit 10 1.84x, limit 200 2.56x.
+- Reads: complex `findByID` 4.6x, typical depth 1 2.4x.
+- Overall MongoDB geomeans before fused writes (WP-A): Local 1.21x, REST 1.21x, GraphQL 1.18x.
+- The full pass on this tree is in `.rs-runs/perf/round9`.
+
+Verification on the merged tree (round 9):
+
+| check                                                 | result                                                                                                        |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| MongoDB                                               | 3330 / 164 / 422, = baseline (6,715 fused read hits); the same with read and write lane-shadow, 0 differences |
+| SQLite                                                | 134/135 identical, with the fused lanes and under `--fuse shadow`                                             |
+| PostgreSQL                                            | 131/135, = baseline                                                                                           |
+| shadow                                                | 8/8 files, 22,511 calls, 0 divergences                                                                        |
+| parity                                                | 503/503 in 3 of 3 runs                                                                                        |
+| fused-write corpus                                    | 12/12                                                                                                         |
+| fused lane suites                                     | 41/41                                                                                                         |
+| glue / driver lane / HTTP lanes / fn-compile / switch | 33/33, 4/4, 18/18, 39/39, 9/9                                                                                 |
+| packaging and default-path check                      | OK                                                                                                            |
+
+Not built (owner decision D10): auxiliary MongoDB indexes (`AUX_INDEXES_PROPOSAL.md`).
+
+Still ineligible for fused writes:
+
+- drafts and autosave;
+- REST writes at the default depth 2 (document-reading field access on `users.sessions`);
+- user hooks (the hooks shape);
+- uploads, json fields, timezone dates.
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).
