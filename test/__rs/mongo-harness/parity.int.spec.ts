@@ -129,12 +129,11 @@ const withSkippedMaxVersions = (
 
 /**
  * Bulk updates whose documents upstream processes concurrently (`Promise.all` in the update
- * operation): the order of adapter calls across documents depends on database timing, for TS too.
- * Owner decision 2026-11-25 (RUST_PERF_PLAN.md section 0): for these steps the calls are compared per
- * document, ignoring only the interleaving between documents. A call belongs to the document of
- * the first id in its arguments; a call naming several documents (the initial `find`) stays in
- * order with the other such calls. Every entry must still match, and the calls of each document
- * must keep the golden's order. Returns the golden's order when that holds, else `actual`.
+ * operation): which calls overlap depends on database timing (for TS too), and the tracer sorts
+ * overlapping calls by content (adapterTrace.ts), so the goldens hold no per-document call order.
+ * Owner decision 2026-11-25 (RUST_PERF_PLAN.md section 0): for these steps the trace must hold
+ * exactly the golden's entries (arguments, argument fingerprints, events), in any order. Returns
+ * the golden's order when that holds, else `actual`.
  */
 const concurrentDocumentSteps = new Set([
   'live > update many over several docs',
@@ -150,23 +149,8 @@ const withDocumentInterleaving = (section: string, name: string, actual: TraceEn
   if (!Array.isArray(expected) || !Array.isArray(actual) || expected.length !== actual.length) {
     return actual
   }
-  const ids = (entry: TraceEntry) => [...new Set(JSON.stringify(entry).match(/<oid:\d+>/g))]
-  const documents = new Set([expected, actual].flat().map((entry) => ids(entry)[0]))
-  const documentOf = (entry: TraceEntry) =>
-    ids(entry).filter((id) => documents.has(id)).length > 1 ? 'several' : String(ids(entry)[0])
-  const byDocument = (trace: TraceEntry[]) => {
-    const groups = new Map<string, string[]>()
-    for (const entry of trace) {
-      groups.set(documentOf(entry), [
-        ...(groups.get(documentOf(entry)) ?? []),
-        JSON.stringify(entry),
-      ])
-    }
-    return [...groups].sort(([a], [b]) => a.localeCompare(b))
-  }
-  return JSON.stringify(byDocument(expected)) === JSON.stringify(byDocument(actual))
-    ? expected
-    : actual
+  const entries = (trace: TraceEntry[]) => trace.map((entry) => JSON.stringify(entry)).sort()
+  return JSON.stringify(entries(expected)) === JSON.stringify(entries(actual)) ? expected : actual
 }
 
 type Ctx = { payload: Payload; tick: typeof tick }
