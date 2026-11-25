@@ -519,9 +519,10 @@ For WP-H, per operation: lexical's `afterChange` hook is the identity for every 
 accepts (no node ids, so its `originalNodeIDMap` is empty); the field `afterChange` traversal has
 no other own hooks on eligible collections.
 
-## 13. Dispatch, drivers and the write lane-shadow (WP-H, status 2026-11-24)
+## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, status 2026-11-25)
 
-Built (off by default; the create slice runs on WP-I's prepare, section 12):
+Built (on by default since WP-J; create, updateByID and deleteByID run on WP-I's prepare,
+section 12):
 
 | part                   | where                                                                                         |
 | ---------------------- | --------------------------------------------------------------------------------------------- |
@@ -644,8 +645,59 @@ updated in two locales) at 0 differences; the MongoDB harness with `--fuse shado
 shadow` equals `.rs-baseline/mongodb-all.json` (3330 / 164 / 422) with 2810 creates, 68
 updateByID and 162 deleteByID compared and 0 lane-shadow differences.
 
-Left: `PAYLOAD_RS_FUSE_WRITES=on` by default once the bars (parity, shadow files, driver lane,
-glue, packaging) are rerun on the final tree and the perf suite confirms section 8.
+**Widened (WP-J)**: a config's global blocks no longer make every collection ineligible (the
+write plan carries `globalBlocks`; a row whose `blockType` is a global slug bails in
+`block_to_match`, since upstream's lookup `req.payload.blocks[blockType] ?? field.blocks.find(...)`
+prefers it, in beforeValidate, beforeChange and the write transform's `traverseFields`). A
+relationship's static `filterOptions` (a where, `true`, `false`) reaches the validator in `vo`:
+`validateFilterOptions` returns `true` without I/O for an empty value (no awaits, so the tick
+count is unchanged), and any other value reaches `payloadDataLoader.find`, which the prepare's
+`NoHost` refuses (a bail). Function `filterOptions` stay ineligible.
+
+**Default on** (`PAYLOAD_RS_FUSE_WRITES` unset). Bars on the final tree (2026-11-25):
+
+- MongoDB harness, `--engine default`: 3329 / 165 / 422 against the baseline's 3330 / 164 / 422;
+  the one difference is test/plugin-ecommerce "should settle simultaneous confirmation requests
+  only once" (a 500 from the endpoint's 500 ms settlement deadline under the harness's load; its
+  solo rerun is clean, 3 full-file runs and 12 runs of the settlement tests with the lane on and
+  off pass, and it passed in both shadow harness runs). test/cli differs only by the worktree
+  path; storage emulators and hmr absent.
+- The harness with `--fuse shadow --fuse-writes shadow`: 3330 / 164 / 422, 2982 creates, 71
+  updateByID and 162 deleteByID compared, 0 lane-shadow differences.
+- The 8 shadow files: 971 / 0 / 46, 0 divergences. Parity 503/503 (two of three runs show only the
+  known bulk-update ordering flake). Driver lane 4/4, glue 33/33, the fuse-writes corpus 12/12,
+  the lane suites 23/23 (default and shadow), packaging OK (it needed the harness flush registry
+  moved out of `mongo-adapter/`: a SQLite-only install loaded it through `fuse-write/stats.ts`).
+
+Remaining bails in the shadow harness, largest first: `plan:localization:filterAvailableLocales`
+149, `plan:field:json` 141, `plan:field:upload` 117, `plan:date:timezone` 112, `mongo:model` 71,
+`plan:tabs:named` 59, `prepare:relationship:numberIDs` 49, `plan:field:slug` 48, `plan:field:ui`
+38, `populate:related` 36; guards: `file` 595, `args:options` 509, `access:fields` 465,
+`transaction` 307, `disableTransaction` 289, `data:id` 152.
+
+Perf suite (2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install verified
+against the tarballs; `ts/rs` median ratios, geometric mean per category; `off` is the engine
+variant `rs-fused-off`):
+
+| shape   | surface | create      | update      | partial-update | delete      |
+| ------- | ------- | ----------- | ----------- | -------------- | ----------- |
+| typical | local   | 1.10 → 1.25 | 1.00 → 1.27 | 1.00 → 1.52    | 0.97 → 1.00 |
+| typical | rest    | 0.62 → 0.59 | 1.04 → 0.95 | 0.40 → 0.39    | 0.90 → 0.84 |
+| typical | graphql | 1.11 → 0.93 | -           | 1.02 → 1.00    | 1.00 → 0.97 |
+| complex | local   | 1.08 → 1.07 | 1.03 → 1.03 | 1.05 → 1.02    | 1.00 → 1.00 |
+| hooks   | local   | 1.07 → 1.07 | 0.95 → 1.00 | 0.96 → 0.99    | 0.95 → 0.96 |
+
+Per scenario (typical, Local API): update by id 1.44-1.56x (off ~1.0x), create 1.27-1.47x,
+delete by id 1.30x (off 0.95x). complex and hooks are ineligible (user hooks, where-constraint
+access), REST and GraphQL calls do not reach the lanes (request guards), which is the next
+widening; REST `POST` / `PATCH /:id` are ~0.4x on both variants (not a fused-writes effect). The
+bulk `update many` (0.91x vs 1.02x) and `delete many` (0.77x vs 0.99x) are not fused and got
+slower with the lane on: a micro-benchmark shows no difference between deletes after fused and
+exact creates, but a 20 ms idle gap before the timed delete doubles its latency, so the likely
+cause is that the bulk operation's Node driver connection sat idle while the setup's writes went
+through the Rust client; fusing `update` / `delete` (many) removes it. The section 8 estimates
+(1.7-2.3x) are not reached on the perf suite: its update path still pays the stored-document
+read, the lock delete outside the transaction and the commit.
 
 Measured (2026-11-24, creates, WP-I's prepare, release addon, mongod 8.2 rs0 on loopback, cores
 22-31; vitest micro-benchmark of 300 creates after 30 warm-up, p50, not the perf suite):
