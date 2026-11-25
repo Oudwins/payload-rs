@@ -58,6 +58,20 @@ export type FusedWriteTarget = {
     read: { payload: unknown; request: string }
     state?: Uint8Array
   }) => Promise<string[]>
+  /**
+   * Runs a bulk update / delete (`args` the operation's) in a new Rust-owned transaction: the
+   * document read of `read` (the fused `find` request of `payload.db.find` and of the results'
+   * `afterRead`), the per-document statements prepared for the documents it found, the results'
+   * `afterRead` and the commit; with `isShadow` reads the touched collections inside the
+   * transaction and aborts. `result`: `[text, state | '', '']`; a string is a bail (the
+   * transaction was aborted, nothing was written).
+   */
+  runBulk: (input: {
+    args: Any
+    isShadow: boolean
+    name: 'delete' | 'update'
+    read: { payload: unknown; request: string }
+  }) => Promise<{ result: string[]; state: Uint8Array } | string>
 }
 
 export type FusedWriteTargetLookup = (adapter: object) => FusedWriteTarget | string

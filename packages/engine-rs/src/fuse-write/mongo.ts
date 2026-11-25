@@ -56,6 +56,13 @@ import { buildWritePlan, type WritePlanResult } from './writePlan.js'
 type Any = any
 
 type FuseWriteAddon = {
+  fuseWriteMongoFind?: (
+    client: number,
+    txn: number,
+    plan: number,
+    requestJson: string,
+    reads: Uint8Array,
+  ) => Promise<string[]>
   fuseWriteMongoOp?: (
     client: number,
     txn: number,
@@ -105,8 +112,12 @@ export const registerFusedMongoWriteTarget = ({
   getLane: (adapter: object) => DriverLane | undefined
 }) => {
   const addon = loadCoreRuntimeAddon() as FuseWriteAddon
-  const { fuseWriteMongoOp, fuseWriteMongoState } = addon
-  if (typeof fuseWriteMongoOp !== 'function' || typeof fuseWriteMongoState !== 'function') {
+  const { fuseWriteMongoFind, fuseWriteMongoOp, fuseWriteMongoState } = addon
+  if (
+    typeof fuseWriteMongoOp !== 'function' ||
+    typeof fuseWriteMongoState !== 'function' ||
+    typeof fuseWriteMongoFind !== 'function'
+  ) {
     return
   }
   const methods = watchedMethods.map((name) => adapter[name])
@@ -160,6 +171,35 @@ export const registerFusedMongoWriteTarget = ({
           bytes,
           state,
         )
+      },
+      runBulk: async ({ name, args, isShadow, read }) => {
+        const { bytes, client, plan } = read.payload as ReadPayload
+        const txn = lane.binding.txnBegin(client)
+        const found = await fuseWriteMongoFind(client, txn, plan, read.request, bytes)
+        if (found.length !== 2) {
+          // the native side aborted the transaction
+          return (found[0] ?? '!bulk:find').slice(1)
+        }
+        let prepared: Awaited<ReturnType<typeof prepareBulk>>
+        try {
+          prepared = await prepareBulk(lane, name, args, JSON.parse(found[0]!), found[1]!)
+        } catch {
+          prepared = 'mongo:bulk:threw'
+        }
+        if (typeof prepared === 'string') {
+          await lane.binding.txnEnd(txn, false)
+          return prepared
+        }
+        const result = await fuseWriteMongoOp(
+          client,
+          txn,
+          prepared.op,
+          plan,
+          read.request,
+          bytes,
+          isShadow ? prepared.state : undefined,
+        )
+        return { result, state: prepared.state }
       },
     }
     return target
@@ -731,29 +771,146 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
     request.wp = planID
   }
   const objectID = new lane.mongoose.Types.ObjectId(id)
+  const reads = [
+    { c: Model.collection.collectionName, f: { _id: objectID } },
+    ...(VersionModel
+      ? [{ c: VersionModel.collection.collectionName, f: { parent: objectID }, s: { _id: 1 } }]
+      : []),
+    ...(isLocking
+      ? [
+          {
+            c: locks.collection.collectionName,
+            f: { 'document.relationTo': slug, 'document.value': { $in: [objectID, id] } },
+            s: { _id: 1 },
+          },
+        ]
+      : []),
+    ...(name === 'deleteByID' && preferences
+      ? [
+          {
+            c: preferences.collection.collectionName,
+            f: { key: `collection-${slug}-${id}` },
+            s: { _id: 1 },
+          },
+        ]
+      : []),
+  ]
+  return { op: lane.BSON.serialize(request), reads, state: lane.BSON.serialize({ r: reads }) }
+}
+
+/**
+ * A bulk update / delete request for the documents `ids` the operation's find returned (`docsHex`:
+ * their BSON, crates/payload-fuse-write `bulk`) and the shadow's state reads (per document, as
+ * the by-id ones). update-many: one updateByID request per document (`prepareByID`: the cast
+ * filters with its id, the prepare request with its readings, taken document by document in the
+ * find's order). delete-many: delete.ts's cast filters for all ids (`id in`, the locks'
+ * `document.value in`, the versions' `parent in`, the preferences' `key in`).
+ */
+const prepareBulk = async (
+  lane: DriverLane,
+  name: 'delete' | 'update',
+  args: Any,
+  ids: string[],
+  docsHex: string,
+) => {
+  const docs = Buffer.from(docsHex, 'hex')
+  if (name === 'update') {
+    const entries: Uint8Array[] = []
+    const reads: unknown[] = []
+    for (const id of ids) {
+      const prepared = await prepareByID(lane, 'updateByID', { ...args, id })
+      if (typeof prepared === 'string') {
+        return prepared
+      }
+      entries.push(prepared.op)
+      reads.push(...prepared.reads)
+    }
+    return {
+      op: lane.BSON.serialize({ e: entries, op: 'updateMany', s: docs }),
+      state: lane.BSON.serialize({ r: reads }),
+    }
+  }
+  const slug = args.collection.config.slug
+  const resolved = entity(lane, slug)
+  if (typeof resolved === 'string') {
+    return `mongo:${resolved}`
+  }
+  const { collectionConfig, Model, VersionModel } = resolved
+  const locks = pristineModel(lane, lockedDocumentsCollectionSlug)
+  const preferences = pristineModel(lane, preferencesCollectionSlug)
+  if (locks === 'model' || preferences === 'model') {
+    return 'mongo:model:internal'
+  }
+  const adapter = lane.view
+  const config = adapter.payload.config
+  const cast = async (Target: Any, collectionSlug: string | undefined, fields: Any, where: Any) =>
+    castFilter(Target, await buildQuery({ adapter, collectionSlug, fields, where }))
+  const request: Record<string, unknown> = {
+    c: Model.collection.collectionName,
+    op: 'deleteMany',
+    q: await cast(Model, slug, collectionConfig.flattenedFields, { id: { in: ids } }),
+    s: docs,
+  }
+  const keys = ids.map((id) => `collection-${slug}-${id}`)
+  const objectIDs = ids.map((id) => new lane.mongoose.Types.ObjectId(id))
+  // `isLockingAvailable` of delete.ts
+  const LockModel = collectionConfig.lockDocuments !== false ? locks : undefined
+  if (LockModel && ids.length > 0) {
+    request.lc = LockModel.collection.collectionName
+    request.lf = await cast(
+      LockModel,
+      lockedDocumentsCollectionSlug,
+      adapter.payload.collections[lockedDocumentsCollectionSlug].config.flattenedFields,
+      {
+        and: [{ 'document.relationTo': { equals: slug } }, { 'document.value': { in: ids } }],
+      },
+    )
+    request.lfind = args.overrideLock === false
+  }
+  if (VersionModel) {
+    request.vc = VersionModel.collection.collectionName
+    request.vq = await cast(
+      VersionModel,
+      undefined,
+      buildVersionCollectionFields(config, collectionConfig, true),
+      { parent: { in: ids } },
+    )
+  }
+  if (preferences) {
+    request.pc = preferences.collection.collectionName
+    request.pf = await cast(
+      preferences,
+      preferencesCollectionSlug,
+      adapter.payload.collections[preferencesCollectionSlug].config.flattenedFields,
+      { key: { in: keys } },
+    )
+  }
   const state = lane.BSON.serialize({
     r: [
-      { c: Model.collection.collectionName, f: { _id: objectID } },
+      { c: Model.collection.collectionName, f: { _id: { $in: objectIDs } }, s: { _id: 1 } },
       ...(VersionModel
-        ? [{ c: VersionModel.collection.collectionName, f: { parent: objectID }, s: { _id: 1 } }]
-        : []),
-      ...(isLocking
         ? [
             {
-              c: locks.collection.collectionName,
-              f: { 'document.relationTo': slug, 'document.value': { $in: [objectID, id] } },
+              c: VersionModel.collection.collectionName,
+              f: { parent: { $in: objectIDs } },
               s: { _id: 1 },
             },
           ]
         : []),
-      ...(name === 'deleteByID' && preferences
+      ...(LockModel
         ? [
             {
-              c: preferences.collection.collectionName,
-              f: { key: `collection-${slug}-${id}` },
+              c: LockModel.collection.collectionName,
+              f: {
+                'document.relationTo': slug,
+                'document.value': { $in: [...objectIDs, ...ids] },
+              },
               s: { _id: 1 },
             },
           ]
+        : []),
+      ...(preferences
+        ? [{ c: preferences.collection.collectionName, f: { key: { $in: keys } }, s: { _id: 1 } }]
         : []),
     ],
   })

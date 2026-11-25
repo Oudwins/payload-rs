@@ -844,6 +844,56 @@ export const materializeFusedResult = (
 export { parseResult as fusedResultValue }
 export type { Fused as FusedRead }
 
+/**
+ * The fused writes' bulk update / delete (src/fuse-write): a `find` request whose reads are
+ * `payload.db.find(dbArgs)` (the operation's document read) and whose `afterRead` is the one the
+ * operation runs on each result document (`depth`, `populate`, `showHiddenFields`, `draft`, the
+ * request's locales; no select, no field access: the fused writes guard both), run on the result
+ * documents together (crates/payload-fuse-mongo `run_documents`). `args` holds the operation's
+ * `collection`, `depth`, `populate`, `req`, `showHiddenFields`; population needs
+ * `overrideAccess: true` (as the write's own result read). A string: the guard reason.
+ */
+export const fusedPageRequest = (
+  args: Any,
+  { db: dbArgs, draft }: { db: Record<string, unknown>; draft: unknown },
+): Fused | string => {
+  const prepared = prepare('find', args)
+  if (!prepared) {
+    return 'page:prepare'
+  }
+  const { payload, plan, planID, req, target } = prepared
+  if (!isRequestValue(req.locale) || !isRequestValue(req.fallbackLocale)) {
+    return 'page:args:values'
+  }
+  const depth = afterReadDepth(args.depth, payload.config)
+  if (!Number.isFinite(depth)) {
+    return 'page:depth'
+  }
+  const population =
+    depth && 1 <= depth && plan.hasRelations
+      ? populationRequest({ args, currentDepth: 1, depth, draft, payload, plan, req, target })
+      : undefined
+  if (typeof population === 'string') {
+    return population
+  }
+  const db = encodeDb(target, 'find', dbArgs)
+  if (typeof db === 'string') {
+    return db
+  }
+  const request = `{"op":"find","plan":${planID},"db":${db.db},${readRequest({
+    currentDepth: 1,
+    depth,
+    fieldAccess: undefined,
+    flattenLocales: true,
+    payload,
+    plan,
+    req,
+    select: undefined,
+    showHiddenFields: Boolean(args.showHiddenFields),
+  }).slice(0, -1)}${population ? `,"pop":${population.json}` : ''}}`
+  return { op: 'find', payload: db.payload, population: population?.context, request, target }
+}
+
 const requestBuilders: Record<Op, (args: Any) => Fused | undefined> = {
   count: buildCountRequest,
   find: buildFindRequest,

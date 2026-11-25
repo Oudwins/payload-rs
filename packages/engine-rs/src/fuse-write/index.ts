@@ -1,6 +1,6 @@
 /**
  * Fused writes (packages/engine-rs/FUSED_WRITES.md): an eligible collection `create`,
- * `updateByID` or `deleteByID` runs fully in Rust, its statements in a transaction the Rust driver
+ * `updateByID`, `deleteByID`, `update` (many) or `delete` (many) runs fully in Rust, its statements in a transaction the Rust driver
  * owns (D4), the result's `afterRead` / population through the fused read core, then the commit,
  * with no JS between the statements. Called by the write operation drop-ins of `../ops-write`:
  * `fuseWrite` returns the operation's promise, or `undefined` when the call runs on the exact lane
@@ -15,11 +15,16 @@
 import { randomUUID } from 'node:crypto'
 
 import type { FusedRead } from '../fuse/index.js'
+import type { RecordedReadings } from '../shadow-mongo/replay.js'
 import type { FusedWriteTarget } from './targets.js'
 
+import { sanitizeSortQuery } from '../../../payload/src/collections/operations/utilities/sanitizeSortQuery.js'
+import { combineQueries } from '../../../payload/src/database/combineQueries.js'
+import { appendNonTrashedFilter } from '../../../payload/src/utilities/appendNonTrashedFilter.js'
 import {
   evaluateCompiledAccess,
   fusedFindByIDRequest,
+  fusedPageRequest,
   fusedResultValue,
   isAcceptedRequest,
   materializeFusedResult,
@@ -28,6 +33,7 @@ import { hasDataProperties, isInertTree, isPlainObject } from '../fuse/inert.js'
 import { getCollectionPlan } from '../fuse/plan.js'
 import { comparePopulated } from '../fuse/populate.js'
 import { canonical, firstDifference } from '../fuse/shadow.js'
+import { isAcceptedWhere } from '../fuse/where.js'
 import {
   createReplayTapes,
   installBsonObjectIdReplay,
@@ -126,6 +132,9 @@ export const fuseWrite = (name: string, args: Any, exact: Exact) => {
   }
   if (name === 'updateByID' || name === 'deleteByID') {
     return fuseByID(name, args, exact)
+  }
+  if (name === 'update' || name === 'delete') {
+    return fuseBulk(name, args, exact)
   }
   if (name !== 'create') {
     return undefined
@@ -716,6 +725,499 @@ const shadowByID = async (checked: Checked, name: ByIDName, args: Any, exact: Ex
   const contextAfter = canonical(args.req.context)
   if (canonical(contextBefore) !== contextAfter) {
     report({ kind: 'context', ...firstDifference(contextAfter, canonical(contextBefore)) })
+  }
+  return result
+}
+
+type BulkName = 'delete' | 'update'
+
+/** Keys of the `update` operation args (all must be data properties). */
+const updateManyArgKeys = [
+  'autosave',
+  'collection',
+  'data',
+  'depth',
+  'disableTransaction',
+  'disableVerificationEmail',
+  'draft',
+  'limit',
+  'overrideAccess',
+  'overrideLock',
+  'overwriteExistingFiles',
+  'populate',
+  'publishAllLocales',
+  'req',
+  'select',
+  'showHiddenFields',
+  'sort',
+  'trash',
+  'unpublishAllLocales',
+  'where',
+]
+
+/** Keys of the `delete` operation args (all must be data properties). */
+const deleteManyArgKeys = [
+  'collection',
+  'depth',
+  'disableTransaction',
+  'overrideAccess',
+  'overrideLock',
+  'populate',
+  'req',
+  'select',
+  'showHiddenFields',
+  'trash',
+  'where',
+]
+
+const bulkHit = (name: BulkName) => (name === 'update' ? 'updateMany' : 'deleteMany')
+
+const fuseBulk = (name: BulkName, args: Any, exact: Exact) => {
+  if (!isPlainObject(args)) {
+    return guard('args')
+  }
+  let checked: ReturnType<typeof checkBulk>
+  try {
+    checked = checkBulk(name, args)
+  } catch {
+    return guard('error')
+  }
+  if (!checked) {
+    return undefined
+  }
+  return mode === 'shadow'
+    ? shadowBulk(checked, name, args, exact)
+    : runBulk(checked, name, args, exact)
+}
+
+/**
+ * The guards of a fused update-many / delete-many (FUSED_WRITES.md section 13): the by-id ones,
+ * plus a `where` the fused reads accept, no `bulkOperationsSingleTransaction` (a transaction per
+ * document), no `select`; update: no row ids in `data` (`copyDataWithFreshRowIDs` keeps a row id
+ * only when the document has it) and no relationship to the collection itself when the results
+ * populate (upstream's concurrent documents would read each other in an order that depends on
+ * the interleaving). Then the fused read of the operation's documents and results
+ * (`fusedPageRequest`).
+ */
+const checkBulk = (name: BulkName, args: Any) => {
+  const isUpdate = name === 'update'
+  if (!hasDataProperties(args, isUpdate ? updateManyArgKeys : deleteManyArgKeys)) {
+    return guard('args')
+  }
+  const { collection, data, req, where } = args
+  if (typeof collection !== 'object' || collection === null || !isAcceptedRequest(req)) {
+    return guard('args:req')
+  }
+  if (req.transactionID) {
+    return guard('transaction')
+  }
+  if (args.disableTransaction) {
+    return guard('disableTransaction')
+  }
+  if (req.operation === 'validate') {
+    return guard('validate')
+  }
+  const payload = req.payload
+  if (payload.db.bulkOperationsSingleTransaction) {
+    return guard('bulkSingleTransaction')
+  }
+  if (args.select !== undefined && args.select !== null) {
+    return guard('select')
+  }
+  if (args.trash) {
+    return guard('trash')
+  }
+  if (!isPlainObject(req.context) || '_payloadManagedDeletedUploads' in req.context) {
+    return guard('context')
+  }
+  const config = collection.config
+  if (
+    !isPlainObject(where) ||
+    !isAcceptedWhere({
+      fields: config.flattenedFields,
+      idOnly: !args.overrideAccess,
+      payload,
+      where,
+    })
+  ) {
+    return guard('where')
+  }
+  if (isUpdate) {
+    if (req.file !== undefined) {
+      return guard('file')
+    }
+    if (
+      args.draft ||
+      args.autosave ||
+      args.publishAllLocales !== undefined ||
+      args.unpublishAllLocales
+    ) {
+      return guard('args:options')
+    }
+    if (!isPlainObject(data) || !isInertTree(data, false)) {
+      return guard('data')
+    }
+    if ('id' in data || '_id' in data) {
+      return guard('data:id')
+    }
+    if (config.trash && 'deletedAt' in data) {
+      return guard('trash')
+    }
+    if (config.disableBulkEdit && !args.overrideAccess) {
+      return guard('disableBulkEdit')
+    }
+    if (hasRowIDs(config.fields, data)) {
+      return guard('data:rowIDs')
+    }
+    if (
+      args.limit !== undefined &&
+      args.limit !== null &&
+      !(typeof args.limit === 'number' && Number.isFinite(args.limit))
+    ) {
+      return guard('limit')
+    }
+    const sort = args.sort || config.defaultSort
+    if (!isBulkSort(sort) || (!args.overrideAccess && sort)) {
+      return guard('sort')
+    }
+  }
+  const plan = getWritePlan(collection, payload)
+  if (!plan.eligible) {
+    count(stats.ineligible, plan.reason)
+    return undefined
+  }
+  const readPlan = getCollectionPlan(collection, payload)
+  if (!readPlan.eligible) {
+    count(stats.ineligible, `read:${readPlan.reason}`)
+    return undefined
+  }
+  if (!args.overrideAccess) {
+    if (plan.hasFieldAccess || readPlan.fieldAccess.length > 0) {
+      return guard('access:fields')
+    }
+    if (readPlan.hasRelations) {
+      return guard('access:populate')
+    }
+    const evaluated = evaluateCompiledAccess(isUpdate ? plan.access.update : plan.access.delete, {
+      id: undefined,
+      collectionConfig: config,
+      data: isUpdate ? data : undefined,
+      req,
+    })
+    if (evaluated.reason !== undefined) {
+      return guard(evaluated.reason)
+    }
+    if (evaluated.value !== true) {
+      return guard('access:where')
+    }
+  }
+  if (isUpdate && readPlan.hasRelations && readPlan.relations.includes(config.slug)) {
+    return guard('populate:self')
+  }
+  const target = getFusedWriteTarget(payload.db)
+  if (typeof target === 'string') {
+    return guard(target)
+  }
+  // update.ts / delete.ts `payload.db.find` (access `true`: `combineQueries` keeps the where)
+  const fullWhere = appendNonTrashedFilter({
+    enableTrash: config.trash,
+    trash: false,
+    where: combineQueries(args.where, true),
+  })
+  const db: Record<string, unknown> = isUpdate
+    ? {
+        collection: config.slug,
+        limit: args.limit ?? 0,
+        locale: req.locale,
+        pagination: false,
+        req,
+        sort: sanitizeSortQuery({
+          fields: config.flattenedFields,
+          sort: args.sort || config.defaultSort,
+        }),
+        where: fullWhere,
+      }
+    : { collection: config.slug, locale: req.locale, req, select: undefined, where: fullWhere }
+  const read = fusedPageRequest(
+    {
+      collection,
+      depth: args.depth,
+      // the results' field access is guarded above
+      overrideAccess: true,
+      populate: args.populate,
+      req,
+      showHiddenFields: args.showHiddenFields,
+    },
+    // update's `afterRead` passes `draft: false`, delete's `draft: undefined`
+    { db, draft: isUpdate ? false : undefined },
+  )
+  if (typeof read === 'string') {
+    return guard(read)
+  }
+  return { payload, read, target }
+}
+
+const isBulkSort = (sort: unknown) =>
+  sort === undefined ||
+  sort === null ||
+  typeof sort === 'string' ||
+  (Array.isArray(sort) &&
+    Object.getPrototypeOf(sort) === Array.prototype &&
+    sort.every((item) => typeof item === 'string'))
+
+/** Whether `data` holds an array or block row with an `id` (in `fields`' traversal). */
+const hasRowIDs = (fields: Any[], data: Any): boolean => {
+  if (typeof data !== 'object' || data === null) {
+    return false
+  }
+  for (const field of fields) {
+    if (field.type === 'array' || field.type === 'blocks') {
+      const rows = data[field.name]
+      if (rows !== undefined && rows !== null && !Array.isArray(rows)) {
+        // localized rows (`{ [locale]: rows }`) or an invalid value: not modelled here
+        return true
+      }
+      for (const row of rows ?? []) {
+        if (typeof row !== 'object' || row === null || 'id' in row) {
+          return true
+        }
+        const rowFields =
+          field.type === 'array'
+            ? field.fields
+            : field.blocks?.find((block: Any) => block.slug === row.blockType)?.fields
+        if (!Array.isArray(rowFields) || hasRowIDs(rowFields, row)) {
+          return true
+        }
+      }
+      continue
+    }
+    if (field.type === 'tabs') {
+      for (const tab of field.tabs) {
+        if (hasRowIDs(tab.fields, 'name' in tab ? data[tab.name] : data)) {
+          return true
+        }
+      }
+      continue
+    }
+    if (Array.isArray(field.fields)) {
+      if (hasRowIDs(field.fields, 'name' in field ? data[field.name] : data)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+type CheckedBulk = { payload: Any; read: FusedRead; target: FusedWriteTarget }
+
+const runBulk = async (checked: CheckedBulk, name: BulkName, args: Any, exact: Exact) => {
+  let outcome: Awaited<ReturnType<FusedWriteTarget['runBulk']>>
+  try {
+    outcome = await checked.target.runBulk({ name, args, isShadow: false, read: checked.read })
+  } catch {
+    count(stats.bails, 'prepare:threw')
+    return exact()
+  }
+  if (typeof outcome === 'string') {
+    count(stats.bails, outcome)
+    return exact()
+  }
+  const [text = '!result', , contextWrites] = outcome.result
+  if (text.charCodeAt(0) === 33 /* ! */) {
+    if (text.charCodeAt(1) === 33) {
+      count(stats.bails, 'commit')
+      throw new Error(safeMessage(text.slice(2)))
+    }
+    count(stats.bails, text.slice(1))
+    return exact()
+  }
+  count(stats.hits, bulkHit(name))
+  if (contextWrites) {
+    for (const [key, value] of checked.target.contextWrites(contextWrites)) {
+      args.req.context[key] = value
+    }
+  }
+  const page = materializeFusedResult(withLoadTransaction(checked.read, randomUUID()), text)
+  // upstream's `commitTransaction` deletes the id `initTransaction` set (after the nested finds)
+  delete args.req.transactionID
+  return { docs: page.docs, errors: [] }
+}
+
+/**
+ * `value` with every value a reading of the tapes generated replaced by its kind: clock readings
+ * (ISO strings, extended JSON dates), ObjectIds made of a clock reading's second and a taped
+ * counter, `bson-objectid` row ids. Upstream processes a bulk update's documents concurrently,
+ * so which document receives which reading follows the interleaving (owner decision D1); the
+ * write lane-shadow then compares the documents' effects up to that assignment.
+ */
+const withoutReadings = (value: unknown, recorded: RecordedReadings): unknown => {
+  const clock = new Set(recorded.clock)
+  const iso = new Set(recorded.clock.map((ms) => new Date(ms).toISOString()))
+  const seconds = new Set(recorded.clock.map((ms) => Math.floor(ms / 1000)))
+  const incs = new Set(recorded.incs.map((inc) => inc % 0xffffff))
+  // `bson-objectid`'s `generate` returns the 12 bytes as a binary string
+  const rows = new Set(
+    recorded.objectIds.map((id) =>
+      id.length === 12 ? Buffer.from(id, 'latin1').toString('hex') : id,
+    ),
+  )
+  const hex = (text: string) => {
+    if (rows.has(text)) {
+      return '<row>'
+    }
+    if (
+      /^[0-9a-f]{24}$/.test(text) &&
+      seconds.has(parseInt(text.slice(0, 8), 16)) &&
+      incs.has(parseInt(text.slice(18), 16))
+    ) {
+      return '<oid>'
+    }
+    return undefined
+  }
+  const walk = (item: unknown): unknown => {
+    if (typeof item === 'string') {
+      return iso.has(item) ? '<clock>' : (hex(item) ?? item)
+    }
+    if (Array.isArray(item)) {
+      return item.map(walk)
+    }
+    if (typeof item !== 'object' || item === null) {
+      return item
+    }
+    const record = item as Record<string, Any>
+    const keys = Object.keys(record)
+    if (keys.length === 1 && keys[0] === '$date' && typeof record.$date?.$numberLong === 'string') {
+      return clock.has(Number(record.$date.$numberLong)) ? '<clock>' : item
+    }
+    if (keys.length === 1 && keys[0] === '$oid' && typeof record.$oid === 'string') {
+      return hex(record.$oid) ?? item
+    }
+    return Object.fromEntries(keys.map((key) => [key, walk(record[key])]))
+  }
+  return walk(value)
+}
+
+/** The state's groups with each group's documents in a canonical order. */
+const sortedGroups = (state: unknown) =>
+  Array.isArray(state)
+    ? state.map((group) =>
+        Array.isArray(group) ? group.map((doc) => canonical(doc)).sort() : group,
+      )
+    : state
+
+const shadowBulk = async (checked: CheckedBulk, name: BulkName, args: Any, exact: Exact) => {
+  installReplay()
+  installObjectIdReplay(checked.target.objectIdClass)
+  installBsonObjectIdReplay(checked.target.rowIdClass)
+  const tapes = createReplayTapes()
+  let dataBefore: Any
+  let contextBefore: Any
+  try {
+    dataBefore = args.data === undefined ? undefined : structuredClone(args.data)
+    contextBefore = structuredClone(args.req.context)
+  } catch {
+    count(stats.guards, 'context')
+    return exact()
+  }
+  const op = bulkHit(name)
+  const report = (difference: Record<string, unknown>) =>
+    recordDiff({ ...difference, collection: args.collection.config.slug, op })
+  let outcome: Awaited<ReturnType<FusedWriteTarget['runBulk']>> | undefined
+  let fusedError: unknown
+  try {
+    outcome = await tapes.reference(() =>
+      checked.target.runBulk({ name, args, isShadow: true, read: checked.read }),
+    )
+  } catch (error) {
+    fusedError = error
+  }
+  if (typeof outcome === 'string') {
+    count(stats.bails, outcome)
+    return exact()
+  }
+  const text = outcome?.result[0]
+  if (text !== undefined && text.charCodeAt(0) === 33) {
+    count(stats.bails, text.slice(1))
+    return exact()
+  }
+  let result: Any
+  try {
+    result = await tapes.candidate(exact)
+  } catch (error) {
+    if (fusedError === undefined) {
+      report({ kind: 'exact-threw', message: errorSummary(error) })
+    } else if (errorSummary(fusedError) === errorSummary(error)) {
+      count(stats.sameError, op)
+    } else {
+      report({ exact: errorSummary(error), fused: errorSummary(fusedError), kind: 'error' })
+    }
+    throw error
+  }
+  if (fusedError !== undefined || !outcome || text === undefined) {
+    report({ fused: errorSummary(fusedError), kind: 'fused-threw' })
+    return result
+  }
+  count(stats.hits, op)
+  const unmatched = Object.fromEntries(
+    Object.entries(tapes.unmatched()).filter(
+      ([channel, reads]) => channel !== 'uuids' || reads.recorded > 0,
+    ),
+  )
+  if (Object.keys(unmatched).length > 0) {
+    report({ kind: 'readings', unmatched })
+  }
+  const recorded = tapes.recorded()
+  const compare = (kind: string, exactValue: unknown, fusedValue: unknown, isGrouped: boolean) => {
+    if (canonical(exactValue) === canonical(fusedValue)) {
+      return
+    }
+    const normalize = (value: unknown) => {
+      const normalized = withoutReadings(value, recorded)
+      return canonical(isGrouped ? sortedGroups(normalized) : normalized)
+    }
+    const exactNormalized = normalize(exactValue)
+    const fusedNormalized = normalize(fusedValue)
+    if (exactNormalized === fusedNormalized) {
+      // the same effects, the readings assigned to the documents in another order (D1)
+      count(stats.hits, `${op}:interleaved`)
+      return
+    }
+    report({ kind, ...firstDifference(exactNormalized, fusedNormalized) })
+  }
+  const exactState = await checked.target.readState(outcome.state)
+  const fusedState = outcome.result[1] ?? ''
+  try {
+    compare('state', JSON.parse(exactState), JSON.parse(fusedState), true)
+  } catch {
+    report({ kind: 'state', ...firstDifference(exactState, fusedState) })
+  }
+  const page = fusedResultValue(text)
+  compare('result', result, { docs: page.docs, errors: [] }, false)
+  if (text.charCodeAt(0) === 35 /* # */ && checked.read.population) {
+    const loaded = withLoadTransaction(checked.read, exactLoadTransaction(args.req))
+    const difference = await comparePopulated(text, loaded.population!, {
+      ...page,
+      docs: result.docs,
+    })
+    if (difference) {
+      report({ ...difference })
+    }
+  }
+  const contextWrites = outcome.result[2]
+  if (contextWrites) {
+    for (const [key, value] of checked.target.contextWrites(contextWrites)) {
+      contextBefore[key] = value
+    }
+  }
+  // both operations work on copies of `data`; delete adds and removes its upload marker
+  if (canonical(dataBefore) !== canonical(args.data)) {
+    report({ kind: 'data', ...firstDifference(canonical(args.data), canonical(dataBefore)) })
+  }
+  if (canonical(contextBefore) !== canonical(args.req.context)) {
+    report({
+      kind: 'context',
+      ...firstDifference(canonical(args.req.context), canonical(contextBefore)),
+    })
   }
   return result
 }

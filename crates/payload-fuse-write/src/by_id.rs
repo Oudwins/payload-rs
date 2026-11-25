@@ -138,7 +138,7 @@ async fn run(
   match steps(client, txn, request, read, state).await {
     Ok((read, doc, context)) => {
       let ResultRead { plan, reads, request_json } = read;
-      let text = run_document(client, plan, &reads, Some(doc), &request_json, Some(txn));
+      let text = run_document(client, plan, &reads, Some(doc), &request_json, Some(txn), false);
       if text.starts_with('!') {
         return Err(abort(txn, text).await);
       }
@@ -158,69 +158,18 @@ async fn steps(
   read: ResultRead,
   state: Option<&(Option<String>, Vec<StateRead>)>,
 ) -> Result<(ResultRead, RawDocumentBuf, Option<String>), String> {
-  let database = request.database.clone();
   let stored = find_stored(client, &read.reads, txn).await.map_err(|reason| format!("!{reason}"))?;
   let stored = stored.ok_or("!byID:notFound")?;
-  let prepared = match &request.update {
-    Some((plan_id, prepare)) => Some(prepare_write(&read, &stored, *plan_id, prepare)?),
-    None => None,
-  };
-  if let Some(lock) = &request.lock {
-    if lock.find {
-      let filter = Document::try_from(lock.filter.as_ref()).map_err(|e| format!("!lock:{e}"))?;
-      let find = FindSpec { filter, limit: Some(1), ..FindSpec::default() };
-      let locks = find_raw(client, database.as_deref(), &lock.collection, find, None).await.map_err(|_| "!lock:find")?;
-      if !locks.is_empty() {
-        // the exact lane decides whether the lock is live (`Locked`) or not
-        return Err("!byID:locked".to_string());
-      }
-    }
-    // upstream deletes without a session; the shadow keeps it in its aborted transaction
-    send(client, txn, database.clone(), delete_command(&lock.collection, lock.filter.clone()), state.is_some()).await?;
-  }
-  match (request.op, prepared) {
-    (ByID::Update, Some((write, context))) => {
-      let stored_after = write.stored_after.ok_or("!byID:storedAfter")?;
-      let update = to_raw(&write.doc)?;
-      let command = rawdoc! {
-        "findAndModify": request.collection.as_str(),
-        "query": request.query,
-        "remove": false,
-        "new": true,
-        "upsert": false,
-        "update": update,
-      };
-      let reply = send(client, txn, database.clone(), command, true).await?;
-      let value = match reply.get("value") {
-        Some(Bson::Document(value)) => to_raw(value)?,
-        _ => return Err("!byID:notFound".to_string()),
-      };
-      if value.as_bytes() != to_raw(&stored_after)?.as_bytes() {
-        return Err("!byID:storedAfter".to_string());
-      }
-      let doc = match (write.version, &request.versions) {
-        (Some(version), Some((versions, max_find, _))) => {
-          let returned = returned_version(&version.doc)?;
-          let flip = Some((to_raw(&version.flip_filter)?, to_raw(&version.flip_update)?));
-          for statement in version_statements(versions, to_raw(&version.doc)?, flip).map_err(|e| format!("!{e}"))? {
-            send(client, txn, database.clone(), statement.command, true).await?;
-          }
-          if let Some(find) = max_find {
-            let find = FindSpec { filter: find.filter.clone(), sort: find.sort.clone(), skip: find.skip, limit: find.limit, ..FindSpec::default() };
-            let found = find_raw(client, database.as_deref(), versions, find, Some(txn)).await.map_err(|_| "!byID:maxVersions:find")?;
-            if !found.is_empty() {
-              // the exact lane deletes the versions past `max`
-              return Err("!byID:maxVersions".to_string());
-            }
-          }
-          returned
-        }
-        (None, None) => value,
-        _ => return Err("!byID:versions".to_string()),
-      };
+  match request.op {
+    ByID::Update => {
+      let (doc, context) = update_document(client, txn, &request, &read, &stored, state.is_some(), false).await?;
       Ok((read, doc, Some(context)))
     }
-    (ByID::Delete, None) => {
+    ByID::Delete => {
+      let database = request.database.clone();
+      if let Some(lock) = &request.lock {
+        lock_statements(client, txn, database.as_deref(), lock, state.is_some()).await?;
+      }
       if let Some((versions, _, Some(filter))) = &request.versions {
         send(client, txn, database.clone(), delete_command(versions, filter.clone()), true).await?;
       }
@@ -241,8 +190,93 @@ async fn steps(
       }
       Ok((read, doc, None))
     }
-    _ => Err("!byID:op".to_string()),
   }
+}
+
+/// `checkDocumentLockStatus` (and the bulk deletes' `getLockedDocumentIds` /
+/// `deleteDocumentLocks`): with `overrideLock: false` the lock `find` (no session), which bails on
+/// any lock (the exact lane decides whether it is live and throws `Locked` or records the error),
+/// then the lock `delete` without a session (`is_shadow`: in the shadow's aborted transaction).
+pub(crate) async fn lock_statements(
+  client: u32,
+  txn: u32,
+  database: Option<&str>,
+  lock: &Lock,
+  is_shadow: bool,
+) -> Result<(), String> {
+  if lock.find {
+    let filter = Document::try_from(lock.filter.as_ref()).map_err(|e| format!("!lock:{e}"))?;
+    let find = FindSpec { filter, limit: Some(1), ..FindSpec::default() };
+    let locks = find_raw(client, database, &lock.collection, find, None).await.map_err(|_| "!lock:find")?;
+    if !locks.is_empty() {
+      return Err("!byID:locked".to_string());
+    }
+  }
+  send(client, txn, database.map(str::to_string), delete_command(&lock.collection, lock.filter.clone()), is_shadow).await?;
+  Ok(())
+}
+
+/// One document's `updateDocument` after its stored read (updateByID, and each document of an
+/// update-many, crates/payload-fuse-write `bulk`): `prepare_update` on `stored` (`lean_with_id`:
+/// read by `payload.db.find`), the lock check, the `findAndModify`, the version statements and
+/// `enforceMaxVersions`' find. The document the result's `afterRead` reads and the prepare's
+/// context writes.
+pub(crate) async fn update_document(
+  client: u32,
+  txn: u32,
+  request: &ByIDRequest,
+  read: &ResultRead,
+  stored: &RawDocumentBuf,
+  is_shadow: bool,
+  lean_with_id: bool,
+) -> Result<(RawDocumentBuf, String), String> {
+  let database = request.database.clone();
+  let (plan_id, prepare) = request.update.as_ref().ok_or("!byID:prepare")?;
+  // the prepare runs before the lock check: it is pure (the order is unobservable) and a bail
+  // then leaves the locks alone
+  let (write, context) = prepare_write(read, stored, *plan_id, prepare, lean_with_id)?;
+  if let Some(lock) = &request.lock {
+    lock_statements(client, txn, database.as_deref(), lock, is_shadow).await?;
+  }
+  let stored_after = write.stored_after.ok_or("!byID:storedAfter")?;
+  let update = to_raw(&write.doc)?;
+  let command = rawdoc! {
+    "findAndModify": request.collection.as_str(),
+    "query": request.query.clone(),
+    "remove": false,
+    "new": true,
+    "upsert": false,
+    "update": update,
+  };
+  let reply = send(client, txn, database.clone(), command, true).await?;
+  let value = match reply.get("value") {
+    Some(Bson::Document(value)) => to_raw(value)?,
+    _ => return Err("!byID:notFound".to_string()),
+  };
+  if value.as_bytes() != to_raw(&stored_after)?.as_bytes() {
+    return Err("!byID:storedAfter".to_string());
+  }
+  let doc = match (write.version, &request.versions) {
+    (Some(version), Some((versions, max_find, _))) => {
+      let returned = returned_version(&version.doc)?;
+      let flip = Some((to_raw(&version.flip_filter)?, to_raw(&version.flip_update)?));
+      for statement in version_statements(versions, to_raw(&version.doc)?, flip).map_err(|e| format!("!{e}"))? {
+        send(client, txn, database.clone(), statement.command, true).await?;
+      }
+      if let Some(find) = max_find {
+        let find = FindSpec { filter: find.filter.clone(), sort: find.sort.clone(), skip: find.skip, limit: find.limit, ..FindSpec::default() };
+        let found = find_raw(client, database.as_deref(), versions, find, Some(txn)).await.map_err(|_| "!byID:maxVersions:find")?;
+        if !found.is_empty() {
+          // the exact lane deletes the versions past `max`
+          return Err("!byID:maxVersions".to_string());
+        }
+      }
+      returned
+    }
+    (None, None) => value,
+    _ => return Err("!byID:versions".to_string()),
+  };
+  Ok((doc, context))
 }
 
 /// `prepare_update` on the stored document; the prepared write and the context writes.
@@ -251,9 +285,10 @@ fn prepare_write(
   stored: &RawDocumentBuf,
   plan_id: u32,
   request_json: &str,
+  lean_with_id: bool,
 ) -> Result<(crate::prepare::PreparedWrite, String), String> {
-  let (doc_with_locales, original_doc) =
-    update_inputs(read.plan, &read.reads, stored, &read.request_json).map_err(|bail| format!("!{}", bail.0))?;
+  let (doc_with_locales, original_doc) = update_inputs(read.plan, &read.reads, stored, &read.request_json, lean_with_id)
+    .map_err(|bail| format!("!{}", bail.0))?;
   let stored = Document::try_from(stored.as_ref()).map_err(|_| "!byID:stored")?;
   let plan = write_plan(plan_id).ok_or("!byID:plan")?;
   let input = UpdateInput { stored, doc_with_locales, original_doc };
@@ -280,10 +315,10 @@ fn returned_version(version: &Document) -> Result<RawDocumentBuf, String> {
 }
 
 /// mongoose's `deleteMany(filter)` (no options): the `delete` command.
-fn delete_command(collection: &str, filter: RawDocumentBuf) -> RawDocumentBuf {
+pub(crate) fn delete_command(collection: &str, filter: RawDocumentBuf) -> RawDocumentBuf {
   rawdoc! { "delete": collection, "deletes": [{ "q": filter, "limit": 0 }], "ordered": true }
 }
 
-fn to_raw(doc: &Document) -> Result<RawDocumentBuf, String> {
+pub(crate) fn to_raw(doc: &Document) -> Result<RawDocumentBuf, String> {
   RawDocumentBuf::from_document(doc).map_err(|e| format!("!bson:{e}"))
 }

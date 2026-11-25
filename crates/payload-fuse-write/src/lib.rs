@@ -7,6 +7,7 @@
 //! The statements arrive as the commands the Node driver would send (BSON as the TS side
 //! serialized them, packages/engine-rs/src/fuse-write).
 
+pub mod bulk;
 pub mod by_id;
 pub mod ops;
 pub mod prepare;
@@ -129,7 +130,7 @@ async fn exec_inner(
   }
   let text = match read {
     Some(ResultRead { plan, reads, request_json }) => {
-      let text = payload_fuse_mongo::run_document(client, plan, &reads, result_doc, &request_json, Some(txn));
+      let text = payload_fuse_mongo::run_document(client, plan, &reads, result_doc, &request_json, Some(txn), false);
       if text.starts_with('!') {
         return Err(abort(txn, text).await);
       }

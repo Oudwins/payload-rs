@@ -468,6 +468,206 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     ).rejects.toThrow('The following field is invalid: Author')
   })
 
+  test('should update many documents and write their versions', async ({ payload }) => {
+    const author = await payload.create({
+      collection: 'authors',
+      data: { name: 'Ada' },
+      overrideAccess: true,
+    })
+    const ids: (number | string)[] = []
+    for (const title of ['a', 'b', 'c']) {
+      ids.push(
+        (
+          await payload.create({
+            collection: 'posts',
+            data: { author: author.id, title },
+            overrideAccess: true,
+          })
+        ).id,
+      )
+    }
+    const other = await payload.create({
+      collection: 'posts',
+      data: { title: 'other' },
+      overrideAccess: true,
+    })
+
+    const result = await payload.update({
+      collection: 'posts',
+      data: { revision: 7 },
+      overrideAccess: true,
+      where: { id: { in: ids } },
+    })
+
+    expect(result.errors).toStrictEqual([])
+    expect(result.docs.map((doc) => doc.revision)).toStrictEqual([7, 7, 7])
+    expect(result.docs.map((doc) => (doc.author as { name: string }).name)).toStrictEqual([
+      'Ada',
+      'Ada',
+      'Ada',
+    ])
+    const versions = await payload.findVersions({
+      collection: 'posts',
+      overrideAccess: true,
+      where: { parent: { in: ids }, 'version.revision': { equals: 7 } },
+    })
+    expect(versions.totalDocs).toBe(3)
+    const untouched = await payload.findByID({
+      id: other.id,
+      collection: 'posts',
+      depth: 0,
+      overrideAccess: true,
+    })
+    expect(untouched.revision).toBe(0)
+  })
+
+  test('should update many of the typical shape sorted, at depth 0', async ({ payload }) => {
+    for (const title of ['z', 'y', 'x']) {
+      await payload.create({
+        collection: 'typical',
+        data: { slug: title, title },
+        overrideAccess: true,
+      })
+    }
+
+    const result = await payload.update({
+      collection: 'typical',
+      data: { featured: true, seo: { title: 'bulk' }, tags: [{ tag: 'new' }] },
+      depth: 0,
+      overrideAccess: true,
+      sort: 'title',
+      where: { title: { in: ['x', 'y', 'z'] } },
+    })
+
+    expect(result.docs.map((doc) => doc.title)).toStrictEqual(['x', 'y', 'z'])
+    expect(result.docs.every((doc) => doc.featured && doc.seo?.title === 'bulk')).toBe(true)
+    // each document gets its own row id
+    expect(new Set(result.docs.map((doc) => doc.tags?.[0]?.id)).size).toBe(3)
+  })
+
+  test('should update many without matches or versions', async ({ payload }) => {
+    const none = await payload.update({
+      collection: 'posts',
+      data: { revision: 1 },
+      overrideAccess: true,
+      where: { title: { equals: 'missing' } },
+    })
+    await payload.create({
+      collection: 'unversioned',
+      data: { title: 'u' },
+      overrideAccess: true,
+    })
+    const unversioned = await payload.update({
+      collection: 'unversioned',
+      data: { views: 3 },
+      overrideAccess: true,
+      where: { title: { equals: 'u' } },
+    })
+
+    expect(none).toStrictEqual({ docs: [], errors: [] })
+    expect(unversioned.docs.map((doc) => doc.views)).toStrictEqual([3])
+  })
+
+  test('should report the validation errors of an update many', async ({ payload }) => {
+    await payload.create({
+      collection: 'posts',
+      data: { title: 'valid' },
+      overrideAccess: true,
+    })
+
+    const result = await payload.update({
+      collection: 'posts',
+      data: { title: '' },
+      overrideAccess: true,
+      where: { title: { equals: 'valid' } },
+    })
+
+    expect(result.docs).toStrictEqual([])
+    expect(result.errors).toHaveLength(1)
+  })
+
+  test('should delete many documents with their versions and preferences', async ({ payload }) => {
+    const author = await payload.create({
+      collection: 'authors',
+      data: { name: 'Ada' },
+      overrideAccess: true,
+    })
+    const ids: (number | string)[] = []
+    for (const title of ['d1', 'd2', 'd3']) {
+      ids.push(
+        (
+          await payload.create({
+            collection: 'posts',
+            data: { author: author.id, title },
+            overrideAccess: true,
+          })
+        ).id,
+      )
+    }
+    await payload.update({
+      id: ids[0]!,
+      collection: 'posts',
+      data: { revision: 1 },
+      overrideAccess: true,
+    })
+    const user = await payload.create({
+      collection: 'users',
+      data: { email: 'bulk-preferences@example.com', password: 'test' },
+      overrideAccess: true,
+    })
+    await payload.create({
+      collection: 'payload-preferences',
+      data: { key: `collection-posts-${ids[1]}`, value: { fields: {} } },
+      overrideAccess: true,
+      user,
+    })
+    await payload.create({
+      collection: 'payload-locked-documents',
+      data: {
+        document: { relationTo: 'posts', value: ids[2]! },
+        user: { relationTo: 'users', value: user.id },
+      },
+      overrideAccess: true,
+    })
+
+    const result = await payload.delete({
+      collection: 'posts',
+      overrideAccess: true,
+      where: { id: { in: ids } },
+    })
+
+    expect(result.errors).toStrictEqual([])
+    expect(result.docs.map((doc) => doc.title).sort()).toStrictEqual(['d1', 'd2', 'd3'])
+    expect(result.docs.every((doc) => (doc.author as { name: string }).name === 'Ada')).toBe(true)
+    const versions = await payload.countVersions({
+      collection: 'posts',
+      overrideAccess: true,
+      where: { parent: { in: ids } },
+    })
+    expect(versions.totalDocs).toBe(0)
+    const preferences = await payload.count({
+      collection: 'payload-preferences',
+      overrideAccess: true,
+      where: { key: { equals: `collection-posts-${ids[1]}` } },
+    })
+    expect(preferences.totalDocs).toBe(0)
+    const locks = await payload.count({
+      collection: 'payload-locked-documents',
+      overrideAccess: true,
+    })
+    expect(locks.totalDocs).toBe(0)
+  })
+
+  test('should delete many without matches', async ({ payload }) => {
+    const result = await payload.delete({
+      collection: 'posts',
+      overrideAccess: true,
+      where: { title: { equals: 'missing' } },
+    })
+
+    expect(result).toStrictEqual({ docs: [], errors: [] })
+  })
+
   test('should have served writes without lane differences', async () => {
     const stats = fuseWriteStats()
 
@@ -478,6 +678,8 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     expect(stats?.hits.create).toBeGreaterThan(0)
     expect(stats?.hits.updateByID).toBeGreaterThan(0)
     expect(stats?.hits.deleteByID).toBeGreaterThan(0)
+    expect(stats?.hits.updateMany).toBeGreaterThan(0)
+    expect(stats?.hits.deleteMany).toBeGreaterThan(0)
     expect(stats?.diffs).toBe(0)
   })
 })

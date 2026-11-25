@@ -519,24 +519,23 @@ For WP-H, per operation: lexical's `afterChange` hook is the identity for every 
 accepts (no node ids, so its `originalNodeIDMap` is empty); the field `afterChange` traversal has
 no other own hooks on eligible collections.
 
-## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, status 2026-11-25)
+## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, status 2026-11-25)
 
-Built (off by default, `PAYLOAD_RS_FUSE_WRITES=on` turns it on: WP-J's default-on commit is held
-until update-many / delete-many are fused, because with only the by-id writes fused the bulk
-operations' idle mongoose connection makes them slower, 0.77-0.91x; create, updateByID and
-deleteByID run on WP-I's prepare, section 12):
+Built (off by default, `PAYLOAD_RS_FUSE_WRITES=on` turns it on: WP-J's default-on commit was
+held until update-many / delete-many were fused, which WP-K did, see below; create, updateByID,
+deleteByID, update-many and delete-many run on WP-I's prepare, section 12):
 
-| part                   | where                                                                                         |
-| ---------------------- | --------------------------------------------------------------------------------------------- |
-| dispatch               | `src/fuse-write/index.ts` `fuseWrite`, called first by every `ops-write` drop-in              |
-| write plan             | `src/fuse-write/plan.ts` (WeakMap per `collection`, `volatile` triples)                       |
-| MongoDB target         | `src/fuse-write/mongo.ts` (registered by `installDriverLane`), registry `targets.ts`          |
-| counters               | `src/fuse-write/stats.ts`: `fuse-writes-<pid>.json`, diffs in `fuse-writes-diffs-<pid>.jsonl` |
-| operation drivers      | `crates/payload-fuse-write/src/ops.rs` (create), `by_id.rs` (updateByID, deleteByID)          |
-| shadow state reads     | `crates/payload-fuse-write/src/state.rs`, `exec_shadowed` in `lib.rs`                         |
-| Rust prepare interface | `crates/payload-fuse-write/src/prepare_stub.rs` (stub: bails `prepare:stub`)                  |
-| bindings               | `fuseWriteMongoOp`, `fuseWriteMongoState` (`crates/payload-node/src/fuse_write.rs`)           |
-| harness                | `runSuites.mjs --fuse-writes <mode> --fuse-writes-prepare <ts\|rs>`; `test/__rs/fuse-writes`  |
+| part                   | where                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| dispatch               | `src/fuse-write/index.ts` `fuseWrite`, called first by every `ops-write` drop-in               |
+| write plan             | `src/fuse-write/plan.ts` (WeakMap per `collection`, `volatile` triples)                        |
+| MongoDB target         | `src/fuse-write/mongo.ts` (registered by `installDriverLane`), registry `targets.ts`           |
+| counters               | `src/fuse-write/stats.ts`: `fuse-writes-<pid>.json`, diffs in `fuse-writes-diffs-<pid>.jsonl`  |
+| operation drivers      | `crates/payload-fuse-write/src/ops.rs` (create), `by_id.rs` (by id), `bulk.rs` (many)          |
+| shadow state reads     | `crates/payload-fuse-write/src/state.rs`, `exec_shadowed` in `lib.rs`                          |
+| Rust prepare interface | `crates/payload-fuse-write/src/prepare_stub.rs` (stub: bails `prepare:stub`)                   |
+| bindings               | `fuseWriteMongoOp`, `fuseWriteMongoFind`, `fuseWriteMongoState` (`payload-node/fuse_write.rs`) |
+| harness                | `runSuites.mjs --fuse-writes <mode> --fuse-writes-prepare <ts\|rs>`; `test/__rs/fuse-writes`   |
 
 Switches: `PAYLOAD_RS_FUSE_WRITES=off|on|shadow` (default `off`);
 `PAYLOAD_RS_FUSE_WRITES_PREPARE=ts` selects the **temporary TS prepare** (upstream's own
@@ -655,6 +654,63 @@ relationship's static `filterOptions` (a where, `true`, `false`) reaches the val
 `validateFilterOptions` returns `true` without I/O for an empty value (no awaits, so the tick
 count is unchanged), and any other value reaches `payloadDataLoader.find`, which the prepare's
 `NoHost` refuses (a bail). Function `filterOptions` stay ineligible.
+
+**update-many and delete-many** (WP-K, driver `crates/payload-fuse-write/src/bulk.rs`, TS
+`runBulk` / `prepareBulk` in `src/fuse-write/mongo.ts`, dispatch `fuseBulk` in `index.ts`). Two
+native calls on one Rust-owned transaction, because the per-document statements need the ids the
+operation's find returns:
+
+1. `fuseWriteMongoFind`: update.ts / delete.ts's `payload.db.find` (`pagination: false`; update
+   with its `limit` and `sort`), the fused `find` reads of `fusedPageRequest` (src/fuse/index.ts),
+   in the transaction; it returns the ids and the documents' BSON (no JS ran yet that a bail
+   would have to undo: a bail aborts and the exact lane reruns);
+2. JS builds, for exactly those documents: update-many one updateByID request per document
+   (`prepareByID` with the document's id: its cast filters and the prepare request with its
+   readings, taken document by document in the find's order); delete-many delete.ts's cast
+   filters for all ids (`id in`, the locks' `document.value in`, the versions' `parent in`, the
+   preferences' `key in`);
+3. `fuseWriteMongoOp` (`op: 'updateMany' | 'deleteMany'`) on the same transaction:
+   - update-many: per document what updateByID runs after its stored read
+     (`by_id::update_document`: `prepare_update` on the find's document, whose `docWithLocales`
+     is the `leanWithId` read transform, the lock check, `findAndModify`, the version statements,
+     `enforceMaxVersions`' find). Upstream runs the documents concurrently (`Promise.all`); the
+     driver runs them in the find's order (D1: each document's statements and effects are
+     upstream's, only the interleaving between documents differs). The documents share
+     `req.context`: the call is fused only when every document's prepare writes the same context
+     values (authorship's submitted marks, `_isNewDoc`, lexical's `internal.richText`), which
+     JS then assigns once; otherwise `bulk:context`;
+   - delete-many (`deleteDocumentsInBulk`): with `overrideLock: false` the locks `find` (any
+     lock bails), the locks `delete` (no session), `deleteCollectionVersions`, the documents'
+     `delete`; for zero documents none of these;
+   - the results' `afterRead` once over all documents (`payload_fuse_mongo::run_documents`, one
+     page of the fused `find` core): population shares the nested reads and objects across the
+     documents like upstream's request dataloader does across its concurrent per-document
+     `afterRead`s (update's `draft: false`, delete's `draft: undefined`);
+   - delete-many: `deleteUserPreferences` (also for zero documents), then the commit.
+
+The result is `{ docs, errors: [] }` (a document upstream would report in `errors`, e.g. a
+validation failure, bails first). Guards besides the by-id ones: a `where` the fused reads accept
+(`isAcceptedWhere`), no `bulkOperationsSingleTransaction`, no `select`, no `req.operation ===
+'validate'`, no `_payloadManagedDeletedUploads` in `req.context`; update: no row ids in `data`
+(`copyDataWithFreshRowIDs` keeps an id only when the document has it), no `disableBulkEdit`
+without `overrideAccess`, no relationship to the collection itself when the results populate
+(upstream's documents would read each other in an interleaving-dependent order).
+
+The write lane-shadow of the bulk writes compares as the by-id one (state reads per document:
+the document, its versions, locks, preferences), except that a bulk update's clock readings,
+version ObjectIds and row ids reach the documents in the exact lane's interleaving: when the
+result or the state differ, both are compared again with every value a taped reading generated
+replaced by its kind (`<clock>`, `<oid>`, `<row>`; replay.ts `recorded()`) and each state group's
+documents sorted; equal then counts `updateMany:interleaved`, anything else is a difference.
+Every reading must still be replayed exactly once.
+
+The bulk regression (below, `update many` 0.91x and `delete many` 0.77x with only the by-id
+writes fused) is not the Node driver's idle connection: in the perf suite, a `ping` through
+mongoose's connection after the fused setup does not recover it, while a 20 ms `setTimeout`
+after exact setups slows the next delete on both variants (8.5 -> 15.5-18.9 ms) and a 20 ms busy
+wait does not. The next statement after the process sat idle pays the wake-up (CPU power state,
+scheduler); fused setups leave the JS thread idle while the Rust runtime works. Fusing the bulk
+writes themselves is the remedy.
 
 **Default on** (`PAYLOAD_RS_FUSE_WRITES` unset). Bars on the final tree (2026-11-25):
 

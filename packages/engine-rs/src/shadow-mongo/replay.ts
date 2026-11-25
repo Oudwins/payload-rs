@@ -166,6 +166,9 @@ export const installBsonObjectIdReplay = (objectIdClass: unknown) => {
   }
 }
 
+/** The values the reference half recorded, per channel. */
+export type RecordedReadings = { clock: number[]; incs: number[]; objectIds: string[] }
+
 export type UnmatchedReads = {
   /** Values the candidate read past the reference's tape. */
   extra: number
@@ -195,6 +198,12 @@ export const createReplayTapes = ({
   const candidate = tape(false)
   return {
     candidate: <T>(fn: () => T) => tapeContext.run(candidate, fn),
+    /** The values the reference recorded (copies). */
+    recorded: (): RecordedReadings => ({
+      clock: [...clock],
+      incs: [...incs],
+      objectIds: [...objectIds],
+    }),
     reference: <T>(fn: () => T) => tapeContext.run(reference, fn),
     /** Channels whose readings do not line up 1:1 (empty when every reading matched). */
     unmatched: () => {

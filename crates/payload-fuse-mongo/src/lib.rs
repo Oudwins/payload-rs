@@ -134,7 +134,9 @@ pub async fn run(client_id: u32, plan_id: u32, reads: MongoReads, request_json: 
 /// The fused `findByID` request `request_json` on `doc` (the document a fused write stored or
 /// changed, as the database holds it) instead of a read, with population's nested reads in the
 /// Rust-owned transaction `txn` (the fused write lanes, packages/engine-rs/FUSED_WRITES.md). The
-/// collection and flags are those of `reads`. Runs on a driver runtime worker.
+/// collection and flags are those of `reads`; `lean_with_id`: `doc` is one of `payload.db.find`'s
+/// documents (read through `Model.paginate`: a bulk delete's result). Runs on a driver runtime
+/// worker.
 pub fn run_document(
   client_id: u32,
   plan_id: u32,
@@ -142,6 +144,7 @@ pub fn run_document(
   doc: Option<RawDocumentBuf>,
   request_json: &str,
   txn: Option<u32>,
+  lean_with_id: bool,
 ) -> String {
   let plan = match plan(plan_id) {
     Ok(plan) => plan,
@@ -152,7 +155,7 @@ pub fn run_document(
     None => (None, false),
   };
   let convert = Convert { plan, flags: reads.flags, leaves: (!canonical).then(RawLeaves::default), fields };
-  let doc = match doc.map(|raw| convert.document(&raw, false)).transpose() {
+  let doc = match doc.map(|raw| convert.document(&raw, lean_with_id)).transpose() {
     Ok(doc) => doc,
     Err(Bail(reason)) => return format!("!{reason}"),
   };
@@ -161,6 +164,44 @@ pub fn run_document(
     txn,
     database: reads.database.clone(),
     loaded: Mutex::new(Some(Loaded::One(doc))),
+    leaves: convert.leaves.clone(),
+    flags: reads.flags,
+  };
+  payload_fuse::run(&backend, 0, request_json)
+}
+
+/// The fused `find` request `request_json` on `docs` (the documents a bulk fused write changed or
+/// removed, in its order) instead of a read: one page, every document's `afterRead` and the
+/// population of all of them together (nested reads deduplicated across documents, like the
+/// request dataloader upstream's concurrent per-document `afterRead`s share), the nested reads in
+/// the Rust-owned transaction `txn`. `lean_with_id`: the documents are `payload.db.find`'s.
+pub fn run_documents(
+  client_id: u32,
+  plan_id: u32,
+  reads: &MongoReads,
+  docs: &[RawDocumentBuf],
+  request_json: &str,
+  txn: Option<u32>,
+  lean_with_id: bool,
+) -> String {
+  let plan = match plan(plan_id) {
+    Ok(plan) => plan,
+    Err(_) => return "!mongo:plan".to_string(),
+  };
+  let (fields, canonical) = match payload_fuse::peek_request(request_json) {
+    Some((fields, canonical)) => (Some(fields), canonical),
+    None => (None, false),
+  };
+  let convert = Convert { plan, flags: reads.flags, leaves: (!canonical).then(RawLeaves::default), fields };
+  let docs = match docs.iter().map(|raw| convert.document(raw, lean_with_id)).collect::<FuseResult<Vec<_>>>() {
+    Ok(docs) => docs,
+    Err(Bail(reason)) => return format!("!{reason}"),
+  };
+  let backend = MongoBackend {
+    client: client_id,
+    txn,
+    database: reads.database.clone(),
+    loaded: Mutex::new(Some(Loaded::Page { count: None, docs, pagination: false, limit: 0.0, page: 1.0 })),
     leaves: convert.leaves.clone(),
     flags: reads.flags,
   };
@@ -191,14 +232,45 @@ pub async fn find_stored(client_id: u32, reads: &MongoReads, txn: u32) -> Result
     })
 }
 
+/// The bulk writes' document read (update.ts / delete.ts `payload.db.find` with
+/// `pagination: false`) inside the Rust-owned transaction `txn`: the `find` of `reads` (which has
+/// no count), the raw documents in the cursor's order.
+pub async fn find_stored_many(client_id: u32, reads: &MongoReads, txn: u32) -> Result<Vec<RawDocumentBuf>, String> {
+  let (ReadOp::Find { pagination: false, .. }, CountSpec::None) = (reads.op, &reads.count) else {
+    return Err("stored:find".to_string());
+  };
+  let Some(find) = reads.find.as_ref() else { return Ok(Vec::new()) };
+  let find = FindSpec {
+    filter: find.filter.clone(),
+    sort: find.sort.clone(),
+    projection: find.projection.clone(),
+    skip: find.skip,
+    limit: find.limit,
+    collation: find.collation.clone(),
+    hint: find.hint.clone(),
+  };
+  payload_mongo_driver::find_raw(client_id, reads.database.as_deref(), &reads.collection, find, Some(txn))
+    .await
+    .map_err(|error| match error {
+      LaneError::Bail(reason) => format!("stored:{reason}"),
+      LaneError::Driver(_) => "stored:driver".to_string(),
+    })
+}
+
 /// updateByID's `docWithLocales` (the stored document `raw` after db-mongodb's read transform, as
-/// `findOne` returns it) and `originalDoc` (`afterRead` of a copy at depth 0,
-/// `payload_fuse::after_read_original` with the result read `request_json`), with the transform
-/// plan `plan_id` and the flags of `reads`.
-pub fn update_inputs(plan_id: u32, reads: &MongoReads, raw: &RawDocument, request_json: &str) -> FuseResult<(JsVal, JsVal)> {
+/// `findOne` returns it; `lean_with_id`: as `payload.db.find` returns it, a bulk update's) and
+/// `originalDoc` (`afterRead` of a copy at depth 0, `payload_fuse::after_read_original` with the
+/// result read `request_json`), with the transform plan `plan_id` and the flags of `reads`.
+pub fn update_inputs(
+  plan_id: u32,
+  reads: &MongoReads,
+  raw: &RawDocument,
+  request_json: &str,
+  lean_with_id: bool,
+) -> FuseResult<(JsVal, JsVal)> {
   let plan = plan(plan_id).map_err(|_| bail("plan"))?;
   let mut doc = decode_document(raw).map_err(|b| bail(b.0))?;
-  transform_read(&plan, reads.flags, ReadShape { lean_with_id: false }, &mut doc).map_err(|b| bail(b.0))?;
+  transform_read(&plan, reads.flags, ReadShape { lean_with_id }, &mut doc).map_err(|b| bail(b.0))?;
   let doc_with_locales = to_js(V::Obj(doc), 0)?;
   let mut original = doc_with_locales.clone();
   payload_fuse::after_read_original(request_json, &mut original)?;
