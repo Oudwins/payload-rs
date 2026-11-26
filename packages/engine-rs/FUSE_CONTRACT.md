@@ -62,7 +62,9 @@ A collection is eligible for reads when:
   (`Symbol.for('payload.engine-rs.lexicalAfterRead')`, set by `@payloadcms/richtext-lexical`) and
   has no feature-level `afterRead` hooks; the node types with node hooks or sub fields are listed in
   the plan, and a document holding one of them bails (custom features fall off the lane);
-- no join fields (v1), no drafts (`versions.drafts`, v1), no `select` config function;
+- join fields (a join of one collection, not polymorphic) only on the MongoDB backend (section 8:
+  its join aggregation; any other adapter: `joins`), no drafts (`versions.drafts`, v1), no
+  `select` config function;
 - without `overrideAccess` the collection read access must be compiled by the function compiler
   (FN_COMPILE_CONTRACT.md): it runs in the lane only while call-site guards are installed (payload's
   `init` installs sampled guards with the Rust core) and `fnIrLaneShouldVerify` does not ask for
@@ -313,6 +315,27 @@ with the fused reads. The exact lane's sub-queries run on mongoose, so shadow mo
 the Node driver's `Collection` calls; the ids at a sub-query's `path` are taken from the exact
 lane's command (they must be ObjectIds: what the same sub-query returned there; the results are
 compared on their own).
+
+Joins (WP-S, 2026-11-26): a collection with join fields (no polymorphic joins) is read through
+db-mongodb's `aggregatePaginate` with `buildJoinAggregation`'s stages, re-stated by `joinStages`
+(src/fuse/mongo.ts) for the joins it serves: one collection, the main documents (not
+`versions`), a sanitized join query of `{ where: {} }` (`overrideAccess`, or a read access of
+`true`, and no `where` on the field), not localized, not `locale: 'all'`, a joined collection read
+without drafts (`draftsEnabled` with a drafts collection: `joins:drafts`), `useJoinAggregations`
+(else `resolveJoins`). Per join: `$lookup` (`as: '<path>.docs'`, `foreignField` from `on` /
+`getForeignPath`, `localField: '_id'`, `[{ $match: {} }, { $sort }, { $limit: limit + 1 }]`),
+the `$addFields` mapping `docs` to `_id`s with `hasNextPage`, and the `$slice`. Served: `findOne`
+(`[{ $match: query }, { $limit: 1 }, ...stages, { $project }?]`, the uncast query: aggregation
+pipelines are not cast) and population's nested finds (section 9: `related.backend.pipeline`, the
+stages after `$match` as hex of js-bson `{ stages }`: `$sort`, the join stages, `$project`;
+natively `[{ $match: <the id filter> }, ...stages]`, in the fused write's transaction when there
+is one), both read as raw documents (no `leanWithId`). Without `overrideAccess` a nested find of a
+collection with joins is not served (`mongo:populate:joins:access`: `sanitizeJoinQuery` would run
+the joined collection's read access); a `find` whose aggregation has stages is not served
+(`joins:find`: `aggregatePaginate`'s own result meta). Shadow mode compares the traced
+`aggregate` (its pipeline) with the fused one. The core populates a join's `docs` like
+`relationshipPopulationPromise` (every truthy entry, its `id` when truthy, into `docs[index]`;
+no `null` filtering; `maxDepth` applies).
 
 ## 9. Population (depth >= 1)
 

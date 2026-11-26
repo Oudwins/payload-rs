@@ -316,7 +316,9 @@ not in `payloadOwnFunctions` / `defaultFieldValidators` (hooks, `validate`, `def
 `validate`, field `beforeValidate` / `beforeChange` hooks, a relationship's function
 `filterOptions`), custom ID fields, `localization.filterAvailableLocales`,
 `drafts.schedulePublish`, upload / auth collections, join fields, blocks (until their discriminators are modelled),
-point / code / radio fields, json fields with a `jsonSchema`, rich text other than lexical with
+point / code fields, a localized unnamed group (`group:unnamed:localized`: the hooks hand its
+fields `parentIsLocalized || field.localized`, the transforms' `traverseFields` does not), json
+fields with a `jsonSchema`, rich text other than lexical with
 default features (step 3), `timezone` dates, a tab with an `admin.condition`, mongoose schema features the casting does not model (setters other
 than `_id`'s, discriminators, maps, `Decimal128`, `Buffer`, `BigInt`, non-strict schemas).
 
@@ -516,7 +518,7 @@ transform, `mongoose.rs` casting / documents / `castUpdate` / the `$set` MongoDB
    and the SchemaType casts (`String`, `Number`, `Boolean`, `Date` via V8's `Date.parse`,
    `ObjectId`, `Mixed`, document arrays with `_id: false`); a cast error is a bail.
 
-### 12.6 Status (2026-11-25)
+### 12.6 Status (2026-11-26)
 
 Ported and in the corpus, per field kind (no drafts):
 
@@ -531,6 +533,8 @@ Ported and in the corpus, per field kind (no drafts):
 | array (row ids from the registry)          | `0` / `'0'`, rows, `getExistingRowDoc` | array                         | document arrays                                                    |
 | blocks (the field's own blocks)            | block lookup, `blockType`              | blocks (no `filterOptions`)   | embedded discriminators, block `minimize`                          |
 | group, row, collapsible, unnamed tabs      | placeholders, traversal                | `() => true`                  | single nested subdocuments                                         |
+| unnamed groups (WP-S)                      | the parent's sibling data / doc        | none (no data)                | the parent's level (as a row)                                      |
+| radio (WP-S)                               | -                                      | radio                         | String cast, enum check on insert                                  |
 | named tabs (localized or not, WP-O)        | as a named group                       | none (tabs have no validate)  | single nested subdocuments, locale-keyed when localized            |
 | json (no `jsonSchema`, WP-O)               | fallback, defaults                     | json (strings bail)           | Mixed; `$` / dotted keys bail                                      |
 | upload fields (WP-O)                       | as relationship                        | upload                        | as relationship                                                    |
@@ -657,7 +661,17 @@ hooks update` (18: trimming, values from `data` / `siblingData` / `previousValue
 block rows; bails: a hook returning a copied array, `blockData` in beforeValidate). The corpus
 is 348 cases: 316 equal (230 written, 86 invalid), 32 bails, 0 differences.
 
-## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, status 2026-11-26)
+WP-S (2026-11-26): unnamed groups (beforeValidate and beforeChange traverse their fields on the
+parent's sibling data / doc / `docWithLocales` under the parent's path, labelled
+`getTranslatedLabel(field.label || 'group')` unless `label: false`; the write and read transforms
+and `flattenDataByLocale` treat them as rows; a localized unnamed group stays ineligible) and
+radio fields (the `radio` validator, a String path with an enum). Corpus groups `grouped create`
+/ `grouped update` (28: unnamed groups with labels, `label: false`, nested in a named group and in
+array rows, radios) and `localized unnamed groups` (9: test/versions' `Drafts` shape, a localized
+unique title in an unnamed group). The corpus is 385 cases: 351 equal (254 written, 97 invalid),
+34 bails (the 2 new ones: radio values mongoose's enum rejects), 0 differences.
+
+## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, WP-S, status 2026-11-26)
 
 Built and on by default since WP-K (`PAYLOAD_RS_FUSE_WRITES=off` restores the exact lane for
 every write; WP-J's default-on commit was held until update-many / delete-many were fused, see
@@ -749,9 +763,9 @@ Rust-owned transaction, no JS turn between the statements, the prepare running i
    driver's key order), whose `value` must equal the prepare's `stored_after` byte for byte
    (`byID:storedAfter`: the version would have been built from another document); with
    versions the version insert, the latest flip (none without drafts) and `enforceMaxVersions`'
-   find (`skip: max, limit: 1`, sort `updatedAt: -1, createdAt: -1` as the driver lane sends it),
-   which bails when it finds a version (`byID:maxVersions`: the exact lane deletes the old
-   versions; reached only by documents with more than `maxPerDoc` versions). The result is
+   find (`skip: max, limit: 1`, sort `updatedAt: -1, createdAt: -1` as the driver lane sends it);
+   since WP-S, when it finds a version with an `updatedAt`, its `deleteVersions` in the
+   transaction (below). The result is
    saveVersion's returned version: the version insert's `version` with `_id = parent` through the
    collection's read transform (`id` last, as `sanitizeInternalFields` and `createdVersion.id =
    parent` leave it); without versions the `findAndModify` value;
@@ -1144,6 +1158,100 @@ field, which the fused reads do not serve: they run the exact lane through the b
 were 0.84x against 1.06x off). The hooks shape never fuses a write (every hook increments a
 captured counter): its on / off columns run the same code. An earlier set of three passes put the
 hooks rows at 0.89-1.15 on both sides, the spread of single processes on this machine.
+
+**WP-S (2026-11-26)**: unnamed groups and radio fields in the prepare (section 12.6),
+`maxPerDoc` in the update drivers, join fields in fused population and `findByID`
+(FUSE_CONTRACT.md section 8).
+
+- **maxPerDoc** (`by_id.rs`, also update-many's documents): after the version statements,
+  `enforceMaxVersions`' find; when it returns a version whose `updatedAt` is a Date (`null` /
+  absent: upstream deletes nothing; anything else bails `byID:maxVersions:updatedAt`), the
+  `delete` of `deleteVersions` in the transaction: the template `md` is db-mongodb's `buildQuery`
+  of `{ updatedAt: { less_than_equal }, parent: { equals } }` (the found version's read-transformed
+  ISO string, which the cast turns back into the same Date), cast by mongoose, built with the
+  sentinel id and a sentinel date `ms` that the driver replaces by the found `updatedAt`. The
+  `byID:maxVersions` backoff is gone with the bail.
+- **Joins**: the read plans of collections with join fields are eligible on MongoDB (other
+  adapters: `joins`); the core populates a join's `docs` like `relationshipPopulationPromise`.
+  Population's nested finds of a collection with joins and `findOne` reads run db-mongodb's join
+  aggregation (`aggregatePaginate` with `buildJoinAggregation`'s stages, re-stated for one
+  collection, `where: {}`, not localized, no drafts), in the fused write's transaction for a
+  write's result read (driver crate: the additive `aggregate_docs_raw`). The complex shape's
+  Local API writes, which populate `author` at depth 2, now fuse. Not served yet:
+  without `overrideAccess` (`mongo:populate:joins:access`: `sanitizeJoinQuery` runs the joined
+  collection's read access, a where constraint in the complex shape: its REST writes still back
+  off on `populate:related`), `find` with join stages (`joins:find`: `aggregatePaginate`'s result
+  meta), join queries with values (`joins:where` / `sort` / `limit`), localized joins.
+- **Write lane-shadow**: shadowed by-id writes of one document run one at a time
+  (`serializedPerDocument`): test/versions' 100 parallel draft saves of one document (now fused:
+  the unnamed group) otherwise reported write conflicts of the exact lane caused by the other
+  calls' shadow transactions, and state reads that saw the other calls' versions (52 differences
+  in the first run, 0 after). Outside shadow mode, a write conflict in the fused transaction aborts
+  it and the call reruns on the exact lane (D1: which of the racing calls fail is an interleaving
+  outcome on both lanes).
+
+Measured, full MongoDB harness with `--fuse shadow --fuse-writes shadow` (WP-P's run `wpp_mf3` →
+WP-S's `wps_mf`; test/versions rerun alone after the shadow fix: 153 / 0 / 0, 0 differences):
+
+| lane   | hits        | bails       | guards      | ineligible  |
+| ------ | ----------- | ----------- | ----------- | ----------- |
+| writes | 4508 → 4853 | 1434 → 1040 | 2661 → 2663 | 3813 → 3811 |
+| reads  | 3448 → 3469 | 277 → 283   | 5273 → 5283 | 3188 → 2959 |
+
+Writes: updateByID 168 → 433, create 3887 → 3962; `plan:group:unnamed` 454 → 0,
+`plan:field:radio` 6 → 0, `byID:maxVersions` 2 → 0, `populate:related` 142 → 129. Reads:
+ineligible `joins` 285 → 102, findByID hits 920 → 948, `populate:related` 27 → 24; new guards
+`mongo:joins:find` 21, `mongo:joins:localized` 4, `mongo:joins:where` 2. The newly eligible
+`Drafts` calls next stop at `plan:schema:default` 40 and, in the race test, write conflicts
+(42 bails). Largest left on the write path: `plan:json:jsonSchema` 141, `plan:date:timezone` 131,
+`populate:related` 129 (REST writes populating a collection with joins), guards `transaction`
+765, `file` 605; ineligible collection hooks (`hooks:beforeRead` 777, `hooks:afterRead` 623).
+
+Bars on the final tree (release addon, mongod 8.2 rs0): the harness with `--engine default`
+3330 / 164 / 422, equal to `.rs-baseline/mongodb-all.json` (test/cli differs by the worktree path;
+storage emulators and hmr absent; fused writes served: 3953 creates, 525 updateByID, 234
+deleteByID, 4 update-many, 216 delete-many; fused read hits 3460), the harness with both shadows
+3330 / 164 / 422 and 0 lane differences (above); the 8 shadow files 971 / 0 / 46, 0 divergences;
+parity 503/503 (twice); driver lane 4/4; glue 33/33; HTTP lanes 18/18; fn-compile 39/39; the
+corpus 28/28 (385 cases); the lane suites 89/89 in default and with both shadows (new:
+`fuse-populate/joins.int.spec.ts`, Drafts-shaped unnamed groups and radios in
+`drafts-localized`, `maxPerDoc` past the limit with and without drafts, incl. update-many, in
+`drafts`); SQLite with `--fuse shadow` equal to `.rs-baseline/sqlite-all.json` by relative path
+(test/cli: the worktree path; create-payload-app: 11 baseline failures pass), 0 lane
+differences; packaging OK.
+
+Perf (WP-S, test/__rs/perf, MongoDB 1k posts, release addon, packed install verified against
+the builds, 3 interleaved rounds per cell, CPUs 22-31; `ts/rs` per category: the geometric mean
+of the per-round geomeans of the scenarios' TS / variant medians, [95% t interval over the
+rounds]; `off` = `rs-fused-off` → `on`):
+
+| shape   | surface | read                                | create                              | update                              | partial-update                      | delete                              |
+| ------- | ------- | ----------------------------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- |
+| typical | local   | 1.41 [1.36-1.45] → 1.37 [1.09-1.73] | 1.10 [1.07-1.13] → 1.35 [0.90-2.03] | 1.03 [0.99-1.08] → 1.83 [1.34-2.50] | 1.00 [0.94-1.06] → 1.79 [0.87-3.70] | 1.00 [0.93-1.07] → 1.15 [0.46-2.91] |
+| typical | rest    | 1.44 [1.43-1.46] → 1.49 [1.25-1.77] | 1.03 [0.91-1.15] → 1.13 [0.59-2.14] | 0.98 [0.92-1.04] → 1.15 [0.81-1.65] | 1.03 [0.96-1.11] → 1.53 [1.19-1.96] | 0.96 [0.79-1.17] → 0.82 [0.52-1.31] |
+| typical | graphql | 1.19 [0.91-1.55] → 1.20 [0.81-1.78] | 1.08 [0.98-1.19] → 0.90 [0.82-0.99] | -                                   | 0.99 [0.96-1.03] → 1.38 [0.55-3.44] | 0.96 [0.91-1.02] → 1.07 [0.43-2.69] |
+| complex | local   | 1.30 [0.92-1.84] → 1.33 [1.09-1.63] | 1.09 [1.07-1.12] → 1.29 [1.18-1.41] | 1.06 [1.03-1.09] → 1.62 [1.42-1.85] | 1.04 [1.00-1.09] → 1.46 [1.40-1.52] | 1.00 [0.99-1.01] → 1.04 [0.70-1.53] |
+| complex | rest    | 0.95 [0.63-1.42] → 0.97 [0.71-1.31] | 1.04 [0.93-1.17] → 0.96 [0.94-0.99] | 1.03 [0.91-1.16] → 0.96 [0.88-1.06] | 1.01 [0.91-1.12] → 0.98 [0.92-1.04] | 0.96 [0.83-1.11] → 0.90 [0.80-1.00] |
+| complex | graphql | 1.18 [0.95-1.47] → 1.11 [0.83-1.47] | 1.10 [0.97-1.23] → 1.06 [0.70-1.62] | -                                   | 1.05 [1.02-1.08] → 0.98 [0.89-1.07] | 0.98 [0.84-1.14] → 1.12 [0.76-1.64] |
+
+The complex shape's Local API writes are now fused (WP-P: 1.0-1.2 on both sides): per round,
+`create` 1.85 / 1.87 / 2.21 (off 1.07-1.13), `create depth 1` 1.83 / 1.99 / 1.32, `update by id`
+1.31-1.52, `update many` 1.92-2.11, the partial updates 1.29-1.59 (off 0.95-1.10). Its REST writes
+still populate `author` without `overrideAccess` and back off on `populate:related`
+(`mongo:populate:joins:access`), at the `off` speed. Wide intervals of the typical `on` cells come
+from single slow processes: typical `DELETE /posts?where` measured 16.5-16.7 ms in all three
+rounds of the full run (TS 10.4-10.8, off 10.1-11.7) and 11.4 / 11.4 / 16.9 ms run alone (TS
+10.8-11.2), where the slow process was also slow on its other fused writes (`POST /posts` 12.4
+against 5.7-6.0 ms): the per-process placement / wake-up mode of the perf README, not a code path
+of this change (typical has no versions, joins or unnamed groups).
+
+What is left (WP-S), largest first: REST / GraphQL population of collections with joins without
+`overrideAccess` (evaluate the joined collection's compiled read access per call like
+`relatedEntry`'s `access`, `$match` = the uncast `buildFilter` of the where; complex REST writes
+and reads), `find` with join stages (`aggregatePaginate`'s result meta in payload-fuse-mongo),
+join queries with `limit` / `sort` / `where` values, `plan:json:jsonSchema` 141,
+`plan:date:timezone` 131, `plan:schema:default` 40 (the `Drafts` collection's next stop), the
+collection hooks (not compiled: side effects).
 
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
