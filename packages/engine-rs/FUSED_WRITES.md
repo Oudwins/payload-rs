@@ -1454,6 +1454,69 @@ REST `PATCH`), write result reads loading collections with ineligible read plans
 relationship-path `where`s (sub-queries), `locale: 'all'` joins, joins of draft collections read
 with `draft`.
 
+**WP-V, second round (2026-11-26)**:
+
+- **Bulk writes without `overrideAccess`.** update-many / delete-many no longer guard
+  `access:fields` / `access:populate`: their result read (`fusedPageRequest`, now read as an
+  operation result) takes the call's `overrideAccess`, with the compiled field read access and
+  population access per call as the by-id writes' result reads. Two upstream behaviours the
+  REST path exposed: `disableBulkDelete` without `overrideAccess` throws in delete.ts (guarded,
+  `disableBulkDelete`; this guard was missing before, a latent difference for collections without
+  relationships), and with `overrideLock: false` `getLockedDocumentIds` reads the clock after its
+  lock find (the bulk delete now takes that reading, which the write lane-shadow caught as an
+  unmatched clock reading). Lane suite: REST `PATCH` / `DELETE /notices?where` and Local
+  update-many / delete-many with a user, field read access and population of a collection whose
+  read access depends on the user, a `disableBulkDelete` collection (403).
+- **Work that cannot succeed is skipped before it starts.**
+  - `populate:unserved`: `populationRequest` now also returns the collections it leaves
+    unserved (`unserved`); a create or update whose `data` references one is guarded before the
+    native call. The unserved collections of a read shape (depth, draft, `overrideAccess`,
+    `payloadAPI`, locales; no `populate`) are remembered per read plan, so later calls of that
+    shape decide the guard and the `populate:related` backoff before building their result
+    read. A stale entry can only send a call to the exact lane.
+  - The by-id drivers check the stored document right after its read: a value at a stored path
+    of a relationship to an unserved collection (`up`, from the dispatch) bails before any
+    statement, where it used to bail after the writes and their abort.
+  - `fn:warmup`: the write plan lists the compiled user functions every prepare uses (field
+    hooks and, unless the call skips validation, validators of fields outside array / block
+    rows). While one is still in guard sampling's first calls or de-optimised
+    (`fnIrLaneInWarmup`, which counts nothing, the first branch of `lane_should_verify`),
+    creates and updates skip their prepare; updates no longer open a transaction only to bail
+    `fn:verify`.
+- **`create as draft` (complex)**: its draft result read populates `author`, and `authors` (a
+  join on a localized collection) is unserved under drafts; with the backoff reset by the
+  scenario's successful teardown deletes every few calls ran the fused statements, bailed
+  `populate:related` and reran. Now `populate:unserved` (50 of 50 calls in a bench process).
+
+Measured, full harness with both shadows (`wpv_mf` → `wpv2_mf`, first runs only): write hits
+5242 → 5244, bails 663 → 512 (`populate:related` 109 → 16, `prepare:fn:verify` 67 → 0,
+`fn:warmup` 0 → 74), guards `populate:unserved` 0 → 155, `access:populate` 7 → 0,
+`access:fields` 3 → 0; 0 lane differences.
+
+Perf (5 interleaved rounds, CPUs 16-21; `off/rs`: `rs-fused-off` median / `rs` median, > 1 is `rs`
+faster): typical REST `DELETE /posts/:id` 1.74 [1.40-2.15], `PATCH /posts/:id` 2.02
+[1.85-2.20], `DELETE /posts?where` 1.12 [0.85-1.47], `PATCH /posts?where` 0.98 [0.95-1.02];
+complex REST `DELETE /posts/:id` 0.93 [0.89-0.97], `PATCH /posts/:id (one field)` 0.97
+[0.96-0.99], `PATCH /posts?where` 0.94 [0.90-0.98], `DELETE /posts?where` 0.88 [0.74-1.04],
+Local `create as draft` 0.97 [0.95-1.00] (it was 0.95 [0.93-0.97] before this round). The bar
+(≥ `rs-fused-off`) is not met on the complex ones. In a CPU profile of guarded draft creates
+(exact teardowns, so both variants run the same exact lane) the whole dispatch is 0.29 ms per
+call (0.18 of it the result read, now skipped for known shapes), while `rs` measured 1.3 ms wall
+and 1.8 ms CPU above `rs-fused-off` (GC counts and times equal). Most of the gap is therefore
+outside the JS dispatch: process state the fused seeding and setups leave (the Rust runtime's
+threads, see the idle-wake effect above) is the remaining suspect, not confirmed. The REST
+bulk writes of both shapes mostly run inside the access functions' sampling window in the perf
+suite's ~20-iteration scenarios (`access:verify`), so they run the exact lane there.
+
+Not done in this round: `plan:field:slug` (78: generateSlug's hook reads the database through
+`fieldValueExists` / `getUniqueFieldValue` / `getSlugFallbackValue` and slugifies),
+`prepare:drafts:localizedPublish:unique` (90: `validateUniqueConstraints` runs a `payload.find`
+per unique value outside the transaction, `limit: 2`, `depth: 0`, `overrideAccess: true`; a
+conflict only ever bails, so the prepare can return the lookups it needs, field path, locale and
+value, for the drivers to run without a session before any statement, with filters templated in
+JS from db-mongodb's `buildQuery` of `{ [path]: { equals } }` and the value substituted
+natively), localized json fields with a schema, and the `pattern` / `format` keywords.
+
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
 byte-identical; `ts/rs` ratios, per scenario the median of 3 processes per variant, geometric
