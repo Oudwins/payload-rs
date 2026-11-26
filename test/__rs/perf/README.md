@@ -8,7 +8,7 @@ databases.
 cargo build -p payload-node --release          # the addon under test (target/release)
 pnpm build:core                                # dist builds the tarballs are packed from
 node test/__rs/perf/run.mjs                    # full matrix (hours)
-node test/__rs/perf/run.mjs --quick            # minimal + complex, 100 / 1000 posts, short timing
+node test/__rs/perf/run.mjs --quick            # minimal + complex, 100 / 1000 posts, short timing, 1 round
 node test/__rs/perf/run.mjs --reuse --databases mongodb --shapes typical --sizes 1000 --verbose
 ```
 
@@ -78,18 +78,45 @@ One engine alone works too (`--engines ts` or `--engines rs`: absolute numbers, 
 `--engines ts,rs,db-rs,core-rs` attributes a difference to the database engine or the core.
 `--categories`, `--scenarios <regex>`, `--surfaces`, `--shapes`, `--sizes`, `--databases` select a
 subset. On shared servers, `--mongodb-server <url>` selects the MongoDB server and `--db-prefix
-<prefix>` (default `perf`) the name prefix of every database a run creates.
+<prefix>` (default `perf`) the name prefix of every database a run creates. `--processes <n>`
+(rounds), `--order shuffle|suite` and `--cpus <list>` control the method below.
 
 ## Method
 
-- One fresh process and one fresh database per (database, shape, size, engine) cell, cells strictly
-  one after another; the engine order alternates between cells. `ts` = `PAYLOAD_ENGINE=ts`, `rs` =
+- **Rounds.** Each (database, shape, size) runs `--processes` rounds (default 3, `--quick` 1). A
+  round starts one fresh process per engine, each on its own fresh database, seeded one after the
+  other (the engine that starts first alternates between rounds). `ts` = `PAYLOAD_ENGINE=ts`, `rs` =
   the flag unset (the default). `NODE_ENV=production`; SQL schemas are pushed before measuring.
+- **Interleaved engines.** run.mjs drives the processes of a round over IPC, scenario by scenario:
+  the ts process measures scenario k, then the rs process does (the engine going first alternates
+  per scenario), while the other process idles. Both engines of a scenario are measured seconds
+  apart, so a transient load (another process, a database checkpoint, a slow window of a shared
+  server) hits both or shows up as the spread between rounds, instead of biasing one engine's
+  whole cell.
+- **Order.** `--order shuffle` (default) shuffles the scenarios per round, with the round as the
+  seed and the same order for every engine of the round: read-only scenarios first, then the
+  mutating ones (each group shuffled), then throughput, so reads still see the seeded data. No
+  scenario's number depends on one fixed predecessor; `--order suite` keeps the catalogue order.
+- `--cpus <list>` pins every bench process with `taskset` (e.g. `--cpus 0-7`; MongoDB and other
+  servers are not pinned by the suite).
 - Per scenario: `gc()`, warmup runs (the first records the result fingerprint and hook calls), then
   timed iterations until at least `--min-iterations` and `--min-time-ms` (capped by
   `--max-iterations` / `--max-time-ms`). Per-iteration setup (e.g. creating the document a delete
   removes) and teardown (deleting what a create made, so the size stays fixed) are not timed.
-- Reported: median, p95, mean, min, max per scenario; speedup = TS median / Rust median.
+- **Reported.** A cell (database, shape, size, engine) pools the samples of its rounds: median,
+  p95, mean, min, max, CPU, the median of the per-process GC / heap / throughput numbers, and
+  `processes` (each round's own median, p95, n, CPU, req/s, position in the order, heap / RSS after
+  the scenario). Speedup (> 1: Rust faster) with several rounds = geometric mean of the per-round
+  speedups (TS median / Rust median of the same round; throughput: Rust req/s / TS req/s), with a
+  95% confidence interval (t interval of the log speedups over the rounds). A scenario is
+  **confidently slower** (faster) when the whole interval lies below (above) 1; report.md lists
+  the confidently slower ones. With one round: TS median / Rust median. Summaries add the per-round
+  geomeans and their interval, and the counts of confidently faster / slower scenarios. In
+  report.md, `(a–b)` after a latency is the range of the per-process medians.
+- `results.json` keeps the old layout (one cell per database x shape x size x engine, the same
+  scenario fields), plus `processes` per scenario and per cell; `scenarios.csv` adds the interval,
+  the per-round speedups and the per-process median range; `samples.csv` adds the round of each
+  sample (`process`).
 - Correctness guards (the run fails): an rs process that did not map the engine addon or a ts
   process that did (`/proc/self/maps`), a scenario that errors on one engine only, and ts / rs
   differences in the result fingerprint (keys, array lengths, pagination counters, deterministic
@@ -100,4 +127,5 @@ subset. On shared servers, `--mongodb-server <url>` selects the MongoDB server a
 Not covered: the admin UI's React server components and form state (rendering, not an engine
 API), image processing (sharp is not installed: uploads are text files, so storage and the upload
 pipeline are measured, resizing is not), email delivery (`disableEmail`). Machine load from other
-processes distorts results: run nothing else meanwhile.
+processes distorts results: run nothing else meanwhile (the interleaving spreads it over both
+engines, it does not remove it; a wide interval is the sign).

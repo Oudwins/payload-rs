@@ -17,9 +17,16 @@
  *                    rendered in the browser from the data embedded in the page
  *
  * Works for one engine as well (`--engines ts` or `rs`): speedups are then absent.
+ *
+ * Speedup of a scenario with several rounds (run.mjs `--processes`): the geometric mean of the
+ * per-round speedups (each round's ts process against its rs process, measured interleaved), with
+ * a 95% confidence interval over the rounds (`ratioInterval`); a scenario is confidently slower
+ * (faster) when the whole interval lies below (above) 1. With one round: TS median / Rust median.
  */
 import fs from 'node:fs'
 import path from 'node:path'
+
+import { ratioInterval } from './stats.mjs'
 
 export const writeReports = ({ outDir, results }) => {
   const model = buildModel(results)
@@ -58,6 +65,11 @@ const ms = (value) =>
         : value.toFixed(3)
     : '-'
 const times = (value) => (Number.isFinite(value) ? `${value.toFixed(2)}×` : '-')
+/** A speedup with its 95% interval over the rounds, when there are several. */
+const speedupText = ({ interval, speedup }) =>
+  Number.isFinite(interval?.low)
+    ? `${times(speedup)} [${interval.low.toFixed(2)}–${interval.high.toFixed(2)}]`
+    : times(speedup)
 
 /** Rows (one per cell x scenario), ts / rs pairs, summaries, startup. */
 function buildModel(results) {
@@ -75,6 +87,7 @@ function buildModel(results) {
         gc: scenario.gc,
         heapDeltaBytes: scenario.heapDeltaBytes,
         name: scenario.name,
+        processes: scenario.processes,
         quantiles: scenario.samples ? quantilesOf(scenario.samples) : undefined,
         shape: cell.shape,
         size: cell.size,
@@ -94,12 +107,18 @@ function buildModel(results) {
   for (const pair of pairs.values()) {
     const { rs, ts } = pair.engines
     // throughput: Rust requests per second / TS requests per second
+    pair.rounds = roundSpeedups({ rs, ts })
+    pair.interval = ratioInterval(pair.rounds.map(({ speedup }) => speedup))
     pair.speedup =
-      ts?.throughput && rs?.throughput
-        ? rs.throughput.requestsPerSecond / ts.throughput.requestsPerSecond
-        : ts && rs && rs.stats.medianMs > 0
-          ? ts.stats.medianMs / rs.stats.medianMs
-          : NaN
+      pair.rounds.length > 1
+        ? pair.interval.geomean
+        : ts?.throughput && rs?.throughput
+          ? rs.throughput.requestsPerSecond / ts.throughput.requestsPerSecond
+          : ts && rs && rs.stats.medianMs > 0
+            ? ts.stats.medianMs / rs.stats.medianMs
+            : NaN
+    pair.confidence =
+      pair.interval.high < 1 ? 'slower' : pair.interval.low > 1 ? 'faster' : 'unclear'
   }
   const summarize = (field) => {
     const groups = new Map()
@@ -110,13 +129,28 @@ function buildModel(results) {
     return [...groups].map(([key, members]) => {
       const [database, value] = key.split('|')
       const speedups = members.map((member) => member.speedup).filter(Number.isFinite)
+      // per round: the geomean over the group's scenarios measured in that round
+      const roundIndexes = [
+        ...new Set(members.flatMap((member) => member.rounds.map(({ round }) => round))),
+      ]
+      const roundGeomeans = roundIndexes.map((round) =>
+        geomean(
+          members.map(
+            (member) => member.rounds.find((entry) => entry.round === round)?.speedup ?? NaN,
+          ),
+        ),
+      )
       return {
+        confidentlyFaster: members.filter((member) => member.confidence === 'faster').length,
+        confidentlySlower: members.filter((member) => member.confidence === 'slower').length,
         database,
         faster: speedups.filter((value) => value > 1.05).length,
         geomean: geomean(speedups),
         group: value,
         max: speedups.length ? Math.max(...speedups) : NaN,
         min: speedups.length ? Math.min(...speedups) : NaN,
+        roundGeomeans,
+        roundInterval: ratioInterval(roundGeomeans),
         scenarios: members.length,
         slower: speedups.filter((value) => value < 0.95).length,
       }
@@ -150,6 +184,28 @@ function buildModel(results) {
   }
 }
 
+/**
+ * One speedup per round both engines measured without an error: TS median / Rust median, or Rust
+ * req/s / TS req/s for throughput (the `processes` entries of run.mjs `poolCell`).
+ */
+function roundSpeedups({ rs, ts }) {
+  if (!ts?.processes || !rs?.processes) {
+    return []
+  }
+  return ts.processes
+    .map((tsProcess) => {
+      const rsProcess = rs.processes.find((entry) => entry.round === tsProcess.round)
+      const speedup =
+        !rsProcess || tsProcess.error || rsProcess.error
+          ? NaN
+          : ts.throughput
+            ? rsProcess.requestsPerSecond / tsProcess.requestsPerSecond
+            : tsProcess.medianMs / rsProcess.medianMs
+      return { round: tsProcess.round, speedup }
+    })
+    .filter(({ speedup }) => Number.isFinite(speedup) && speedup > 0)
+}
+
 const csv = (header, rows) =>
   [header, ...rows]
     .map((row) =>
@@ -178,12 +234,14 @@ function scenariosCsv(model) {
     'cv',
     'n',
   ]
-  const speedupOf = new Map(
+  const pairOf = new Map(
     model.pairs.map((pair) => [
       [pair.database, pair.shape, pair.size, pair.surface, pair.name].join('|'),
-      pair.speedup,
+      pair,
     ]),
   )
+  const processMedians = (row) =>
+    (row.processes ?? []).filter((entry) => !entry.error).map((entry) => entry.medianMs)
   return csv(
     [
       'database',
@@ -202,6 +260,13 @@ function scenariosCsv(model) {
       'resultBytes',
       'resultDocs',
       'speedupTsOverRs',
+      'speedupCiLow',
+      'speedupCiHigh',
+      'speedupConfidence',
+      'speedupRounds',
+      'processes',
+      'processMedianMsMin',
+      'processMedianMsMax',
       'concurrency',
       'requestsPerSecond',
       'cpuMsPerRequest',
@@ -209,30 +274,41 @@ function scenariosCsv(model) {
       'eventLoopUtilization',
       'error',
     ],
-    model.rows.map((row) => [
-      row.database,
-      row.shape,
-      row.size,
-      row.engine,
-      row.surface,
-      row.category,
-      row.name,
-      ...statKeys.map((key) => row.stats?.[key]),
-      row.cpu?.medianMs,
-      row.cpu?.meanMs,
-      row.gc?.count,
-      row.gc?.ms,
-      row.heapDeltaBytes,
-      row.bytes,
-      row.docs,
-      speedupOf.get([row.database, row.shape, row.size, row.surface, row.name].join('|')),
-      row.throughput?.concurrency,
-      row.throughput?.requestsPerSecond,
-      row.throughput?.cpuMsPerRequest,
-      row.throughput?.jsThreadMsPerRequest,
-      row.throughput?.eventLoopUtilization,
-      row.error,
-    ]),
+    model.rows.map((row) => {
+      const pair = pairOf.get([row.database, row.shape, row.size, row.surface, row.name].join('|'))
+      const medians = processMedians(row)
+      return [
+        row.database,
+        row.shape,
+        row.size,
+        row.engine,
+        row.surface,
+        row.category,
+        row.name,
+        ...statKeys.map((key) => row.stats?.[key]),
+        row.cpu?.medianMs,
+        row.cpu?.meanMs,
+        row.gc?.count,
+        row.gc?.ms,
+        row.heapDeltaBytes,
+        row.bytes,
+        row.docs,
+        pair?.speedup,
+        pair?.interval.low,
+        pair?.interval.high,
+        pair?.rounds.length > 1 ? pair.confidence : undefined,
+        pair?.rounds.map(({ speedup }) => speedup.toFixed(4)).join(' '),
+        row.processes?.length,
+        medians.length ? Math.min(...medians) : undefined,
+        medians.length ? Math.max(...medians) : undefined,
+        row.throughput?.concurrency,
+        row.throughput?.requestsPerSecond,
+        row.throughput?.cpuMsPerRequest,
+        row.throughput?.jsThreadMsPerRequest,
+        row.throughput?.eventLoopUtilization,
+        row.error,
+      ]
+    }),
   )
 }
 
@@ -240,6 +316,10 @@ function samplesCsv(results) {
   const rows = []
   for (const cell of results.cells.filter((entry) => entry.kind === 'scenarios')) {
     for (const scenario of cell.scenarios) {
+      // the pooled samples are the processes' samples one after another (errored ones excluded)
+      const roundOfSample = (scenario.processes ?? [])
+        .filter((entry) => !entry.error)
+        .flatMap((entry) => Array.from({ length: entry.n }, () => entry.round))
       ;(scenario.samples ?? []).forEach((value, index) => {
         rows.push([
           cell.database,
@@ -252,6 +332,7 @@ function samplesCsv(results) {
           index,
           value,
           scenario.cpuSamples?.[index],
+          roundOfSample[index],
         ])
       })
     }
@@ -268,6 +349,7 @@ function samplesCsv(results) {
       'iteration',
       'wallMs',
       'cpuMs',
+      'process',
     ],
     rows,
   )
@@ -317,20 +399,34 @@ function markdown({ model, results }) {
   const { options } = results
   let md = `# Payload performance: Rust engine vs upstream TypeScript\n\n`
   md += `${results.createdAt}; ${environment.platform ?? ''}, ${environment.cpu ?? ''} (${environment.cpus ?? '?'} cpus), Node ${environment.node ?? ''}; engines ${model.engines.join(', ')}.\n\n`
-  md += `Both engines run the packed dist builds (NODE_ENV=production), one fresh process and database per cell, cells one at a time. Per scenario: ${options.warmup} warmup runs, then at least ${options.minIterations} iterations and ${options.minTimeMs} ms (at most ${options.maxIterations} / ${options.maxTimeMs} ms). Speedup = TS median / Rust median (> 1: Rust faster). Raw data: results.json, scenarios.csv, samples.csv, startup.csv, seed.csv; interactive: report.html.\n\n`
+  const rounds = options.processes ?? 1
+  md += `Both engines run the packed dist builds (NODE_ENV=production). ${rounds} round(s) per database / shape / size: per round one fresh process and database per engine, the processes taking turns scenario by scenario (one measures at a time), scenario order ${options.order === 'suite' ? 'as in the catalogue' : 'shuffled per round'}${options.cpus ? `, pinned to CPUs ${options.cpus}` : ''}. Per scenario: ${options.warmup} warmup runs, then at least ${options.minIterations} iterations and ${options.minTimeMs} ms (at most ${options.maxIterations} / ${options.maxTimeMs} ms). Latencies pool the samples of every round. Speedup (> 1: Rust faster) = ${rounds > 1 ? 'geometric mean of the per-round TS median / Rust median, [95% confidence interval over the rounds]; "confidently slower / faster" = the whole interval below / above 1' : 'TS median / Rust median'}. In the tables, (a–b) is the range of the per-process medians. Raw data: results.json, scenarios.csv, samples.csv, startup.csv, seed.csv; interactive: report.html.\n\n`
   if (results.failures.length > 0) {
     md += `## Failures\n\n${results.failures.map((failure) => `- ${failure}`).join('\n')}\n\n`
   }
   if (model.isPaired) {
     const summaryTable = (title, rows, label) => {
-      let table = `## ${title}\n\n| database | ${label} | scenario results | geomean speedup | min | max | Rust faster (>1.05×) | Rust slower (<0.95×) |\n|---|---|---|---|---|---|---|---|\n`
+      let table = `## ${title}\n\n| database | ${label} | scenario results | geomean speedup | per-round geomeans [95% CI] | min | max | Rust faster (>1.05×) | Rust slower (<0.95×) | confidently faster | confidently slower |\n|---|---|---|---|---|---|---|---|---|---|---|\n`
       for (const row of rows) {
-        table += `| ${row.database} | ${row.group} | ${row.scenarios} | ${times(row.geomean)} | ${times(row.min)} | ${times(row.max)} | ${row.faster} | ${row.slower} |\n`
+        const perRound = row.roundGeomeans.length
+          ? `${row.roundGeomeans.map((value) => value.toFixed(2)).join(' / ')}${Number.isFinite(row.roundInterval.low) ? ` [${row.roundInterval.low.toFixed(2)}–${row.roundInterval.high.toFixed(2)}]` : ''}`
+          : '-'
+        table += `| ${row.database} | ${row.group} | ${row.scenarios} | ${times(row.geomean)} | ${perRound} | ${times(row.min)} | ${times(row.max)} | ${row.faster} | ${row.slower} | ${row.confidentlyFaster} | ${row.confidentlySlower} |\n`
       }
       return `${table}\n`
     }
     md += summaryTable('Summary by surface', model.bySurface, 'surface')
     md += summaryTable('Summary by category', model.byCategory, 'category')
+    const slower = model.pairs
+      .filter((pair) => pair.confidence === 'slower' && pair.rounds.length > 1)
+      .sort((a, b) => a.speedup - b.speedup)
+    if (slower.length > 0) {
+      md += `## Confidently slower (95% interval below 1)\n\n| database | shape | size | surface | scenario | speedup [95% CI] | per round |\n|---|---|---|---|---|---|---|\n`
+      for (const pair of slower) {
+        md += `| ${pair.database} | ${pair.shape} | ${pair.size} | ${pair.surface} | ${pair.name} | ${speedupText(pair)} | ${pair.rounds.map(({ speedup }) => speedup.toFixed(2)).join(' / ')} |\n`
+      }
+      md += '\n'
+    }
   }
   if (model.startup.length > 0) {
     md += `## Startup (median of fresh processes, ms)\n\n| database | shape | engine | runs | import | buildConfig | getPayload | total |\n|---|---|---|---|---|---|---|---|\n`
@@ -353,10 +449,10 @@ function markdown({ model, results }) {
         return row
           ? row.error
             ? `error: ${row.error.slice(0, 60)}`
-            : `${ms(row.stats.medianMs)} / ${ms(row.stats.p95Ms)} / ${ms(row.stats.p99Ms)}`
+            : `${ms(row.stats.medianMs)} / ${ms(row.stats.p95Ms)} / ${ms(row.stats.p99Ms)}${processSpread(row)}`
           : '-'
       }
-      md += `| ${pair.surface} | ${pair.category} | ${pair.name} | ${engines.map(cell).join(' | ')} | ${engines.map((engine) => ms(pair.engines[engine]?.cpu?.medianMs)).join(' | ')} | ${pair.docs ?? '-'} | ${pair.bytes ?? '-'} | ${times(pair.speedup)} |\n`
+      md += `| ${pair.surface} | ${pair.category} | ${pair.name} | ${engines.map(cell).join(' | ')} | ${engines.map((engine) => ms(pair.engines[engine]?.cpu?.medianMs)).join(' | ')} | ${pair.docs ?? '-'} | ${pair.bytes ?? '-'} | ${speedupText(pair)} |\n`
     }
     md += '\n'
     const throughputPairs = pairs.filter((pair) => pair.surface === 'throughput')
@@ -368,6 +464,15 @@ function markdown({ model, results }) {
     }
   }
   return md
+}
+
+/** ` (a–b)`: the range of the per-process medians (`isRate`: req/s) of a pooled row. */
+const processSpread = (row, isRate = false) => {
+  const values = (row.processes ?? [])
+    .filter((entry) => !entry.error)
+    .map((entry) => (isRate ? entry.requestsPerSecond : entry.medianMs))
+  const format = (value) => (isRate ? value.toFixed(0) : ms(value))
+  return values.length > 1 ? ` (${format(Math.min(...values))}–${format(Math.max(...values))})` : ''
 }
 
 const THROUGHPUT_HINT =
@@ -393,7 +498,11 @@ function throughputTable({ engines, pairs }) {
     return [
       pair.name,
       ...engines.map((engine) =>
-        value(engine, (entry) => entry.throughput?.requestsPerSecond?.toFixed(0) ?? '-'),
+        value(
+          engine,
+          (entry) =>
+            `${entry.throughput?.requestsPerSecond?.toFixed(0) ?? '-'}${processSpread(entry, true)}`,
+        ),
       ),
       ...engines.map((engine) =>
         value(
@@ -408,7 +517,7 @@ function throughputTable({ engines, pairs }) {
       ...engines.map((engine) =>
         value(engine, (entry) => perRequest(entry.throughput?.jsThreadMsPerRequest)),
       ),
-      times(pair.speedup),
+      speedupText(pair),
     ]
   })
   return { body, head }
@@ -460,6 +569,9 @@ function pageData({ model, results }) {
       p95: round(row.stats.p95Ms),
       p99: round(row.stats.p99Ms),
       q: row.quantiles?.map(round),
+      processes: row.processes?.map((entry) =>
+        round(row.throughput ? entry.requestsPerSecond : entry.medianMs),
+      ),
       rps: round(row.throughput?.requestsPerSecond),
       sd: round(row.stats.stddevMs),
     }
@@ -478,9 +590,13 @@ function pageData({ model, results }) {
       name: pair.name,
       shape: pair.shape,
       size: pair.size,
-      // throughput pairs: Rust req/s / TS req/s instead of the ratio of median latencies
-      speedup:
-        pair.surface === 'throughput' && Number.isFinite(pair.speedup) ? pair.speedup : undefined,
+      ci: Number.isFinite(pair.interval.low)
+        ? [round(pair.interval.low), round(pair.interval.high)]
+        : undefined,
+      confidence: pair.rounds.length > 1 ? pair.confidence : undefined,
+      rounds: pair.rounds.map(({ speedup }) => round(speedup)),
+      // the report's speedup (per-round geomean, or for throughput Rust req/s / TS req/s)
+      speedup: Number.isFinite(pair.speedup) ? pair.speedup : undefined,
       surface: pair.surface,
     })),
     startup: results.cells
@@ -504,7 +620,7 @@ function html({ model, results }) {
 <div id="failures"></div>
 <nav id="filters" aria-label="Filters"></nav>
 <section><h2>Summary</h2><p class="hint">Geometric mean of TS median ÷ Rust median over the filtered scenarios (log scale; &gt; 1 means Rust is faster).</p><div id="summary"></div></section>
-<section><h2>Speedup per scenario</h2><p class="hint">Sorted; hover or focus a row for both engines' p50 / p95 / p99, CPU, GC and result size.</p><div id="speedups"></div></section>
+<section><h2>Speedup per scenario</h2><p class="hint">Sorted; the whisker is the 95% interval over the rounds (several processes per engine). Hover or focus a row for both engines' p50 / p95 / p99, CPU, GC, result size and the per-round speedups.</p><div id="speedups"></div></section>
 <section><h2>Latency distribution</h2><p class="hint">Per scenario and engine: whiskers p5–p95, box p25–p75, tick = median (log scale, ms).</p><div id="distributions"></div></section>
 <section><h2>Scaling with collection size</h2><p class="hint">Median (line) and p25–p75 (band) per engine across collection sizes, for the chosen scenario.</p><div id="scaling-controls"></div><div id="scaling"></div></section>
 <section><h2>CPU and garbage collection</h2><p class="hint">CPU ms per iteration (user + system) and GC ms per 100 iterations, per engine.</p><div id="cpu"></div></section>
@@ -574,10 +690,11 @@ const SCRIPT = `
   const hideTip = () => { tip.hidden = true }
   const pairTip = (p) => (node) => {
     node.append(el('div', {}, p.surface + ' · ' + p.category), el('strong', {}, p.name), el('div', {}, p.database + ' / ' + p.shape + ' / ' + p.size + ' posts'))
-    const s = speedupOf(p); if (isFinite(s)) node.append(el('div', {}, 'speedup ' + times(s)))
+    const s = speedupOf(p); if (isFinite(s)) node.append(el('div', {}, 'speedup ' + times(s) + (p.ci ? ' [95% CI ' + p.ci[0].toFixed(2) + '–' + p.ci[1].toFixed(2) + ', ' + p.confidence + ']' : '')))
+    if (p.rounds && p.rounds.length > 1) node.append(el('div', {}, 'per round: ' + p.rounds.map((v) => v.toFixed(2)).join(' / ')))
     for (const e of engines) { const r = p.engines[e]; if (!r) continue
       const line = el('div'); const key = el('span', { class: 'line' }); key.style.background = ENGINE_COLOR[e]; line.append(key)
-      line.append(document.createTextNode((ENGINE_NAME[e] || e) + ': ' + (r.error ? 'error ' + r.error : 'p50 ' + fmt(r.median) + ' · p95 ' + fmt(r.p95) + ' · p99 ' + fmt(r.p99) + ' ms · cpu ' + fmt(r.cpu) + ' ms · gc ' + (r.gcCount ?? 0) + ' (' + fmt(r.gcMs) + ' ms) · n ' + r.n)))
+      line.append(document.createTextNode((ENGINE_NAME[e] || e) + ': ' + (r.error ? 'error ' + r.error : 'p50 ' + fmt(r.median) + ' · p95 ' + fmt(r.p95) + ' · p99 ' + fmt(r.p99) + ' ms · cpu ' + fmt(r.cpu) + ' ms · gc ' + (r.gcCount ?? 0) + ' (' + fmt(r.gcMs) + ' ms) · n ' + r.n + (r.processes && r.processes.length > 1 ? ' · per process ' + r.processes.map(fmt).join(' / ') : ''))))
       node.append(line) }
     const any = p.engines.ts || p.engines.rs || Object.values(p.engines)[0]
     if (any) node.append(el('div', {}, 'result: ' + (any.docs ?? '-') + ' docs, ' + (any.bytes ?? '-') + ' bytes'))
@@ -614,6 +731,7 @@ const SCRIPT = `
       g.append(svgEl('rect', { x: 0, y: y - 2, width: W, height: rowH, class: 'hit' }))
       g.append(svgEl('text', { x: labelWidth - 8, y: y + 13, 'text-anchor': 'end', class: 'label' }, item.label.length > 52 ? item.label.slice(0, 51) + '…' : item.label))
       if (isFinite(item.v)) { const e = x(item.v); const bar = svgEl('rect', { x: Math.min(c, e), y: y + 1, width: Math.max(2, Math.abs(e - c)), height: rowH - 6, rx: 4 }); bar.style.fill = item.v >= 1 ? 'var(--faster)' : 'var(--slower)'; g.append(bar) }
+      if (item.ci) { const whisker = svgEl('line', { x1: x(item.ci[0]), x2: x(item.ci[1]), y1: y + rowH / 2 - 2, y2: y + rowH / 2 - 2 }); whisker.style.stroke = 'var(--ink)'; whisker.style.strokeWidth = '1.5'; g.append(whisker) }
       g.append(svgEl('text', { x: labelWidth + plot + 8, y: y + 13, class: 'label' }, times(item.v)))
       hover(g, item.tip); svg.append(g)
     })
@@ -633,7 +751,7 @@ const SCRIPT = `
   }
 
   const renderSpeedups = (pairs) => {
-    const items = pairs.map((p) => ({ label: p.surface + ' · ' + p.name + (filters.shape === 'all' || filters.size === 'all' || filters.database === 'all' ? '  [' + p.database[0] + ' ' + p.shape + ' ' + p.size + ']' : ''), v: speedupOf(p), tip: pairTip(p) })).filter((i) => isFinite(i.v)).sort((a, b) => a.v - b.v)
+    const items = pairs.map((p) => ({ label: p.surface + ' · ' + p.name + (filters.shape === 'all' || filters.size === 'all' || filters.database === 'all' ? '  [' + p.database[0] + ' ' + p.shape + ' ' + p.size + ']' : ''), v: speedupOf(p), ci: p.ci, tip: pairTip(p) })).filter((i) => isFinite(i.v)).sort((a, b) => a.v - b.v)
     const shown = items.slice(0, 400)
     diverging(document.getElementById('speedups'), shown)
     if (items.length > shown.length) document.getElementById('speedups').append(el('p', { class: 'empty' }, 'Showing the 400 slowest of ' + items.length + '; narrow the filters to see the rest.'))
@@ -748,14 +866,14 @@ const SCRIPT = `
     const node = document.getElementById('table'); node.replaceChildren()
     const cols = [['database', 't'], ['shape', 't'], ['size', ''], ['surface', 't'], ['category', 't'], ['name', 't']]
     for (const e of engines) for (const k of ['median', 'p95', 'p99', 'cpu', 'gcMs', 'n']) cols.push([e + '.' + k, ''])
-    cols.push(['docs', ''], ['bytes', ''], ['speedup', ''])
-    const value = (p, key) => { if (key === 'speedup') return speedupOf(p); if (key === 'docs' || key === 'bytes') return (p.engines.ts || p.engines.rs || Object.values(p.engines)[0])?.[key]; if (key.includes('.')) { const [e, k] = key.split('.'); return p.engines[e]?.[k] } return p[key] }
+    cols.push(['docs', ''], ['bytes', ''], ['speedup', ''], ['ciLow', ''], ['ciHigh', ''], ['confidence', 't'])
+    const value = (p, key) => { if (key === 'speedup') return speedupOf(p); if (key === 'ciLow') return p.ci?.[0]; if (key === 'ciHigh') return p.ci?.[1]; if (key === 'docs' || key === 'bytes') return (p.engines.ts || p.engines.rs || Object.values(p.engines)[0])?.[key]; if (key.includes('.')) { const [e, k] = key.split('.'); return p.engines[e]?.[k] } return p[key] }
     const sorted = pairs.slice().sort((a, b) => { const x = value(a, sortState.key), y = value(b, sortState.key); return (x > y ? 1 : x < y ? -1 : 0) * sortState.dir })
     const table = el('table'), head = el('tr')
     for (const [key, cls] of cols) { const th = el('th', { class: cls, scope: 'col' }, key + (sortState.key === key ? (sortState.dir > 0 ? ' ▲' : ' ▼') : '')); th.addEventListener('click', () => { sortState.dir = sortState.key === key ? -sortState.dir : 1; sortState.key = key; renderTable(pairs) }); head.append(th) }
     const thead = el('thead'); thead.append(head); table.append(thead)
     const tbody = el('tbody')
-    for (const p of sorted.slice(0, 2000)) { const tr = el('tr'); for (const [key, cls] of cols) { const v = value(p, key); tr.append(el('td', { class: cls }, typeof v === 'number' ? (key === 'speedup' ? times(v) : key.endsWith('.n') || key === 'size' || key === 'docs' || key === 'bytes' ? String(v) : fmt(v)) : v ?? '-')) } tbody.append(tr) }
+    for (const p of sorted.slice(0, 2000)) { const tr = el('tr'); for (const [key, cls] of cols) { const v = value(p, key); tr.append(el('td', { class: cls }, typeof v === 'number' ? (key === 'speedup' || key === 'ciLow' || key === 'ciHigh' ? times(v) : key.endsWith('.n') || key === 'size' || key === 'docs' || key === 'bytes' ? String(v) : fmt(v)) : v ?? '-')) } tbody.append(tr) }
     table.append(tbody); node.append(table)
   }
 

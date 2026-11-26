@@ -11,7 +11,8 @@
  *     [--scenarios <regex>] [--startup-shapes ...] [--startup-runs 5] [--engines ts,rs]
  *     [--addon file] [--out dir] [--reuse] [--quick] [--min-time-ms 1000] [--min-iterations 10]
  *     [--max-iterations 300] [--max-time-ms 5000] [--no-samples] [--no-startup] [--no-scenarios]
- *     [--db-prefix perf] [--fuse on|off|shadow] [--verbose]
+ *     [--db-prefix perf] [--fuse on|off|shadow] [--processes 3] [--order shuffle|suite]
+ *     [--cpus 0-7] [--verbose]
  *   node test/__rs/perf/run.mjs --list      # the scenario catalogue (markdown), nothing runs
  *
  * `--engines ts` or `--engines rs` alone measures one engine (absolute numbers, no comparison).
@@ -23,18 +24,26 @@
  * them into .rs-runs/perf/app, so every measurement runs the packed dist builds as users get them.
  * `--reuse` keeps an existing app (the bench files are copied again).
  *
- * Each (database, shape, size, engine) cell is one fresh process on a fresh database, cells run one
- * at a time (no concurrent load), the engine order alternates between cells. Engines: `ts` =
- * PAYLOAD_ENGINE=ts (upstream), `rs` = PAYLOAD_ENGINE unset (the default). NODE_ENV=production.
+ * Each (database, shape, size) runs `--processes` rounds. A round starts one fresh process per
+ * engine, each on its own fresh database, seeded one after the other; then the processes take turns
+ * scenario by scenario (only one measures at a time, the engine that goes first alternates), so
+ * both engines see the same machine state. The scenario order is shuffled per round (`--order
+ * shuffle`, the default; read-only scenarios before mutating ones before throughput, as in the
+ * catalogue), equal for every engine of the round, so no number depends on one fixed predecessor.
+ * A cell (database, shape, size, engine) pools the samples of its processes and keeps each
+ * process's numbers (`processes`) for the spread. `--cpus <list>` pins every bench process
+ * (taskset). Engines: `ts` = PAYLOAD_ENGINE=ts (upstream), `rs` = PAYLOAD_ENGINE unset (the
+ * default). NODE_ENV=production.
  *
- * Fails (exit 1) when a cell crashes, an rs process did not map the engine addon or a ts process
- * did, a scenario errors on one engine only, or ts and rs fingerprints of a scenario differ.
+ * Fails (exit 1) when a process crashes, an rs process did not map the engine addon or a ts
+ * process did, a scenario errors on one engine only, or ts and rs fingerprints of a scenario differ
+ * (checked per round).
  * Writes <out>/results.json (everything, incl. every timed sample), <out>/scenarios.csv (one row
  * per database x shape x size x engine x scenario with every statistic), <out>/samples.csv (one row
  * per timed iteration), <out>/startup.csv, <out>/report.md and <out>/report.html (interactive
  * charts with filters), and the raw per-process results in <out>/cells/.
  */
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
@@ -43,7 +52,9 @@ import { fileURLToPath } from 'node:url'
 import { packRelease } from '../../../packages/engine-rs/scripts/release/packRelease.mjs'
 import { rebuildStaleDist } from '../packaging/rebuildStale.mjs'
 import { writeReports } from './report.mjs'
+import { createRandom } from './configs.mjs'
 import { categories, scenarios, throughputScenarios } from './scenarios.mjs'
+import { median, summarize } from './stats.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '../../..')
@@ -64,6 +75,8 @@ if (process.argv.includes('--list')) {
 
 const options = {
   addon: path.resolve(option('--addon', path.join(root, 'target/release/libpayload_node.so'))),
+  /** CPUs every bench process is pinned to (taskset list, e.g. `0-7`); empty: not pinned. */
+  cpus: option('--cpus', ''),
   databases: list('--databases', 'mongodb,sqlite,postgres'),
   /** Prefix of the per-cell database names (shared servers: one prefix per user of the server). */
   dbPrefix: option('--db-prefix', 'perf'),
@@ -77,7 +90,11 @@ const options = {
     '--mongodb-server',
     'mongodb://payload:payload@localhost:27018/?authSource=admin&directConnection=true&replicaSet=rs0',
   ),
+  /** Scenario order of each round: `shuffle` (seeded by the round) or `suite` (catalogue order). */
+  order: option('--order', 'shuffle'),
   out: path.resolve(option('--out', path.join(root, '.rs-runs/perf/out'))),
+  /** Rounds per (database, shape, size): processes per engine. */
+  processes: Number(option('--processes', isQuick ? 1 : 3)),
   shapes: list('--shapes', isQuick ? 'minimal,complex' : 'minimal,typical,complex,hooks'),
   sizes: list('--sizes', isQuick ? '100,1000' : '100,1000,10000').map(Number),
   startupRuns: Number(option('--startup-runs', isQuick ? 3 : 5)),
@@ -114,6 +131,9 @@ const engineVariants = {
   rs: {},
   ts: { PAYLOAD_ENGINE: 'ts' },
 }
+if (!['shuffle', 'suite'].includes(options.order)) {
+  throw new Error(`--order: shuffle or suite, not ${options.order}`)
+}
 for (const engine of options.engines) {
   if (!engineVariants[engine]) {
     throw new Error(
@@ -138,7 +158,7 @@ const fail = (message) => {
 if (!isReuse || !fs.existsSync(path.join(appDir, 'node_modules/payload'))) {
   install()
 }
-for (const file of ['bench.mjs', 'configs.mjs', 'scenarios.mjs']) {
+for (const file of ['bench.mjs', 'configs.mjs', 'scenarios.mjs', 'stats.mjs']) {
   fs.copyFileSync(path.join(here, file), path.join(appDir, file))
 }
 
@@ -155,9 +175,7 @@ for (const database of options.databases) {
   if (isScenarios) {
     for (const shape of options.shapes) {
       for (const size of options.sizes) {
-        for (const engine of orderedEngines()) {
-          cells.push(runScenarios({ database, engine, shape, size }))
-        }
+        cells.push(...(await runScenarios({ database, shape, size })))
       }
     }
   }
@@ -300,9 +318,12 @@ await connection.close()`
   execFileSync('node', ['--input-type=module', '-e', script], { cwd: dbMongodb, stdio: 'ignore' })
 }
 
-function spawnBench({ engine, label, spec: specInput }) {
+/**
+ * The spec file, environment and command line of one bench process (`uploadDir`: the media
+ * collection's files, one directory per process, removed afterwards).
+ */
+function benchProcess({ engine, label, spec: specInput }) {
   const specFile = path.join(cellsDir, `${label}.spec.json`)
-  // the media collection's files: one directory per process, removed afterwards
   const uploadDir = path.join(options.out, 'uploads', label)
   const spec = { ...specInput, uploadDir }
   fs.writeFileSync(specFile, JSON.stringify(spec, null, 2))
@@ -316,8 +337,16 @@ function spawnBench({ engine, label, spec: specInput }) {
   if (options.fuse) {
     env.PAYLOAD_RS_FUSE = options.fuse
   }
+  const node = [process.execPath, '--expose-gc', 'bench.mjs', specFile]
+  const [command, ...args] = options.cpus ? ['taskset', '-c', options.cpus, ...node] : node
+  return { args, command, env, spec, uploadDir }
+}
+
+function spawnBench(input) {
+  const { args, command, env, spec, uploadDir } = benchProcess(input)
+  const { label } = input
   const started = Date.now()
-  const child = spawnSync(process.execPath, ['--expose-gc', 'bench.mjs', specFile], {
+  const child = spawnSync(command, args, {
     cwd: appDir,
     encoding: 'utf8',
     env,
@@ -373,54 +402,272 @@ function runStartup({ database, engine, shape }) {
   }
 }
 
-function runScenarios({ database, engine, shape, size }) {
-  const label = `${database}-${shape}-${size}-${engine}`
+/**
+ * `options.processes` rounds of one (database, shape, size). A round starts one bench process per
+ * engine (fresh database each, seeded one after the other), then drives them over IPC scenario by
+ * scenario, one process measuring at a time, the engine going first alternating; the fingerprints
+ * of the round are compared. Returns one cell per engine pooling its rounds (`poolCell`).
+ */
+async function runScenarios({ database, shape, size }) {
+  const outputs = Object.fromEntries(options.engines.map((engine) => [engine, []]))
+  for (let round = 0; round < options.processes; round++) {
+    const driven = []
+    try {
+      for (const engine of orderedEngines()) {
+        driven.push(await startDriven({ database, engine, round, shape, size }))
+      }
+      const listed = JSON.stringify(driven[0].scenarios)
+      for (const other of driven.slice(1)) {
+        if (JSON.stringify(other.scenarios) !== listed) {
+          throw new Error(`${other.label}: a different scenario list than ${driven[0].label}`)
+        }
+      }
+      for (const [position, index] of scenarioOrder(driven[0].scenarios, round).entries()) {
+        for (const bench of position % 2 === 0 ? driven : [...driven].reverse()) {
+          await bench.request({ index, type: 'run' })
+        }
+      }
+      for (const bench of driven) {
+        outputs[bench.engine][round] = await bench.finish()
+      }
+    } catch (error) {
+      fail(`${database} ${shape} ${size} round ${round}: ${error.message}`)
+      for (const bench of driven) {
+        bench.kill()
+      }
+    } finally {
+      for (const bench of driven) {
+        bench.drop()
+      }
+    }
+    checkRound({
+      database,
+      outputs: Object.fromEntries(
+        Object.entries(outputs).map(([engine, rounds]) => [engine, rounds[round]]),
+      ),
+      round,
+      shape,
+      size,
+    })
+  }
+  return options.engines.map((engine) =>
+    poolCell({ database, engine, outputs: outputs[engine], shape, size }),
+  )
+}
+
+/**
+ * One bench process in driven mode (bench.mjs over IPC), started and seeded: resolves once it
+ * reported its scenario list. `request` sends a message and waits for the reply, `finish` ends the
+ * process and reads its output.
+ */
+async function startDriven({ database, engine, round, shape, size }) {
+  const label = `${database}-${shape}-${size}-${engine}-p${round}`
   const { drop, location } = createDatabase(
     database,
     `${options.dbPrefix}_${process.pid}_${label.replaceAll('-', '_')}`,
   )
-  try {
-    const output = spawnBench({
-      engine,
-      label,
-      spec: {
-        database,
-        location,
-        maxIterations: options.maxIterations,
-        maxTimeMs: options.maxTimeMs,
-        minIterations: options.minIterations,
-        minTimeMs: options.minTimeMs,
-        mode: 'scenarios',
-        out: path.join(cellsDir, `${label}.json`),
-        shape,
-        size,
-        categories: options.categories,
-        isSamplesKept: options.isSamplesKept,
-        scenarioPattern: options.scenarioPattern,
-        surfaces: options.surfaces,
-        throughputConcurrency: options.throughputConcurrency,
-        verbose: isVerbose,
-        warmup: options.warmup,
-      },
-    })
-    return {
-      addonLoaded: output ? [output.addonLoaded] : [],
+  const { args, command, env, spec, uploadDir } = benchProcess({
+    engine,
+    label,
+    spec: {
       database,
-      engine,
-      environment: output?.environment,
-      kind: 'scenarios',
-      scenarios: output?.scenarios ?? [],
-      seed: output?.seed,
+      location,
+      maxIterations: options.maxIterations,
+      maxTimeMs: options.maxTimeMs,
+      minIterations: options.minIterations,
+      minTimeMs: options.minTimeMs,
+      mode: 'scenarios',
+      out: path.join(cellsDir, `${label}.json`),
       shape,
       size,
-      startup: output?.startup,
-    }
-  } finally {
+      categories: options.categories,
+      // pooled by poolCell; dropped from results.json there when --no-samples
+      isSamplesKept: true,
+      scenarioPattern: options.scenarioPattern,
+      surfaces: options.surfaces,
+      throughputConcurrency: options.throughputConcurrency,
+      verbose: isVerbose,
+      warmup: options.warmup,
+    },
+  })
+  const started = Date.now()
+  const child = spawn(command, args, {
+    cwd: appDir,
+    env,
+    stdio: ['ignore', isVerbose ? 'inherit' : 'ignore', 'pipe', 'ipc'],
+  })
+  let stderr = ''
+  child.stderr.on('data', (chunk) => {
+    stderr = (stderr + chunk).slice(-3000)
+  })
+  const timeout = setTimeout(() => child.kill('SIGKILL'), 3_600_000)
+  const exited = new Promise((resolve) =>
+    child.on('exit', (code, signal) => {
+      clearTimeout(timeout)
+      resolve(code ?? signal)
+    }),
+  )
+  const next = () =>
+    Promise.race([
+      new Promise((resolve) => child.once('message', resolve)),
+      exited.then((status) => {
+        throw new Error(`${label} exited ${status}: ${stderr}`)
+      }),
+    ])
+  const cleanUp = () => {
+    fs.rmSync(uploadDir, { force: true, recursive: true })
     drop()
+  }
+  try {
+    const ready = await next()
+    return {
+      drop: cleanUp,
+      engine,
+      finish: async () => {
+        child.send({ type: 'finish' })
+        const status = await exited
+        if (status !== 0) {
+          fail(`${label} exited ${status}: ${stderr}`)
+          return undefined
+        }
+        console.log(`${label}: ${((Date.now() - started) / 1000).toFixed(1)} s`)
+        return JSON.parse(fs.readFileSync(spec.out, 'utf8'))
+      },
+      kill: () => child.kill('SIGKILL'),
+      label,
+      request: (message) => {
+        child.send(message)
+        return next()
+      },
+      scenarios: ready.scenarios,
+    }
+  } catch (error) {
+    child.kill('SIGKILL')
+    cleanUp()
+    throw error
   }
 }
 
-/** Engine identity, errors on one side only, fingerprint equality. */
+/**
+ * The indexes of `listed` in the order a round measures them: read-only scenarios, then mutating
+ * ones, then throughput (as in the catalogue); within the first two groups shuffled with the round
+ * as the seed (`--order shuffle`), or the catalogue order (`--order suite`).
+ */
+function scenarioOrder(listed, round) {
+  const indexes = listed.map((_, index) => index)
+  const groups = [
+    indexes.filter((index) => listed[index].surface !== 'throughput' && !listed[index].isMutating),
+    indexes.filter((index) => listed[index].surface !== 'throughput' && listed[index].isMutating),
+    indexes.filter((index) => listed[index].surface === 'throughput'),
+  ]
+  if (options.order === 'suite') {
+    return groups.flat()
+  }
+  const random = createRandom(round + 1)
+  const shuffle = (values) => {
+    const shuffled = [...values]
+    for (let index = shuffled.length - 1; index > 0; index--) {
+      const other = Math.floor(random() * (index + 1))
+      ;[shuffled[index], shuffled[other]] = [shuffled[other], shuffled[index]]
+    }
+    return shuffled
+  }
+  return [...shuffle(groups[0]), ...shuffle(groups[1]), ...groups[2]]
+}
+
+/**
+ * One cell (database, shape, size, engine) from its rounds' outputs: per scenario the pooled
+ * samples' statistics, the medians of the per-process GC, heap and throughput numbers, and
+ * `processes`, each process's own numbers (by round) for the spread.
+ */
+function poolCell({ database, engine, outputs, shape, size }) {
+  const runs = outputs.map((output, round) => ({ output, round })).filter(({ output }) => output)
+  const first = runs[0]?.output
+  const catalogueIndex = (entry) =>
+    catalogue.findIndex(
+      (scenario) => scenario.surface === entry.surface && scenario.name === entry.name,
+    )
+  const scenarios = (first?.scenarios ?? [])
+    .toSorted((a, b) => catalogueIndex(a) - catalogueIndex(b))
+    .map((listed) => {
+      const entries = runs
+        .map(({ output, round }) => ({
+          entry: output.scenarios.find(
+            (entry) => entry.surface === listed.surface && entry.name === listed.name,
+          ),
+          round,
+        }))
+        .filter(({ entry }) => entry)
+      const measured = entries.map(({ entry }) => entry).filter((entry) => !entry.error)
+      const medianOf = (valueOf) => median(measured.map(valueOf))
+      const samples = measured.flatMap((entry) => entry.samples ?? [])
+      const cpuSamples = measured.flatMap((entry) => entry.cpuSamples ?? [])
+      const throughput = measured[0]?.throughput && {
+        concurrency: measured[0].throughput.concurrency,
+        cpuMsPerRequest: medianOf((entry) => entry.throughput.cpuMsPerRequest),
+        eventLoopUtilization: medianOf((entry) => entry.throughput.eventLoopUtilization),
+        jsThreadMsPerRequest: medianOf((entry) => entry.throughput.jsThreadMsPerRequest),
+        requests: measured.reduce((sum, entry) => sum + entry.throughput.requests, 0),
+        requestsPerSecond: medianOf((entry) => entry.throughput.requestsPerSecond),
+      }
+      return {
+        category: listed.category,
+        ...(measured[0]?.cpu && { cpu: summarize(cpuSamples) }),
+        error: entries.find(({ entry }) => entry.error)?.entry.error,
+        fingerprint: listed.fingerprint,
+        gc: measured[0]?.gc && {
+          byKind: measured[0].gc.byKind,
+          count: medianOf((entry) => entry.gc.count),
+          ms: medianOf((entry) => entry.gc.ms),
+        },
+        heapDeltaBytes: medianOf((entry) => entry.heapDeltaBytes),
+        hookCalls: listed.hookCalls,
+        name: listed.name,
+        processes: entries.map(({ entry, round }) => ({
+          cpuMedianMs: entry.cpu?.medianMs,
+          error: entry.error?.message,
+          gcMs: entry.gc?.ms,
+          heapUsedAfter: entry.memoryAfter?.heapUsed,
+          medianMs: entry.stats.medianMs,
+          n: entry.stats.n,
+          p95Ms: entry.stats.p95Ms,
+          position: entry.memoryAfter?.position,
+          requestsPerSecond: entry.throughput?.requestsPerSecond,
+          round,
+          rssAfter: entry.memoryAfter?.rss,
+        })),
+        result: listed.result,
+        stats: summarize(samples),
+        surface: listed.surface,
+        ...(throughput && { throughput }),
+        wallMs: measured.reduce((sum, entry) => sum + (entry.wallMs ?? 0), 0),
+        ...(options.isSamplesKept && {
+          ...(measured[0]?.cpuSamples && { cpuSamples }),
+          samples,
+        }),
+      }
+    })
+  const seedOf = (key) => median(runs.map(({ output }) => output.seed?.[key]))
+  return {
+    addonLoaded: runs.map(({ output }) => output.addonLoaded),
+    database,
+    engine,
+    environment: first?.environment,
+    kind: 'scenarios',
+    processes: runs.length,
+    scenarios,
+    seed: first?.seed && {
+      postsCreateMs: seedOf('postsCreateMs'),
+      postsPerSecond: seedOf('postsPerSecond'),
+      totalMs: seedOf('totalMs'),
+    },
+    shape,
+    size,
+    startup: first?.startup,
+  }
+}
+
+/** Engine identity of every process. */
 function checkCells(cells) {
   for (const cell of cells) {
     const name = `${cell.kind} ${cell.database} ${cell.shape}${cell.size !== undefined ? ` ${cell.size}` : ''} ${cell.engine}`
@@ -433,43 +680,37 @@ function checkCells(cells) {
       }
     }
   }
-  const scenarioCells = cells.filter((cell) => cell.kind === 'scenarios')
-  for (const tsCell of scenarioCells.filter((cell) => cell.engine === 'ts')) {
-    const rsCell = scenarioCells.find(
-      (cell) =>
-        cell.engine === 'rs' &&
-        cell.database === tsCell.database &&
-        cell.shape === tsCell.shape &&
-        cell.size === tsCell.size,
+}
+
+/** The ts and rs processes of one round: errors on one side only, fingerprint equality. */
+function checkRound({ database, outputs: { rs, ts }, round, shape, size }) {
+  if (!rs || !ts) {
+    return
+  }
+  for (const tsScenario of ts.scenarios) {
+    const rsScenario = rs.scenarios.find(
+      (scenario) => scenario.surface === tsScenario.surface && scenario.name === tsScenario.name,
     )
-    if (!rsCell) {
+    const where = `${database} ${shape} ${size} round ${round} ${tsScenario.surface} "${tsScenario.name}"`
+    if (!rsScenario) {
+      fail(`${where}: missing in rs`)
       continue
     }
-    for (const tsScenario of tsCell.scenarios) {
-      const rsScenario = rsCell.scenarios.find(
-        (scenario) => scenario.surface === tsScenario.surface && scenario.name === tsScenario.name,
+    if (Boolean(tsScenario.error) !== Boolean(rsScenario.error)) {
+      fail(
+        `${where}: error on one engine only: ts ${tsScenario.error?.message ?? 'ok'} / rs ${rsScenario.error?.message ?? 'ok'}`,
       )
-      const where = `${tsCell.database} ${tsCell.shape} ${tsCell.size} ${tsScenario.surface} "${tsScenario.name}"`
-      if (!rsScenario) {
-        fail(`${where}: missing in rs`)
-        continue
-      }
-      if (Boolean(tsScenario.error) !== Boolean(rsScenario.error)) {
-        fail(
-          `${where}: error on one engine only: ts ${tsScenario.error?.message ?? 'ok'} / rs ${rsScenario.error?.message ?? 'ok'}`,
-        )
-        continue
-      }
-      if (JSON.stringify(tsScenario.fingerprint) !== JSON.stringify(rsScenario.fingerprint)) {
-        fail(
-          `${where}: result fingerprints differ: ts ${JSON.stringify(tsScenario.fingerprint).slice(0, 400)} / rs ${JSON.stringify(rsScenario.fingerprint).slice(0, 400)}`,
-        )
-      }
-      if (JSON.stringify(tsScenario.hookCalls) !== JSON.stringify(rsScenario.hookCalls)) {
-        fail(
-          `${where}: hook calls differ: ts ${JSON.stringify(tsScenario.hookCalls)} / rs ${JSON.stringify(rsScenario.hookCalls)}`,
-        )
-      }
+      continue
+    }
+    if (JSON.stringify(tsScenario.fingerprint) !== JSON.stringify(rsScenario.fingerprint)) {
+      fail(
+        `${where}: result fingerprints differ: ts ${JSON.stringify(tsScenario.fingerprint).slice(0, 400)} / rs ${JSON.stringify(rsScenario.fingerprint).slice(0, 400)}`,
+      )
+    }
+    if (JSON.stringify(tsScenario.hookCalls) !== JSON.stringify(rsScenario.hookCalls)) {
+      fail(
+        `${where}: hook calls differ: ts ${JSON.stringify(tsScenario.hookCalls)} / rs ${JSON.stringify(rsScenario.hookCalls)}`,
+      )
     }
   }
 }

@@ -11,7 +11,10 @@
  *   selected surfaces (scenarios.mjs): warmup, then iterations until both `minIterations` and
  *   `minTimeMs` are reached (capped by `maxIterations` / `maxTimeMs`); the first warmup iteration
  *   also records the result fingerprint and the hook calls it made. The `throughput` surface
- *   runs last, once per concurrency level (`measureThroughput`).
+ *   runs last, once per concurrency level (`measureThroughput`). Started by run.mjs with an IPC
+ *   channel, the process is driven instead: after seeding it reports its scenario list (`ready`)
+ *   and measures the scenario of each `run` message (`done`), in the order run.mjs picks, until
+ *   `finish`. Every scenario entry records the heap and RSS after it (`memoryAfter`).
  * - `startup`: the phases of a cold start in this fresh process: importing payload and the
  *   adapters, `buildConfig` (sanitization), `getPayload` (adapter init, connect, models / schema).
  * - `prepare`: getPayload and, for SQL databases, push the schema (so `startup` runs measure a
@@ -27,6 +30,7 @@ import { PerformanceObserver } from 'node:perf_hooks'
 
 import { authorCount, buildConfigInput, categoryCount, createRandom, postData } from './configs.mjs'
 import { fingerprint, scenarios, throughputScenarios } from './scenarios.mjs'
+import { summarize } from './stats.mjs'
 
 const spec = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
 const now = () => Number(process.hrtime.bigint()) / 1e6
@@ -88,27 +92,53 @@ if (spec.mode === 'prepare' || spec.mode === 'scenarios') {
 if (spec.mode === 'scenarios') {
   const ctx = await seed()
   result.scenarios = []
-  for (const scenario of [...scenarios, ...throughputScenarios(spec.throughputConcurrency)]) {
-    if (!spec.surfaces.includes(scenario.surface)) {
-      continue
-    }
-    if (scenario.shapes && !scenario.shapes.includes(spec.shape)) {
-      continue
-    }
-    if (spec.categories?.length && !spec.categories.includes(scenario.category)) {
-      continue
-    }
-    if (spec.scenarioPattern && !new RegExp(spec.scenarioPattern, 'i').test(scenario.name)) {
-      continue
-    }
-    result.scenarios.push(
-      await (scenario.surface === 'throughput' ? measureThroughput : measure)(ctx, scenario),
+  const selected = [...scenarios, ...throughputScenarios(spec.throughputConcurrency)].filter(
+    (scenario) =>
+      spec.surfaces.includes(scenario.surface) &&
+      (!scenario.shapes || scenario.shapes.includes(spec.shape)) &&
+      (!spec.categories?.length || spec.categories.includes(scenario.category)) &&
+      (!spec.scenarioPattern || new RegExp(spec.scenarioPattern, 'i').test(scenario.name)),
+  )
+  const runScenario = async (scenario) => {
+    const entry = await (scenario.surface === 'throughput' ? measureThroughput : measure)(
+      ctx,
+      scenario,
     )
+    const memory = process.memoryUsage()
+    entry.memoryAfter = {
+      external: memory.external,
+      heapUsed: memory.heapUsed,
+      position: result.scenarios.length,
+      rss: memory.rss,
+    }
+    result.scenarios.push(entry)
     if (spec.verbose) {
-      const last = result.scenarios.at(-1)
       console.log(
-        `${scenario.surface} ${scenario.name}: ${last.error ? `ERROR ${last.error.message}` : last.throughput ? `${last.throughput.requestsPerSecond.toFixed(0)} req/s, p50 ${last.stats.medianMs.toFixed(2)} ms` : `${last.stats.medianMs.toFixed(3)} ms (n=${last.stats.n})`}`,
+        `${scenario.surface} ${scenario.name}: ${entry.error ? `ERROR ${entry.error.message}` : entry.throughput ? `${entry.throughput.requestsPerSecond.toFixed(0)} req/s, p50 ${entry.stats.medianMs.toFixed(2)} ms` : `${entry.stats.medianMs.toFixed(3)} ms (n=${entry.stats.n})`}`,
       )
+    }
+  }
+  if (process.send) {
+    // driven by run.mjs over IPC: it interleaves the scenarios of the ts and rs processes of one
+    // round and picks their order; `run` measures one scenario, `finish` ends the process
+    await new Promise((resolve) => {
+      process.on('message', async (message) => {
+        if (message.type === 'run') {
+          await runScenario(selected[message.index])
+          process.send({ type: 'done' })
+        } else if (message.type === 'finish') {
+          process.removeAllListeners('message')
+          resolve()
+        }
+      })
+      process.send({
+        scenarios: selected.map(({ isMutating, name, surface }) => ({ isMutating, name, surface })),
+        type: 'ready',
+      })
+    })
+  } else {
+    for (const scenario of selected) {
+      await runScenario(scenario)
     }
   }
 }
@@ -492,30 +522,6 @@ function describeResult(value) {
         ? 1
         : 0
   return { bytes, docs }
-}
-
-/** Order statistics, mean, standard deviation and coefficient of variation of `values` (ms). */
-function summarize(values) {
-  const sorted = [...values].sort((a, b) => a - b)
-  const n = sorted.length
-  const at = (q) => (n ? sorted[Math.min(n - 1, Math.floor(q * n))] : NaN)
-  const mean = n ? sorted.reduce((sum, value) => sum + value, 0) / n : NaN
-  const stddev =
-    n > 1 ? Math.sqrt(sorted.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (n - 1)) : 0
-  return {
-    cv: n ? stddev / mean : NaN,
-    maxMs: sorted.at(-1) ?? NaN,
-    meanMs: mean,
-    medianMs: at(0.5),
-    minMs: sorted[0] ?? NaN,
-    n,
-    p25Ms: at(0.25),
-    p75Ms: at(0.75),
-    p90Ms: at(0.9),
-    p95Ms: at(0.95),
-    p99Ms: at(0.99),
-    stddevMs: stddev,
-  }
 }
 
 function isAddonLoaded() {
