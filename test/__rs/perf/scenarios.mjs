@@ -1274,7 +1274,9 @@ export const categories = [
  * keys (sorted), array lengths, the shape of the first element, and the values of pagination
  * counters. ts and rs must produce equal fingerprints for every scenario. `isCountVariable`
  * (scenarios whose counts depend on how many iterations earlier scenarios ran: version listings,
- * a user's sessions): lengths and counters are left out, the shape is kept.
+ * a user's sessions): lengths and counters are left out, the shape is kept. A populated user's
+ * `sessions` are count-variable in every scenario (they grow with the logins of the scenarios
+ * that ran before, which the shuffled order puts anywhere).
  */
 export const fingerprint = (value, depth = 0, options = {}) => {
   if (value === null || value === undefined) {
@@ -1301,7 +1303,13 @@ export const fingerprint = (value, depth = 0, options = {}) => {
         : [...counters, 'status', 'valid']
       // generated ids used as keys (e.g. `jobStatus` of jobs.runByID): ObjectIds and uuids
       const outKey = /^[0-9a-f]{24}$|^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(key) ? '<id>' : key
-      out[outKey] = isKept.includes(key) ? value[key] : fingerprint(value[key], depth + 1, options)
+      out[outKey] = isKept.includes(key)
+        ? value[key]
+        : fingerprint(
+            value[key],
+            depth + 1,
+            key === 'sessions' ? { ...options, isCountVariable: true } : options,
+          )
     }
     return out
   }
