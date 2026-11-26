@@ -746,7 +746,145 @@ const tabbedUpdates = (f: Fixtures): Case[] =>
     },
   ].map((c) => ({ ...c, collection: 'tabbed' }))
 
+const validatedCreates = (f: Fixtures): Case[] =>
+  [
+    { name: 'filterOptions function, no value', data: { title: 't', filtered: null } },
+    { name: 'filterOptions function, empty (bails)', data: { title: 't', filtered: [] } },
+    { name: 'filterOptions function, value (bails)', data: { title: 't', filtered: [f.author] } },
+    { name: 'title only', data: { title: 't' } },
+    { name: 'whole rating', data: { title: 't', rating: 3 } },
+    { name: 'fractional rating', data: { title: 't', rating: 2.5 } },
+    { name: 'rating string', data: { title: 't', rating: '4' } },
+    { name: 'rating null', data: { title: 't', rating: null } },
+    { name: 'unchecked', data: { title: 't', mustCheck: false } },
+    { name: 'checkbox string', data: { title: 't', mustCheck: 'false' } },
+    { name: 'code on create', data: { title: 't', code: 'open' } },
+    { name: 'short', data: { title: 't', short: 'abc' } },
+    { name: 'too long', data: { title: 't', short: 'abcdefg' } },
+    { name: 'needs user, anonymous', data: { title: 't', needsUser: 'x' } },
+    { name: 'needs user, logged in', data: { title: 't', needsUser: 'x' }, user: true },
+    { name: 'title echo', data: { title: 't', titleEcho: 't' } },
+    { name: 'title echo differs', data: { title: 't', titleEcho: 'u' } },
+    { name: 'list (source array kept)', data: { title: 't', list: ['a', 'b'] } },
+    { name: 'range ok', data: { title: 't', range: { min: 1, max: 2 } } },
+    { name: 'range below', data: { title: 't', range: { min: 3, max: 2 } } },
+    { name: 'range number strings', data: { title: 't', range: { min: '3', max: '2' } } },
+    { name: 'rows', data: { title: 't', rows: [{ label: 'ok' }, { label: 'bad' }] } },
+    { name: 'block', data: { title: 't', layout: [{ blockType: 'a', text: 'bad' }] } },
+    { name: 'async ok', data: { title: 't', asyncChecked: 'fine' } },
+    { name: 'async error', data: { title: 't', asyncChecked: 'async' } },
+    { name: 'awaited (bails)', data: { title: 't', awaited: 'wait' } },
+    { name: 'awaited, no await', data: { title: 't', awaited: 'now' } },
+    { name: 'throws (bails)', data: { title: 't', throws: null } },
+    { name: 'several errors in order', data: { short: 'abcdefg', rating: 1.5, mustCheck: false } },
+    { name: 'draft-like unknown key', data: { title: 't', extra: { nested: [1] } } },
+  ].map((c) => ({ ...c, collection: 'validated' }))
+
+const validatedUpdates = (): Case[] =>
+  [
+    { name: 'rating', data: { rating: 4 }, seed: { data: { title: 't', rating: 1 } } },
+    { name: 'bad rating', data: { rating: 4.5 }, seed: { data: { title: 't' } } },
+    { name: 'locked code', data: { code: 'open' }, seed: { data: { title: 't', code: 'locked' } } },
+    {
+      name: 'locked code kept',
+      data: { code: 'locked' },
+      seed: { data: { title: 't', code: 'locked' } },
+    },
+    {
+      name: 'title echo against stored title',
+      data: { titleEcho: 's' },
+      seed: { data: { title: 's' } },
+    },
+    {
+      name: 'title echo, stored differs',
+      data: { titleEcho: 'x' },
+      seed: { data: { title: 's' } },
+    },
+    {
+      name: 'range max below stored min',
+      data: { range: { max: 1 } },
+      seed: { data: { title: 't', range: { min: 5 } } },
+    },
+    {
+      name: 'rows merged with stored rows',
+      data: { rows: [{ label: 'bad' }] },
+      seed: { data: { title: 't', rows: [{ label: 'a' }, { label: 'b' }] } },
+    },
+    {
+      name: 'stored list',
+      data: { list: ['c'] },
+      seed: { data: { title: 't', list: ['a'] } },
+    },
+    {
+      name: 'stored filtered relation (bails)',
+      data: { title: 'u' },
+      seed: { raw: { title: 'raw', filtered: [] } },
+    },
+    {
+      name: 'raw stored unchecked',
+      data: { title: 'r' },
+      seed: { raw: { title: 'raw', mustCheck: false } },
+    },
+  ].map((c) => ({ ...c, collection: 'validated' }))
+
+const fieldHookCreates = (): Case[] =>
+  [
+    { name: 'title only', data: { title: '  Padded Title ' } },
+    { name: 'given slug', data: { title: 't', slug: 'given' } },
+    { name: 'number title', data: { title: 12 } },
+    { name: 'kept on create', data: { title: 't', kept: 'k' } },
+    { name: 'origin slug', data: { title: 't', origin: 'slug' } },
+    { name: 'origin keep (create)', data: { title: 't', origin: 'keep' } },
+    { name: 'tags kept (beforeChange copies: bails)', data: { title: 't', tags: ['a'] } },
+    { name: 'count doubled', data: { title: 't', count: 3 } },
+    { name: 'count doubled over the max', data: { title: 't', count: 60 } },
+    { name: 'note', data: { title: 't', meta: { note: 'n' } } },
+    {
+      name: 'block (beforeValidate reads blockData: bails)',
+      data: { title: 't', layout: [{ blockType: 'a', text: 'x' }] },
+    },
+    { name: 'missing title', data: { slug: 's' } },
+    { name: 'user', data: { title: 't' }, user: true },
+  ].map((c) => ({ ...c, collection: 'fieldHooks' }))
+
+const fieldHookUpdates = (): Case[] =>
+  [
+    { name: 'title', data: { title: ' New ' }, seed: { data: { title: 'old', kept: 'k' } } },
+    { name: 'kept from stored', data: { slug: 'x' }, seed: { data: { title: 'old', kept: 'k' } } },
+    { name: 'origin keep', data: { origin: 'keep' }, seed: { data: { title: 'stored' } } },
+    {
+      name: 'note from stored',
+      data: { meta: {} },
+      seed: { data: { title: 't', meta: { note: 'n' } } },
+    },
+    { name: 'empty data', data: {}, seed: { data: { title: 't', count: 2 } } },
+  ].map((c) => ({ ...c, collection: 'fieldHooks' }))
+
 test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
+  test('compiled field hooks: creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'field hooks create', fieldHookCreates(), f)
+    finish('field hooks create')
+  })
+
+  test('compiled field hooks: updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'field hooks update', fieldHookUpdates(), f)
+    finish('field hooks update')
+  })
+
+  test('compiled validators: creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'validated create', validatedCreates(f), f)
+    finish('validated create')
+  })
+
+  test('compiled validators: updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'validated update', validatedUpdates(), f)
+    finish('validated update')
+  })
+
   test('upload field creates', async ({ payload }) => {
     const f = await fixtures(payload)
     await runAll(payload, 'upload create', uploadCases(f), f)

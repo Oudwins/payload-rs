@@ -9,6 +9,11 @@ import {
 } from 'payload'
 
 import { loadEngineAddon } from '../../../packages/engine-rs/src/addon.js'
+import { getFnIr } from '../../../packages/engine-rs/src/compile/native.js'
+import {
+  encodeSnapshot,
+  snapshotRequest,
+} from '../../../packages/engine-rs/src/compile/snapshot.js'
 import { buildWritePlan } from '../../../packages/engine-rs/src/fuse-write/writePlan.js'
 import { deserializeFromEngine } from '../../../packages/engine-rs/src/serialize.js'
 import { afterRead } from '../../../packages/payload/src/fields/hooks/afterRead/index.js'
@@ -51,6 +56,9 @@ const plans = new Map<string, string>()
 const planOf = (payload: Payload, slug: string) => {
   let plan = plans.get(slug)
   if (!plan) {
+    // the compiled user functions of the plans are evaluated on every call: this corpus is
+    // their verification (no guard sampling)
+    getFnIr().fnIrSetPolicy(0, 0)
     const built = buildWritePlan({ collection: payload.collections[slug], payload })
     if (!built.json) {
       throw new Error(`${slug}: write plan ineligible: ${built.reason}`)
@@ -348,6 +356,7 @@ export const runCase = async ({
     op,
     originalDoc: op === 'update' ? encode(originalDoc) : undefined,
     overrideAccess,
+    req: encodeSnapshot(snapshotRequest(req)),
     translations: req.i18n.translations,
     user: user ? [user.collection, encode(user.id)] : undefined,
   }

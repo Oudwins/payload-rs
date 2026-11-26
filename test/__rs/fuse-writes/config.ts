@@ -253,6 +253,263 @@ export default buildConfigWithDefaults({
         ],
       },
       {
+        // compiled user validators (FUSED_WRITES.md section 12.7): what they read of the
+        // options object, the merged data, ticks, identity, a throwing one
+        slug: 'validated',
+        fields: [
+          { name: 'title', type: 'text', required: true },
+          {
+            // the perf suite's complex shape
+            name: 'rating',
+            type: 'number',
+            max: 5,
+            min: 0,
+            validate: (value: unknown) =>
+              value === undefined ||
+              value === null ||
+              Number.isInteger(value) ||
+              'whole numbers only',
+          },
+          {
+            name: 'mustCheck',
+            type: 'checkbox',
+            defaultValue: true,
+            validate: (value: unknown) => (value ? true : 'This field is required.'),
+          },
+          {
+            name: 'code',
+            type: 'text',
+            validate: (value: unknown, { operation, previousValue }: any) =>
+              operation === 'update' && previousValue === 'locked' && value !== 'locked'
+                ? `locked (was ${previousValue})`
+                : true,
+          },
+          {
+            name: 'short',
+            type: 'text',
+            maxLength: 5,
+            validate: (value: unknown, { maxLength, name, path }: any) =>
+              typeof value !== 'string' ||
+              value.length <= maxLength ||
+              `${name} at ${path.join('/')} longer than ${maxLength}`,
+          },
+          {
+            name: 'needsUser',
+            type: 'text',
+            validate: (value: unknown, { req }: any) =>
+              value === undefined || req.user ? true : 'login required',
+          },
+          {
+            name: 'titleEcho',
+            type: 'text',
+            validate: (value: unknown, { data }: any) =>
+              value === undefined || value === data.title || `not the title (${data.title})`,
+          },
+          {
+            name: 'list',
+            type: 'text',
+            hasMany: true,
+            validate: (value: unknown, { siblingData }: any) =>
+              value === undefined || value === siblingData.list || 'merged list copied',
+          },
+          {
+            name: 'range',
+            type: 'group',
+            fields: [
+              { name: 'min', type: 'number' },
+              {
+                name: 'max',
+                type: 'number',
+                validate: (value: any, { siblingData }: any) =>
+                  value === undefined ||
+                  value === null ||
+                  siblingData.min === undefined ||
+                  siblingData.min === null ||
+                  value >= siblingData.min ||
+                  `below min ${siblingData.min}`,
+              },
+            ],
+          },
+          {
+            name: 'rows',
+            type: 'array',
+            fields: [
+              {
+                name: 'label',
+                type: 'text',
+                validate: (value: unknown, { path, siblingData }: any) =>
+                  value !== 'bad' || `bad at ${path.join('.')} (${Object.keys(siblingData)})`,
+              },
+            ],
+          },
+          {
+            name: 'layout',
+            type: 'blocks',
+            blocks: [
+              {
+                slug: 'a',
+                fields: [
+                  {
+                    name: 'text',
+                    type: 'text',
+                    validate: (value: unknown, { blockData }: any) =>
+                      value !== 'bad' || `bad in ${blockData.blockType}`,
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            name: 'asyncChecked',
+            type: 'text',
+            validate: async (value: unknown) => value !== 'async' || 'async error',
+          },
+          {
+            name: 'awaited',
+            type: 'text',
+            validate: async (value: unknown) => {
+              if (value === 'wait') {
+                await null
+              }
+              return true
+            },
+          },
+          {
+            // a function `filterOptions`: called (and the database read) for a truthy value only
+            name: 'filtered',
+            type: 'relationship',
+            relationTo: 'authors',
+            hasMany: true,
+            filterOptions: ({ req }: any) =>
+              req.payloadAPI === 'REST' ? req.method === 'POST' : true,
+          },
+          {
+            name: 'throws',
+            type: 'text',
+            validate: (value: any) => value === undefined || value.length > 0 || 'empty',
+          },
+        ],
+      },
+      {
+        // compiled user field hooks (FUSED_WRITES.md section 12.7): beforeValidate and
+        // beforeChange computing a value from their arguments
+        slug: 'fieldHooks',
+        fields: [
+          {
+            name: 'title',
+            type: 'text',
+            required: true,
+            hooks: {
+              beforeValidate: [
+                ({ value }: any) => (typeof value === 'string' ? value.trim() : value),
+              ],
+            },
+          },
+          {
+            name: 'slug',
+            type: 'text',
+            hooks: {
+              beforeChange: [
+                ({ data, value }: any) =>
+                  value ?? (typeof data.title === 'string' ? data.title.toLowerCase() : undefined),
+              ],
+            },
+          },
+          {
+            name: 'length',
+            type: 'number',
+            hooks: { beforeChange: [({ siblingData }: any) => siblingData.title?.length] },
+          },
+          {
+            name: 'internal',
+            type: 'text',
+            hooks: { beforeChange: [() => 'internal hook'] },
+          },
+          {
+            name: 'kept',
+            type: 'text',
+            hooks: {
+              beforeChange: [
+                ({ operation, previousValue, value }: any) =>
+                  operation === 'update' && value === undefined ? previousValue : value,
+              ],
+            },
+          },
+          {
+            name: 'origin',
+            type: 'text',
+            hooks: {
+              beforeValidate: [
+                ({ collection, originalDoc, value }: any) =>
+                  value === 'keep'
+                    ? (originalDoc.title ?? null)
+                    : value === 'slug'
+                      ? collection.slug
+                      : value,
+              ],
+            },
+          },
+          {
+            name: 'tags',
+            type: 'text',
+            hasMany: true,
+            hooks: {
+              beforeValidate: [({ value }: any) => value],
+              beforeChange: [({ value }: any) => (Array.isArray(value) ? [...value] : value)],
+            },
+          },
+          {
+            name: 'count',
+            type: 'number',
+            defaultValue: 1,
+            hooks: {
+              beforeValidate: [({ value }: any) => (typeof value === 'number' ? value * 2 : value)],
+            },
+            validate: (value: any) => value === undefined || value < 100 || 'too many',
+          },
+          {
+            name: 'meta',
+            type: 'group',
+            fields: [
+              {
+                name: 'note',
+                type: 'text',
+                hooks: {
+                  beforeChange: [
+                    ({ previousSiblingDoc, value }: any) =>
+                      value === undefined ? previousSiblingDoc.note : `${value}.`,
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            name: 'layout',
+            type: 'blocks',
+            blocks: [
+              {
+                slug: 'a',
+                fields: [
+                  {
+                    name: 'text',
+                    type: 'text',
+                    hooks: {
+                      beforeChange: [
+                        ({ blockData, value }: any) =>
+                          blockData.blockType === 'a' && typeof value === 'string'
+                            ? `${value}!`
+                            : value,
+                      ],
+                      beforeValidate: [({ blockData, value }: any) => blockData && value],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      {
         // named tabs (the perf suite's complex shape has one), next to unnamed ones
         slug: 'tabbed',
         fields: [
