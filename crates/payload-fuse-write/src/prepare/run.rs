@@ -69,9 +69,33 @@ pub struct Run<'e> {
   /// `skipMutationHooks`): beforeChange with `skipHooks` and `isValidationOperation`; its
   /// `mergeLocaleActions` change only the pass's discarded data and are not run.
   pub validation_pass: bool,
+  /// `req` as compiled user functions see it (`WriteCtx::req`; a validation pass: its locale).
+  pub req: Option<payload_fn_ir::Value>,
+  /// The compiled functions this call already used (`user_fn_lane_call`).
+  pub checked: RefCell<Vec<payload_fn_ir::FnId>>,
+  /// The top-level `doc` of the running `beforeChange` (`originalDoc`).
+  pub root_doc: RefCell<V>,
 }
 
 impl<'e> Run<'e> {
+  /// The first use of compiled function `id` in this call is one lane call
+  /// (FN_COMPILE_CONTRACT.md "Lanes"): a de-optimised function, or a call guard mode wants to
+  /// see, bails (the exact lane calls the JS function, where the call-site guard verifies it).
+  pub fn user_fn_lane_call(&self, id: payload_fn_ir::FnId) -> Result<(), Bail> {
+    let mut checked = self.checked.borrow_mut();
+    if checked.contains(&id) {
+      return Ok(());
+    }
+    checked.push(id);
+    if !payload_fn_ir::registry::is_active(id) {
+      return Err(Bail::new("fn:inactive"));
+    }
+    if payload_fn_ir::guard::lane_should_verify(id) {
+      return Err(Bail::new("fn:verify"));
+    }
+    Ok(())
+  }
+
   pub fn fail(&self, bail: Bail) {
     let mut slot = self.bail.borrow_mut();
     if slot.is_none() {

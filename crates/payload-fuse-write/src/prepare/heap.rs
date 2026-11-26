@@ -259,6 +259,29 @@ impl Heap {
     })
   }
 
+  /// [`Heap::export`] keeping identity: one heap object becomes one shared `JsVal` across every
+  /// value exported with the same `memo` (what compiled functions compare with `===`).
+  pub fn export_shared(&self, value: &V, memo: &mut std::collections::HashMap<Ref, JsVal>) -> JsVal {
+    let V::Ref(r) = value else {
+      return self.export(value);
+    };
+    if let Some(done) = memo.get(r) {
+      return done.clone();
+    }
+    let out = match &self.nodes[*r] {
+      Node::Arr(a) => JsVal::arr(a.iter().map(|v| self.export_shared(v, memo)).collect()),
+      Node::Obj(o) => {
+        let mut out = JsObj::with_capacity(o.len());
+        for (k, v) in o {
+          out.insert(k.to_string(), self.export_shared(v, memo));
+        }
+        JsVal::obj(out)
+      }
+    };
+    memo.insert(*r, out.clone());
+    out
+  }
+
   /// The boundary value of a tree (shared objects are written once per place).
   pub fn export(&self, value: &V) -> JsVal {
     match value {

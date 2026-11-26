@@ -5,12 +5,14 @@
  * exact lane and rebuilds the plan.
  *
  * Eligible: no collection hooks on the write paths and no root `afterError` hooks; every field
- * function on the path is Payload's own (`payloadOwnFunctions`, `defaultFieldValidators`); no
+ * function on the path is Payload's own (`payloadOwnFunctions`, `defaultFieldValidators`) or a
+ * compiled user `validate`; no
  * upload / auth collection, no joins, no custom ID (localization and drafts: WP-I's prepare and
  * WP-A's read plan decide; deletes guard scheduled publish).
  */
 import { defaultFieldValidators } from '../../../payload/src/fields/config/defaultFieldValidators.js'
 import { payloadOwnFunctions } from '../../../payload/src/fields/config/payloadOwnFunctions.js'
+import { laneFunction } from '../compile/index.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- sanitized configs are untyped here */
 type Any = any
@@ -83,6 +85,10 @@ const watchEmptyHooks = (builder: Builder, owner: Any, names: readonly string[])
 /** A function Payload installed itself (by identity), else user code. */
 const isOwn = (fn: unknown) => typeof fn === 'function' && payloadOwnFunctions.has(fn)
 
+/** Payload's own function, or a compiled user function a lane may use (`laneFunction`). */
+const isOwnOrLaneFunction = (fn: unknown) =>
+  isOwn(fn) || (typeof fn === 'function' && laneFunction(fn as Any).entry !== undefined)
+
 const fieldsWalk = (builder: Builder, owner: Any, key: string) => {
   const fields = watch(builder, owner, key)
   if (!Array.isArray(fields)) {
@@ -114,20 +120,37 @@ const fieldWalk = (builder: Builder, field: Any) => {
       if (isEmptyList(list)) {
         continue
       }
-      if (!Array.isArray(list) || !list.every(isOwn)) {
+      // compiled user hooks run in the prepare (beforeValidate, beforeChange: writePlan.ts checks
+      // what they read)
+      const isAccepted =
+        name === 'beforeValidate' || name === 'beforeChange' ? isOwnOrLaneFunction : isOwn
+      if (!Array.isArray(list) || !list.every(isAccepted)) {
         ineligible(`field:hooks:${name}`)
       }
     }
   }
   const validate = watch(builder, field, 'validate')
-  if (validate !== undefined && !defaultFieldValidators.has(validate)) {
+  // a user `validate` runs in the prepare when it is compiled and a lane may use it (guards
+  // installed, active: compile/index.ts `laneFunction`; the prepare samples, writePlan.ts checks
+  // what it reads)
+  if (
+    validate !== undefined &&
+    !defaultFieldValidators.has(validate) &&
+    !isOwnOrLaneFunction(validate)
+  ) {
     ineligible('field:validate')
   }
   const defaultValue = watch(builder, field, 'defaultValue')
   if (typeof defaultValue === 'function' && !isOwn(defaultValue)) {
     ineligible('field:defaultValue')
   }
-  if (typeof watch(builder, field, 'filterOptions') === 'function') {
+  // a relationship's function `filterOptions` is called by its validator for a truthy value
+  // only, where the prepare bails (writePlan.ts)
+  if (
+    typeof watch(builder, field, 'filterOptions') === 'function' &&
+    type !== 'relationship' &&
+    type !== 'upload'
+  ) {
     ineligible('field:filterOptions')
   }
   if (type === 'richText') {

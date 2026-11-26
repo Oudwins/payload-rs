@@ -14,6 +14,7 @@ mod read;
 mod run;
 mod text;
 mod transform;
+mod user_fn;
 #[cfg(test)]
 mod tests;
 
@@ -114,6 +115,10 @@ pub struct WriteCtx<'a> {
   pub draft: bool,
   /// The operation's `autosave` argument (the version's `autosave`).
   pub autosave: bool,
+  /// `req` as compiled user functions read it (`payload_fn_ir::lanes::from_typed` of the
+  /// dispatch's `snapshotRequest(req)`, without `context`, which the operation changes): `None`
+  /// when the plan's user functions do not read it (reading it then bails).
+  pub req: Option<payload_fn_ir::Value>,
 }
 
 /// The input of `prepare_update` from the operation's first statement (12.4).

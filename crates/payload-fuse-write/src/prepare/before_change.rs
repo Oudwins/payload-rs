@@ -10,8 +10,9 @@ use payload_engine::js::{JsVal, Obj as JsObj};
 use super::before_validate::{Task, block_to_match, existing_row_doc};
 use super::exec::{tick, ticks};
 use super::heap::{Heap, Ref, V};
-use super::plan::{Authorship, Field, Kind, Label, Lexical, NodeValidation, OwnHook, RelationTo, Validate};
+use super::plan::{Authorship, Field, Hook, Kind, Label, Lexical, NodeValidation, OwnHook, RelationTo, Validate};
 use super::run::{Operation, S};
+use super::user_fn;
 use super::{Bail, FieldError, IdUse};
 
 pub const NEW_DOC_KEY: &str = "_isNewDoc";
@@ -28,6 +29,8 @@ struct Level {
   label_path: Option<String>,
   skip_validation: bool,
   parent_is_localized: bool,
+  /// `blockData`: the enclosing block row (`undefined` outside blocks).
+  block_data: V,
 }
 
 /// `beforeChange({ data, doc, docWithLocales })` after its `deepCopyObjectSimple(data)` (the
@@ -41,7 +44,9 @@ pub fn before_change<'r, 'e: 'r>(s: S<'r, 'e>, data: Ref, doc: V, doc_with_local
     };
     run.is_new_doc.set(Some(is_new));
     run.note_context(NEW_DOC_KEY);
+    run.root_doc.replace(doc.clone());
     let level = Level {
+      block_data: V::Undef,
       data: V::Ref(data),
       doc,
       doc_with_locales,
@@ -131,7 +136,27 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
       // `!skipHooks && field.hooks?.beforeChange`
       for hook in field.before_change.iter().filter(|_| !run.validation_pass) {
         let hooked = match hook {
-          OwnHook::RowIdBeforeChange => {
+          Hook::User(user) => {
+            let value = run.get(&level.data, name);
+            let call = user_fn::HookCall {
+              data: &level_root(&s),
+              doc: &run.root_doc.borrow().clone(),
+              field: user_fn::FieldCall {
+                block_data: Some(&level.block_data),
+                name,
+                path: &path,
+                sibling_data: &level.data,
+                sibling_doc: &level.doc,
+              },
+              sibling_doc_with_locales: Some(&level.doc_with_locales),
+              value: &value,
+            };
+            match user_fn::field_hook(run, user, &call) {
+              Ok(hooked) => hooked.unwrap_or(V::Undef),
+              Err(bail) => return run.fail(bail),
+            }
+          }
+          Hook::Own(OwnHook::RowIdBeforeChange) => {
             let value = run.get(&level.data, name);
             if value.truthy() {
               value
@@ -142,13 +167,13 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
               }
             }
           }
-          OwnHook::AuthorshipBeforeChange(which) => match authorship_before_change(&s, *which, &level) {
+          Hook::Own(OwnHook::AuthorshipBeforeChange(which)) => match authorship_before_change(&s, *which, &level) {
             Ok(value) => value,
             Err(bail) => return run.fail(bail),
           },
-          OwnHook::AuthorshipBeforeValidate(_) => return run.fail(Bail::new("beforeChange:hook")),
+          Hook::Own(OwnHook::AuthorshipBeforeValidate(_)) => return run.fail(Bail::new("beforeChange:hook")),
         };
-        // `await callUserFunction(hook)` of a synchronous hook
+        // `await callUserFunction(hook)` of a synchronous hook (a compiled one settles at once)
         tick().await;
         if !hooked.is_undef() && run.check(run.set(sd, name, hooked)).is_none() {
           return;
@@ -173,7 +198,7 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
         }
       }
       if !skip_validation {
-        if let Some(result) = validate(&s, field, &value, &path).await {
+        if let Some(result) = validate(&s, field, &value, &path, &level).await {
           if let Some(message) = result {
             push_error(&s, field, &level, message, &path);
           }
@@ -217,6 +242,7 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
             _ => None,
           };
           let inner = Level {
+            block_data: level.block_data.clone(),
             data: row,
             doc,
             doc_with_locales,
@@ -258,6 +284,7 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
             label => block_label_path(&s, label, name, &block.label, &block_type, index, level.label_path.as_deref()),
           };
           let inner = Level {
+            block_data: row.clone(),
             data: row,
             doc,
             doc_with_locales,
@@ -361,6 +388,7 @@ fn group_level(s: &S<'_, '_>, field: &Field, sd: Ref, level: &Level, path: &str)
     },
   };
   Ok(Level {
+    block_data: level.block_data.clone(),
     data,
     doc,
     doc_with_locales,
@@ -470,13 +498,34 @@ fn has_invalid_field_value_shape(heap: &Heap, field: &Field, value: &V) -> bool 
 }
 
 /// Runs `field.validate`; `None` when the run bailed, `Some(Some(message))` for an error.
-async fn validate(s: &S<'_, '_>, field: &Field, value: &V, path: &str) -> Option<Option<String>> {
+async fn validate(s: &S<'_, '_>, field: &Field, value: &V, path: &str, level: &Level) -> Option<Option<String>> {
   let run = s.run;
   match &field.validate {
+    Validate::User(user) => {
+      let call = user_fn::FieldCall {
+        block_data: Some(&level.block_data),
+        name: field.name.as_deref().unwrap_or_default(),
+        path,
+        sibling_data: &level.data,
+        sibling_doc: &level.doc,
+      };
+      let result = run.check(user_fn::validate(run, user, value, &call))?;
+      // `await callUserFunction(validateFn, ...)` of a call that settles at once
+      tick().await;
+      if run.failed() {
+        return None;
+      }
+      Some(result)
+    }
     Validate::None => Some(None),
     Validate::True => {
       tick().await;
       Some(None)
+    }
+    Validate::Default(_, _) if field.filter_options_fn && value.truthy() => {
+      // `validateFilterOptions` awaits the user's `filterOptions` and reads the database
+      run.fail(Bail::new("filterOptions:function"));
+      None
     }
     Validate::Default(validator, field_options) => {
       let outcome = if *validator == Validator::RichText {

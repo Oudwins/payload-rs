@@ -2,6 +2,8 @@ import { defaultFieldValidators } from '../../../payload/src/fields/config/defau
 import { payloadOwnFunctions } from '../../../payload/src/fields/config/payloadOwnFunctions.js'
 import { getVersionsMax } from '../../../payload/src/utilities/getVersionsConfig.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
+import { compileFunction } from '../compile/compileFunction.js'
+import { encodeSnapshot, snapshot } from '../compile/snapshot.js'
 import { isInertTree } from '../fuse/inert.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- sanitized config and mongoose schema shapes */
@@ -15,7 +17,14 @@ type Any = any
  * caller re-checks per call, like the fused read plans.
  */
 export type WritePlanResult =
-  | { fieldAccess: FieldAccess[]; json: string; reason?: undefined; volatile: Volatile[] }
+  | {
+      fieldAccess: FieldAccess[]
+      json: string
+      /** A compiled user function of the plan reads `req`: the prepare request carries it. */
+      readsReq: boolean
+      reason?: undefined
+      volatile: Volatile[]
+    }
   | { json?: undefined; reason: string; volatile: Volatile[] }
 
 /**
@@ -88,6 +97,7 @@ const collectionHookNames = [
 type Builder = {
   fieldAccess: FieldAccess[]
   payload: Any
+  readsReq: boolean
   relations: Set<string>
   volatile: Volatile[]
 }
@@ -102,7 +112,13 @@ const watch = (builder: Builder, object: Any, key: PropertyKey) => {
 }
 
 export const buildWritePlan = ({ collection, payload }: { collection: Any; payload: Any }) => {
-  const builder: Builder = { fieldAccess: [], payload, relations: new Set(), volatile: [] }
+  const builder: Builder = {
+    fieldAccess: [],
+    payload,
+    readsReq: false,
+    relations: new Set(),
+    volatile: [],
+  }
   try {
     const config = collection.config
     // `localization.filterAvailableLocales` (a user function) runs on the eligible write paths only
@@ -192,7 +208,12 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
           }
         : null,
     })
-    return { fieldAccess: builder.fieldAccess, json, volatile: builder.volatile }
+    return {
+      fieldAccess: builder.fieldAccess,
+      json,
+      readsReq: builder.readsReq,
+      volatile: builder.volatile,
+    }
   } catch (error) {
     if (error instanceof Ineligible) {
       return { reason: error.message, volatile: builder.volatile }
@@ -291,7 +312,7 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
   if (named && type !== 'row' && type !== 'collapsible' && type !== 'tabs') {
     const hooks = watch(builder, field, 'hooks')
     if (hooks !== undefined && hooks !== null) {
-      const own: Record<string, string[]> = {}
+      const own: Record<string, unknown[]> = {}
       for (const name of writeHookNames) {
         const list = watch(builder, hooks, name)
         if (list === undefined || list === null) {
@@ -301,7 +322,14 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
           return ineligible('field:hooks')
         }
         if (list.length > 0) {
-          own[name] = list.map(ownKind)
+          // compiled user hooks run in the prepare (beforeValidate, beforeChange)
+          own[name] = list.map((hook) =>
+            name !== 'afterChange' && !payloadOwnFunctions.has(hook)
+              ? userFunctionPlan(builder, hook, 0, hookArgKeys, 'field:hooks', (key) =>
+                  key === 'field' ? (tab ? { ...field, type: 'tab' } : field) : undefined,
+                )
+              : ownKind(hook),
+          )
         }
       }
       if (own.afterChange) {
@@ -333,7 +361,17 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
     const known = typeof validate === 'function' ? defaultFieldValidators.get(validate) : undefined
     if (!validate) {
       // fields sanitization never saw (the timestamps): upstream validates nothing
-    } else if (!known || known.field !== field) {
+    } else if (!known) {
+      // a user function: compiled (FN_COMPILE_CONTRACT.md), evaluated by the prepare
+      out.val = userFunctionPlan(
+        builder,
+        validate,
+        1,
+        validateOptionKeys,
+        'field:validate',
+        (key) => spreadProperty(builder, field, key),
+      )
+    } else if (known.field !== field) {
       return ineligible('field:validate')
     } else if (known.validate === validate) {
       out.val = true
@@ -352,11 +390,15 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
       if ((type === 'relationship' || type === 'upload') && field.filterOptions !== undefined) {
         // a static `filterOptions` (a where, `true` / `false`): the validator returns `true` for
         // an empty value without I/O, and its `payloadDataLoader.find` for any other value is a
-        // bail of payload-core-validate's host in the prepare
-        if (typeof field.filterOptions === 'function' || !isInertTree(field.filterOptions, false)) {
+        // bail of payload-core-validate's host in the prepare. A function: `validateFilterOptions`
+        // calls it only for a truthy value, where the prepare bails (`fof`)
+        if (typeof field.filterOptions === 'function') {
+          out.fof = 1
+        } else if (!isInertTree(field.filterOptions, false)) {
           return ineligible('field:filterOptions')
+        } else {
+          options.filterOptions = field.filterOptions
         }
-        options.filterOptions = field.filterOptions
       } else if (field.filterOptions) {
         return ineligible('field:filterOptions')
       }
@@ -428,6 +470,109 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
       break
   }
   return out
+}
+
+/**
+ * The keys of `validate`'s options object upstream adds to `{ ...field }`
+ * (fields/hooks/beforeChange/promise.ts); the prepare builds them per call.
+ */
+const validateOptionKeys = new Set([
+  'blockData',
+  'collectionSlug',
+  'data',
+  'event',
+  'id',
+  'jsonError',
+  'operation',
+  'overrideAccess',
+  'path',
+  'preferences',
+  'previousValue',
+  'req',
+  'siblingData',
+  'skipCompilation',
+])
+
+/**
+ * The keys of a field `beforeValidate` / `beforeChange` hook's args the prepare builds per call
+ * (fields/hooks/{beforeValidate,beforeChange}/promise.ts); `field` is the plan's snapshot, and a
+ * hook reading any other key (`context`, `indexPath`, `schemaPath`, `siblingFields`) stays JS.
+ */
+const hookArgKeys = new Set([
+  'blockData',
+  'collection',
+  'data',
+  'global',
+  'operation',
+  'originalDoc',
+  'overrideAccess',
+  'path',
+  'previousSiblingDoc',
+  'previousValue',
+  'req',
+  'siblingData',
+  'siblingDocWithLocales',
+  'skipCompilation',
+  'value',
+])
+
+class Unsupported {}
+
+/** `{ ...field }[key]`: an own enumerable data property, else `Object.prototype`'s. */
+const spreadProperty = (builder: Builder, field: Any, key: string) => {
+  const descriptor = Object.getOwnPropertyDescriptor(field, key)
+  if (descriptor ? !('value' in descriptor) : objectPrototypeKeys.has(key)) {
+    return new Unsupported()
+  }
+  return descriptor?.enumerable ? watch(builder, field, key) : undefined
+}
+
+/**
+ * A compiled user function of the write path (FUSED_WRITES.md section 12.7): its `FnId`, the
+ * keys it reads of argument `argIndex` (the object upstream builds: `operationKeys` per call by
+ * the prepare, any other key `constantKey(key)`'s value, snapshotted here; an `Unsupported` or
+ * an `undefined` one of a hook makes it ineligible), or ineligible when it does not compile or
+ * may read any key. Compiling here is memoized per function (payload's `init` compiles the
+ * config's functions with the Rust core); whether a lane may use it (guards installed, active,
+ * sampling) is decided per call (plan.ts, the prepare).
+ */
+const userFunctionPlan = (
+  builder: Builder,
+  fn: Any,
+  argIndex: number,
+  operationKeys: Set<string>,
+  reason: string,
+  constantKey: (key: string) => unknown,
+) => {
+  if (typeof fn !== 'function') {
+    return ineligible(reason)
+  }
+  const compiled = compileFunction(fn)
+  if (!compiled.ok) {
+    return ineligible(`${reason}:compile`)
+  }
+  if (compiled.argKeys.length <= argIndex) {
+    return { fn: compiled.id }
+  }
+  const keys = compiled.argKeys[argIndex]
+  if (!keys) {
+    return ineligible(`${reason}:args`)
+  }
+  const props: [string, unknown][] = []
+  for (const key of keys) {
+    if (key === 'req') {
+      builder.readsReq = true
+    }
+    if (operationKeys.has(key)) {
+      continue
+    }
+    const value = constantKey(key)
+    if (value instanceof Unsupported || (operationKeys === hookArgKeys && value === undefined)) {
+      return ineligible(`${reason}:key`)
+    }
+    props.push([key, encodeSnapshot(snapshot(value))])
+  }
+  return { fn: compiled.id, keys, props }
 }
 
 /**

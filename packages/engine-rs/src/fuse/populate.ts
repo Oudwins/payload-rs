@@ -34,6 +34,12 @@ export type PopulationContext = {
    */
   loadTransactionID?: unknown
   payload: Any
+  /**
+   * A relationship of the read collection itself reaches a collection the nested finds do not
+   * serve (its load bails natively): the fused writes guard on it before writing (their bail
+   * would come after the statements).
+   */
+  reachesUnserved: boolean
   req: Any
   /** `populate?.[slug] ?? defaultPopulate` per related collection (the keys' `select`) */
   selects: Record<string, unknown>
@@ -123,6 +129,7 @@ export const populationRequest = ({
   const seen = new Set<string>()
   /** Without `overrideAccess`: the collections whose nested finds run access functions. */
   const accessChecks: { plan: { eligible: true } & CollectionPlan; slug: string }[] = []
+  let reachesUnserved = false
   // the collections the levels currentDepth..depth can load
   let frontier: ({ eligible: true } & CollectionPlan)[] = [plan]
   for (let level = currentDepth; level <= depth && frontier.length > 0; level++) {
@@ -145,6 +152,8 @@ export const populationRequest = ({
           if (!overrideAccess) {
             accessChecks.push({ slug, plan: entry.plan })
           }
+        } else if (level === currentDepth) {
+          reachesUnserved = true
         }
       }
     }
@@ -177,7 +186,7 @@ export const populationRequest = ({
     req: { fallbackLocale: req.fallbackLocale, locale: req.locale, payloadAPI: req.payloadAPI },
   })
   return {
-    context: { args, draft, payload, req, selects, topCurrentDepth: currentDepth },
+    context: { args, draft, payload, reachesUnserved, req, selects, topCurrentDepth: currentDepth },
     json,
   }
 }

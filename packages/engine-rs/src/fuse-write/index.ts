@@ -222,8 +222,12 @@ const checkCreate = (args: Any) => {
   }
   // the result read's guards (population's access without `overrideAccess`, ...) depend on the
   // call, not on the document: checked before the prepare
-  if (!resultRead(args, placeholderID)) {
+  const read = resultRead(args, placeholderID)
+  if (!read) {
     return guard('read')
+  }
+  if (read.population?.reachesUnserved) {
+    return guard('populate:unserved')
   }
   return { payload, target }
 }
@@ -606,8 +610,12 @@ const checkByID = (name: ByIDName, args: Any) => {
   if (typeof target === 'string') {
     return guard(target)
   }
-  if (!resultRead(args, id)) {
+  const read = resultRead(args, id)
+  if (!read) {
     return guard('read')
+  }
+  if (read.population?.reachesUnserved) {
+    return guard('populate:unserved')
   }
   return { payload, target }
 }
@@ -993,6 +1001,9 @@ const checkBulk = (name: BulkName, args: Any) => {
   )
   if (typeof read === 'string') {
     return guard(read)
+  }
+  if (read.population?.reachesUnserved) {
+    return guard('populate:unserved')
   }
   return { payload, read, target }
 }

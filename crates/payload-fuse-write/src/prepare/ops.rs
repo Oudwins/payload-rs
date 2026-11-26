@@ -64,6 +64,9 @@ fn new_run<'e>(
     saving_draft,
     autosave: ctx.autosave,
     validation_pass: false,
+    req: ctx.req.clone(),
+    checked: RefCell::new(Vec::new()),
+    root_doc: RefCell::new(V::Undef),
   })
 }
 
@@ -154,6 +157,11 @@ fn validate_all_locales(run: &Run<'_>, result: Ref, source: Option<(Ref, Ref)>) 
       saving_draft: false,
       autosave: false,
       validation_pass: true,
+      // the pass's request is a new `createPayloadRequest` (runLocaleScopedValidation.ts): a
+      // compiled function reading `req` bails here
+      req: None,
+      checked: RefCell::new(run.checked.borrow().clone()),
+      root_doc: RefCell::new(V::Undef),
     };
     let data = import_obj(&pass, &data, "data")?;
     flatten_by_locale(plan, &mut pass.heap.borrow_mut(), &plan.fields, data, locale, false)?;

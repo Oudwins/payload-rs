@@ -9,6 +9,7 @@ description = "Fused MongoDB writes: an operation's statements in a Rust-owned t
 indexmap.workspace = true
 payload-core-validate = { path = "../payload-core-validate" }
 payload-engine = { path = "../payload-engine" }
+payload-fn-ir = { path = "../payload-fn-ir" }
 payload-fuse-mongo = { path = "../payload-fuse-mongo" }
 payload-mongo-driver = { path = "../payload-mongo-driver" }
 serde_json.workspace = true

@@ -13,7 +13,8 @@ use super::Bail;
 use super::IdUse;
 use super::exec::tick;
 use super::heap::{Heap, Node, Ref, V};
-use super::plan::{DefaultValue, Field, Kind, OwnHook, RelationTo};
+use super::plan::{DefaultValue, Field, Hook, Kind, OwnHook, RelationTo};
+use super::user_fn;
 use super::run::{Operation, S};
 
 pub type Task<'r, T> = Pin<Box<dyn Future<Output = T> + 'r>>;
@@ -26,6 +27,8 @@ pub const INTERNAL_KEY: &str = "internal";
 /// `beforeValidate({ data, doc })` (index.ts): `await traverseFields(...)`.
 pub fn before_validate<'r, 'e: 'r>(s: S<'r, 'e>, data: Ref, doc: Ref) -> Task<'r, ()> {
   Box::pin(async move {
+    s.run.root_data.set(Some(data));
+    s.run.root_doc.replace(V::Ref(doc));
     let fields = &s.run.plan.fields;
     s.exec.spawn(traverse_fields(s.clone(), fields, V::Ref(data), V::Ref(doc), String::new())).wait().await;
   })
@@ -82,7 +85,43 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
       }
       for hook in &field.before_validate {
         match hook {
-          OwnHook::AuthorshipBeforeValidate(which) => {
+          Hook::User(user) => {
+            let value = match &fallback {
+              Some(fallback) if run.get(&sibling_data, name).is_undef() => fallback.clone(),
+              _ => run.get(&sibling_data, name),
+            };
+            let call = user_fn::HookCall {
+              data: &run.root_data.get().map_or(V::Undef, V::Ref),
+              doc: &run.root_doc.borrow().clone(),
+              field: user_fn::FieldCall {
+                // not tracked here: reading it bails
+                block_data: None,
+                name,
+                path: &path,
+                sibling_data: &sibling_data,
+                sibling_doc: &sibling_doc,
+              },
+              sibling_doc_with_locales: None,
+              value: &value,
+            };
+            // `_status`: upstream's `originalDoc` / `previousSiblingDoc` are `docForHooks`
+            let hooked = if path == "_status" {
+              Err(Bail::new("fn:hook:status"))
+            } else {
+              user_fn::field_hook(run, user, &call)
+            };
+            let Some(hooked) = run.check(hooked) else {
+              return;
+            };
+            // `await callUserFunction(hook, ...)` of a call that settles at once
+            tick().await;
+            if let Some(hooked) = hooked
+              && run.check(run.set(sd, name, hooked)).is_none()
+            {
+              return;
+            }
+          }
+          Hook::Own(OwnHook::AuthorshipBeforeValidate(which)) => {
             let key = which.key();
             let supplied = !run.get(&sibling_data, key).is_undef();
             let submitted = match run.submitted.get() {
@@ -97,7 +136,7 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
             // `await callUserFunction(hook)`: the hook returns `undefined`
             tick().await;
           }
-          _ => return run.fail(Bail::new("beforeValidate:hook")),
+          Hook::Own(_) => return run.fail(Bail::new("beforeValidate:hook")),
         }
       }
       let mut access_result = true;

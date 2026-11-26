@@ -116,6 +116,13 @@ impl OwnHook {
   }
 }
 
+/// A field hook of the write path: Payload's own or a compiled user function.
+#[derive(Clone, Debug)]
+pub enum Hook {
+  Own(OwnHook),
+  User(UserFn),
+}
+
 #[derive(Clone, Debug)]
 pub enum DefaultValue {
   None,
@@ -132,6 +139,49 @@ pub enum Validate {
   True,
   /// The default validator with the field properties it reads (`{ ...field, ...options }`).
   Default(Validator, JsVal),
+  /// A compiled user function (FN_COMPILE_CONTRACT.md), evaluated in Rust.
+  User(UserFn),
+}
+
+/// A user function of the write path compiled by the function compiler (writePlan.ts
+/// `userFunctionPlan`): its `FnId` and what it reads of the argument object upstream builds
+/// (`validate`'s options, a hook's args).
+#[derive(Clone, Debug)]
+pub struct UserFn {
+  pub id: payload_fn_ir::FnId,
+  /// The keys of the argument object the function reads (its `argKeys`), the operation-derived
+  /// ones; `None`: it takes no such argument.
+  pub keys: Option<Vec<Arc<str>>>,
+  /// The keys it reads that come from the field config (`{ ...field }`), as snapshots taken when
+  /// the plan was built (`undefined` for keys the field does not have).
+  pub props: Vec<(Arc<str>, payload_fn_ir::Value)>,
+}
+
+impl UserFn {
+  pub fn decode(json: &Json) -> Result<UserFn, String> {
+    let id = json.get("fn").and_then(Json::as_u64).ok_or_else(|| bad("fn"))? as payload_fn_ir::FnId;
+    let keys = match json.get("keys") {
+      None | Some(Json::Null) => None,
+      Some(Json::Array(keys)) => {
+        Some(keys.iter().map(|k| k.as_str().map(Arc::from).ok_or_else(|| bad("fn.keys"))).collect::<Result<_, _>>()?)
+      }
+      Some(_) => return Err(bad("fn.keys")),
+    };
+    let props = match json.get("props") {
+      None => Vec::new(),
+      Some(Json::Array(entries)) => entries
+        .iter()
+        .map(|entry| match entry.as_array().map(Vec::as_slice) {
+          Some([Json::String(key), value]) => payload_fn_ir::lanes::from_typed(&JsVal::from_json(value))
+            .map(|value| (Arc::from(key.as_str()), value))
+            .ok_or_else(|| bad("fn.props")),
+          _ => Err(bad("fn.props")),
+        })
+        .collect::<Result<_, _>>()?,
+      Some(_) => return Err(bad("fn.props")),
+    };
+    Ok(UserFn { id, keys, props })
+  }
 }
 
 /// `field.label` for `getTranslatedLabel`.
@@ -184,8 +234,8 @@ pub struct Field {
   pub has_many: bool,
   pub relation_to: RelationTo,
   pub default: DefaultValue,
-  pub before_validate: Vec<OwnHook>,
-  pub before_change: Vec<OwnHook>,
+  pub before_validate: Vec<Hook>,
+  pub before_change: Vec<Hook>,
   /// `field.access.create` / `.update` is set (a function): its index in the request's
   /// `fieldAccess` (the results of the call's operation, decided by the dispatch); only read
   /// without `overrideAccess`.
@@ -201,6 +251,9 @@ pub struct Field {
   pub blocks: Vec<Block>,
   /// `field.unique` (a named field).
   pub unique: bool,
+  /// A relationship's `filterOptions` is a function (`validateFilterOptions` calls it for a
+  /// truthy value: the prepare bails there).
+  pub filter_options_fn: bool,
 }
 
 impl Field {
@@ -444,12 +497,16 @@ fn decode_fields(json: Option<&Json>) -> Result<Vec<Field>, String> {
   items.iter().map(decode_field).collect()
 }
 
-fn decode_hooks(json: Option<&Json>) -> Result<Vec<OwnHook>, String> {
+fn decode_hooks(json: Option<&Json>) -> Result<Vec<Hook>, String> {
   match json {
     None => Ok(Vec::new()),
-    Some(Json::Array(items)) => {
-      items.iter().map(|item| item.as_str().and_then(OwnHook::parse).ok_or_else(|| bad("hook"))).collect()
-    }
+    Some(Json::Array(items)) => items
+      .iter()
+      .map(|item| match item {
+        Json::Object(_) => UserFn::decode(item).map(Hook::User),
+        _ => item.as_str().and_then(OwnHook::parse).map(Hook::Own).ok_or_else(|| bad("hook")),
+      })
+      .collect(),
     Some(_) => Err(bad("hooks")),
   }
 }
@@ -472,6 +529,7 @@ fn decode_field(json: &Json) -> Result<Field, String> {
       let validator = Validator::from_name(name).ok_or_else(|| bad("field.val"))?;
       Validate::Default(validator, json.get("vo").map(JsVal::from_json).unwrap_or_else(|| JsVal::obj(JsObj::new())))
     }
+    Some(user @ Json::Object(_)) => Validate::User(UserFn::decode(user)?),
     Some(_) => return Err(bad("field.val")),
   };
   let relation_to = match json.get("r") {
@@ -553,6 +611,7 @@ fn decode_field(json: &Json) -> Result<Field, String> {
     before_validate: decode_hooks(hooks.and_then(|h| h.get("beforeValidate")))?,
     default,
     fields,
+    filter_options_fn: flag("fof"),
     has_many: flag("m"),
     kind,
     label: decode_label(json.get("label")),

@@ -3,7 +3,8 @@
 //!
 //! Request: `{ op: 'create' | 'update', data, id?, originalDoc?, docWithLocales?, user?:
 //! [collection, id], overrideAccess, context, language, fallbackLanguage, translations?, clock:
-//! [ms], ids: [['row' | 'document' | 'version', hex]], draft?, autosave? }`, values in the boundary's tree
+//! [ms], ids: [['row' | 'document' | 'version', hex]], draft?, autosave?, req? }` (`req`: the
+//! `encodeSnapshot(snapshotRequest(req))` compiled user functions read), values in the boundary's tree
 //! encoding (`decode_value_bson`); `stored` (update) is the stored document's BSON.
 //!
 //! Result: `{ bail }` or `{ callerData, contextWrites: [[key, value]], invalid?: { collection,
@@ -56,6 +57,7 @@ struct Request {
   field_access: Vec<Option<bool>>,
   draft: bool,
   autosave: bool,
+  req: Option<payload_fn_ir::Value>,
 }
 
 fn parse(request_json: &str) -> Result<Request, Bail> {
@@ -106,7 +108,11 @@ fn parse(request_json: &str) -> Result<Request, Bail> {
   };
   let draft = request.get("draft").and_then(Json::as_bool).unwrap_or(false);
   let autosave = request.get("autosave").and_then(Json::as_bool).unwrap_or(false);
-  Ok(Request { json: request, entropy, user, i18n, context, language, fallback_language, data, locale, override_access, field_access, draft, autosave })
+  let req = match request.get("req") {
+    None | Some(Json::Null) => None,
+    Some(snapshot) => Some(super::user_fn::request_value(snapshot)?),
+  };
+  Ok(Request { json: request, entropy, user, i18n, context, language, fallback_language, data, locale, override_access, field_access, draft, autosave, req })
 }
 
 impl Request {
@@ -123,6 +129,7 @@ impl Request {
       user: self.user.clone(),
       draft: self.draft,
       autosave: self.autosave,
+      req: self.req.clone(),
     }
   }
 

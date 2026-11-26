@@ -78,6 +78,7 @@ fn create_builds_the_insert_in_mongoose_order() {
     user: None,
     draft: false,
     autosave: false,
+    req: None,
   };
   let prepared = prepare_create(&plan, &data(json!({ "views": "  12 ", "title": 7, "author": AUTHOR })), &mut ctx).unwrap();
   let write = prepared.outcome.unwrap();
@@ -114,6 +115,7 @@ fn create_reports_upstreams_validation_error() {
     user: None,
     draft: false,
     autosave: false,
+    req: None,
   };
   let prepared = prepare_create(&plan, &data(json!({ "views": 1 })), &mut ctx).unwrap();
   let invalid = prepared.outcome.unwrap_err();
@@ -131,7 +133,7 @@ fn a_validation_failure_without_translations_bails() {
   let mut entropy = RecordedEntropy::default();
   let context = JsVal::Undefined;
   let mut ctx =
-    WriteCtx { context: &context, locale: None, entropy: &mut entropy, fallback_language: &[], language: "en", override_access: true, field_access: &[], t: None, user: None, draft: false, autosave: false };
+    WriteCtx { context: &context, locale: None, entropy: &mut entropy, fallback_language: &[], language: "en", override_access: true, field_access: &[], t: None, user: None, draft: false, autosave: false, req: None };
   assert!(prepare_create(&plan, &data(json!({})), &mut ctx).is_err());
 }
 
@@ -153,6 +155,7 @@ fn a_missing_reading_bails() {
     user: None,
     draft: false,
     autosave: false,
+    req: None,
   };
   let bail = prepare_create(&plan, &data(json!({ "title": "x" })), &mut ctx).unwrap_err();
   assert_eq!(bail.0, "entropy:clock");
@@ -180,6 +183,7 @@ fn update_casts_the_set_in_reverse_key_order_and_applies_it() {
     user: None,
     draft: false,
     autosave: false,
+    req: None,
   };
   let id = JsVal::str("010101010101010101010101");
   let prepared = prepare_update(&plan, &id, &data(json!({ "views": -0.0 })), &input, &mut ctx).unwrap();

@@ -46,6 +46,7 @@ import { buildAllLocalesPublicationHookDoc } from '../../../payload/src/versions
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
 import { appendVersionToQueryKey } from '../../../payload/src/versions/drafts/appendVersionToQueryKey.js'
 import { loadCoreRuntimeAddon } from '../addon.js'
+import { encodeSnapshot, snapshotRequest } from '../compile/snapshot.js'
 import { evaluateRequestOnlyAccess } from '../fuse/access.js'
 import {
   castQuery,
@@ -437,6 +438,13 @@ const fieldAccessRequest = (
   return results
 }
 
+/**
+ * `req` as the plan's compiled user functions read it (`snapshotRequest`, compile/snapshot.ts),
+ * only when one of them reads it.
+ */
+const requestSnapshot = (plan: { readsReq: boolean }, req: Any) =>
+  plan.readsReq ? encodeSnapshot(snapshotRequest(req)) : undefined
+
 const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any) => {
   const resolved = entity(lane, args.collection.config.slug)
   if (typeof resolved === 'string') {
@@ -474,6 +482,7 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
         req.payload.config.localization && typeof req.locale === 'string' ? req.locale : undefined,
       op: 'create',
       overrideAccess: Boolean(args.overrideAccess),
+      req: requestSnapshot(plan, req),
       user: req.user ? [req.user.collection, encodeTree(req.user.id)] : undefined,
     }).slice(0, -1)
   } catch {
@@ -845,6 +854,7 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
             : undefined,
         op: 'update',
         overrideAccess: Boolean(args.overrideAccess),
+        req: requestSnapshot(plan, req),
         user: req.user ? [req.user.collection, encodeTree(req.user.id)] : undefined,
       })
     } catch {
