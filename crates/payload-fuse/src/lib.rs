@@ -213,6 +213,11 @@ fn decode_population(pop: &JsVal, access_req: Option<payload_fn_ir::Value>) -> F
           JsVal::Undefined | JsVal::Null => None,
           id => Some(id.as_num().filter(|n| *n >= 0.0 && n.fract() == 0.0).ok_or_else(|| Bail::new("request:pop"))? as u32),
         },
+        access_result: match entry.get("accessResult") {
+          JsVal::Undefined | JsVal::Null => None,
+          where_ => Some(write::to_json(where_)?),
+        },
+        join_access: decode_join_access(entry.get("joinAccess"))?,
       },
     );
   }
@@ -224,6 +229,24 @@ fn decode_population(pop: &JsVal, access_req: Option<payload_fn_ir::Value>) -> F
     related,
     access_req,
   })
+}
+
+/// `"joinAccess": [{ id, slug, result }, ...]` of a related collection (absent: none).
+fn decode_join_access(value: &JsVal) -> FuseResult<Vec<backend::JoinAccess>> {
+  let bad = || Bail::new("request:joinAccess");
+  let items = match value {
+    JsVal::Undefined | JsVal::Null => return Ok(Vec::new()),
+    JsVal::Arr(items) => items,
+    _ => return Err(bad()),
+  };
+  items
+    .iter()
+    .map(|item| {
+      let id = item.get("id").as_num().filter(|n| *n >= 0.0 && n.fract() == 0.0).ok_or_else(bad)? as u32;
+      let slug = item.get("slug").as_str().ok_or_else(bad)?.to_string();
+      Ok(backend::JoinAccess { id, slug, expected: write::to_json(item.get("result"))? })
+    })
+    .collect()
 }
 
 /// Runs one fused operation on `backend` and returns the result JSON text, or `!<reason>` when it

@@ -23,6 +23,7 @@ import { getNativeEngine } from '../native.js'
 import { createFunctionRegistry, serializeForEngine } from '../serialize.js'
 import { compiledAccess, laneFieldAccess } from './access.js'
 import { hasDataProperties, isInertTree, isPlainDataObject, isPlainObject } from './inert.js'
+import { fusedJoinQuery, hasJoins } from './joins.js'
 import { getCollectionPlan } from './plan.js'
 import {
   comparePopulated,
@@ -64,6 +65,8 @@ type Fused = {
   payload: unknown
   /** set when the operation populates relationships */
   population?: PopulationContext
+  /** upstream's changes to the caller's `joins` (`sanitizeJoinQuery`), applied after success */
+  replayJoins?: (joins: unknown) => void
   request: string
   target: FusedTarget
 }
@@ -481,6 +484,11 @@ const buildFindRequest = (args: Any): Fused | undefined => {
     return guard(population)
   }
 
+  const joinQuery = operationJoins({ args, config, overrideAccess, payload, req })
+  if (typeof joinQuery === 'string') {
+    return guard(joinQuery)
+  }
+
   const usePagination = pagination && limit !== 0
   const fullWhere = appendNonTrashedFilter({
     enableTrash: config.trash,
@@ -491,7 +499,7 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   const db = encodeDb(target, 'find', {
     collection: config.slug,
     draftsEnabled: draft,
-    joins: req.payloadAPI === 'GraphQL' ? false : joins === false ? false : joins || {},
+    joins: joinQuery.joins,
     limit: limit ?? (usePagination ? 10 : 0),
     locale: req.locale,
     page: page || 1,
@@ -520,7 +528,57 @@ const buildFindRequest = (args: Any): Fused | undefined => {
     select,
     showHiddenFields: Boolean(showHiddenFields),
   }).slice(0, -1)}${population ? `,"pop":${population.json}` : ''}}`
-  return { op: 'find', payload: db.payload, population: population?.context, request, target }
+  return {
+    op: 'find',
+    payload: db.payload,
+    population: population?.context,
+    replayJoins: joinQuery.replay,
+    request,
+    target,
+  }
+}
+
+/**
+ * The `joins` of the operation's `payload.db` call (`sanitizeJoinQuery`, then `false` for
+ * GraphQL) and the replay of its changes to `args.joins`, or the guard reason. A write
+ * operation's own result read passes no joins query (its collection has none: the fused writes'
+ * plan).
+ */
+const operationJoins = ({
+  args,
+  config,
+  overrideAccess,
+  payload,
+  req,
+}: {
+  args: Any
+  config: Any
+  overrideAccess: boolean
+  payload: Any
+  req: Any
+}) => {
+  const { joins } = args
+  if (!hasJoins(config)) {
+    return {
+      joins: req.payloadAPI === 'GraphQL' ? false : joins === false ? false : joins || {},
+      replay: undefined,
+    }
+  }
+  const joinQuery = fusedJoinQuery({
+    collectionConfig: config,
+    joins,
+    overrideAccess,
+    payload,
+    predict: false,
+    req,
+  })
+  if (typeof joinQuery === 'string') {
+    return joinQuery
+  }
+  return {
+    joins: req.payloadAPI === 'GraphQL' ? false : joinQuery.joins,
+    replay: isPlainObject(joins) ? joinQuery.replay : undefined,
+  }
 }
 
 export const fuseFind = (args: Any, exact: Exact): Promise<Any> | undefined => {
@@ -596,6 +654,9 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
           depth,
           draft: replaceWithVersion,
           fieldAccessIDs,
+          // findByID destructures `overrideAccess = false`
+          ownOverrideAccess:
+            isOperationResult || args.overrideAccess !== undefined ? args.overrideAccess : false,
           payload,
           plan,
           req,
@@ -604,6 +665,10 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
       : undefined
   if (typeof population === 'string') {
     return guard(population)
+  }
+  const joinQuery = operationJoins({ args, config, overrideAccess, payload, req })
+  if (typeof joinQuery === 'string') {
+    return guard(joinQuery)
   }
   const fullWhere = appendNonTrashedFilter({
     enableTrash: config.trash,
@@ -616,7 +681,7 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
     {
       collection: config.slug,
       draftsEnabled: replaceWithVersion,
-      joins: req.payloadAPI === 'GraphQL' ? false : joins === false ? false : joins || {},
+      joins: joinQuery.joins,
       locale: req.locale,
       req: { fallbackLocale: undefined, locale: undefined, payloadAPI: undefined },
       select,
@@ -643,7 +708,14 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
     select,
     showHiddenFields: Boolean(showHiddenFields),
   }).slice(0, -1)}${population ? `,"pop":${population.json}` : ''}}`
-  return { op: 'findByID', payload: db.payload, population: population?.context, request, target }
+  return {
+    op: 'findByID',
+    payload: db.payload,
+    population: population?.context,
+    replayJoins: joinQuery.replay,
+    request,
+    target,
+  }
 }
 
 export const fuseFindByID = (args: Any, exact: Exact): Promise<Any> | undefined => {
@@ -727,13 +799,13 @@ const runFused = (fused: Fused, args: Any, exact: Exact): Promise<Any> | undefin
       if (backoffKey) {
         notePopulated(args.collection, backoffKey, resolved)
       }
-      return settle(fused, resolved) ?? exact()
+      return settle(fused, resolved, args) ?? exact()
     })
   }
   if (backoffKey) {
     notePopulated(args.collection, backoffKey, text)
   }
-  return settle(fused, text)
+  return settle(fused, text, args)
 }
 
 /**
@@ -779,12 +851,17 @@ const notePopulated = (collection: object, key: string, text: string) => {
   }
 }
 
-const settle = ({ op, population }: Fused, text: string): Promise<Any> | undefined => {
+const settle = (
+  { op, population, replayJoins }: Fused,
+  text: string,
+  args: Any,
+): Promise<Any> | undefined => {
   if (text.charCodeAt(0) === 33 /* ! */) {
     count(stats.bails, text.slice(1))
     return undefined
   }
   count(stats.hits, op)
+  replayJoins?.(args.joins)
   if (text.charCodeAt(0) === 35 /* # */) {
     count(stats.populated, op)
     return Promise.resolve(materializePopulated(text, population!))
@@ -801,8 +878,10 @@ const argsSnapshot = (args: Any) =>
   canonical([args.where, args.sort, args.select, args.joins, args.populate, args.id])
 
 const shadow = async (fused: Fused, args: Any, exact: Exact): Promise<Any> => {
-  const { op, request } = fused
+  const { op, replayJoins, request } = fused
   const before = argsSnapshot(args)
+  // the caller's `joins` with the changes the fused lane replays (compared with the exact lane's)
+  const replayed = replayJoins && structuredClone(args.joins)
   const text = await runNative(fused)
   const isBail = text.charCodeAt(0) === 33
   if (isBail) {
@@ -844,8 +923,10 @@ const shadow = async (fused: Fused, args: Any, exact: Exact): Promise<Any> => {
       }
     }
     const after = argsSnapshot(args)
-    if (after !== before) {
-      recordDiff({ kind: 'mutation', op, request, ...firstDifference(after, before) })
+    replayJoins?.(replayed)
+    const expected = replayJoins ? argsSnapshot({ ...args, joins: replayed }) : before
+    if (after !== expected) {
+      recordDiff({ kind: 'mutation', op, request, ...firstDifference(after, expected) })
     }
   }
   return result
@@ -980,6 +1061,7 @@ export const fusedOperationText = ({
     return guard('populate:text')
   }
   const request = `${fused.request.slice(0, -1)},"canonical":true}`
+  const { replayJoins } = fused
   const finish = (text: string): string | undefined => {
     if (text.charCodeAt(0) === 33 /* ! */) {
       count(stats.bails, text.slice(1))
@@ -997,6 +1079,7 @@ export const fusedOperationText = ({
       }
       return undefined
     }
+    replayJoins?.(operationArgs.joins)
     return text
   }
   const text = runNative({ ...fused, request })

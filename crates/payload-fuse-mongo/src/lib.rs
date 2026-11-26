@@ -36,9 +36,10 @@ pub struct MongoReads {
   count: CountSpec,
   flags: Flags,
   subqueries: Vec<SubQuery>,
-  /// `findOne` of a collection with joins: db-mongodb's `aggregatePaginate` pipeline (`$match`,
-  /// `$limit: 1`, the join stages, `$project`), sent without options (`Model.aggregate(pipeline,
-  /// { collation: undefined, session })`) instead of `find`.
+  /// `findOne` / `find` of a collection with joins: db-mongodb's `aggregatePaginate` pipeline
+  /// (`$match`, `$sort`, `$skip`, `$limit`, the join stages, `$project`), sent without options
+  /// (`Model.aggregate(pipeline, { collation: undefined, session })`) instead of `find`; a `find`
+  /// runs it beside its count and returns `aggregatePaginate`'s result meta.
   pipeline: Option<Vec<Document>>,
 }
 
@@ -175,7 +176,8 @@ impl MongoReads {
 
 /// What the reads returned: the documents decoded, transformed and converted.
 enum Loaded {
-  Page { count: Option<u64>, docs: Vec<JsVal>, pagination: bool, limit: f64, page: f64 },
+  /// `aggregate`: read through db-mongodb's `aggregatePaginate` (its own result meta)
+  Page { count: Option<u64>, docs: Vec<JsVal>, pagination: bool, limit: f64, page: f64, aggregate: bool },
   One(Option<JsVal>),
   Count(u64),
 }
@@ -297,7 +299,7 @@ pub fn run_documents(
     client: client_id,
     txn,
     database: reads.database.clone(),
-    loaded: Mutex::new(Some(Loaded::Page { count: None, docs, pagination: false, limit: 0.0, page: 1.0 })),
+    loaded: Mutex::new(Some(Loaded::Page { count: None, docs, pagination: false, limit: 0.0, page: 1.0, aggregate: false })),
     leaves: convert.leaves.clone(),
     flags: reads.flags,
   };
@@ -468,17 +470,49 @@ async fn run_find(
   Ok(docs)
 }
 
+/// The documents of an aggregation (raw documents: `_id`, no `leanWithId`), converted by `convert`
+/// in chunks like [`run_find`].
+async fn run_aggregate(coll: &Collection<RawDocumentBuf>, pipeline: Vec<Document>, convert: &Convert) -> Result<Vec<JsVal>, Failure> {
+  let mut cursor = coll.aggregate(pipeline).await?;
+  let mut tasks = Vec::new();
+  let mut chunk = Vec::with_capacity(CHUNK);
+  while cursor.advance().await? {
+    chunk.push(cursor.current().to_raw_document_buf());
+    if chunk.len() == CHUNK {
+      let docs = std::mem::replace(&mut chunk, Vec::with_capacity(CHUNK));
+      let convert = convert.clone();
+      tasks.push(tokio::spawn(async move { docs.iter().map(|raw| convert.document(raw, false)).collect::<FuseResult<Vec<_>>>() }));
+    }
+  }
+  let tail = chunk.iter().map(|raw| convert.document(raw, false)).collect::<FuseResult<Vec<_>>>()?;
+  let mut docs = Vec::new();
+  for task in tasks {
+    docs.extend(task.await.map_err(|_| LaneError::Bail("conversion task failed"))??);
+  }
+  docs.extend(tail);
+  Ok(docs)
+}
+
 async fn load(client_id: u32, reads: &mut MongoReads, convert: &Convert) -> Result<Loaded, Failure> {
   let state = client(client_id)?;
   reads.resolve_subqueries(&state).await?;
   let coll = collection(&state, reads.database.as_deref(), &reads.collection);
   Ok(match reads.op {
-    ReadOp::Find { .. } if reads.pipeline.is_some() => return Err(LaneError::Bail("aggregate:find").into()),
+    ReadOp::Find { pagination, limit, page } if reads.pipeline.is_some() => {
+      if !reads.subqueries.is_empty() {
+        return Err(LaneError::Bail("aggregate:subqueries").into());
+      }
+      // db-mongodb `aggregatePaginate`: `Promise.all([Model.aggregate(...), countPromise])`, the
+      // aggregation started first, both in flight
+      let pipeline = reads.pipeline.clone().unwrap_or_default();
+      let (docs, count) = tokio::join!(run_aggregate(&coll, pipeline, convert), run_count(&coll, &reads.count));
+      Loaded::Page { count: count?, docs: docs?, pagination, limit, page, aggregate: true }
+    }
     ReadOp::Find { pagination, limit, page } => {
       // mongoose-paginate-v2: the count is started first, both in flight
       let (count, docs) =
         tokio::join!(run_count(&coll, &reads.count), run_find(&coll, reads.find.as_ref(), convert, true));
-      Loaded::Page { count: count?, docs: docs?, pagination, limit, page }
+      Loaded::Page { count: count?, docs: docs?, pagination, limit, page, aggregate: false }
     }
     ReadOp::FindOne if reads.pipeline.is_some() => {
       if !reads.subqueries.is_empty() {
@@ -545,10 +579,14 @@ fn bail(reason: &'static str) -> Bail {
 
 impl MongoSession<'_> {
   fn page(&mut self) -> FuseResult<JsVal> {
-    let Some(Loaded::Page { count, docs, pagination, limit, page }) = self.loaded.take() else {
+    let Some(Loaded::Page { count, docs, pagination, limit, page, aggregate }) = self.loaded.take() else {
       return Err(bail("read order"));
     };
-    Ok(page_result(docs, count, pagination, limit, page))
+    Ok(if aggregate {
+      aggregate_page_result(docs, count, pagination, limit, page)
+    } else {
+      page_result(docs, count, pagination, limit, page)
+    })
   }
 
   fn one(&mut self) -> FuseResult<JsVal> {
@@ -619,13 +657,28 @@ impl ReadSession for MongoSession<'_> {
     id_condition.insert("$in", Bson::Array(in_ids));
     let mut condition = Document::new();
     condition.insert("_id", id_condition);
+    // with a where constraint of the collection's read access (`related.access_result`):
+    // `combineQueries({ id: { in } }, accessResult)` is `{ and: [{ id: { in } }, accessResult] }`,
+    // whose `buildQuery` holds the constraint's own query second (`accessQuery`: cast for
+    // `Model.find`, uncast for an aggregation)
+    let pipeline_stages_hex = backend.get("pipeline").as_str();
+    let access = match &related.access_result {
+      None => None,
+      Some(_) => {
+        let key = if pipeline_stages_hex.is_some() { "accessMatch" } else { "accessFilter" };
+        let hex = backend.get(key).as_str().ok_or_else(|| bail("populate:access"))?;
+        Some(hex_document(hex)?.get_document("query").map_err(|_| bail("populate:access"))?.clone())
+      }
+    };
+    let mut and = vec![Bson::Document(condition)];
+    and.extend(access.map(Bson::Document));
     let mut filter = Document::new();
-    filter.insert("$and", Bson::Array(vec![Bson::Document(condition)]));
+    filter.insert("$and", Bson::Array(and));
     let lane_bail = |error: LaneError| match error {
       LaneError::Bail(reason) => bail(reason),
       LaneError::Driver(_) => bail("driver"),
     };
-    if let Some(stages) = backend.get("pipeline").as_str() {
+    if let Some(stages) = pipeline_stages_hex {
       // a collection with joins: `aggregatePaginate`'s `[{ $match: query }, ...stages]` (the
       // uncast `buildQuery` of the ids is this same filter), raw documents (no `leanWithId`)
       let mut pipeline = vec![{
@@ -695,6 +748,14 @@ impl ReadSession for MongoSession<'_> {
 /// `{ stages: [...] }` the TS side serialized (src/fuse/mongo.ts `relatedBackend`).
 fn pipeline_stages(hex: &str) -> FuseResult<Vec<Document>> {
   let bad = || bail("populate:pipeline");
+  let doc = hex_document(hex).map_err(|_| bad())?;
+  let Ok(stages) = doc.get_array("stages") else { return Err(bad()) };
+  stages.iter().map(|stage| stage.as_document().cloned().ok_or_else(bad)).collect()
+}
+
+/// A js-bson document the TS side serialized as hex (src/fuse/mongo.ts `relatedBackend`).
+fn hex_document(hex: &str) -> FuseResult<Document> {
+  let bad = || bail("populate:backend");
   if hex.len() % 2 != 0 {
     return Err(bad());
   }
@@ -702,9 +763,7 @@ fn pipeline_stages(hex: &str) -> FuseResult<Vec<Document>> {
     .step_by(2)
     .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).map_err(|_| bad()))
     .collect::<FuseResult<Vec<u8>>>()?;
-  let doc = Document::from_reader(bytes.as_slice()).map_err(|_| bad())?;
-  let Ok(stages) = doc.get_array("stages") else { return Err(bad()) };
-  stages.iter().map(|stage| stage.as_document().cloned().ok_or_else(bad)).collect()
+  Document::from_reader(bytes.as_slice()).map_err(|_| bad())
 }
 
 /// A JSON-like sort / projection as js-bson serializes it (integers as int32).
@@ -788,6 +847,29 @@ fn page_result(docs: Vec<JsVal>, count: Option<u64>, pagination: bool, limit: f6
   out.insert("hasNextPage".to_string(), JsVal::Bool(has_next));
   out.insert("prevPage".to_string(), prev);
   out.insert("nextPage".to_string(), next);
+  JsVal::obj(out)
+}
+
+/// db-mongodb `aggregatePaginate`'s result (utilities/aggregatePaginate.ts): `count` is the
+/// count query's result (`null` without one: the documents' number); `page` and `limit` are the
+/// numbers `find` passes, `pagination` is `pagination !== false`.
+fn aggregate_page_result(docs: Vec<JsVal>, count: Option<u64>, pagination: bool, limit: f64, page: f64) -> JsVal {
+  let total = count.map_or(docs.len() as f64, |n| n as f64);
+  let total_pages = if pagination && limit != 0.0 { (total / limit).ceil() } else { 1.0 };
+  let has_prev = pagination && page > 1.0;
+  let has_next = pagination && total_pages > page;
+  let paging_counter = if pagination { (page - 1.0) * limit + 1.0 } else { 1.0 };
+  let mut out = JsObj::with_capacity(10);
+  out.insert("docs".to_string(), JsVal::arr(docs));
+  out.insert("hasNextPage".to_string(), JsVal::Bool(has_next));
+  out.insert("hasPrevPage".to_string(), JsVal::Bool(has_prev));
+  out.insert("limit".to_string(), JsVal::Num(limit));
+  out.insert("nextPage".to_string(), if has_next { JsVal::Num(page + 1.0) } else { JsVal::Null });
+  out.insert("page".to_string(), JsVal::Num(page));
+  out.insert("pagingCounter".to_string(), JsVal::Num(paging_counter));
+  out.insert("prevPage".to_string(), if has_prev { JsVal::Num(page - 1.0) } else { JsVal::Null });
+  out.insert("totalDocs".to_string(), JsVal::Num(total));
+  out.insert("totalPages".to_string(), JsVal::Num(total_pages));
   JsVal::obj(out)
 }
 

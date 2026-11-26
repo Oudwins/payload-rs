@@ -124,7 +124,8 @@ A collection is eligible for reads when:
   would throw a `QueryError` or rewrite the query) runs on the exact lane;
 - options the core does not implement send the call to the exact lane: `includeLockStatus`,
   `draft` with drafts, `joins` with values, `data` (findByID), `disableErrors` misses, `locale`
-  `'all'` with localized blocks;
+  `'all'` with localized blocks; a join query (section 8) whose `where` the validator refuses, or
+  with a sort without `overrideAccess`;
 - `req` is a plain object, a web `Request` carrying Payload's properties, or Payload's own
   `isolateObjectProperty` proxy of either (the proxies are recorded in a `globalThis` `WeakMap`,
   `Symbol.for('payload.isolateObjectProperty')`);
@@ -134,9 +135,13 @@ A collection is eligible for reads when:
   `overrideAccess` every collection the levels can load must have compiled read access (its `FnId`
   goes to the request; the core evaluates it like the nested find's `executeAccess({ slug,
   disableErrors: true, req })` when the nested find runs: `true` reads, `false` returns no
-  documents without a read, anything else bails `populate:access:*`), compiled field read access
-  only (section 2) and no `defaultSort` (sort path validation checks field permissions), else
-  `populate:access`; the text lane (`fusedOperationText`) does not populate.
+  documents without a read, on MongoDB a where constraint predicted for the operation's `req` is
+  combined into the nested reads (section 8; a different result bails `populate:access:changed`),
+  anything else bails `populate:access:*`), compiled field read access only (section 2), compiled
+  read access of the collections their joins read (section 8) and no `defaultSort` (sort path
+  validation checks field permissions), else `populate:access`; the text lane
+  (`fusedOperationText`) does not populate. The keys of the operation's own loads carry its
+  `afterRead` `overrideAccess` (findByID's default `false`).
 - a write operation's own result read (`fusedFindByIDRequest`, src/fuse-write) does not check the
   collection's read access (the operations do not); its field read access and population follow
   the operation's `overrideAccess` like any read.
@@ -316,26 +321,63 @@ the Node driver's `Collection` calls; the ids at a sub-query's `path` are taken 
 lane's command (they must be ObjectIds: what the same sub-query returned there; the results are
 compared on their own).
 
-Joins (WP-S, 2026-11-26): a collection with join fields (no polymorphic joins) is read through
-db-mongodb's `aggregatePaginate` with `buildJoinAggregation`'s stages, re-stated by `joinStages`
-(src/fuse/mongo.ts) for the joins it serves: one collection, the main documents (not
-`versions`), a sanitized join query of `{ where: {} }` (`overrideAccess`, or a read access of
-`true`, and no `where` on the field), not localized, not `locale: 'all'`, a joined collection read
-without drafts (`draftsEnabled` with a drafts collection: `joins:drafts`), `useJoinAggregations`
-(else `resolveJoins`). Per join: `$lookup` (`as: '<path>.docs'`, `foreignField` from `on` /
-`getForeignPath`, `localField: '_id'`, `[{ $match: {} }, { $sort }, { $limit: limit + 1 }]`),
-the `$addFields` mapping `docs` to `_id`s with `hasNextPage`, and the `$slice`. Served: `findOne`
-(`[{ $match: query }, { $limit: 1 }, ...stages, { $project }?]`, the uncast query: aggregation
-pipelines are not cast) and population's nested finds (section 9: `related.backend.pipeline`, the
-stages after `$match` as hex of js-bson `{ stages }`: `$sort`, the join stages, `$project`;
-natively `[{ $match: <the id filter> }, ...stages]`, in the fused write's transaction when there
-is one), both read as raw documents (no `leanWithId`). Without `overrideAccess` a nested find of a
-collection with joins is not served (`mongo:populate:joins:access`: `sanitizeJoinQuery` would run
-the joined collection's read access); a `find` whose aggregation has stages is not served
-(`joins:find`: `aggregatePaginate`'s own result meta). Shadow mode compares the traced
-`aggregate` (its pipeline) with the fused one. The core populates a join's `docs` like
-`relationshipPopulationPromise` (every truthy entry, its `id` when truthy, into `docs[index]`;
-no `null` filtering; `maxDepth` applies).
+Joins (WP-S, WP-U, 2026-11-26): a collection with join fields (no polymorphic joins) is read
+through db-mongodb's `aggregatePaginate` with `buildJoinAggregation`'s stages, re-stated by
+`joinStages` (src/fuse/mongo.ts): one collection per join, the main documents (not `versions`),
+not `locale: 'all'` (`joins:allLocales`), a joined collection read without drafts
+(`draftsEnabled` with a drafts collection: `joins:drafts`), `useJoinAggregations` (else
+`resolveJoins`).
+
+- **The join query** is payload's `sanitizeJoinQuery`, re-stated by `fusedJoinQuery`
+  (src/fuse/joins.ts) on a copy of the operation's `joins`: per join (in `collectionConfig.joins`
+  order) the joined collection's read access (without `overrideAccess`: compiled, `true`, `false`
+  or a plain JSON where; anything else guards `joins:access:*`), `false` drops the join, a where is
+  `sanitizeWhereQuery`'d and combined (`combineQueries`) after the field's `where`. The join's
+  `where` must pass the conservative validator (`isAcceptedWhere` on the joined collection, `id`
+  paths only without `overrideAccess`: `joins:where`); without `overrideAccess` a join sort
+  (`sort || field.defaultSort || defaultSort`) guards `joins:access:sort` (`validateSortQuery`
+  checks field access). The operation's own read evaluates the access through `evaluateOnLane`
+  (guard sampling: a sampled call runs the exact lane). Upstream changes the caller's `joins`
+  object in place: after a fused success the same changes are applied to it with the recorded
+  access results (`replayJoins`; shadow mode compares them with the exact lane's). GraphQL
+  sanitizes too (its access calls run) and passes `joins: false`.
+- **Per join**: `$lookup` (`as: '<path>[.<locale>].docs'`, the locale suffix for a localized join
+  field, `foreignField` from `on` / `getForeignPath({ locale })`, `localField: '_id'`, pipeline
+  `[{ $match }, { $sort }, { $skip }?, { $limit: limit + 1 }?]`; `$match` is
+  `JoinModel.buildQuery` of the join's `where`, the uncast `buildFilter` on the joined collection,
+  no relationship sub-queries), the `$addFields` mapping `docs` to `_id`s with `hasNextPage`, with
+  `count` the `totalDocs` `$lookup` / `$addFields`, then the `$slice`. Join query values: `limit`
+  (finite number, default `defaultLimit ?? 10`), `page`, `count` (boolean), `sort`, `where`;
+  anything else `joins:values`.
+- **Served reads**: `findOne` (`[{ $match: query }, { $limit: 1 }, ...stages, { $project }?]`),
+  `find` (`aggregatePaginate`: `[{ $match: query }, { $sort }, { $skip }, { $limit }?, ...stages,
+  { $project }?]` beside its count, `estimatedDocumentCount` for an empty query, else
+  `countDocuments` of the cast query; no collation, no sub-queries; the result meta in
+  `aggregatePaginate`'s order and arithmetic: `totalPages` without `|| 1`, `pagingCounter`, ...,
+  `payload_fuse_mongo::aggregate_page_result`) and population's nested finds (section 9:
+  `related.backend.pipeline`, the stages after `$match` as hex of js-bson `{ stages }`: `$sort`,
+  `$skip: 0`, the join stages, `$project`; natively `[{ $match: <the id filter> }, ...stages]`, in
+  the fused write's transaction when there is one), all read as raw documents (no `leanWithId`).
+  Aggregation pipelines are not cast by mongoose: the stages are sent as built.
+- **Nested finds without `overrideAccess`** (population): `relatedEntry` (src/fuse/populate.ts)
+  sanitizes the nested find's `joins: undefined` with the access results predicted for the
+  operation's `req` (`evaluateCompiled`, no sampling) and builds the stages from them; the request
+  carries them (`related[slug].joinAccess: [{ id, slug, result }]`) and the core evaluates each
+  function where the nested find runs (after its own access, only when that read; `lane_call`:
+  guard sampling at the real call), with the nested `req` (`req.query.depth`), bailing
+  `populate:joins:access:changed` when a result differs from the prediction.
+- **Collection read access returning a where** in a nested find (the perf suite's complex posts,
+  loaded as a join's `docs`): predicted the same way (`predictedAccessWhere`), the nested reads
+  hold `combineQueries({ id: { in } }, where)`'s `buildQuery`: `{ $and: [<ids>, <where's query>] }`
+  (`related.backend.accessFilter`, cast by mongoose for `Model.find`, or `accessMatch`, uncast, for
+  the aggregation); the request carries the prediction (`related[slug].accessResult`) and the core
+  checks the evaluated result against it (`populate:access:changed`). Only backends with
+  `relatedBackend` (MongoDB) receive it; elsewhere a where result still bails
+  `populate:access:result`.
+
+Shadow mode compares the traced `aggregate` (its pipeline, before the count of a `find`) with
+the fused one. The core populates a join's `docs` like `relationshipPopulationPromise` (every
+truthy entry, its `id` when truthy, into `docs[index]`; no `null` filtering; `maxDepth` applies).
 
 ## 9. Population (depth >= 1)
 
@@ -351,10 +393,11 @@ documents get their own `afterRead`, documents are matched to keys by id, missin
 id, trashed ones become `null`, hasMany arrays drop `null`s.
 
 The request carries `"pop": { draft, joins, locale, req, related: { [slug]: { plan, select,
-selectMode, sort, trash, numberID, auth, backend, access, fieldAccess } } }` for the collections
-the levels can reach (an unlisted one bails; `access` / `fieldAccess`: their compiled read access
-and field read access without `overrideAccess`, section 3 and 2, evaluated with the request's
-`accessReq`). A populated result is `#` plus `{ r, x, p, k, n }`: the result with each
+selectMode, sort, trash, numberID, auth, backend, access, accessResult, fieldAccess, joinAccess }
+} }` for the collections the levels can reach (an unlisted one bails; `access` / `fieldAccess`:
+their compiled read access and field read access without `overrideAccess`, section 3 and 2,
+evaluated with the request's `accessReq`; `accessResult` / `joinAccess`: the predicted where of
+`access` and the read access of the collections their joins read, section 8). A populated result is `#` plus `{ r, x, p, k, n }`: the result with each
 document written once (`p`: the other paths that hold the same object), documents only the
 dataloader holds (`x`, e.g. trashed ones), the dataloader entries in cache insertion order (`k`:
 `[slug, id, depth, currentDepth, path | null]`) and the nested finds (`n`: their depth). JS

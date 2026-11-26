@@ -190,13 +190,14 @@ const entity = (lane: DriverLane, collectionSlug: string) => {
 
 /**
  * db-mongodb `buildJoinAggregation` (utilities/buildJoinAggregation.ts) of a collection's joins
- * (no polymorphic joins: `entity`), for the joins the fused reads serve: one collection, the
- * main collection's documents (no `versions`), a join query of `where: {}` only (`overrideAccess`
- * or a read access of `true`, no `where` on the field), not localized, not all locales, and a
- * joined collection read without drafts. `joins`: the sanitized `JoinQuery` db-mongodb gets.
- * Aggregation pipelines are not cast by mongoose: the stages are sent as built.
+ * (no polymorphic joins: `entity`) for the main collection's documents (no `versions`): one
+ * collection per join, a joined collection read without drafts, one locale. `joins`: the
+ * sanitized `JoinQuery` db-mongodb gets (src/fuse/joins.ts), whose `where` becomes the join's
+ * `$match` through `JoinModel.buildQuery` (`buildFilter` on the joined collection: no relationship
+ * sub-queries). Aggregation pipelines are not cast by mongoose: the stages are sent as built.
  */
 const joinStages = (
+  lane: DriverLane,
   adapter: Any,
   collectionConfig: Any,
   {
@@ -231,46 +232,66 @@ const joinStages = (
       if (draftsEnabled && joinedConfig.versions?.drafts) {
         unsupported('joins:drafts')
       }
-      const query = joins?.[join.joinPath] || {}
-      for (const key of Object.keys(query)) {
-        if (key !== 'where' || Object.keys(query.where ?? {}).length > 0) {
-          unsupported(`joins:${key}`)
-        }
-      }
       if (localization && locale === 'all') {
         unsupported('joins:allLocales')
       }
+      const {
+        count,
+        limit = join.field.defaultLimit ?? 10,
+        page,
+        sort: sortJoin = join.field.defaultSort || joinedConfig.defaultSort,
+        where = {},
+      } = joins?.[join.joinPath] || {}
       if (
-        localization &&
-        locale &&
-        fieldShouldBeLocalized({ field: join.field, parentIsLocalized: join.parentIsLocalized })
+        !(count === undefined || typeof count === 'boolean') ||
+        !(typeof limit === 'number' && Number.isFinite(limit)) ||
+        !(page === undefined || (typeof page === 'number' && Number.isFinite(page)))
       ) {
-        unsupported('joins:localized')
+        unsupported('joins:values')
       }
-      const limit = join.field.defaultLimit ?? 10
       const sort = buildSortParam({
         adapter,
         config: adapter.payload.config,
         fields: joinedConfig.flattenedFields,
         locale,
-        sort: join.field.defaultSort || joinedConfig.defaultSort,
+        sort: sortJoin,
         timestamps: true,
       })
       const sortProperty = Object.keys(sort)[0]!
-      // `JoinModel.buildQuery({ where: {} })`
+      const { Model: JoinModel } = getCollection({ adapter, collectionSlug: joinedConfig.slug })
+      // `JoinModel.buildQuery({ locale, payload, where })`
+      const { query: $match, subqueries } = buildFilter({
+        adapter,
+        collectionSlug: joinedConfig.slug,
+        fields: joinedConfig.flattenedFields,
+        lane,
+        locale,
+        where,
+      })
+      if (subqueries.length > 0) {
+        unsupported('joins:where:relationship-path')
+      }
       const pipeline: Any[] = [
-        { $match: {} },
+        { $match },
         { $sort: { [sortProperty]: sort[sortProperty] === 'asc' ? 1 : -1 } },
       ]
+      if (page) {
+        pipeline.push({ $skip: (page - 1) * limit })
+      }
       if (limit > 0) {
         pipeline.push({ $limit: limit + 1 })
       }
       const polymorphicSuffix = Array.isArray(join.targetField.relationTo) ? '.value' : ''
+      const localeSuffix =
+        fieldShouldBeLocalized({ field: join.field, parentIsLocalized: join.parentIsLocalized }) &&
+        localization &&
+        locale
+          ? `.${locale}`
+          : ''
+      const as = `${join.joinPath}${localeSuffix}`
       const foreignField = join.getForeignPath
         ? `${join.getForeignPath({ locale })}${polymorphicSuffix}`
         : `${join.field.on}${polymorphicSuffix}`
-      const as = join.joinPath
-      const { Model: JoinModel } = getCollection({ adapter, collectionSlug: joinedConfig.slug })
       stages.push(
         {
           $lookup: {
@@ -288,6 +309,24 @@ const joinStages = (
           },
         },
       )
+      if (count) {
+        stages.push(
+          {
+            $lookup: {
+              as: `${as}.totalDocs`,
+              foreignField,
+              from: JoinModel.collection.name,
+              localField: '_id',
+              pipeline: [{ $match }, { $count: 'result' }],
+            },
+          },
+          {
+            $addFields: {
+              [`${as}.totalDocs`]: { $ifNull: [{ $first: `$${as}.totalDocs.result` }, 0] },
+            },
+          },
+        )
+      }
       if (limit > 0) {
         stages.push({ $addFields: { [`${as}.docs`]: { $slice: [`$${as}.docs`, limit] } } })
       }
@@ -305,17 +344,17 @@ const relatedBackend = (
   lane: DriverLane,
   slug: string,
   {
+    accessWhere,
     draft,
     joins,
     locale,
-    overrideAccess,
     select,
     sort: sortArg,
   }: {
+    accessWhere: unknown
     draft: unknown
     joins: unknown
     locale: Any
-    overrideAccess: boolean
     select: Any
     sort: Any
   },
@@ -349,33 +388,49 @@ const relatedBackend = (
           select,
         })
       : undefined
-    if (joins !== false && Object.keys(collectionConfig.joins ?? {}).length > 0) {
-      if (!overrideAccess) {
-        // the nested find's `sanitizeJoinQuery` runs the joined collections' read access
-        return 'mongo:populate:joins:access'
+    // `buildQuery` of `{ and: [{ id: { in } }, accessWhere] }` holds the constraint's own query
+    // second in its `$and` (built natively with the ids): uncast for an aggregation, cast by
+    // mongoose for `Model.find`
+    let accessQuery: Any
+    if (accessWhere !== undefined) {
+      const { query, subqueries } = buildFilter({
+        adapter,
+        collectionSlug: slug,
+        fields: collectionConfig.flattenedFields,
+        lane,
+        locale,
+        where: accessWhere,
+      })
+      if (subqueries.length > 0 || Object.keys(query).length === 0) {
+        unsupported('populate:access:where')
       }
-      // the nested find sanitizes `joins: {}` with `overrideAccess` to `{ [path]: { where: {} } }`
-      const stages = joinStages(adapter, collectionConfig, {
+      accessQuery = query
+    }
+    const hexOf = (value: unknown) => Buffer.from(lane.BSON.serialize(value)).toString('hex')
+    if (joins !== false && Object.keys(collectionConfig.joins ?? {}).length > 0) {
+      // `joins`: the nested find's sanitized join query (src/fuse/populate.ts)
+      const stages = joinStages(lane, adapter, collectionConfig, {
         draftsEnabled: draft,
-        joins: {},
+        joins,
         locale,
         projection,
       })
       if (stages.length > 0) {
-        // `aggregatePaginate` (`pagination: false`, `limit: 0`): `$match` (built natively), the
-        // sort, the join stages, the projection
+        // `aggregatePaginate` (`pagination: false`, `limit: 0`, `page: 1`): `$match` (built
+        // natively), the sort, `$skip: 0`, the join stages, the projection
         const $sort: Record<string, -1 | 1> = {}
         for (const [key, value] of Object.entries(sort)) {
           $sort[key] = value === 'desc' ? -1 : 1
         }
-        const after: Any[] = [{ $sort }, ...stages]
+        const after: Any[] = [{ $sort }, { $skip: 0 }, ...stages]
         if (projection) {
           after.push({ $project: projection })
         }
         return {
           backend: {
+            accessMatch: accessQuery && hexOf({ query: accessQuery }),
             collection: Model.collection.collectionName,
-            pipeline: Buffer.from(lane.BSON.serialize({ stages: after })).toString('hex'),
+            pipeline: hexOf({ stages: after }),
             plan,
           },
         }
@@ -383,6 +438,7 @@ const relatedBackend = (
     }
     return {
       backend: {
+        accessFilter: accessQuery && hexOf({ query: castFilter(Model.schema, accessQuery) }),
         collection: Model.collection.collectionName,
         plan,
         projection: projectionForExec(Model, 'find', projection) ?? null,
@@ -482,21 +538,70 @@ const findReads = (lane: DriverLane, args: Any): { plan: number } & Record<strin
       paginationOptions.pagination = false
     }
   }
-  const stages = joinStages(adapter, collectionConfig, {
+  const stages = joinStages(lane, adapter, collectionConfig, {
     draftsEnabled: args.draftsEnabled,
     joins,
     locale,
     projection: paginationOptions.projection,
   })
   if (stages.length > 0) {
-    // `aggregatePaginate` with its own result meta: not served yet
-    unsupported('joins:find')
+    if (subqueries.length > 0) {
+      unsupported('joins:subqueries')
+    }
+    return { ...aggregatePaginateReads(Model, query, stages, paginationOptions), plan }
   }
   return {
     ...paginateReads(Model, query, paginationOptions),
     plan,
     subqueries: subqueryReads(Model.schema, query, subqueries),
   }
+}
+
+/**
+ * db-mongodb `aggregatePaginate` (utilities/aggregatePaginate.ts) of `find` with join stages, up
+ * to its aggregation and count: the uncast query as `$match` (aggregation pipelines are not cast),
+ * the count as mongoose casts it; `meta`: the inputs of its result meta.
+ */
+const aggregatePaginateReads = (Model: Any, query: Any, stages: Any[], paginationOptions: Any) => {
+  const { collation, limit, page, pagination, projection, sort, useEstimatedCount } =
+    paginationOptions
+  if (collation !== undefined) {
+    // `Model.aggregate(pipeline, { collation })`
+    unsupported('joins:collation')
+  }
+  if (typeof page !== 'number' || typeof limit !== 'number') {
+    unsupported('joins:page')
+  }
+  const pipeline: Any[] = [{ $match: query }]
+  if (sort) {
+    const $sort: Record<string, -1 | 1> = {}
+    for (const [key, value] of Object.entries(sort)) {
+      $sort[key] = value === 'desc' ? -1 : 1
+    }
+    pipeline.push({ $sort })
+  }
+  if (page) {
+    pipeline.push({ $skip: (page - 1) * limit })
+  }
+  if (limit) {
+    pipeline.push({ $limit: limit })
+  }
+  pipeline.push(...stages)
+  if (projection) {
+    pipeline.push({ $project: projection })
+  }
+  const reads: Record<string, unknown> = {
+    collection: Model.collection.collectionName,
+    meta: { limit, page, pagination: pagination !== false },
+    op: 'find',
+    pipeline,
+  }
+  if (pagination !== false && limit) {
+    // `Model.estimatedDocumentCount(query)` (an empty query) or `Model.countDocuments(query, {
+    // collation, session })` (the `_id` hint only applies to an empty query)
+    reads.count = useEstimatedCount ? 'estimated' : countSpec(Model, query, {})
+  }
+  return reads
 }
 
 /** mongoose-paginate-v2 `paginate(query, options)` (src/index.js) up to its two queries. */
@@ -624,7 +729,7 @@ const findOneReads = (lane: DriverLane, args: Any): { plan: number } & Record<st
     fields: collectionConfig.flattenedFields,
     select,
   })
-  const stages = joinStages(adapter, collectionConfig, {
+  const stages = joinStages(lane, adapter, collectionConfig, {
     draftsEnabled: args.draftsEnabled,
     joins,
     locale,
@@ -1469,6 +1574,11 @@ const expectedOperations = (reads: Any) => {
     out.push({ collection, hasSubqueryIDs: false, op: 'find', spec })
   }
   const main = { collection: reads.collection, hasSubqueryIDs: Boolean(reads.subqueries) }
+  if (reads.pipeline) {
+    // `Model.aggregate(pipeline, { collation, session })`, traced as `[pipeline, options]`; for a
+    // `find` (`aggregatePaginate`) before its count
+    out.push({ ...main, op: 'aggregate', spec: { filter: reads.pipeline } })
+  }
   const count = reads.count
   if (count === 'estimated') {
     out.push({ ...main, op: 'estimatedDocumentCount', spec: {} })
@@ -1481,10 +1591,6 @@ const expectedOperations = (reads: Any) => {
       spec.hint = count.hint
     }
     out.push({ ...main, op: 'countDocuments', spec })
-  }
-  if (reads.pipeline) {
-    // `Model.aggregate(pipeline, { collation, session })`: traced as `[pipeline, options]`
-    out.push({ ...main, op: 'aggregate', spec: { filter: reads.pipeline } })
   }
   if (reads.find) {
     const { filter, ...options } = reads.find

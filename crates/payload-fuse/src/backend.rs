@@ -111,6 +111,24 @@ pub struct Related {
   /// `overrideAccess` (`executeAccess({ slug, disableErrors: true, req })`): `true` reads, `false`
   /// returns no documents without a read, anything else bails
   pub access: Option<payload_fn_ir::FnId>,
+  /// `accessResult`: the where constraint `access` returns that `backend`'s nested reads already
+  /// combine with the ids (`combineQueries(where, accessResult)`), as the core writes it
+  /// (`write::to_json`); `None`: `access` must return a boolean
+  pub access_result: Option<String>,
+  /// `joinAccess`: without `overrideAccess`, the compiled read access of each collection the
+  /// nested finds' `sanitizeJoinQuery` runs (`executeAccess({ slug, disableErrors: true, req })`,
+  /// in its order), with the result the TS side built the join stages of `backend` from
+  pub join_access: Vec<JoinAccess>,
+}
+
+/// One join's collection read access of a nested find ([`Related::join_access`]).
+#[derive(Debug)]
+pub struct JoinAccess {
+  pub id: payload_fn_ir::FnId,
+  /// the joined collection (`executeAccess`'s `slug`)
+  pub slug: String,
+  /// the result the join stages hold, as the core writes it (`write::to_json`)
+  pub expected: String,
 }
 
 /// A job of one fused operation: everything after the request was decoded, run with the

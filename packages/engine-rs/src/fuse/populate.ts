@@ -11,6 +11,7 @@ import type { FusedTarget } from './targets.js'
 
 import { createDataloaderCacheKey } from '../../../payload/src/collections/dataloader.js'
 import { sanitizeSortQuery } from '../../../payload/src/collections/operations/utilities/sanitizeSortQuery.js'
+import { sanitizeWhereQuery } from '../../../payload/src/database/sanitizeWhereQuery.js'
 import { createPayloadRequest } from '../../../payload/src/utilities/createPayloadRequest.js'
 import { getSelectMode } from '../../../payload/src/utilities/getSelectMode.js'
 import { hasDraftsEnabled } from '../../../payload/src/utilities/getVersionsConfig.js'
@@ -18,6 +19,7 @@ import { sanitizeFallbackLocale } from '../../../payload/src/utilities/sanitizeF
 import { getNativeEngine } from '../native.js'
 import { laneFieldAccess, laneFunctionID } from './access.js'
 import { isInertTree, isPlainObject } from './inert.js'
+import { fusedJoinQuery, hasJoins, type JoinAccess, predictedAccessWhere } from './joins.js'
 import { getCollectionPlan } from './plan.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- operation args keep upstream's generics */
@@ -33,6 +35,8 @@ export type PopulationContext = {
    * upstream populates a write's result inside the operation's transaction, src/fuse-write).
    */
   loadTransactionID?: unknown
+  /** the `overrideAccess` the operation's own `afterRead` gets (its loads' keys) */
+  ownOverrideAccess: unknown
   payload: Any
   /**
    * A relationship of the read collection itself reaches a collection the nested finds do not
@@ -91,6 +95,7 @@ export const populationRequest = ({
   depth,
   draft,
   fieldAccessIDs,
+  ownOverrideAccess = args.overrideAccess,
   payload,
   plan,
   req,
@@ -101,6 +106,8 @@ export const populationRequest = ({
   depth: number
   draft: unknown
   fieldAccessIDs: Map<unknown, number>
+  /** findByID's `overrideAccess = false` default (find and the writes pass theirs as given) */
+  ownOverrideAccess?: unknown
   payload: Any
   plan: { eligible: true } & CollectionPlan
   req: Any
@@ -128,7 +135,11 @@ export const populationRequest = ({
   const selects: Record<string, unknown> = {}
   const seen = new Set<string>()
   /** Without `overrideAccess`: the collections whose nested finds run access functions. */
-  const accessChecks: { plan: { eligible: true } & CollectionPlan; slug: string }[] = []
+  const accessChecks: {
+    joinAccess: JoinAccess[]
+    plan: { eligible: true } & CollectionPlan
+    slug: string
+  }[] = []
   let reachesUnserved = false
   // the collections the levels currentDepth..depth can load
   let frontier: ({ eligible: true } & CollectionPlan)[] = [plan]
@@ -141,16 +152,16 @@ export const populationRequest = ({
         }
         seen.add(slug)
         const entry = relatedEntry({ slug, draft, overrideAccess, payload, populate, req, target })
-        if (entry === 'access') {
+        if (typeof entry === 'string') {
           // decided by the request: guarded here rather than bailing after the root read
-          return 'populate:access'
+          return `populate:${entry}`
         }
         if (entry) {
           related[slug] = entry.json
           selects[slug] = entry.select
           next.push(entry.plan)
           if (!overrideAccess) {
-            accessChecks.push({ slug, plan: entry.plan })
+            accessChecks.push({ slug, joinAccess: entry.joinAccess, plan: entry.plan })
           }
         } else if (level === currentDepth) {
           reachesUnserved = true
@@ -164,7 +175,7 @@ export const populationRequest = ({
   if (accessChecks.length > 0 && !keepsAccessRequest(req)) {
     return 'populate:access:req'
   }
-  for (const { slug, plan: relatedPlan } of accessChecks) {
+  for (const { slug, joinAccess, plan: relatedPlan } of accessChecks) {
     const access = laneFunctionID(relatedPlan.access, fieldAccessIDs)
     if (typeof access === 'string') {
       return `populate:access:${access}`
@@ -177,6 +188,17 @@ export const populationRequest = ({
     if (fieldAccess.length > 0) {
       related[slug]!.fieldAccess = fieldAccess
     }
+    if (joinAccess.length > 0) {
+      const checks = []
+      for (const { slug: joinedSlug, fn, result } of joinAccess) {
+        const id = laneFunctionID(fn, fieldAccessIDs)
+        if (typeof id === 'string') {
+          return `populate:joins:access:${id}`
+        }
+        checks.push({ id, slug: joinedSlug, result })
+      }
+      related[slug]!.joinAccess = checks
+    }
   }
   const json = JSON.stringify({
     draft: Boolean(draft),
@@ -186,7 +208,16 @@ export const populationRequest = ({
     req: { fallbackLocale: req.fallbackLocale, locale: req.locale, payloadAPI: req.payloadAPI },
   })
   return {
-    context: { args, draft, payload, reachesUnserved, req, selects, topCurrentDepth: currentDepth },
+    context: {
+      args,
+      draft,
+      ownOverrideAccess,
+      payload,
+      reachesUnserved,
+      req,
+      selects,
+      topCurrentDepth: currentDepth,
+    },
     json,
   }
 }
@@ -222,7 +253,11 @@ const keepsLocales = (req: Any, localization: Any) => {
  * must be compiled (evaluated natively: `true` reads, `false` returns no documents) and the
  * afterRead of the loaded documents runs their compiled field read access (both checked by the
  * caller); without a default sort (sort path validation checks field permissions), `'access'`
- * otherwise.
+ * otherwise. A read access returning a where constraint for this `req` (predicted here) is
+ * combined into the backend's nested reads (`accessResult`; the core checks the result where each
+ * nested find runs). A collection with joins: the nested finds' `sanitizeJoinQuery` of `joins:
+ * undefined` (the joined collections' read access predicted here, `joinAccess`, and evaluated
+ * natively where each nested find runs); a string: the guard reason.
  */
 const relatedEntry = ({
   slug,
@@ -272,13 +307,39 @@ const relatedEntry = ({
     return undefined
   }
   const sort = sanitizeSortQuery({ fields: config.flattenedFields, sort: defaultSort })
-  let backend: unknown = null
-  if (target.relatedBackend) {
-    const result = target.relatedBackend(slug, {
-      draft,
-      joins: req.payloadAPI === 'GraphQL' ? false : {},
-      locale: req.locale,
+  let joins: unknown = req.payloadAPI === 'GraphQL' ? false : {}
+  let joinAccess: JoinAccess[] = []
+  if (hasJoins(config)) {
+    const joinQuery = fusedJoinQuery({
+      collectionConfig: config,
+      joins: undefined,
       overrideAccess,
+      payload,
+      predict: true,
+      req,
+    })
+    if (typeof joinQuery === 'string') {
+      return joinQuery
+    }
+    joinAccess = joinQuery.access
+    if (req.payloadAPI !== 'GraphQL') {
+      joins = joinQuery.joins
+    }
+  }
+  let backend: unknown = null
+  let accessResult: unknown = undefined
+  if (target.relatedBackend) {
+    // the nested find's `combineQueries(where, accessResult)`, then `sanitizeWhereQuery`
+    const accessWhere = overrideAccess ? undefined : predictedAccessWhere(config, req)
+    const sanitizedAccessWhere = accessWhere && structuredClone(accessWhere)
+    if (sanitizedAccessWhere) {
+      sanitizeWhereQuery({ fields: config.flattenedFields, payload, where: sanitizedAccessWhere })
+    }
+    const result = target.relatedBackend(slug, {
+      accessWhere: sanitizedAccessWhere,
+      draft,
+      joins,
+      locale: req.locale,
       select: findSelect,
       sort,
     })
@@ -286,13 +347,16 @@ const relatedEntry = ({
       return undefined
     }
     backend = result.backend
+    accessResult = accessWhere
   }
   if (plan.id === undefined) {
     plan.id = (getNativeEngine() as unknown as NativeFuse).fuseRegisterPlan(plan.json)
   }
   return {
     config,
+    joinAccess,
     json: {
+      accessResult,
       auth: Boolean(config.auth),
       backend,
       numberID: (collection.customIDType || payload.db.defaultIDType) === 'number',
@@ -351,7 +415,7 @@ const cacheKey = (
     draft: draft as boolean,
     fallbackLocale: req.fallbackLocale,
     locale: req.locale,
-    overrideAccess: isOwn ? args.overrideAccess : Boolean(args.overrideAccess),
+    overrideAccess: isOwn ? context.ownOverrideAccess : Boolean(args.overrideAccess),
     populate: args.populate,
     select: context.selects[slug] as never,
     showHiddenFields: isOwn ? args.showHiddenFields : Boolean(args.showHiddenFields),

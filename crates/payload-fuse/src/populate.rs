@@ -209,14 +209,22 @@ fn nested_find(run: &mut PopRun<'_>, session: &mut dyn ReadSession, args: &ReadA
   run.nested.push(depth);
   let ids: Vec<JsVal> = group.iter().map(|&k| run.ids[k].clone()).collect();
   let db_args = nested_args(request, &first.slug, related, &ids);
-  let req = match (&related.access, &related.field_access) {
-    (None, None) => None,
+  let req = match (&related.access, &related.field_access, related.join_access.is_empty()) {
+    (None, None, true) => None,
     _ => Some(nested_request(request.access_req.as_ref().ok_or_else(|| Bail::new("request:accessReq"))?, depth)?),
   };
   let can_read = match (related.access, &req) {
-    (Some(id), Some(req)) => nested_access(run.checked, id, &first.slug, req)?,
+    (Some(id), Some(req)) => nested_access(run.checked, id, &first.slug, related.access_result.as_deref(), req)?,
     _ => true,
   };
+  if can_read {
+    if let Some(req) = &req {
+      // `sanitizeJoinQuery` (after the find's own access, which returns early on `false`)
+      for join in &related.join_access {
+        nested_join_access(run.checked, join, req)?;
+      }
+    }
+  }
   // `find` with read access `false` and `disableErrors`: empty results, no database call
   let mut docs = if can_read { session.populate_find(&db_args, related, &ids)? } else { Vec::new() };
   let field_access = match (&related.field_access, req) {
@@ -469,20 +477,51 @@ fn nested_request(req: &payload_fn_ir::Value, depth: f64) -> FuseResult<payload_
 }
 
 /// `executeAccess({ slug, disableErrors: true, req }, collection.access.read)` of a nested find:
-/// `true` reads (no constraint), `false` returns no documents; anything else (a where constraint,
-/// another falsy value, a bail, a call guard mode wants to see) bails.
+/// `true` reads (no constraint), `false` returns no documents; with `expected` (the where
+/// constraint the backend's nested reads hold, predicted by the TS side) the result must be that
+/// constraint, which reads; anything else (another where, another falsy value, a bail, a call
+/// guard mode wants to see) bails.
 fn nested_access(
   checked: &std::sync::Mutex<Vec<payload_fn_ir::FnId>>,
   id: payload_fn_ir::FnId,
   slug: &str,
+  expected: Option<&str>,
   req: &payload_fn_ir::Value,
 ) -> FuseResult<bool> {
   use payload_fn_ir::Value;
   lane_call(checked, id, "populate:access:verify")?;
   let args = payload_fn_ir::lanes::collection_access_args(Value::Undefined, slug, Value::Undefined, req.clone());
-  match payload_fn_ir::evaluate(id, &[args]) {
-    Ok(Value::Bool(can_read)) => Ok(can_read),
-    Ok(_) => Err(Bail::new("populate:access:result")),
-    Err(bail) => Err(Bail::new(format!("populate:access:bail:{}", bail.reason()))),
+  match (payload_fn_ir::evaluate(id, &[args]), expected) {
+    (Ok(Value::Bool(can_read)), None) => Ok(can_read),
+    (Ok(value @ Value::Object(_)), Some(expected)) => {
+      let value = value.to_js_val().ok_or_else(|| Bail::new("populate:access:result"))?;
+      if write::to_json(&value)? != expected {
+        return Err(Bail::new("populate:access:changed"));
+      }
+      Ok(true)
+    }
+    (Ok(_), _) => Err(Bail::new("populate:access:result")),
+    (Err(bail), _) => Err(Bail::new(format!("populate:access:bail:{}", bail.reason()))),
   }
+}
+
+/// `sanitizeJoinQuery`'s `executeAccess({ slug, disableErrors: true, req }, joinedCollection.access
+/// .read)` of a nested find: the join stages of the request were built from the result the TS
+/// side predicted with the operation's `req`; the nested find's `req` (its `query.depth`) must
+/// give the same result, else the call bails.
+fn nested_join_access(
+  checked: &std::sync::Mutex<Vec<payload_fn_ir::FnId>>,
+  join: &crate::backend::JoinAccess,
+  req: &payload_fn_ir::Value,
+) -> FuseResult<()> {
+  use payload_fn_ir::Value;
+  lane_call(checked, join.id, "populate:joins:access:verify")?;
+  let args = payload_fn_ir::lanes::collection_access_args(Value::Undefined, &join.slug, Value::Undefined, req.clone());
+  let result = payload_fn_ir::evaluate(join.id, &[args])
+    .map_err(|bail| Bail::new(format!("populate:joins:access:bail:{}", bail.reason())))?;
+  let value = result.to_js_val().ok_or_else(|| Bail::new("populate:joins:access:result"))?;
+  if write::to_json(&value)? != join.expected {
+    return Err(Bail::new("populate:joins:access:changed"));
+  }
+  Ok(())
 }

@@ -25,12 +25,19 @@ export type FusedTarget = {
   relatedBackend?: (
     slug: string,
     args: {
+      /**
+       * the where constraint the nested finds' read access returns (sanitized), combined with
+       * their ids (`combineQueries`); `undefined`: none
+       */
+      accessWhere: unknown
       /** the nested finds' `draft` (`draftsEnabled` of their `payload.db.find`) */
       draft: unknown
-      /** the nested finds' `joins` argument (`false` for GraphQL, else `{}`) */
+      /**
+       * the nested finds' sanitized `joins` of their `payload.db.find` (`false` for GraphQL; `{}`
+       * for a collection without joins)
+       */
       joins: unknown
       locale: unknown
-      overrideAccess: boolean
       select: unknown
       sort: unknown
     },
