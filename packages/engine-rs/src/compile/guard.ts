@@ -23,7 +23,9 @@ import { snapshot, snapshotArgs } from './snapshot.js'
  * compares. A mismatch de-optimises the function permanently and is logged.
  *
  * `PAYLOAD_FN_COMPILE_GUARD=all` verifies every call; `=sample` the policy default (first 32
- * calls, then 1 in 256). `PAYLOAD_FN_COMPILE_STATS=<dir>` writes `<dir>/<pid>.json`: every
+ * calls, then 1 in 256). The policy is applied here, on the function's JS call count, so a call
+ * that is not verified does not cross into the addon (`fnIrIsActive` is asked only for the calls
+ * the policy selects; a de-optimisation is permanent). `PAYLOAD_FN_COMPILE_STATS=<dir>` writes `<dir>/<pid>.json`: every
  * function seen (once per function object, with all its config labels), compiled or not (and
  * why), with its counters, bail reasons and mismatches.
  */
@@ -46,6 +48,8 @@ const trackedByFunction = new WeakMap<AnyFunction, Tracked>()
 const guarded = new WeakMap<AnyFunction, Guarded>()
 const guardedConfigs = new WeakSet<object>()
 let installed = false
+/** `fnIrSetPolicy`'s values: verify the first `first` calls of a function, then 1 in `sampleEvery`. */
+let verifyPolicy = { first: 32, sampleEvery: 256 }
 let scheduleFlush: () => void = () => {}
 let flushTimer: ReturnType<typeof setTimeoutReal> | undefined
 let testFile: string | undefined
@@ -61,7 +65,9 @@ export const installCompileGuards = (
     ?.filepath
   const fnIr = getFnIr()
   const mode = process.env.PAYLOAD_FN_COMPILE_GUARD
-  fnIr.fnIrSetPolicy(mode === 'all' ? Infinity : 32, mode === 'all' ? 1 : 256)
+  verifyPolicy =
+    mode === 'all' ? { first: Infinity, sampleEvery: 1 } : { first: 32, sampleEvery: 256 }
+  fnIr.fnIrSetPolicy(verifyPolicy.first, verifyPolicy.sampleEvery)
   let compiledCount = 0
   const entries = configFunctions(config)
   for (const entry of entries) {
@@ -112,10 +118,10 @@ export const guardStats = (fn: AnyFunction) => {
   }
   return {
     bailReasons: record.bailReasons,
-    calls: record.calls,
     compiled: record.compiled,
     mismatches: record.mismatches.length,
     ...(record.id !== undefined ? getFnIr().fnIrStats(record.id) : {}),
+    calls: record.calls,
   }
 }
 
@@ -131,11 +137,14 @@ const guardCall = (fn: AnyFunction, thisArg: unknown, args: unknown[]): unknown 
   }
   const { id, record } = entry
   const fnIr = getFnIr()
-  record.calls++
+  const calls = ++record.calls
   scheduleFlush()
   let compiled: CompiledResult | undefined
   let snapArgs: undefined | unknown[]
-  if (fnIr.fnIrIsActive(id) && fnIr.fnIrShouldVerify(id)) {
+  const shouldVerify =
+    calls <= verifyPolicy.first ||
+    (verifyPolicy.sampleEvery > 0 && calls % verifyPolicy.sampleEvery === 0)
+  if (shouldVerify && fnIr.fnIrIsActive(id)) {
     snapArgs = snapshotArgs(args, entry.argKeys)
     const evaluated = fnIr.fnIrEvaluate(id, snapArgs)
     if (typeof evaluated === 'string') {
@@ -209,7 +218,7 @@ const installStatsWriter = () => {
     const fnIr = getFnIr()
     const functions = tracked.map((t) => ({
       ...t,
-      ...(t.id !== undefined ? { stats: fnIr.fnIrStats(t.id) } : {}),
+      ...(t.id !== undefined ? { stats: { ...fnIr.fnIrStats(t.id), calls: t.calls } } : {}),
     }))
     writeFileSync(file, JSON.stringify({ functions, pid: process.pid, testFile: testFile ?? null }))
   }

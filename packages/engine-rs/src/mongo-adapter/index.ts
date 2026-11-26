@@ -5,7 +5,7 @@
  * Right after upstream's `init` builds the adapter, its data methods are replaced by the live Rust
  * ports (live.ts), which receive the caller's real arguments and the adapter as `this` (no copy, no
  * JSON) and call the adapter's real mongoose models, and its `init` (model building) by the live
- * port of db-mongodb's `init`. The collection write methods of `upstreamWriteMethods` stay
+ * port of db-mongodb's `init`. The methods of `upstreamMethods` (the writes and `findDistinct`) stay
  * upstream's (owner decision 2026-11-24: faster than the live ports, which cross Node-API per
  * statement); `PAYLOAD_RS_MONGO_LIVE_WRITES=true` serves them with the live ports too. Nothing else is wrapped. Connection use, transactions, migrations
  * and `payload.db.collections` / `versions` / `globals` / `connection` stay the upstream TS. An
@@ -49,19 +49,28 @@ export const mongoEngineMethods = [
 ] as const
 
 /**
- * Write methods upstream's db-mongodb serves by default (measured faster than their live ports:
- * WP-G A/B, typical shape, about +2-4% on create / update / delete). The global, jobs and upsert
- * writes stay live.
+ * Data methods upstream's db-mongodb serves by default, measured faster than their live ports,
+ * which drive the mongoose models through Node-API once per property and statement:
+ * - the collection writes (WP-G A/B, typical shape, about +2-4% on create / update / delete);
+ * - the global, jobs and upsert writes and `findDistinct` (WP-N A/B, MongoDB, 1k posts: about 4%
+ *   on `updateGlobal`, 5-7% on `findDistinct`).
  */
-export const upstreamWriteMethods = [
+export const upstreamMethods = [
   'create',
+  'createGlobal',
+  'createGlobalVersion',
   'createVersion',
   'deleteMany',
   'deleteOne',
   'deleteVersions',
+  'findDistinct',
+  'updateGlobal',
+  'updateGlobalVersion',
+  'updateJobs',
   'updateMany',
   'updateOne',
   'updateVersion',
+  'upsert',
 ] as const
 
 const isLiveWrites = () => process.env.PAYLOAD_RS_MONGO_LIVE_WRITES === 'true'
@@ -186,7 +195,7 @@ export const withRustMongoEngine = <TAdapterObj extends AdapterObj>(
     rustAdapters.add(adapter)
     const upstream = isLiveWrites()
       ? []
-      : upstreamWriteMethods.map((method) => [method, adapter[method]] as const)
+      : upstreamMethods.map((method) => [method, adapter[method]] as const)
     const live = installLiveEngine({ adapter, methods: mongoEngineMethods })
     for (const [method, upstreamMethod] of upstream) {
       adapter[method] = upstreamMethod

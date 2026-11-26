@@ -107,8 +107,9 @@ The real function is the authority. Two places verify:
   args, expr)` (payload `utilities/callUserFunction.ts`, the JS call sites of both engines), and the
   Rust core calls every JS function through `js::call`. With guards installed
   (`setUserFunctionGuard` / `fnIrSetCallGuard`) both route through `guardCall(fn, this, args)`,
-  which looks `fn` up by identity: for a compiled function and the calls `fnIrShouldVerify`
-  selects it evaluates the IR on a snapshot of the arguments taken before the call, calls the real
+  which looks `fn` up by identity: for a compiled function and the calls the policy selects
+  (counted in JS per function, so an unverified call does not cross into the addon; `fnIrIsActive`
+  is asked only for the selected calls) it evaluates the IR on a snapshot of the arguments taken before the call, calls the real
   function (same `this`, arguments, returned value / promise, errors) and compares (structural,
   key order, `-0`, `NaN`). A mismatch de-optimises the id permanently (`registry::is_active`
   becomes false) and is logged; bails are counted per function with their reason. Without guards,

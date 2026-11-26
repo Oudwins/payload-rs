@@ -2,8 +2,8 @@
  * `withRustMongoEngine` on the live engine (packages/engine-rs/src/mongo-adapter/live.ts):
  *
  * - every data method of the adapter is the live Rust port (no copy of the arguments), proven by
- *   the addon's own call counters, except the collection writes of `upstreamWriteMethods`, which
- *   stay upstream's db-mongodb methods (owner decision 2026-11-24);
+ *   the addon's own call counters, except the methods of `upstreamMethods` (the writes and
+ *   `findDistinct`), which stay upstream's db-mongodb methods (owner decision 2026-11-24);
  * - shadow differential, serial and concurrent mode: reference = upstream TS adapter, candidate =
  *   `withRustMongoEngine(mongooseAdapter(args))` on a second database; zero divergences required
  *   (results, thrown errors, argument mutations, generated values, database state).
@@ -30,7 +30,7 @@ import {
   getRustMongoEngineStats,
   isRustMongoEngineAdapter,
   mongoEngineMethods,
-  upstreamWriteMethods,
+  upstreamMethods,
   withRustMongoEngine,
 } from '../../../packages/engine-rs/src/mongo-adapter/index.js'
 import {
@@ -213,7 +213,7 @@ describe('withRustMongoEngine (live engine)', () => {
     // model building is the live port by default
     expect(stats.liveInit - liveInitBefore).toBe(1)
     expect(payload.db.init.toString()).toContain('getMongoLiveSchema()')
-    expect(stats.upstreamMethods).toEqual([...upstreamWriteMethods].sort())
+    expect(stats.upstreamMethods).toEqual([...upstreamMethods].sort())
     expect([...stats.liveMethods, ...stats.upstreamMethods].sort()).toEqual(
       [...mongoEngineMethods].sort(),
     )
@@ -233,21 +233,15 @@ describe('withRustMongoEngine (live engine)', () => {
       'find',
       'findOne',
       'count',
-      'findDistinct',
-      'upsert',
       'findVersions',
-      'createGlobal',
       'findGlobal',
       'queryDrafts',
     ]) {
       expect(served(method), method).toBeGreaterThan(0)
     }
-    // the live write methods are the live write binding's own functions, the others upstream's
+    // every method of `upstreamMethods` is upstream's, never the live write binding's
     const writes = getMongoLiveWrite()!
-    for (const method of ['upsert', 'updateJobs', 'createGlobal', 'updateGlobal']) {
-      expect(payload.db[method], method).toBe(writes[method])
-    }
-    for (const method of upstreamWriteMethods) {
+    for (const method of upstreamMethods) {
       expect(payload.db[method], method).not.toBe(writes[method])
       expect(served(method), method).toBe(0)
     }

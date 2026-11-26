@@ -3,7 +3,6 @@ import type { PayloadRequest } from '../types/index.js'
 
 import { Forbidden } from '../errors/index.js'
 import { callUserFunction } from '../utilities/callUserFunction.js'
-import { isRustCoreEngine } from '../utilities/engineSelection.js'
 import { skipCompilation } from '../utilities/skipCompilation.js'
 
 type OperationArgs = {
@@ -58,37 +57,15 @@ const upstream = {
 }
 
 /**
- * Upstream's `executeAccess`, whichever engine is selected: the export when the Rust engine is not
- * selected, and the TS reference of the Rust port's differential harnesses (test/__rs).
+ * Upstream's `executeAccess`, whichever engine is selected, and the TS reference of the Rust port's
+ * differential harnesses (test/__rs).
  */
 export const executeAccessTS = upstream.executeAccess
 
-type RustOperations = {
-  executeAccess: typeof executeAccessTS
-  recordDeferredCall: () => void
-}
-
 /**
- * Rust engine (`packages/engine-rs/src/ops`, crates/payload-core-ops `common::execute_access`),
- * selected once at module load: `isRustCoreEngine()` (Rust unless `PAYLOAD_ENGINE=ts`, utilities/engineSelection.ts). See
- * RUST_OPS_DESIGN.md.
+ * Upstream's TS function under every engine. The Rust operations call their own port
+ * (crates/payload-core-ops `common::execute_access`) without crossing into JS; for the callers in
+ * JS (entity permissions, llm instructions, join access, ...) the port's Node-API crossings and
+ * engine task cost several times the TS function's own work.
  */
-const isRustOperations = isRustCoreEngine()
-const rustOperationsSpecifier = '@payloadcms/engine-rs/ops'
-let rustOperations: RustOperations | undefined
-const rustOperationsLoad: Promise<RustOperations> | undefined = isRustOperations
-  ? import('../utilities/importRustEngine.js')
-      .then(({ importRustEngine }) => importRustEngine(rustOperationsSpecifier))
-      .then((loaded: RustOperations) => (rustOperations = loaded))
-  : undefined
-void rustOperationsLoad?.catch(() => {})
-
-export const executeAccess: typeof executeAccessTS = isRustOperations
-  ? (args, access) =>
-      rustOperations
-        ? rustOperations.executeAccess(args, access)
-        : rustOperationsLoad!.then((loaded) => {
-            loaded.recordDeferredCall()
-            return loaded.executeAccess(args, access)
-          })
-  : executeAccessTS
+export const executeAccess = executeAccessTS
