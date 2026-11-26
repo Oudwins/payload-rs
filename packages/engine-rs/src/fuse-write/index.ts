@@ -226,43 +226,47 @@ const checkCreate = (args: Any) => {
   if (!read) {
     return guard('read')
   }
-  if (read.population?.reachesUnserved && isBackingOff(collection)) {
-    return guard('populate:unserved')
+  const backingOff = backoffReason(collection)
+  if (backingOff) {
+    return guard(`backoff:${backingOff}`)
   }
   return { payload, target }
 }
 
 /**
- * The writes of a collection whose result read can reach a collection the fused reads do not
- * serve (`reachesUnserved`: a relationship to it, which bails natively when a document holds a
- * value, after the statements ran). Whether documents hold such values is the data's, so the
- * lane backs off per collection: after such a bail the next 1, 2, 4, ... up to 64 calls of the
- * collection run the exact lane directly (`populate:unserved`), a fused write that runs through
- * resets it. A performance decision only: both lanes give upstream's result.
+ * Bails the drivers can only take after the statements ran (the transaction is aborted and the
+ * exact lane reruns the call), which tend to repeat for a collection: a result read reaching a
+ * collection the fused reads do not serve (`populate:related`: a relationship value to it; e.g.
+ * the perf suite's `authors` with a join field), and a document past `maxPerDoc` versions
+ * (`byID:maxVersions`: the exact lane deletes the old versions). After one, the lane backs off
+ * per collection: the next 1, 2, 4, ... up to 64 calls run the exact lane directly
+ * (`backoff:<reason>`); a fused write that runs through resets it. A performance decision only:
+ * both lanes give upstream's result. The shadow lanes do not back off.
  */
-const unservedBackoff = new WeakMap<object, { next: number; skip: number }>()
+const lateBails = new Set(['!byID:maxVersions', '!populate:related'])
 
-const isBackingOff = (collection: Any) => {
-  const state = unservedBackoff.get(collection)
+const backoff = new WeakMap<object, { next: number; reason: string; skip: number }>()
+
+/** The reason the lane backs off from `collection` for this call, if it does. */
+const backoffReason = (collection: Any) => {
+  const state = backoff.get(collection)
   if (!state || state.skip === 0) {
-    return false
+    return undefined
   }
   state.skip--
-  return true
+  return state.reason
 }
 
-/** Records a run lane's native result (`text`) for `unservedBackoff`. */
-const noteUnserved = (collection: Any, read: FusedRead, text: string) => {
-  if (!read.population?.reachesUnserved) {
-    return
-  }
-  if (text === '!populate:related') {
-    const state = unservedBackoff.get(collection) ?? { next: 1, skip: 0 }
+/** Records a run lane's native result (`text`) for `backoff`. */
+const noteRun = (collection: Any, text: string) => {
+  if (lateBails.has(text)) {
+    const state = backoff.get(collection) ?? { next: 1, reason: '', skip: 0 }
+    state.reason = text.slice(1)
     state.skip = state.next
     state.next = Math.min(state.next * 2, 64)
-    unservedBackoff.set(collection, state)
+    backoff.set(collection, state)
   } else if (text.charCodeAt(0) !== 33 /* ! */) {
-    unservedBackoff.delete(collection)
+    backoff.delete(collection)
   }
 }
 
@@ -398,7 +402,7 @@ const runCreate = async (checked: Checked, args: Any, exact: Exact) => {
     return exact()
   }
   const text = outcome.result[0]!
-  noteUnserved(args.collection, outcome.read, text)
+  noteRun(args.collection, text)
   if (text.charCodeAt(0) === 33 /* ! */) {
     if (text.charCodeAt(1) === 33) {
       // the commit failed after the statements were sent: its outcome is unknown, like upstream's
@@ -649,8 +653,9 @@ const checkByID = (name: ByIDName, args: Any) => {
   if (!read) {
     return guard('read')
   }
-  if (read.population?.reachesUnserved && isBackingOff(collection)) {
-    return guard('populate:unserved')
+  const backingOff = backoffReason(collection)
+  if (backingOff) {
+    return guard(`backoff:${backingOff}`)
   }
   return { payload, target }
 }
@@ -692,7 +697,7 @@ const runByID = async (checked: Checked, name: ByIDName, args: Any, exact: Exact
     return exact()
   }
   const [text = '!result', , contextWrites] = outcome.result
-  noteUnserved(args.collection, outcome.read, text)
+  noteRun(args.collection, text)
   if (text.charCodeAt(0) === 33 /* ! */) {
     if (text.charCodeAt(1) === 33) {
       count(stats.bails, 'commit')
@@ -1038,8 +1043,9 @@ const checkBulk = (name: BulkName, args: Any) => {
   if (typeof read === 'string') {
     return guard(read)
   }
-  if (read.population?.reachesUnserved && isBackingOff(collection)) {
-    return guard('populate:unserved')
+  const backingOff = backoffReason(collection)
+  if (backingOff) {
+    return guard(`backoff:${backingOff}`)
   }
   return { payload, read, target }
 }
@@ -1110,7 +1116,7 @@ const runBulk = async (checked: CheckedBulk, name: BulkName, args: Any, exact: E
     return exact()
   }
   const [text = '!result', , contextWrites] = outcome.result
-  noteUnserved(args.collection, checked.read, text)
+  noteRun(args.collection, text)
   if (text.charCodeAt(0) === 33 /* ! */) {
     if (text.charCodeAt(1) === 33) {
       count(stats.bails, 'commit')
