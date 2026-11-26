@@ -318,9 +318,10 @@ not in `payloadOwnFunctions` / `defaultFieldValidators` (hooks, `validate`, `def
 `drafts.schedulePublish`, upload / auth collections, join fields, blocks (until their discriminators are modelled),
 point / code fields, a localized unnamed group (`group:unnamed:localized`: the hooks hand its
 fields `parentIsLocalized || field.localized`, the transforms' `traverseFields` does not), json
-fields with a `jsonSchema`, rich text other than lexical with
-default features (step 3), `timezone` dates, a tab with an `admin.condition`, mongoose schema features the casting does not model (setters other
-than `_id`'s, discriminators, maps, `Decimal128`, `Buffer`, `BigInt`, non-strict schemas).
+fields whose `jsonSchema` the plan does not convert (`json:jsonSchema:<keyword>`, section 12.6), rich text other than lexical with
+default features (step 3), a tab with an `admin.condition`, mongoose schema features the casting does not model (setters other
+than `_id`'s, function defaults other than mongoose's own array / document array ones,
+discriminators, maps, `Decimal128`, `Buffer`, `BigInt`, non-strict schemas).
 
 ### 12.2 The call context
 
@@ -671,7 +672,54 @@ array rows, radios) and `localized unnamed groups` (9: test/versions' `Drafts` s
 unique title in an unnamed group). The corpus is 385 cases: 351 equal (254 written, 97 invalid),
 34 bails (the 2 new ones: radio values mongoose's enum rejects), 0 differences.
 
-## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, WP-S, status 2026-11-26)
+WP-V (2026-11-26):
+
+- **json fields with a `jsonSchema`.** Upstream's `json` validator returns
+  `validateJSONSchema({ jsonSchema, value })` for a non-empty value: zod's `fromJSONSchema` of
+  `jsonSchema.schema` (after a JSON round trip), then `safeParse`. The write plan converts the
+  schema the way `fromJSONSchema` does (`jsonSchemaPlan` / `jsonSchemaNode` in writePlan.ts) into
+  nodes the prepare checks (`prepare/json_schema.rs`, given to the validator as `vo.jsonSchema`
+  and evaluated by its host's `validate_json_schema`): booleans, `enum` / `const` of primitives
+  (`Set#has`), `type` (one or a list: a union), strings with `minLength` / `maxLength` (code
+  points, as zod's `codePointLength`), `number` / `integer` (safe integers) with `minimum` /
+  `maximum` / `exclusiveMinimum` / `exclusiveMaximum` (numbers, or booleans making the bound
+  exclusive), `boolean`, `null`, objects (`properties`, `required`, `additionalProperties` false:
+  strict, a schema: a catchall, otherwise passthrough), arrays (`items` as one schema, `minItems`
+  / `maxItems`), no `type`: any; `default`, `description`, `readOnly`, `$comment`, `$schema` and
+  keys zod only records as metadata change nothing. Any other zod keyword (`$ref`, `$id`, composition,
+  `pattern`, `format`, tuples, `uniqueItems`, `patternProperties`, ...) is ineligible
+  (`json:jsonSchema:<keyword>`), as is a schema `validateJSONSchema` fetches (no `uri` or no
+  `schema`) and a localized json field (its `mergeLocaleActions` entry is pushed after the
+  validator settles, which takes more ticks with a schema than the prepare models; for any other
+  field the validator's ticks are the field's last step and order nothing). A value zod accepts is
+  valid; one it rejects bails (`jsonSchema:invalid`: the exact lane builds zod's message), as do an
+  absent required key, `undefined`, typed values and `__proto__` keys.
+- **Dates with timezones.** Sanitization inserts a `<name>_tz` select after the date (not
+  sanitized itself: no `validate`, so upstream validates nothing for it; its options are the
+  mongoose enum), a field of the plan like any other. The date validator reads `timezone` and
+  `siblingData[`${name}_tz`]` (required timezones); the plan sends `vo.timezone` and the prepare
+  passes that key of `deepMergeWithSourceArrays(siblingDoc, siblingData)` (the source's value
+  when it has the key, else the target's).
+- **Document array defaults** (`plan:schema:default`, test/fields' arrays and blocks with a
+  `defaultValue`): mongoose wraps a document array's array default in a function default without
+  `$runBeforeSetters`, which it applies after `$set(obj)` when the path is still `undefined`
+  (`PathDefault::AfterSetters`, before the reorder by `schema.tree`). The plan takes the value from
+  `schemaType.options.default` (`[].concat(default)`).
+- **Row ids of default rows** (dispatch): a create's `countMissingRowIds` counts the rows of an
+  array / blocks field's `defaultValue` when `data` lacks the field (beforeValidate's fallback on
+  a create) and the fields of a missing named group / tab (beforeValidate's `{}` placeholder);
+  these creates bailed `entropy:objectId` before.
+
+Corpus groups `json schema create` / `json schema update` (32: test/fields' schema, every
+modelled keyword, values zod rejects, empty and scalar values, stored invalid values), `array
+defaults create` / `array defaults update` (7), `timezone create` / `timezone update` (20:
+required timezones, defaults, a single supported timezone, offsets, rows, groups, blocks, values
+the enum rejects), plus the plan's ineligibility for `pattern`. The corpus is 444 cases: 388 equal
+(281 written, 107 invalid), 56 bails (the new ones: values zod rejects, enum violations, an
+absent required key, a string json, a null group, an update whose stored document lacks a
+defaulted array), 0 differences.
+
+## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, WP-S, WP-V, status 2026-11-26)
 
 Built and on by default since WP-K (`PAYLOAD_RS_FUSE_WRITES=off` restores the exact lane for
 every write; WP-J's default-on commit was held until update-many / delete-many were fused, see
@@ -1252,6 +1300,92 @@ and reads), `find` with join stages (`aggregatePaginate`'s result meta in payloa
 join queries with `limit` / `sort` / `where` values, `plan:json:jsonSchema` 141,
 `plan:date:timezone` 131, `plan:schema:default` 40 (the `Drafts` collection's next stop), the
 collection hooks (not compiled: side effects).
+
+**WP-V (2026-11-26)**: two suspected fused-write regressions of WP-S's perf run, and the write
+plan widened at its largest remaining bails (section 12.6: json schemas, timezones, document array
+defaults; the dispatch's row-id count of default rows).
+
+Regressions, measured with focused interleaved A/Bs (test/__rs/perf, typical, 1k posts, `ts`,
+`rs`, `rs-fused-off`, 5 processes per engine, wall and CPU per op; `ts/x` geomean over the rounds
+[95% t interval]) on two CPU sets (16-19 and 18-21, E-cores; the main session's and WP-U's
+harness runs were busy on 0-15 and 22-31), plus each lane alone with `perf stat` user-space
+instructions and cycles counted over the timed iterations only (4 processes per engine, CPUs
+16-19):
+
+| scenario                  | CPUs  | `ts/rs` wall     | `ts/rs` CPU      | `ts/off` wall    | alone: ms, M instr. / op (rs, off, ts) |
+| ------------------------- | ----- | ---------------- | ---------------- | ---------------- | -------------------------------------- |
+| GraphQL `createPost`      | 16-19 | 1.50 [1.35-1.66] | 1.61 [1.34-1.94] | 1.12 [1.06-1.18] | 3.79 / 10.9, 5.42 / 11.5, 6.30 / 13.7  |
+| GraphQL `createPost`      | 18-21 | 1.29 [1.27-1.31] | 1.61 [1.45-1.79] | 1.03 [0.93-1.14] |                                        |
+| `DELETE /posts?where` (5) | 16-19 | 0.97 [0.92-1.03] | 0.83 [0.81-0.86] | 0.98 [0.91-1.06] | 9.43 / 16.5, 10.19 / 15.4, 9.87 / 18.8 |
+| `DELETE /posts?where` (5) | 18-21 | 0.92 [0.85-1.00] | 0.85 [0.77-0.93] | 0.98 [0.89-1.07] |                                        |
+
+- **GraphQL create: ruled out.** The fused create is 1.3-1.5x of TS and ~1.4x of fused writes
+  off on both CPU sets, and does fewer instructions and cycles than either (10.3 M cycles against
+  13.8 off and 15.3 TS). WP-S's 0.90x [0.82-0.99] came from its run's placement and load.
+- **REST bulk delete: not a fused write.** `DELETE /posts?where` carries no `overrideAccess` and
+  the typical posts populate relationships: the bulk dispatch guards it (`access:populate`, the
+  bulk writes have no per-call field access / population access yet, unlike the by-id ones), so
+  `rs` and `rs-fused-off` run the same exact-lane delete. In 25 processes on two CPU sets no
+  process showed WP-S's 16.6 ms mode; wall time is at TS's (alone 9.4 ms against TS 9.9). The
+  `rs` processes use ~15% more CPU per op in the window than TS: with setups whose creates run on
+  the exact lane (`disableTransaction`), `rs` and `off` are equal (6.6 against 6.9 ms CPU, 15.9
+  against 15.3 M instructions: the bulk dispatch's checks before its guard), so the rest is the
+  Rust threads of the setup's fused creates finishing while the timed delete runs, not work of
+  the delete. Nothing to fix on the write path; fusing it needs the bulk writes' field and
+  population access per call (the by-id writes' WP-C / WP-M treatment).
+
+Widening (`--fuse shadow --fuse-writes shadow`, the full harness; WP-S's run `wps_mf` → WP-V's
+`wpv_mf`): `plan:json:jsonSchema` 141 → 0, `plan:date:timezone` 131 → 0, `plan:schema:default`
+40 → 0 (all of them test/fields' calls, not test/versions'), and the creates of default rows that
+then stopped at `prepare:entropy:objectId` (34) → 0. test/fields' fused writes 102 → 412 hits
+(creates 8 → 310, updateByID 1 → 9); its remaining bails are `plan:field:slug` 78,
+`plan:field:ui` 37, `prepare:fn:verify` 33 (guard sampling). Over the files neither run reran
+(27 reruns, most of them load timeouts: the machine's load average reached 235 during the run),
+write hits 4333 → 5243, bails 990 → 667, 0 lane differences (WP-S's run had 52, before its
+serialization fix). Fused writes served with `--engine default` (`wpv_m`): 4254 creates, 533
+updateByID, 234 deleteByID, 4 update-many, 216 delete-many (WP-S: 3953 / 525 / 234 / 4 / 216).
+
+Bars on the final tree (release addon, mongod 8.2 rs0): the harness with `--engine default` and
+with both shadows 3330 / 164 / 422 with each file's solo rerun, equal to
+`.rs-baseline/mongodb-all.json` (test/cli differs by the worktree path; storage emulators and hmr
+absent), 0 lane-shadow differences; the 8 shadow files 971 / 0 / 46, 0 divergences; parity
+503/503 (twice); driver lane 4/4; glue 33/33; HTTP lanes 18/18; fn-compile 39/39; the corpus
+35/35 (444 cases); the lane suites 91/91 in default and with both shadows (new: a json schema
+and timezone collection through create / update / update-many / delete with invalid inputs,
+array / blocks / group defaults); packaging OK.
+
+Perf (WP-V, test/__rs/perf, MongoDB 1k posts, release addon, packed install verified against
+the builds, 3 interleaved rounds per cell, CPUs 16-21, write categories only; `ts/rs` per
+category: the geometric mean of the per-round geomeans of the scenarios' TS / variant medians,
+[95% t interval over the rounds]; `off` = `rs-fused-off` → `on`):
+
+| shape   | surface | create                              | update                              | partial-update                      | delete                              |
+| ------- | ------- | ----------------------------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- |
+| typical | local   | 1.10 [1.02-1.18] → 1.52 [1.31-1.78] | 0.99 [0.97-1.02] → 1.90 [1.35-2.70] | 1.00 [0.93-1.08] → 1.91 [1.41-2.58] | 0.99 [0.91-1.07] → 1.45 [1.25-1.68] |
+| typical | rest    | 1.02 [0.89-1.16] → 1.17 [0.99-1.38] | 1.01 [0.97-1.05] → 1.06 [0.73-1.54] | 1.00 [0.89-1.11] → 1.75 [1.06-2.91] | 0.98 [0.85-1.13] → 1.05 [0.70-1.58] |
+| typical | graphql | 1.08 [0.89-1.30] → 1.21 [0.67-2.18] | -                                   | 0.99 [0.94-1.04] → 1.80 [1.18-2.74] | 0.98 [0.84-1.15] → 1.11 [0.57-2.15] |
+| complex | local   | 1.10 [1.05-1.14] → 1.41 [1.02-1.94] | 1.07 [1.05-1.10] → 1.89 [1.11-3.23] | 1.05 [1.02-1.07] → 1.84 [1.14-2.95] | 1.02 [0.95-1.09] → 1.26 [0.86-1.86] |
+| complex | rest    | 1.04 [1.00-1.09] → 0.97 [0.85-1.09] | 1.06 [0.96-1.16] → 0.97 [0.88-1.07] | 1.01 [0.94-1.09] → 0.95 [0.90-0.99] | 1.00 [0.99-1.01] → 0.96 [0.88-1.04] |
+| complex | graphql | 1.14 [1.05-1.24] → 1.42 [1.02-1.96] | -                                   | 1.07 [1.05-1.10] → 0.98 [0.95-1.01] | 0.97 [0.89-1.05] → 0.98 [0.71-1.36] |
+
+All write scenarios together (`rs` against TS): typical 1.52x [1.31-1.76] (14 confidently faster,
+0 slower), complex 1.39x [1.11-1.74] (11 faster, 3 slower). The three confidently slower ones are
+complex: REST `DELETE /posts/:id` 0.89x [0.80-1.00] and `PATCH /posts/:id (one field)` 0.95x
+[0.90-0.99], Local `create as draft` 0.96x [0.93-0.99]; on them `rs-fused-off` was 5-9% faster
+than `rs` (0.94-1.03x of TS), so the fused dispatch costs there. Counted in a bench process (stats
+dir), the complex REST by-id writes mostly run the exact lane after the dispatch's checks (guard
+sampling of the compiled access in the scenarios' first calls, `access:verify` 64;
+`access:where` 20; `prepare:fn:verify` 35; `backoff:populate:related` 18), and 5 of about 110 run
+the fused statements, bail `populate:related` (joins without `overrideAccess`, WP-U's) and rerun:
+the cost of those attempts and of the checks, in scenarios short enough that sampling's first 32
+calls dominate. `create as draft` was not attributed. The typical shape (no json
+schemas, timezones or array defaults) runs the same write code as before this package.
+
+What is left (WP-V), on the write side: the bulk writes without `overrideAccess` (field access
+per call, population access, `access:populate` / `access:fields`), localized json fields with a
+schema, the schema keywords not converted (`pattern` / `format` need JS regex and zod's formats),
+`plan:field:slug` 78, `prepare:drafts:localizedPublish:unique` 90, `plan:field:condition` 75,
+`populate:related` (joins without `overrideAccess`, WP-U).
 
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
