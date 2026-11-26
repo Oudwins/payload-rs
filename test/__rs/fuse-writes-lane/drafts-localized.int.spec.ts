@@ -194,6 +194,93 @@ test.suite('fuse-writes drafts localized', { config: './drafts-localized.config.
     expect(deleted).toMatchObject({ _status: 'draft', id: doc.id })
   })
 
+  test('should write documents with an unnamed group and a radio', async ({ payload }) => {
+    const hitsBefore = fuseWriteStats()?.hits.create ?? 0
+    const doc = await payload.create({
+      collection: 'draftPosts',
+      data: {
+        blocksField: [{ blockType: 'block', localized: 'l', text: 't' }],
+        description: 'd',
+        radio: 'test',
+        title: 'grouped',
+      },
+      draft: true,
+      locale: 'en',
+      overrideAccess: true,
+    })
+    const related = await payload.create({
+      collection: 'draftPosts',
+      data: { description: 'r', relation: doc.id, title: 'related' },
+      locale: 'en',
+      overrideAccess: true,
+    })
+
+    const draft = await payload.update({
+      id: doc.id,
+      collection: 'draftPosts',
+      data: { title: 'gruppiert' },
+      draft: true,
+      locale: 'de',
+      overrideAccess: true,
+    })
+    const published = await payload.update({
+      id: doc.id,
+      collection: 'draftPosts',
+      data: { _status: 'published', description: 'p' },
+      locale: 'en',
+      overrideAccess: true,
+    })
+    const all = await payload.findByID({
+      id: doc.id,
+      collection: 'draftPosts',
+      draft: true,
+      locale: 'all',
+      overrideAccess: true,
+    })
+
+    expect(related).toMatchObject({ relation: { id: doc.id }, title: 'related' })
+    expect(draft).toMatchObject({ _status: 'draft', radio: 'test', title: 'gruppiert' })
+    expect(published).toMatchObject({ _status: 'published', description: 'p', title: 'grouped' })
+    expect(all.title).toStrictEqual({ de: 'gruppiert', en: 'grouped' })
+    if (fuseWriteStats() && process.env.PAYLOAD_RS_FUSE_WRITES !== 'off') {
+      expect(fuseWriteStats()!.hits.create).toBeGreaterThan(hitsBefore)
+    }
+  })
+
+  test('should reject writes to an unnamed group the same way', async ({ payload }) => {
+    await payload.create({
+      collection: 'draftPosts',
+      data: { description: 'd', title: 'taken' },
+      locale: 'en',
+      overrideAccess: true,
+    })
+
+    await expect(
+      payload.create({
+        collection: 'draftPosts',
+        data: { description: 'd' },
+        locale: 'en',
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Group > Title')
+    await expect(
+      payload.create({
+        collection: 'draftPosts',
+        data: { description: 'd', radio: 'other', title: 'radio' },
+        locale: 'en',
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Radio')
+    await expect(
+      payload.create({
+        collection: 'draftPosts',
+        data: { description: 'd', title: 'taken' },
+        locale: 'en',
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: title')
+  })
+
   test('should have served writes without lane differences', () => {
     if (process.env.PAYLOAD_RS_FUSE_WRITES === 'off' || process.env.PAYLOAD_ENGINE === 'ts') {
       return

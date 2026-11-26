@@ -184,6 +184,56 @@ export default buildConfigWithDefaults({
         versions: { drafts: true },
       },
       {
+        // test/versions' `Drafts`: an unnamed group holding a localized, unique title, a radio
+        slug: 'draftPosts',
+        fields: [
+          {
+            type: 'group',
+            fields: [
+              {
+                name: 'title',
+                type: 'text',
+                label: 'Title',
+                localized: true,
+                required: true,
+                unique: true,
+              },
+            ],
+          },
+          { name: 'description', type: 'textarea', label: 'Description', required: true },
+          {
+            name: 'radio',
+            type: 'radio',
+            options: [{ label: { en: 'Test en', es: 'Test es' }, value: 'test' }],
+          },
+          {
+            name: 'select',
+            type: 'select',
+            hasMany: true,
+            options: [
+              { label: { en: 'Test1 en', es: 'Test1 es' }, value: 'test1' },
+              { label: { en: 'Test2 en', es: 'Test2 es' }, value: 'test2' },
+            ],
+          },
+          {
+            name: 'blocksField',
+            type: 'blocks',
+            blocks: [
+              {
+                slug: 'block',
+                fields: [
+                  { name: 'text', type: 'text' },
+                  { name: 'localized', type: 'text', localized: true },
+                ],
+              },
+            ],
+          },
+          { name: 'relation', type: 'relationship', relationTo: 'draftPosts' },
+          { name: 'restrictedToUpdate', type: 'checkbox' },
+        ],
+        versions: { drafts: true, maxPerDoc: 0 },
+      },
+      {
         // named tabs: localized, and not localized holding localized fields
         slug: 'magazines',
         fields: [

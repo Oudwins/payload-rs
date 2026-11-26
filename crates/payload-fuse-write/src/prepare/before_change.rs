@@ -307,6 +307,19 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
         }
         s.exec.spawn(traverse_fields(s.clone(), &field.fields, inner)).wait().await;
       }
+      Kind::Group if !field.affects_data() => {
+        // an unnamed group: the parent's levels, labelled `getTranslatedLabel(field?.label ||
+        // field?.type)` unless `label: false`
+        let mut inner = level.clone();
+        if !matches!(field.label, Label::False) {
+          inner.label_path = match translated_label(&s, &field.label, field.kind.name()) {
+            LabelText::Text(text) => level.label_path.as_ref().map(|parent| build_field_label(parent, text.as_deref())),
+            _ => None,
+          };
+        }
+        inner.parent_is_localized = child_localized;
+        s.exec.spawn(traverse_fields(s.clone(), &field.fields, inner)).wait().await;
+      }
       Kind::Group => {
         let Some(mut inner) = run.check(group_level(&s, field, sd, &level, &path)) else {
           return;

@@ -74,7 +74,7 @@ fn flattened<'f>(fields: &'f [Field], out: &mut Vec<&'f Field>) {
       Kind::Row | Kind::Collapsible => flattened(&field.fields, out),
       // a named tab stays one field (`{ ...tab, type: 'tab', flattenedFields }`)
       Kind::Tabs => flattened(&field.tabs, out),
-      Kind::Tab if !field.affects_data() => flattened(&field.fields, out),
+      Kind::Tab | Kind::Group if !field.affects_data() => flattened(&field.fields, out),
       _ if field.affects_data() => out.push(field),
       _ => {}
     }
@@ -235,7 +235,7 @@ fn sanitize(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref, pare
           }
         }
       }
-      Kind::Row | Kind::Collapsible | Kind::Tab => sanitize(plan, heap, &field.fields, data, parent_localized)?,
+      Kind::Row | Kind::Collapsible | Kind::Tab | Kind::Group => sanitize(plan, heap, &field.fields, data, parent_localized)?,
       Kind::Tabs => sanitize(plan, heap, &field.tabs, data, parent_localized)?,
       _ => {}
     }

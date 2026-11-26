@@ -230,6 +230,10 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
       Kind::Collapsible | Kind::Row => {
         s.exec.spawn(traverse_fields(s.clone(), &field.fields, sibling_data.clone(), sibling_doc.clone(), parent_path.clone())).wait().await;
       }
+      // an unnamed group: its fields on the parent's sibling data and doc, under the parent's path
+      Kind::Group if !field.affects_data() => {
+        s.exec.spawn(traverse_fields(s.clone(), &field.fields, sibling_data.clone(), sibling_doc.clone(), parent_path.clone())).wait().await;
+      }
       Kind::Group => {
         let name = field.name.as_deref().unwrap_or_default();
         let Some((group_data, group_doc)) = run.check(group_siblings(&s, sd, &sibling_doc, name)) else {

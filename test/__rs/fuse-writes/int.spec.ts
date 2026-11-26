@@ -746,6 +746,61 @@ const tabbedUpdates = (f: Fixtures): Case[] =>
     },
   ].map((c) => ({ ...c, collection: 'tabbed' }))
 
+const groupedFull = (f: Fixtures) => ({
+  title: 'g',
+  views: 3,
+  summary: 'sum',
+  deep: 'deeper',
+  radio: 'one',
+  choice: 'b',
+  named: { inner: 'i' },
+  rows: [{ cell: 'c1', author: f.author }, { cell: 'c2' }],
+})
+
+const groupedCreates = (f: Fixtures): Case[] =>
+  [
+    { name: 'full', data: groupedFull(f) },
+    { name: 'title only (named inner missing)', data: { title: 't' } },
+    { name: 'minimal valid', data: { title: 't', named: { inner: 'x' } } },
+    { name: 'missing title', data: { named: { inner: 'x' } } },
+    { name: 'views too large', data: { title: 't', views: 11, named: { inner: 'x' } } },
+    { name: 'deep too short', data: { title: 't', deep: 'ab', named: { inner: 'x' } } },
+    { name: 'radio three', data: { title: 't', radio: 'three', named: { inner: 'x' } } },
+    { name: 'radio invalid', data: { title: 't', radio: 'four', named: { inner: 'x' } } },
+    { name: 'radio empty string', data: { title: 't', radio: '', named: { inner: 'x' } } },
+    { name: 'radio null', data: { title: 't', radio: null, named: { inner: 'x' } } },
+    { name: 'choice null (required)', data: { title: 't', choice: null, named: { inner: 'x' } } },
+    { name: 'radio number', data: { title: 't', radio: 1, named: { inner: 'x' } } },
+    { name: 'row missing cell', data: { title: 't', named: { inner: 'x' }, rows: [{}] } },
+    { name: 'several errors', data: { views: 20, deep: 'a', radio: 'z', rows: [{}] } },
+    { name: 'views string', data: { title: 't', views: '4', named: { inner: 'x' } } },
+    { name: 'unknown key', data: { title: 't', other: 1, named: { inner: 'x', junk: 2 } } },
+    { name: 'draft', data: { views: 99 }, draft: true },
+    { name: 'user', data: { title: 't', named: { inner: 'x' } }, user: true },
+  ].map((c) => ({ ...c, collection: 'grouped' }))
+
+const groupedUpdates = (f: Fixtures): Case[] =>
+  [
+    { name: 'title', data: { title: 'u' }, seed: { data: groupedFull(f) } },
+    { name: 'clear title', data: { title: '' }, seed: { data: groupedFull(f) } },
+    { name: 'deep', data: { deep: 'longer' }, seed: { data: groupedFull(f) } },
+    { name: 'radio', data: { radio: 'two' }, seed: { data: groupedFull(f) } },
+    { name: 'radio invalid', data: { radio: 'nope' }, seed: { data: groupedFull(f) } },
+    { name: 'rows', data: { rows: [{ cell: 'only' }] }, seed: { data: groupedFull(f) } },
+    { name: 'empty data', data: {}, seed: { data: groupedFull(f) } },
+    { name: 'draft save', data: { title: 'd' }, draft: true, seed: { data: groupedFull(f) } },
+    {
+      name: 'publish over a draft',
+      data: { views: 5 },
+      seed: { data: groupedFull(f), updates: [{ data: { title: 'next' }, draft: true }] },
+    },
+    {
+      name: 'raw: missing fields, unknown key',
+      data: { summary: 'r' },
+      seed: { raw: { title: 'raw', junk: 1, named: { inner: 'q' }, _status: 'published' } },
+    },
+  ].map((c) => ({ ...c, collection: 'grouped' }))
+
 const validatedCreates = (f: Fixtures): Case[] =>
   [
     { name: 'filterOptions function, no value', data: { title: 't', filtered: null } },
@@ -913,6 +968,18 @@ test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
     const f = await fixtures(payload)
     await runAll(payload, 'tabbed update', tabbedUpdates(f), f)
     finish('tabbed update')
+  })
+
+  test('unnamed groups and radios: creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'grouped create', groupedCreates(f), f)
+    finish('grouped create')
+  })
+
+  test('unnamed groups and radios: updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'grouped update', groupedUpdates(f), f)
+    finish('grouped update')
   })
 
   test('drafts creates and updates', async ({ payload }) => {

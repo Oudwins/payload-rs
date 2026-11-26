@@ -510,6 +510,72 @@ export default buildConfigWithDefaults({
         ],
       },
       {
+        // unnamed groups (test/versions' `Drafts` has one) and radio fields
+        slug: 'grouped',
+        fields: [
+          {
+            type: 'group',
+            fields: [
+              { name: 'title', type: 'text', label: 'Title', required: true },
+              { name: 'views', type: 'number', defaultValue: 0, max: 10 },
+            ],
+          },
+          {
+            type: 'group',
+            label: 'Meta',
+            fields: [
+              { name: 'summary', type: 'text', required: true, defaultValue: 's' },
+              {
+                type: 'group',
+                label: false,
+                fields: [{ name: 'deep', type: 'text', minLength: 3 }],
+              },
+            ],
+          },
+          {
+            name: 'radio',
+            type: 'radio',
+            options: [
+              { label: { en: 'One en', es: 'One es' }, value: 'one' },
+              { label: 'Two', value: 'two' },
+              'three',
+            ],
+          },
+          {
+            name: 'choice',
+            type: 'radio',
+            defaultValue: 'a',
+            options: ['a', 'b'],
+            required: true,
+          },
+          {
+            name: 'named',
+            type: 'group',
+            fields: [
+              {
+                type: 'group',
+                label: 'Inner',
+                fields: [{ name: 'inner', type: 'text', required: true }],
+              },
+            ],
+          },
+          {
+            name: 'rows',
+            type: 'array',
+            fields: [
+              {
+                type: 'group',
+                fields: [
+                  { name: 'cell', type: 'text', required: true },
+                  { name: 'author', type: 'relationship', relationTo: 'authors' },
+                ],
+              },
+            ],
+          },
+        ],
+        versions: { drafts: true },
+      },
+      {
         // named tabs (the perf suite's complex shape has one), next to unnamed ones
         slug: 'tabbed',
         fields: [

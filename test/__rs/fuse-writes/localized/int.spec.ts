@@ -341,11 +341,62 @@ const bulletins = (): Case[] =>
     },
   ].map((c) => ({ ...c, collection: 'bulletins' }))
 
+const draftPost = {
+  blocksField: [{ blockType: 'block', localized: 'l', text: 't' }],
+  description: 'd',
+  radio: 'test',
+  select: ['test1', 'test2'],
+  title: 'post',
+}
+
+const draftPosts = (): Case[] =>
+  [
+    { name: 'create draft', data: draftPost, draft: true, locale: 'en' },
+    { name: 'create draft de', data: { ...draftPost, title: 'de' }, draft: true, locale: 'de' },
+    { name: 'create draft, nothing', data: {}, draft: true, locale: 'en' },
+    { name: 'create draft, radio invalid', data: { radio: 'x' }, draft: true, locale: 'en' },
+    { name: 'create published', data: { ...draftPost, title: 'pub' }, locale: 'en' },
+    {
+      name: 'draft save',
+      data: { description: 'd2', title: 'post2' },
+      draft: true,
+      locale: 'en',
+      seed: { data: { ...draftPost, title: 'seed1' }, draft: true },
+    },
+    {
+      name: 'draft save de',
+      data: { title: 'hallo' },
+      draft: true,
+      locale: 'de',
+      seed: { data: { ...draftPost, title: 'seed2' }, draft: true },
+    },
+    {
+      name: 'draft save, blocks',
+      data: { blocksField: [{ blockType: 'block', text: 'n' }] },
+      draft: true,
+      locale: 'en',
+      seed: { data: { ...draftPost, title: 'seed3' }, draft: true },
+    },
+    {
+      name: 'raw: draft save over locale-keyed title',
+      data: { radio: 'test' },
+      draft: true,
+      locale: 'fr',
+      seed: { raw: { title: { en: 'x', de: 'y' }, description: 'r', _status: 'draft' } },
+    },
+  ].map((c) => ({ ...c, collection: 'draftPosts' }))
+
 test.suite('fused writes: localized write-side corpus', { config: './config.ts' }, () => {
   test('localized publishes of all locales', async ({ payload }) => {
     const f = await fixtures(payload)
     await runAll(payload, 'all locales publish', bulletins(), f)
     finish('all locales publish')
+  })
+
+  test('localized unnamed groups (test/versions drafts)', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'localized unnamed groups', draftPosts(), f)
+    finish('localized unnamed groups')
   })
 
   test('localized named tabs', async ({ payload }) => {

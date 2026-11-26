@@ -274,7 +274,8 @@ fn flatten_by_locale(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: 
       continue;
     }
     match field.kind {
-      Kind::Collapsible | Kind::Row => flatten_by_locale(plan, heap, &field.fields, data, locale, parent_localized)?,
+      // (a named group took the branch above)
+      Kind::Collapsible | Kind::Group | Kind::Row => flatten_by_locale(plan, heap, &field.fields, data, locale, parent_localized)?,
       Kind::Tabs => {
         for tab in &field.tabs {
           match tab.name.as_deref() {

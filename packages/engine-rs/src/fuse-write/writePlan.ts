@@ -55,6 +55,7 @@ const modelledTypes = new Set([
   'group',
   'json',
   'number',
+  'radio',
   'relationship',
   'richText',
   'row',
@@ -418,8 +419,10 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
     case 'group':
     case 'row':
     case 'tab':
-      if (type === 'group' && !named) {
-        return ineligible('group:unnamed')
+      if (type === 'group' && !named && out.l) {
+        // a localized unnamed group: the hooks pass `parentIsLocalized || field.localized` to its
+        // fields, `traverseFields` (the transforms) does not
+        return ineligible('group:unnamed:localized')
       }
       out.f = fieldsPlan(builder, field.fields)
       break

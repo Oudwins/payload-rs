@@ -37,11 +37,55 @@ export default buildConfigWithDefaults({
         versions: { drafts: true },
       },
       {
+        // test/versions' `Drafts`: an unnamed group holding a localized, unique title, a radio
+        slug: 'draftPosts',
+        fields: [
+          {
+            type: 'group',
+            fields: [
+              {
+                name: 'title',
+                type: 'text',
+                label: 'Title',
+                localized: true,
+                required: true,
+                unique: true,
+              },
+            ],
+          },
+          { name: 'description', type: 'textarea', label: 'Description', required: true },
+          {
+            name: 'radio',
+            type: 'radio',
+            options: [{ label: { de: 'Test de', en: 'Test en' }, value: 'test' }],
+          },
+          {
+            name: 'blocksField',
+            type: 'blocks',
+            blocks: [
+              {
+                slug: 'block',
+                fields: [
+                  { name: 'text', type: 'text' },
+                  { name: 'localized', type: 'text', localized: true },
+                ],
+              },
+            ],
+          },
+          { name: 'relation', type: 'relationship', relationTo: 'draftPosts' },
+        ],
+        versions: { drafts: true, maxPerDoc: 0 },
+      },
+      {
         // no localized fields: every publish validates all locales
         slug: 'bulletins',
         fields: [
           { name: 'title', type: 'text', required: true },
-          { name: 'items', type: 'array', fields: [{ name: 'item', type: 'text', required: true }] },
+          {
+            name: 'items',
+            type: 'array',
+            fields: [{ name: 'item', type: 'text', required: true }],
+          },
           {
             type: 'tabs',
             tabs: [{ name: 'extra', fields: [{ name: 'count', type: 'number', max: 9 }] }],

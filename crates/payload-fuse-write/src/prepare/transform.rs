@@ -158,7 +158,8 @@ fn traverse(plan: &WritePlan, heap: &mut Heap, fields: &[Field], container: Ref,
           }
         }
       }
-      Kind::Row | Kind::Collapsible | Kind::Tab => traverse(plan, heap, &field.fields, container, parent_localized)?,
+      // rows, collapsibles, unnamed tabs and unnamed groups: the parent's `ref`
+      Kind::Row | Kind::Collapsible | Kind::Tab | Kind::Group => traverse(plan, heap, &field.fields, container, parent_localized)?,
       Kind::Tabs => traverse(plan, heap, &field.tabs, container, parent_localized)?,
       _ => {}
     }
