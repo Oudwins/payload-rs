@@ -1011,14 +1011,14 @@ const checkBulk = (name: BulkName, args: Any) => {
     count(stats.ineligible, `read:${readPlan.reason}`)
     return undefined
   }
+  if (!isUpdate && config.disableBulkDelete && !args.overrideAccess) {
+    // delete.ts throws its APIError before anything else
+    return guard('disableBulkDelete')
+  }
   if (!args.overrideAccess) {
-    // field write access is evaluated per call in each document's prepare (`fieldAccessRequest`)
-    if (readPlan.fieldAccess.length > 0) {
-      return guard('access:fields')
-    }
-    if (readPlan.hasRelations) {
-      return guard('access:populate')
-    }
+    // field write access is evaluated per call in each document's prepare (`fieldAccessRequest`),
+    // the results' field read access and population access in the result read (as the by-id
+    // writes' result reads)
     const evaluated = evaluateCompiledAccess(isUpdate ? plan.access.update : plan.access.delete, {
       id: undefined,
       collectionConfig: config,
@@ -1064,8 +1064,7 @@ const checkBulk = (name: BulkName, args: Any) => {
     {
       collection,
       depth: args.depth,
-      // the results' field access is guarded above
-      overrideAccess: true,
+      overrideAccess: args.overrideAccess,
       populate: args.populate,
       req,
       showHiddenFields: args.showHiddenFields,

@@ -978,16 +978,17 @@ export type { Fused as FusedRead }
  * The fused writes' bulk update / delete (src/fuse-write): a `find` request whose reads are
  * `payload.db.find(dbArgs)` (the operation's document read) and whose `afterRead` is the one the
  * operation runs on each result document (`depth`, `populate`, `showHiddenFields`, `draft`, the
- * request's locales; no select, no field access: the fused writes guard both), run on the result
- * documents together (crates/payload-fuse-mongo `run_documents`). `args` holds the operation's
- * `collection`, `depth`, `populate`, `req`, `showHiddenFields`; population needs
- * `overrideAccess: true` (as the write's own result read). A string: the guard reason.
+ * request's locales; no select: the fused writes guard it), run on the result documents together
+ * (crates/payload-fuse-mongo `run_documents`). `args` holds the operation's `collection`, `depth`,
+ * `overrideAccess`, `populate`, `req`, `showHiddenFields`; field read access and population follow
+ * `overrideAccess` as in the by-id writes' result reads (the operation checks no collection read
+ * access). A string: the guard reason.
  */
 export const fusedPageRequest = (
   args: Any,
   { db: dbArgs, draft }: { db: Record<string, unknown>; draft: unknown },
 ): Fused | string => {
-  const prepared = prepare('find', args)
+  const prepared = prepare('find', args, true)
   if (!prepared) {
     return 'page:prepare'
   }
@@ -1021,10 +1022,14 @@ export const fusedPageRequest = (
   if (typeof db === 'string') {
     return db
   }
+  const fieldAccess = compiledFieldAccess(prepared, fieldAccessIDs)
+  if (typeof fieldAccess === 'string') {
+    return fieldAccess
+  }
   const request = `{"op":"find","plan":${planID},"db":${db.db},${readRequest({
     currentDepth: 1,
     depth,
-    fieldAccess: undefined,
+    fieldAccess,
     fieldAccessIDs,
     flattenLocales: true,
     payload,

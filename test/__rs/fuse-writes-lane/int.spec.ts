@@ -794,6 +794,96 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     }
   })
 
+  test('should update and delete many without overrideAccess', async ({ payload, restClient }) => {
+    const author = await payload.create({
+      collection: 'authors',
+      data: { name: 'Bulk' },
+      overrideAccess: true,
+    })
+    const create = (title: string) =>
+      payload.create({
+        collection: 'notices',
+        data: { title, author: author.id, secret: 's' },
+        overrideAccess: true,
+      })
+    const ids = [(await create('a')).id, (await create('b')).id, (await create('c')).id]
+    const user = {
+      ...(await payload.create({
+        collection: 'users',
+        data: { email: 'bulk@fuse.test', password: 'secret' },
+        overrideAccess: true,
+      })),
+      collection: 'users',
+    }
+    // past guard sampling (the first 32 checked calls of each compiled access function run the
+    // exact lane): collection, field and population read access, update and delete access
+    const none = { id: { equals: '000000000000000000000000' } }
+    for (let i = 0; i < 40; i++) {
+      await payload.update({
+        collection: 'notices',
+        data: { title: 'w' },
+        depth: 1,
+        overrideAccess: false,
+        user,
+        where: { id: { equals: ids[2] } },
+      })
+      await payload.delete({ collection: 'notices', overrideAccess: false, user, where: none })
+    }
+    const hitsBefore = { ...fuseWriteStats()?.hits }
+
+    const updated = await payload.update({
+      collection: 'notices',
+      data: { title: 'u' },
+      depth: 1,
+      overrideAccess: false,
+      user,
+      where: { id: { in: ids.slice(0, 2) } },
+    })
+    const patched = await restClient.PATCH('/notices', {
+      body: JSON.stringify({ title: 'p' }),
+      query: { where: { id: { in: ids } } },
+    })
+    const patchedJson = await patched.json()
+    const deleted = await restClient.DELETE('/notices', {
+      query: { where: { id: { in: ids.slice(1) } } },
+    })
+    const deletedJson = await deleted.json()
+    const local = await payload.delete({
+      collection: 'notices',
+      depth: 2,
+      overrideAccess: false,
+      user,
+      where: { id: { equals: ids[0] } },
+    })
+    const kept = await payload.create({
+      collection: 'kept',
+      data: { title: 'k' },
+      overrideAccess: true,
+    })
+    const refused = await restClient.DELETE('/kept', {
+      query: { where: { id: { equals: kept.id } } },
+    })
+
+    expect(updated.docs).toHaveLength(2)
+    expect(updated.docs[0]).toMatchObject({ author: { id: author.id, name: 'Bulk' }, secret: 's' })
+    expect(patched.status).toBe(200)
+    expect(patchedJson.docs).toHaveLength(3)
+    expect(patchedJson.docs[0].secret).toBeUndefined()
+    expect(deleted.status).toBe(200)
+    expect(deletedJson.docs.map((doc) => doc.title)).toStrictEqual(['p', 'p'])
+    expect(local.docs[0]).toMatchObject({ title: 'p', secret: 's' })
+    expect(refused.status).toBe(403)
+    const hits = fuseWriteStats()?.hits
+    if (
+      hits &&
+      process.env.PAYLOAD_RS_FUSE_WRITES !== 'off' &&
+      process.env.PAYLOAD_ENGINE !== 'ts'
+    ) {
+      expect(hits.updateMany).toBeGreaterThanOrEqual((hitsBefore.updateMany ?? 0) + 2)
+      expect(hits.deleteMany).toBeGreaterThanOrEqual((hitsBefore.deleteMany ?? 0) + 2)
+    }
+  })
+
   test('should have served writes without lane differences', async () => {
     const stats = fuseWriteStats()
 

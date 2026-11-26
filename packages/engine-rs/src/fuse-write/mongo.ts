@@ -994,6 +994,10 @@ const prepareBulk = async (
       },
     )
     request.lfind = args.overrideLock === false
+    if (request.lfind) {
+      // getLockedDocumentIds reads the clock after its find (unused: any lock found bails)
+      Date.now()
+    }
   }
   if (VersionModel) {
     request.vc = VersionModel.collection.collectionName

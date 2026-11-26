@@ -213,6 +213,27 @@ export default buildConfigWithDefaults({
         ],
         versions: true,
       },
+      {
+        // bulk writes without `overrideAccess` (REST): compiled collection access, field read
+        // access, population of a collection whose read access depends on the user
+        slug: 'notices',
+        access: { delete: () => true, read: () => true, update: () => true },
+        fields: [
+          { name: 'title', type: 'text' },
+          { name: 'author', type: 'relationship', relationTo: 'authors' },
+          {
+            name: 'secret',
+            type: 'text',
+            access: { read: ({ req }) => Boolean(req.user) },
+          },
+        ],
+      },
+      {
+        slug: 'kept',
+        access: { delete: () => true, read: () => true },
+        disableBulkDelete: true,
+        fields: [{ name: 'title', type: 'text' }],
+      },
     ],
     blocks: [{ slug: 'callout', fields: [{ name: 'note', type: 'text' }] }],
   },
