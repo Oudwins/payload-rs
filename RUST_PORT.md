@@ -207,6 +207,12 @@ Verification on the merged tree (round 9):
 | glue / driver lane / HTTP lanes / fn-compile / switch | 33/33, 4/4, 18/18, 39/39, 9/9                                                                                 |
 | packaging and default-path check                      | OK                                                                                                            |
 
+Round 4, continued (2026-11-26), verified as round 10:
+
+- **Drafts (WP-L):** fused writes cover drafts for published creates, `draft: true` creates and updates, publishing over a latest draft, a per-locale `_status`, and deletes.
+- **Per-document field access (WP-M):** compiled field read access that reads the document runs per document inside the fused afterRead, with upstream's tick order. This clears the REST depth-2 write guard on `users.sessions`.
+- **Verification:** MongoDB = baseline, with and without both lane-shadows. SQLite and PostgreSQL = baselines. Shadow and parity 3/3 clean. Corpus 14/14, lane suites 64/64. The only failures were load flakes that pass on rerun: a cloud-storage timeout, plugin-ecommerce's 500 ms settlement, and auth's 1 s `waitFor` under serial shadow.
+
 Not built (owner decision D10): auxiliary MongoDB indexes (`AUX_INDEXES_PROPOSAL.md`).
 
 Still ineligible for fused writes:
