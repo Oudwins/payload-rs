@@ -46,6 +46,7 @@ import { buildAllLocalesPublicationHookDoc } from '../../../payload/src/versions
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
 import { appendVersionToQueryKey } from '../../../payload/src/versions/drafts/appendVersionToQueryKey.js'
 import { loadCoreRuntimeAddon } from '../addon.js'
+import { getFnIr } from '../compile/native.js'
 import { encodeSnapshot, snapshotRequest } from '../compile/snapshot.js'
 import { evaluateRequestOnlyAccess } from '../fuse/access.js'
 import {
@@ -161,7 +162,7 @@ export const registerFusedMongoWriteTarget = ({
       contextWrites: (text) =>
         JSON.parse(text).map(([key, value]: Any) => [key, decodeTree(value)]),
       objectIdClass: lane.mongoose.Types.ObjectId,
-      prepareByID: (name, args) => prepareByID(lane, name, args),
+      prepareByID: (name, args, unserved) => prepareByID(lane, name, args, unserved),
       prepareCreate: (args, data, context) =>
         isTSPrepare
           ? prepareCreateTS(lane, args, data, context)
@@ -416,6 +417,26 @@ const decodeTree = (value: Any): Any => {
   return out
 }
 
+/**
+ * Whether a prepare of `plan` would bail on a compiled user function still in guard sampling's
+ * first calls (or de-optimised): skipped before its encoding, readings and native call (an update
+ * before its transaction). `isValidated`: the call runs the validators.
+ */
+const isInWarmup = (
+  plan: { warmup: { hooks: number[]; validators: number[] } },
+  isValidated: boolean,
+) => {
+  const { hooks, validators } = plan.warmup
+  if (hooks.length === 0 && (!isValidated || validators.length === 0)) {
+    return false
+  }
+  const fnIr = getFnIr()
+  return (
+    hooks.some((id) => fnIr.fnIrLaneInWarmup(id)) ||
+    (isValidated && validators.some((id) => fnIr.fnIrLaneInWarmup(id)))
+  )
+}
+
 const writePlans = new WeakMap<object, WritePlanResult>()
 
 /** WP-I's write plan of `collection` (writePlan.ts), rebuilt when a property it assumed changed. */
@@ -478,6 +499,11 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
   const plan = writePlanOf(args.collection, args.req.payload)
   if (plan.json === undefined) {
     return `plan:${plan.reason}`
+  }
+  // a draft save validates only with `drafts.validate`
+  const drafts = collectionConfig.versions?.drafts
+  if (isInWarmup(plan, !(args.draft && drafts && !drafts.validate))) {
+    return 'fn:warmup'
   }
   const fieldAccess = fieldAccessRequest(plan, 'create', args)
   if (typeof fieldAccess === 'string') {
@@ -810,7 +836,12 @@ const captureUpdateReadings = (
  * with the call's id, the lock check, the versions and preferences collections, and for updates
  * WP-I's plan with the prepare request (its readings taken here, in upstream's order).
  */
-const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', args: Any) => {
+const prepareByID = async (
+  lane: DriverLane,
+  name: 'deleteByID' | 'updateByID',
+  args: Any,
+  unserved?: string[],
+) => {
   const slug = args.collection.config.slug
   const resolved = entity(lane, slug)
   if (typeof resolved === 'string') {
@@ -841,6 +872,9 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
   if (VersionModel) {
     request.vc = VersionModel.collection.collectionName
   }
+  if (unserved?.length) {
+    request.up = unservedPaths(collectionConfig.fields, unserved)
+  }
   if (name === 'deleteByID' && preferences) {
     request.pc = preferences.collection.collectionName
   }
@@ -848,6 +882,15 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
     const plan = writePlanOf(args.collection, req.payload)
     if (plan.json === undefined) {
       return `plan:${plan.reason}`
+    }
+    // utilities/update.ts `isSavingDraft` (no `publishAllLocales`: guarded); a draft save
+    // validates only with `drafts.validate`
+    const isSavingDraft = Boolean(
+      args.draft && hasDraftsEnabled(collectionConfig) && args.data._status !== 'published',
+    )
+    const drafts = collectionConfig.versions?.drafts
+    if (isInWarmup(plan, !(isSavingDraft && drafts && !drafts.validate))) {
+      return 'fn:warmup'
     }
     const fieldAccess = fieldAccessRequest(plan, 'update', args)
     if (typeof fieldAccess === 'string') {
@@ -861,10 +904,6 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
     if (typeof timestamps === 'object' && timestamps !== null && 'currentTime' in timestamps) {
       return 'mongo:currentTime'
     }
-    // utilities/update.ts `isSavingDraft` (no `publishAllLocales`: guarded)
-    const isSavingDraft = Boolean(
-      args.draft && hasDraftsEnabled(collectionConfig) && args.data._status !== 'published',
-    )
     const readings = captureUpdateReadings(lane, collectionConfig.fields, args.data, {
       hasTimestamps: Boolean(timestamps),
       hasVersions: Boolean(VersionModel),
@@ -924,6 +963,63 @@ const prepareByID = async (lane: DriverLane, name: 'deleteByID' | 'updateByID', 
       : []),
   ]
   return { op: lane.BSON.serialize(request), reads, state: lane.BSON.serialize({ r: reads }) }
+}
+
+const unservedPathCache = new WeakMap<object, Map<string, string[][]>>()
+
+/**
+ * The stored-document paths of the relationship / upload fields that can reference one of
+ * `slugs` (array and block rows are path segments matched in every element; named groups and
+ * tabs nest, unnamed containers do not): the by-id drivers bail before any statement when the
+ * stored document holds a value at one (the result read would load an unserved collection).
+ */
+const unservedPaths = (fields: Any[], slugs: string[]) => {
+  const key = slugs.join('\u0000')
+  let byKey = unservedPathCache.get(fields)
+  if (!byKey) {
+    byKey = new Map()
+    unservedPathCache.set(fields, byKey)
+  }
+  let paths = byKey.get(key)
+  if (!paths) {
+    paths = []
+    collectUnservedPaths(fields, slugs, [], paths)
+    byKey.set(key, paths)
+  }
+  return paths
+}
+
+const collectUnservedPaths = (
+  fields: Any[],
+  slugs: string[],
+  prefix: string[],
+  out: string[][],
+) => {
+  for (const field of fields) {
+    if (field.type === 'relationship' || field.type === 'upload') {
+      const relationTo = Array.isArray(field.relationTo) ? field.relationTo : [field.relationTo]
+      if (relationTo.some((slug: string) => slugs.includes(slug))) {
+        out.push([...prefix, field.name])
+      }
+    } else if (field.type === 'blocks') {
+      for (const block of field.blocks ?? []) {
+        if (typeof block === 'object' && block !== null) {
+          collectUnservedPaths(block.fields ?? [], slugs, [...prefix, field.name], out)
+        }
+      }
+    } else if (field.type === 'tabs') {
+      for (const tab of field.tabs) {
+        collectUnservedPaths(tab.fields, slugs, 'name' in tab ? [...prefix, tab.name] : prefix, out)
+      }
+    } else if (Array.isArray(field.fields)) {
+      collectUnservedPaths(
+        field.fields,
+        slugs,
+        'name' in field ? [...prefix, field.name] : prefix,
+        out,
+      )
+    }
+  }
 }
 
 /**

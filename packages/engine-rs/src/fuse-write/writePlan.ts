@@ -24,6 +24,12 @@ export type WritePlanResult =
       readsReq: boolean
       reason?: undefined
       volatile: Volatile[]
+      /**
+       * The compiled user functions every prepare call uses (fields outside array / block rows):
+       * field hooks, and validators (unless the call skips validation). While one is still in
+       * guard sampling's first calls the prepare bails on it (`fn:verify`).
+       */
+      warmup: { hooks: number[]; validators: number[] }
     }
   | { json?: undefined; reason: string; volatile: Volatile[] }
 
@@ -97,10 +103,13 @@ const collectionHookNames = [
 
 type Builder = {
   fieldAccess: FieldAccess[]
+  /** Planning the fields of array / block rows (their functions run per row). */
+  isInRows: boolean
   payload: Any
   readsReq: boolean
   relations: Set<string>
   volatile: Volatile[]
+  warmup: { hooks: number[]; validators: number[] }
 }
 
 const watch = (builder: Builder, object: Any, key: PropertyKey) => {
@@ -115,10 +124,12 @@ const watch = (builder: Builder, object: Any, key: PropertyKey) => {
 export const buildWritePlan = ({ collection, payload }: { collection: Any; payload: Any }) => {
   const builder: Builder = {
     fieldAccess: [],
+    isInRows: false,
     payload,
     readsReq: false,
     relations: new Set(),
     volatile: [],
+    warmup: { hooks: [], validators: [] },
   }
   try {
     const config = collection.config
@@ -214,6 +225,7 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
       json,
       readsReq: builder.readsReq,
       volatile: builder.volatile,
+      warmup: builder.warmup,
     }
   } catch (error) {
     if (error instanceof Ineligible) {
@@ -425,20 +437,25 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
         // fields, `traverseFields` (the transforms) does not
         return ineligible('group:unnamed:localized')
       }
-      out.f = fieldsPlan(builder, field.fields)
+      out.f =
+        type === 'array'
+          ? inRows(builder, () => fieldsPlan(builder, field.fields))
+          : fieldsPlan(builder, field.fields)
       break
     case 'blocks':
       if (field.filterOptions) {
         return ineligible('blocks:filterOptions')
       }
-      out.b = field.blocks.map((block: Any) =>
-        typeof block === 'object' && block !== null && typeof block.slug === 'string'
-          ? {
-              slug: block.slug,
-              f: fieldsPlan(builder, block.fields),
-              label: labelPlan(block.labels?.singular),
-            }
-          : ineligible('blocks:reference'),
+      out.b = inRows(builder, () =>
+        field.blocks.map((block: Any) =>
+          typeof block === 'object' && block !== null && typeof block.slug === 'string'
+            ? {
+                slug: block.slug,
+                f: fieldsPlan(builder, block.fields),
+                label: labelPlan(block.labels?.singular),
+              }
+            : ineligible('blocks:reference'),
+        ),
       )
       break
     case 'number':
@@ -520,6 +537,17 @@ const hookArgKeys = new Set([
   'value',
 ])
 
+/** `plan()` with the builder planning the fields of array / block rows. */
+const inRows = <T>(builder: Builder, plan: () => T) => {
+  const wasInRows = builder.isInRows
+  builder.isInRows = true
+  try {
+    return plan()
+  } finally {
+    builder.isInRows = wasInRows
+  }
+}
+
 class Unsupported {}
 
 /** `{ ...field }[key]`: an own enumerable data property, else `Object.prototype`'s. */
@@ -554,6 +582,9 @@ const userFunctionPlan = (
   const compiled = compileFunction(fn)
   if (!compiled.ok) {
     return ineligible(`${reason}:compile`)
+  }
+  if (!builder.isInRows) {
+    builder.warmup[reason === 'field:validate' ? 'validators' : 'hooks'].push(compiled.id)
   }
   if (compiled.argKeys.length <= argIndex) {
     return { fn: compiled.id }

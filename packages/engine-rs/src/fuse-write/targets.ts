@@ -33,9 +33,15 @@ export type FusedWriteTarget = {
   /**
    * Prepares an `updateByID` / `deleteByID` of `args`: the clock readings and ids upstream would
    * take (update), the cast filters of its statements; the stored-document read and WP-I's
-   * prepare run inside `run`. A string is a bail (nothing ran).
+   * prepare run inside `run`. A string is a bail (nothing ran). `unserved`: the collections the
+   * result read's population does not serve (a stored document referencing one bails before any
+   * statement).
    */
-  prepareByID: (name: 'deleteByID' | 'updateByID', args: Any) => Promise<PreparedByID | string>
+  prepareByID: (
+    name: 'deleteByID' | 'updateByID',
+    args: Any,
+    unserved?: string[],
+  ) => Promise<PreparedByID | string>
   /**
    * Prepares a create of `args` on `data` and `context` (copies of the caller's data and
    * `req.context`, which upstream mutates in place: the dispatch replays that): the clock readings and

@@ -39,6 +39,14 @@ pub fn should_verify(id: FnId) -> bool {
   n <= p.first || (p.sample_every > 0 && n % p.sample_every == 0)
 }
 
+/// Whether `id` still lacks [`Policy::first`] verified (or bailed) calls, or is not active: every
+/// lane call bails then ([`lane_should_verify`]'s first branch), so a lane can skip its work
+/// before using it. Counts nothing.
+pub fn lane_in_warmup(id: FnId) -> bool {
+  let Some(e) = registry::entry(id) else { return true };
+  !registry::is_active(id) || e.verified.load(Ordering::Relaxed) + e.bails.load(Ordering::Relaxed) < policy().first
+}
+
 /// For fused lanes: whether this call of `id` must run on the exact (JS-calling) lane so the JS
 /// side can verify it (the guard wrapper compares there). True until the function has
 /// [`Policy::first`] verified (or bailed) calls, then for one lane call in

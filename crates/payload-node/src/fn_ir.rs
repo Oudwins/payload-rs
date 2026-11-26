@@ -10,7 +10,7 @@
 //! fnIrCompare(result: External, jsResult: unknown): 0 | 1 | 2    // match, mismatch, unverifiable
 //! fnIrResultToJs(result: External): unknown                      // undefined if not representable
 //! fnIrShouldVerify(id) / fnIrRecord(id, outcome) / fnIrStats(id) / fnIrSetPolicy(first, every)
-//! fnIrIsActive(id) / fnIrDescribe(id)
+//! fnIrIsActive(id) / fnIrLaneInWarmup(id) / fnIrDescribe(id)
 //! ```
 //!
 //! Values cross as snapshots made by the JS side (`compile/snapshot.ts`): plain objects, arrays
@@ -450,6 +450,13 @@ pub fn fn_ir_stats(id: u32) -> serde_json::Value {
 pub fn fn_ir_set_policy(first: f64, sample_every: f64) {
   let first = if first.is_finite() { first.max(0.0) as u64 } else { u64::MAX };
   guard::set_policy(guard::Policy { first, sample_every: sample_every.max(0.0) as u64 });
+}
+
+/// Whether every fused-lane use of `id` bails for now (not active, or still verifying its first
+/// calls); counts nothing.
+#[napi]
+pub fn fn_ir_lane_in_warmup(id: u32) -> bool {
+  guard::lane_in_warmup(id)
 }
 
 #[napi]

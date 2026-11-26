@@ -47,6 +47,7 @@ export type FnIrBinding = {
   fnIrEvaluate: (id: number, args: unknown[]) => CompiledResult | string
   fnIrInit: (deps: Record<string, unknown>) => void
   fnIrIsActive: (id: number) => boolean
+  fnIrLaneInWarmup: (id: number) => boolean
   fnIrLaneShouldVerify: (id: number) => boolean
   fnIrRecord: (id: number, outcome: 0 | 1 | 2) => void
   fnIrReserve: () => number

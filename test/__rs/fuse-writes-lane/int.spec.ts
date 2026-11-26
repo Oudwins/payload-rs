@@ -10,9 +10,15 @@ import { test } from '../../__helpers/int/vitest.js'
  * checks that the lane served calls and found no difference.
  */
 type FuseWriteStats = {
+  bails: Record<string, number>
   diffs: number
+  guards: Record<string, number>
   hits: Record<string, number>
 }
+
+/** A stats key counted as a guard or a bail. */
+const stopped = (stats: FuseWriteStats | undefined, key: string) =>
+  (stats?.guards[key] ?? 0) + (stats?.bails[key] ?? 0)
 
 const fuseWriteStats = (): FuseWriteStats | undefined =>
   Reflect.get(globalThis, Symbol.for('@payloadcms/engine-rs/fuse-write-stats'))
@@ -881,6 +887,68 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     ) {
       expect(hits.updateMany).toBeGreaterThanOrEqual((hitsBefore.updateMany ?? 0) + 2)
       expect(hits.deleteMany).toBeGreaterThanOrEqual((hitsBefore.deleteMany ?? 0) + 2)
+    }
+  })
+
+  test('should keep writes whose result loads an unserved collection on the exact lane', async ({
+    payload,
+  }) => {
+    const keys = ['populate:unserved', 'populate:related', 'backoff:populate:related']
+    const before = Object.fromEntries(keys.map((key) => [key, stopped(fuseWriteStats(), key)]))
+    const target = await payload.create({
+      collection: 'readHooked',
+      data: { title: 't' },
+      overrideAccess: true,
+    })
+    const plain = await payload.create({
+      collection: 'pointers',
+      data: { title: 'plain' },
+      depth: 1,
+      overrideAccess: true,
+    })
+    const pointing = await payload.create({
+      collection: 'pointers',
+      data: { title: 'p', target: target.id },
+      depth: 1,
+      overrideAccess: true,
+    })
+    const updated = await payload.update({
+      id: pointing.id,
+      collection: 'pointers',
+      data: { title: 'q' },
+      depth: 1,
+      overrideAccess: true,
+    })
+    const retargeted = await payload.update({
+      id: plain.id,
+      collection: 'pointers',
+      data: { target: target.id },
+      depth: 1,
+      overrideAccess: true,
+    })
+    const deleted = await payload.delete({
+      id: pointing.id,
+      collection: 'pointers',
+      depth: 1,
+      overrideAccess: true,
+    })
+
+    expect(pointing.target).toMatchObject({ id: target.id, title: 't' })
+    expect(updated).toMatchObject({ title: 'q', target: { id: target.id } })
+    expect(retargeted.target).toMatchObject({ id: target.id })
+    expect(deleted).toMatchObject({ title: 'q', target: { id: target.id } })
+    const stats = fuseWriteStats()
+    if (
+      stats &&
+      process.env.PAYLOAD_RS_FUSE_WRITES !== 'off' &&
+      process.env.PAYLOAD_ENGINE !== 'ts'
+    ) {
+      const delta = (key: string) => stopped(stats, key) - before[key]!
+      // the create holding the value and the update setting it stop before the native call, the
+      // update and the delete of the stored value after the stored read, before any statement
+      // (run lanes: calls after such a bail back off)
+      expect(delta('populate:unserved')).toBeGreaterThanOrEqual(1)
+      expect(keys.reduce((sum, key) => sum + delta(key), 0)).toBe(4)
     }
   })
 

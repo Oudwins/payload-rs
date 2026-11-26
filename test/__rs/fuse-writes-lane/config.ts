@@ -229,6 +229,21 @@ export default buildConfigWithDefaults({
         ],
       },
       {
+        // a collection the fused reads do not serve (an afterRead hook) and documents relating
+        // to it: their writes' result reads would load it
+        slug: 'readHooked',
+        fields: [{ name: 'title', type: 'text' }],
+        hooks: { afterRead: [({ doc }) => doc] },
+      },
+      {
+        slug: 'pointers',
+        fields: [
+          { name: 'title', type: 'text' },
+          { name: 'target', type: 'relationship', relationTo: 'readHooked' },
+          { name: 'author', type: 'relationship', relationTo: 'authors' },
+        ],
+      },
+      {
         slug: 'kept',
         access: { delete: () => true, read: () => true },
         disableBulkDelete: true,

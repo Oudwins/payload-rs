@@ -220,16 +220,136 @@ const checkCreate = (args: Any) => {
   if (typeof target === 'string') {
     return guard(target)
   }
+  // a data value the result read would populate from an unserved collection, known from an
+  // earlier read of the same shape: before building this call's read
+  const shape = readShape(args)
+  const knownUnserved = shape === undefined ? undefined : unservedByShape.get(readPlan)?.get(shape)
+  if (knownUnserved) {
+    if (referencesCollections(collection.config.fields, data, knownUnserved)) {
+      return guard('populate:unserved')
+    }
+    if (knownUnserved.length > 0 && isBackingOff(populateBackoff, collection)) {
+      return guard('backoff:populate:related')
+    }
+  }
   // the result read's guards (population's access without `overrideAccess`, ...) depend on the
   // call, not on the document: checked before the prepare
   const read = resultRead(args, placeholderID)
   if (!read) {
     return guard('read')
   }
-  if (read.population?.reachesUnserved && isBackingOff(populateBackoff, collection)) {
-    return guard('backoff:populate:related')
+  if (shape !== undefined && read.population) {
+    rememberUnserved(readPlan, shape, read.population.unserved)
   }
-  return { payload, target }
+  if (read.population?.reachesUnserved) {
+    if (referencesCollections(collection.config.fields, data, read.population.unserved)) {
+      // the result read would load an unserved collection (a bail after the statements)
+      return guard('populate:unserved')
+    }
+    if (!knownUnserved && isBackingOff(populateBackoff, collection)) {
+      return guard('backoff:populate:related')
+    }
+  }
+  return { payload, read, target }
+}
+
+/**
+ * The collections a result read of one shape leaves unserved (`populationRequest`'s `unserved`),
+ * per read plan of the written collection and shape (`readShape`): a create whose data references
+ * one is guarded before its read is built. A stale entry only sends calls to the exact lane.
+ */
+const unservedByShape = new WeakMap<object, Map<string, string[]>>()
+
+/** The arguments `populationRequest`'s unserved collections depend on (`undefined`: not cached). */
+const readShape = (args: Any) => {
+  const { req } = args
+  if (
+    args.populate !== undefined ||
+    typeof req.locale === 'object' ||
+    typeof req.fallbackLocale === 'object'
+  ) {
+    return undefined
+  }
+  return JSON.stringify([
+    args.depth ?? null,
+    Boolean(args.draft),
+    Boolean(args.overrideAccess),
+    req.payloadAPI ?? null,
+    req.locale ?? null,
+    req.fallbackLocale ?? null,
+  ])
+}
+
+const rememberUnserved = (readPlan: object, shape: string, unserved: string[]) => {
+  let byShape = unservedByShape.get(readPlan)
+  if (!byShape) {
+    byShape = new Map()
+    unservedByShape.set(readPlan, byShape)
+  }
+  if (!byShape.has(shape)) {
+    byShape.set(shape, unserved)
+  }
+}
+
+/** A relationship value beforeValidate keeps (its `''` / `'none'` / `'null'` become `null`). */
+const isRelationshipValue = (value: unknown) =>
+  value !== undefined && value !== null && value !== '' && value !== 'none' && value !== 'null'
+
+/**
+ * Whether `data` holds a relationship / upload value of one of `slugs` (in `fields`' traversal:
+ * groups, rows, collapsibles, tabs, array and block rows): a create whose result read populates
+ * it loads that collection.
+ */
+const referencesCollections = (fields: Any[], data: Any, slugs: string[]): boolean => {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return false
+  }
+  for (const field of fields) {
+    if (field.type === 'relationship' || field.type === 'upload') {
+      const values = Array.isArray(data[field.name]) ? data[field.name] : [data[field.name]]
+      for (const value of values) {
+        if (!isRelationshipValue(value)) {
+          continue
+        }
+        const isPolymorphic = typeof field.relationTo !== 'string'
+        if (
+          isPolymorphic
+            ? typeof value !== 'object' || slugs.includes(value.relationTo)
+            : slugs.includes(field.relationTo)
+        ) {
+          return true
+        }
+      }
+      continue
+    }
+    if (field.type === 'array' || field.type === 'blocks') {
+      const rows = data[field.name]
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const rowFields =
+          field.type === 'array'
+            ? field.fields
+            : field.blocks?.find((block: Any) => block.slug === row?.blockType)?.fields
+        if (Array.isArray(rowFields) && referencesCollections(rowFields, row, slugs)) {
+          return true
+        }
+      }
+      continue
+    }
+    if (field.type === 'tabs') {
+      for (const tab of field.tabs) {
+        if (referencesCollections(tab.fields, 'name' in tab ? data[tab.name] : data, slugs)) {
+          return true
+        }
+      }
+      continue
+    }
+    if (Array.isArray(field.fields)) {
+      if (referencesCollections(field.fields, 'name' in field ? data[field.name] : data, slugs)) {
+        return true
+      }
+    }
+  }
+  return false
 }
 
 /**
@@ -683,11 +803,29 @@ const checkByID = (name: ByIDName, args: Any) => {
   if (typeof target === 'string') {
     return guard(target)
   }
+  // what an earlier result read of this shape left unserved: decided before building this one
+  const shape = readShape(args)
+  const knownUnserved = shape === undefined ? undefined : unservedByShape.get(readPlan)?.get(shape)
+  if (knownUnserved) {
+    if (isUpdate && referencesCollections(collection.config.fields, data, knownUnserved)) {
+      return guard('populate:unserved')
+    }
+    if (knownUnserved.length > 0 && isBackingOff(populateBackoff, collection)) {
+      return guard('backoff:populate:related')
+    }
+  }
   const read = resultRead(args, id)
   if (!read) {
     return guard('read')
   }
-  if (read.population?.reachesUnserved && isBackingOff(populateBackoff, collection)) {
+  if (shape !== undefined && read.population) {
+    rememberUnserved(readPlan, shape, read.population.unserved)
+  }
+  if (
+    !knownUnserved &&
+    read.population?.reachesUnserved &&
+    isBackingOff(populateBackoff, collection)
+  ) {
     return guard('backoff:populate:related')
   }
   return { payload, target }
@@ -695,14 +833,20 @@ const checkByID = (name: ByIDName, args: Any) => {
 
 /** What preparing and running a fused updateByID / deleteByID produced (a string: a bail). */
 const fusedByID = async ({ target }: Checked, name: ByIDName, args: Any, isShadow: boolean) => {
-  const prepared = await target.prepareByID(name, args)
-  if (typeof prepared === 'string') {
-    return { bail: prepared }
-  }
   // the result read's `findOne` is also the stored-document read
   const fused = resultRead(args, args.id)
   if (!fused) {
     return { bail: 'read' }
+  }
+  const unserved = fused.population?.unserved
+  if (name === 'updateByID' && unserved?.length) {
+    if (referencesCollections(args.collection.config.fields, args.data, unserved)) {
+      return { bail: 'populate:unserved' }
+    }
+  }
+  const prepared = await target.prepareByID(name, args, unserved)
+  if (typeof prepared === 'string') {
+    return { bail: prepared }
   }
   // deleteByID's afterRead passes `draft: undefined` (its dataloader keys hold `null`)
   const read =

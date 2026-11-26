@@ -79,6 +79,9 @@ pub struct ByIDRequest {
   /// updateByID: `enforceMaxVersions`' `deleteVersions` filter (cast `{ updatedAt: {
   /// less_than_equal }, parent: { equals: id } }`) and the sentinel date its `updatedAt` holds.
   pub max_delete: Option<(Document, Bson)>,
+  /// The stored-document paths of relationships to collections the result read does not serve
+  /// (`up`): a stored value at one bails before any statement (the result read would).
+  pub unserved: Vec<Vec<String>>,
 }
 
 /// Decodes `{ op: 'updateByID' | 'deleteByID', d?, c, t: <BSON { q, lf?, mf?, vq?, pf? }>, lc?,
@@ -133,7 +136,19 @@ pub fn decode(request: &RawDocument) -> Result<ByIDRequest, String> {
     }
     _ => None,
   };
+  let mut unserved = Vec::new();
+  if let Ok(paths) = request.get_array("up") {
+    for path in paths {
+      let path = path.map_err(|e| e.to_string())?.as_array().ok_or("byID:up")?;
+      let mut segments = Vec::new();
+      for segment in path {
+        segments.push(segment.map_err(|e| e.to_string())?.as_str().ok_or("byID:up")?.to_string());
+      }
+      unserved.push(segments);
+    }
+  }
   Ok(ByIDRequest {
+    unserved,
     op,
     database: text("d"),
     collection: text("c").ok_or("byID:c")?,
@@ -203,6 +218,9 @@ async fn steps(
   }
   let stored = find_stored(client, &read.reads, txn).await.map_err(|reason| format!("!{reason}"))?;
   let stored = stored.ok_or("!byID:notFound")?;
+  if request.unserved.iter().any(|path| holds_value(&stored, path)) {
+    return Err("!populate:related".to_string());
+  }
   match request.op {
     ByID::Update => {
       let (doc, context) = update_document(client, txn, &request, &read, &stored, state.is_some(), false, false).await?;
@@ -233,6 +251,28 @@ async fn steps(
       }
       Ok((read, doc, None))
     }
+  }
+}
+
+/// Whether `doc` holds a value other than `null` / an empty array at `path` (array elements are
+/// searched for the remaining segments).
+fn holds_value(doc: &RawDocument, path: &[String]) -> bool {
+  let Some((first, rest)) = path.split_first() else {
+    return false;
+  };
+  match doc.get(first) {
+    Ok(Some(value)) => value_holds(value, rest),
+    _ => false,
+  }
+}
+
+fn value_holds(value: RawBsonRef<'_>, rest: &[String]) -> bool {
+  match value {
+    RawBsonRef::Null | RawBsonRef::Undefined => false,
+    RawBsonRef::Array(items) if rest.is_empty() => items.into_iter().next().is_some(),
+    RawBsonRef::Array(items) => items.into_iter().flatten().any(|item| value_holds(item, rest)),
+    RawBsonRef::Document(doc) if !rest.is_empty() => holds_value(doc, rest),
+    _ => rest.is_empty(),
   }
 }
 

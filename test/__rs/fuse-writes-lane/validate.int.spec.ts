@@ -158,7 +158,10 @@ test.suite('fuse-writes compiled validators', { config: './validate.config.ts' }
     expect(stats?.hits.create).toBeGreaterThan(0)
     expect(stats?.hits.updateByID).toBeGreaterThan(0)
     // guard mode saw the first calls of each validator on the exact lane
-    expect(stats?.bails['prepare:fn:verify']).toBeGreaterThan(0)
+    // (skipped before the prepare while a validator has not had its first calls: `fn:warmup`)
+    expect(
+      (stats?.bails['prepare:fn:verify'] ?? 0) + (stats?.bails['fn:warmup'] ?? 0),
+    ).toBeGreaterThan(0)
     expect(stats?.diffs).toBe(0)
   })
 })

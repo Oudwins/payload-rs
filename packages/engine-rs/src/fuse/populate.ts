@@ -49,6 +49,8 @@ export type PopulationContext = {
   selects: Record<string, unknown>
   /** the operation's `currentDepth` */
   topCurrentDepth: number
+  /** The collections of `reachesUnserved`: the read collection's relationships to them bail. */
+  unserved: string[]
 }
 
 /** The dataloaders payload's `getDataLoader` created (packages/payload collections/dataloader.ts). */
@@ -140,7 +142,7 @@ export const populationRequest = ({
     plan: { eligible: true } & CollectionPlan
     slug: string
   }[] = []
-  let reachesUnserved = false
+  const unserved: string[] = []
   // the collections the levels currentDepth..depth can load
   let frontier: ({ eligible: true } & CollectionPlan)[] = [plan]
   for (let level = currentDepth; level <= depth && frontier.length > 0; level++) {
@@ -164,7 +166,7 @@ export const populationRequest = ({
             accessChecks.push({ slug, joinAccess: entry.joinAccess, plan: entry.plan })
           }
         } else if (level === currentDepth) {
-          reachesUnserved = true
+          unserved.push(slug)
         }
       }
     }
@@ -213,10 +215,11 @@ export const populationRequest = ({
       draft,
       ownOverrideAccess,
       payload,
-      reachesUnserved,
+      reachesUnserved: unserved.length > 0,
       req,
       selects,
       topCurrentDepth: currentDepth,
+      unserved,
     },
     json,
   }
