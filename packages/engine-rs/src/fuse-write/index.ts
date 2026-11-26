@@ -226,9 +226,8 @@ const checkCreate = (args: Any) => {
   if (!read) {
     return guard('read')
   }
-  const backingOff = backoffReason(collection)
-  if (backingOff) {
-    return guard(`backoff:${backingOff}`)
+  if (read.population?.reachesUnserved && isBackingOff(populateBackoff, collection)) {
+    return guard('backoff:populate:related')
   }
   return { payload, target }
 }
@@ -236,37 +235,52 @@ const checkCreate = (args: Any) => {
 /**
  * Bails the drivers can only take after the statements ran (the transaction is aborted and the
  * exact lane reruns the call), which tend to repeat for a collection: a result read reaching a
- * collection the fused reads do not serve (`populate:related`: a relationship value to it; e.g.
- * the perf suite's `authors` with a join field), and a document past `maxPerDoc` versions
- * (`byID:maxVersions`: the exact lane deletes the old versions). After one, the lane backs off
- * per collection: the next 1, 2, 4, ... up to 64 calls run the exact lane directly
- * (`backoff:<reason>`); a fused write that runs through resets it. A performance decision only:
- * both lanes give upstream's result. The shadow lanes do not back off.
+ * collection the fused reads do not serve (`populate:related`, only for reads whose population
+ * can reach one: `reachesUnserved`; e.g. the perf suite's `authors` with a join field, whenever
+ * a document holds a value of the relationship), and a document past `maxPerDoc` versions
+ * (`byID:maxVersions`, updates: the exact lane deletes the old versions). After one, the run
+ * lanes back off for that kind of call per collection: the next 1, 2, 4, ... up to 64 such calls
+ * run the exact lane directly (`backoff:<reason>`); such a call the lane runs through resets it.
+ * A performance decision only: both lanes give upstream's result. The shadow lanes do not back
+ * off.
  */
-const lateBails = new Set(['!byID:maxVersions', '!populate:related'])
+type Backoff = WeakMap<object, { next: number; skip: number }>
 
-const backoff = new WeakMap<object, { next: number; reason: string; skip: number }>()
+const populateBackoff: Backoff = new WeakMap()
+const maxVersionsBackoff: Backoff = new WeakMap()
 
-/** The reason the lane backs off from `collection` for this call, if it does. */
-const backoffReason = (collection: Any) => {
+const isBackingOff = (backoff: Backoff, collection: Any) => {
   const state = backoff.get(collection)
   if (!state || state.skip === 0) {
-    return undefined
+    return false
   }
   state.skip--
-  return state.reason
+  return true
 }
 
-/** Records a run lane's native result (`text`) for `backoff`. */
-const noteRun = (collection: Any, text: string) => {
-  if (lateBails.has(text)) {
-    const state = backoff.get(collection) ?? { next: 1, reason: '', skip: 0 }
-    state.reason = text.slice(1)
-    state.skip = state.next
-    state.next = Math.min(state.next * 2, 64)
-    backoff.set(collection, state)
-  } else if (text.charCodeAt(0) !== 33 /* ! */) {
-    backoff.delete(collection)
+const backOff = (backoff: Backoff, collection: Any) => {
+  const state = backoff.get(collection) ?? { next: 1, skip: 0 }
+  state.skip = state.next
+  state.next = Math.min(state.next * 2, 64)
+  backoff.set(collection, state)
+}
+
+/** Records a run lane's native result (`text`) of an operation that reads `read`. */
+const noteRun = (collection: Any, read: FusedRead, isUpdate: boolean, text: string) => {
+  const isDone = text.charCodeAt(0) !== 33 /* ! */
+  if (read.population?.reachesUnserved) {
+    if (text === '!populate:related') {
+      backOff(populateBackoff, collection)
+    } else if (isDone) {
+      populateBackoff.delete(collection)
+    }
+  }
+  if (isUpdate) {
+    if (text === '!byID:maxVersions') {
+      backOff(maxVersionsBackoff, collection)
+    } else if (isDone) {
+      maxVersionsBackoff.delete(collection)
+    }
   }
 }
 
@@ -402,7 +416,7 @@ const runCreate = async (checked: Checked, args: Any, exact: Exact) => {
     return exact()
   }
   const text = outcome.result[0]!
-  noteRun(args.collection, text)
+  noteRun(args.collection, outcome.read, false, text)
   if (text.charCodeAt(0) === 33 /* ! */) {
     if (text.charCodeAt(1) === 33) {
       // the commit failed after the statements were sent: its outcome is unknown, like upstream's
@@ -653,9 +667,11 @@ const checkByID = (name: ByIDName, args: Any) => {
   if (!read) {
     return guard('read')
   }
-  const backingOff = backoffReason(collection)
-  if (backingOff) {
-    return guard(`backoff:${backingOff}`)
+  if (read.population?.reachesUnserved && isBackingOff(populateBackoff, collection)) {
+    return guard('backoff:populate:related')
+  }
+  if (isUpdate && isBackingOff(maxVersionsBackoff, collection)) {
+    return guard('backoff:byID:maxVersions')
   }
   return { payload, target }
 }
@@ -697,7 +713,7 @@ const runByID = async (checked: Checked, name: ByIDName, args: Any, exact: Exact
     return exact()
   }
   const [text = '!result', , contextWrites] = outcome.result
-  noteRun(args.collection, text)
+  noteRun(args.collection, outcome.read, name === 'updateByID', text)
   if (text.charCodeAt(0) === 33 /* ! */) {
     if (text.charCodeAt(1) === 33) {
       count(stats.bails, 'commit')
@@ -1043,9 +1059,11 @@ const checkBulk = (name: BulkName, args: Any) => {
   if (typeof read === 'string') {
     return guard(read)
   }
-  const backingOff = backoffReason(collection)
-  if (backingOff) {
-    return guard(`backoff:${backingOff}`)
+  if (read.population?.reachesUnserved && isBackingOff(populateBackoff, collection)) {
+    return guard('backoff:populate:related')
+  }
+  if (isUpdate && isBackingOff(maxVersionsBackoff, collection)) {
+    return guard('backoff:byID:maxVersions')
   }
   return { payload, read, target }
 }
@@ -1116,7 +1134,7 @@ const runBulk = async (checked: CheckedBulk, name: BulkName, args: Any, exact: E
     return exact()
   }
   const [text = '!result', , contextWrites] = outcome.result
-  noteRun(args.collection, text)
+  noteRun(args.collection, checked.read, name === 'update', text)
   if (text.charCodeAt(0) === 33 /* ! */) {
     if (text.charCodeAt(1) === 33) {
       count(stats.bails, 'commit')
