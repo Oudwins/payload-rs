@@ -594,10 +594,17 @@ export const fuseFind = (args: Any, exact: Exact): Promise<Any> | undefined => {
   return fused && runFused(fused, args, exact)
 }
 
+/**
+ * `storedAccess`: a fused write's update / delete access result (a where constraint) combined into
+ * the `findOne` (the write's stored-document read, `getLatestCollectionVersion` / deleteByID's
+ * `findOne` of `combineQueries({ id: { equals } }, accessResults)`); the result's `afterRead` runs
+ * on the written document and does not read with it.
+ */
 const buildFindByIDRequest = (
   args: Any,
   isOperationResult = false,
   isText = false,
+  storedAccess?: unknown,
 ): Fused | undefined => {
   const prepared = prepare('findByID', args, isOperationResult)
   if (!prepared) {
@@ -685,7 +692,10 @@ const buildFindByIDRequest = (
   const fullWhere = appendNonTrashedFilter({
     enableTrash: config.trash,
     trash,
-    where: combineQueries({ id: { equals: id } }, overrideAccess ? true : (accessResult as never)),
+    where: combineQueries(
+      { id: { equals: id } },
+      (storedAccess ?? (overrideAccess ? true : accessResult)) as never,
+    ),
   })
   const db = encodeDb(
     target,
@@ -952,7 +962,8 @@ const shadow = async (fused: Fused, args: Any, exact: Exact): Promise<Any> => {
  * `run_document`), the accepted request kinds, compiled access, and the result's
  * materialization (with population's dataloader priming) or plain value (shadow mode).
  */
-export const fusedFindByIDRequest = (args: Any) => buildFindByIDRequest(args, true)
+export const fusedFindByIDRequest = (args: Any, storedAccess?: unknown) =>
+  buildFindByIDRequest(args, true, false, storedAccess)
 export const isAcceptedRequest = (req: unknown) => {
   const kind = acceptedRequest(req, 0)
   return kind !== undefined && (kind === 'isolated' || hasDataProperties(req as object, reqKeys))

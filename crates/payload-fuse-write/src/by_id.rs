@@ -74,7 +74,8 @@ pub struct ByIDRequest {
   /// deleteByID: the preferences collection and its cast key filter.
   pub preferences: Option<(String, RawDocumentBuf)>,
   /// updateByID with drafts: `getLatestCollectionVersion`'s `findVersions` of the parent's latest
-  /// version (the versions collection is `versions`'s).
+  /// version (the versions collection is `versions`'s); with a where-constraint update access the
+  /// one of `tl` (`{ lv }`: the access where with the version keys, combined into it).
   pub latest: Option<FindSpec>,
   /// updateByID: `enforceMaxVersions`' `deleteVersions` filter (cast `{ updatedAt: {
   /// less_than_equal }, parent: { equals: id } }`) and the sentinel date its `updatedAt` holds.
@@ -84,8 +85,8 @@ pub struct ByIDRequest {
   pub unserved: Vec<Vec<String>>,
 }
 
-/// Decodes `{ op: 'updateByID' | 'deleteByID', d?, c, t: <BSON { q, lf?, mf?, vq?, pf? }>, lc?,
-/// lfind?, wp?, p?, vc?, pc? }`.
+/// Decodes `{ op: 'updateByID' | 'deleteByID', d?, c, t: <BSON { q, lf?, mf?, vq?, pf?, lv? }>,
+/// tl?: <BSON { lv }>, lc?, lfind?, wp?, p?, vc?, pc? }`.
 pub fn decode(request: &RawDocument) -> Result<ByIDRequest, String> {
   let op = match request.get_str("op").map_err(|e| e.to_string())? {
     "updateByID" => ByID::Update,
@@ -123,7 +124,17 @@ pub fn decode(request: &RawDocument) -> Result<ByIDRequest, String> {
     (Some(collection), Some(filter)) => Some((collection, filter)),
     _ => None,
   };
-  let latest = match sub("lv") {
+  let access_latest = match request.get_binary("tl") {
+    Ok(binary) => {
+      let doc = RawDocument::from_bytes(binary.bytes).map_err(|e| e.to_string())?;
+      Some(doc.get_document("lv").map_err(|e| e.to_string())?.to_raw_document_buf())
+    }
+    Err(_) => None,
+  };
+  if access_latest.is_some() && sub("lv").is_none() {
+    return Err("byID:tl".to_string());
+  }
+  let latest = match access_latest.or_else(|| sub("lv")) {
     Some(spec) => Some(find_spec(&Document::try_from(spec.as_ref()).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?),
     None => None,
   };

@@ -162,7 +162,8 @@ export const registerFusedMongoWriteTarget = ({
       contextWrites: (text) =>
         JSON.parse(text).map(([key, value]: Any) => [key, decodeTree(value)]),
       objectIdClass: lane.mongoose.Types.ObjectId,
-      prepareByID: (name, args, unserved) => prepareByID(lane, name, args, unserved),
+      prepareByID: (name, args, unserved, accessWhere) =>
+        prepareByID(lane, name, args, unserved, accessWhere),
       prepareCreate: (args, data, context) =>
         isTSPrepare
           ? prepareCreateTS(lane, args, data, context)
@@ -707,26 +708,8 @@ const buildByIDTemplate = async (lane: DriverLane, slug: string): Promise<string
     if ((max > 0 || isDrafts) && (adapter.collation || lane.paginate.options !== undefined)) {
       return 'template:max-versions'
     }
-    // the driver lane's `laneFindVersions` / `lanePaginate` with `pagination: false`, `limit: 1`
-    // and `sort: '-updatedAt'`
-    const versionsFind = (filter: Any, skip: number | undefined) => {
-      const sort = buildSortParam({
-        adapter,
-        config,
-        fields,
-        locale: undefined,
-        sort: '-updatedAt',
-        timestamps: true,
-      })
-      const projection = buildProjectionFromSelect({ adapter, fields, select: undefined })
-      const query = VersionModel.find(filter, projection, { limit: 1, session: undefined, skip })
-      query.select('')
-      query.sort(sort)
-      query.lean(true)
-      return findSpec(castQuery(query, findOptionKeys))
-    }
     if (max > 0) {
-      parts.mf = versionsFind(parent, max)
+      parts.mf = versionsFindSpec(lane, fields, VersionModel, parent, max)
       // the `deleteVersions` of `enforceMaxVersions` when the find returns a version: its
       // `updatedAt` (read-transformed, an ISO string) replaces the sentinel date `ms` in the cast
       parts.md = castFilter(
@@ -743,21 +726,7 @@ const buildByIDTemplate = async (lane: DriverLane, slug: string): Promise<string
       parts.ms = sentinelDate
     }
     if (isDrafts) {
-      // getLatestCollectionVersion: updateByID's where (access `true`, no trash) with the version
-      // keys, and the parent's latest version
-      const where = appendNonTrashedFilter({
-        enableTrash: collectionConfig.trash,
-        trash: false,
-        where: combineQueries({ id: { equals: sentinelHex } }, true),
-      })
-      const latest = await buildQuery({
-        adapter,
-        fields,
-        where: combineQueries(appendVersionToQueryKey(where), {
-          and: [{ parent: { equals: sentinelHex } }, { latest: { equals: true } }],
-        }),
-      })
-      parts.lv = versionsFind(latest, undefined)
+      parts.lv = await latestVersionFind(lane, collectionConfig, VersionModel, true, undefined)
     }
   }
   const preferences = adapter.payload.collections[preferencesCollectionSlug]
@@ -778,6 +747,117 @@ const buildByIDTemplate = async (lane: DriverLane, slug: string): Promise<string
   }
   const template = toTemplate(Buffer.from(lane.BSON.serialize(parts)))
   return template.raw.length + template.hex.length === 0 ? 'template:id' : template
+}
+
+/**
+ * getLatestCollectionVersion's find of the parent's latest version (drafts): updateByID's where
+ * (`access`: its access result; no trash) with the version keys, combined with the parent and
+ * `latest: true`, db-mongodb `findVersions` (`limit: 1`, `pagination: false`, `-updatedAt`) as the
+ * driver lane sends it, for the sentinel id. `locale`: `findVersions`' (`req.locale`).
+ */
+const latestVersionFind = async (
+  lane: DriverLane,
+  collectionConfig: Any,
+  VersionModel: Any,
+  access: unknown,
+  locale: string | undefined,
+) => {
+  const adapter = lane.view
+  const config = adapter.payload.config
+  const fields = buildVersionCollectionFields(config, collectionConfig, true)
+  const where = appendNonTrashedFilter({
+    enableTrash: collectionConfig.trash,
+    trash: false,
+    where: combineQueries({ id: { equals: sentinelHex } }, access as never),
+  })
+  const latest = await buildQuery({
+    adapter,
+    fields,
+    locale,
+    where: combineQueries(appendVersionToQueryKey(where), {
+      and: [{ parent: { equals: sentinelHex } }, { latest: { equals: true } }],
+    }),
+  })
+  return versionsFindSpec(lane, fields, VersionModel, latest, undefined)
+}
+
+/** The driver lane's `laneFindVersions` / `lanePaginate` with `pagination: false`, `limit: 1`, `-updatedAt`. */
+const versionsFindSpec = (
+  lane: DriverLane,
+  fields: Any,
+  VersionModel: Any,
+  filter: Any,
+  skip: number | undefined,
+) => {
+  const adapter = lane.view
+  const sort = buildSortParam({
+    adapter,
+    config: adapter.payload.config,
+    fields,
+    locale: undefined,
+    sort: '-updatedAt',
+    timestamps: true,
+  })
+  const projection = buildProjectionFromSelect({ adapter, fields, select: undefined })
+  const query = VersionModel.find(filter, projection, { limit: 1, session: undefined, skip })
+  query.select('')
+  query.sort(sort)
+  query.lean(true)
+  return findSpec(castQuery(query, findOptionKeys))
+}
+
+/**
+ * Per versions model, the `latestVersionFind` templates of where-constraint access results seen
+ * (keyed by the where and locale; a bounded cache: an access result that varies per user only
+ * rebuilds). A string: the call runs on the exact lane.
+ */
+const latestAccessTemplates = new WeakMap<object, Map<string, Promise<string | Template>>>()
+
+const latestAccessTemplate = (
+  lane: DriverLane,
+  collectionConfig: Any,
+  VersionModel: Any,
+  access: unknown,
+  locale: string | undefined,
+) => {
+  let byKey = latestAccessTemplates.get(VersionModel)
+  if (!byKey) {
+    byKey = new Map()
+    latestAccessTemplates.set(VersionModel, byKey)
+  }
+  const key = `${typedKey(locale)}|${typedKey(access)}`
+  let template = byKey.get(key)
+  if (!template) {
+    if (byKey.size >= 64) {
+      byKey.clear()
+    }
+    template = (async () => {
+      const lv = await latestVersionFind(lane, collectionConfig, VersionModel, access, locale)
+      const built = toTemplate(Buffer.from(lane.BSON.serialize({ lv })))
+      return built.raw.length + built.hex.length === 0 ? 'template:id' : built
+    })().catch(() => 'template:access')
+    byKey.set(key, template)
+  }
+  return template
+}
+
+/** A key telling apart every inert value (`undefined`, `-0` and Dates included). */
+const typedKey = (value: unknown): string => {
+  if (value === undefined) {
+    return 'u'
+  }
+  if (value instanceof Date) {
+    return `d${value.getTime()}`
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(typedKey).join(',')}]`
+  }
+  if (typeof value === 'object' && value !== null) {
+    return `{${Object.entries(value)
+      .map(([key, item]) => `${JSON.stringify(key)}:${typedKey(item)}`)
+      .join(',')}}`
+  }
+  return Object.is(value, -0) ? '-0' : JSON.stringify(value)
 }
 
 /** The collection of `slug`'s model if the lane may write it (`undefined`: none). */
@@ -841,6 +921,7 @@ const prepareByID = async (
   name: 'deleteByID' | 'updateByID',
   args: Any,
   unserved?: string[],
+  accessWhere?: unknown,
 ) => {
   const slug = args.collection.config.slug
   const resolved = entity(lane, slug)
@@ -871,6 +952,19 @@ const prepareByID = async (
   }
   if (VersionModel) {
     request.vc = VersionModel.collection.collectionName
+    if (accessWhere !== undefined && name === 'updateByID' && hasDraftsEnabled(collectionConfig)) {
+      const latest = await latestAccessTemplate(
+        lane,
+        collectionConfig,
+        VersionModel,
+        accessWhere,
+        typeof req.locale === 'string' ? req.locale : undefined,
+      )
+      if (typeof latest === 'string') {
+        return `mongo:${latest}`
+      }
+      request.tl = withID(latest, id)
+    }
   }
   if (unserved?.length) {
     request.up = unservedPaths(collectionConfig.fields, unserved)

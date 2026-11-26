@@ -249,6 +249,36 @@ export default buildConfigWithDefaults({
         disableBulkDelete: true,
         fields: [{ name: 'title', type: 'text' }],
       },
+      {
+        // update / delete access returning a where constraint (the perf suite's complex posts):
+        // combined into the stored-document read and the bulk writes' find
+        slug: 'constrained',
+        access: {
+          delete: () => ({ views: { greater_than_equal: 0 } }),
+          read: () => true,
+          update: () => ({ views: { greater_than_equal: 0 } }),
+        },
+        fields: [
+          { name: 'title', type: 'text' },
+          { name: 'views', type: 'number', defaultValue: 0 },
+        ],
+        versions: { maxPerDoc: 5 },
+      },
+      {
+        // the same with drafts: getLatestCollectionVersion combines the constraint into the
+        // latest version's find (`version.views`)
+        slug: 'constrainedDrafts',
+        access: {
+          delete: () => ({ views: { greater_than_equal: 0 } }),
+          read: () => true,
+          update: () => ({ views: { greater_than_equal: 0 } }),
+        },
+        fields: [
+          { name: 'title', type: 'text' },
+          { name: 'views', type: 'number', defaultValue: 0 },
+        ],
+        versions: { drafts: true },
+      },
     ],
     blocks: [{ slug: 'callout', fields: [{ name: 'note', type: 'text' }] }],
   },

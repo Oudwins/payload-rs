@@ -952,6 +952,149 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     }
   })
 
+  test('should update and delete by id and many with a where-constraint access', async ({
+    payload,
+    restClient,
+  }) => {
+    const create = (collection: 'constrained' | 'constrainedDrafts', views: number) =>
+      payload.create({ collection, data: { title: 'c', views }, overrideAccess: true })
+    const allowed = await create('constrained', 1)
+    const denied = await create('constrained', -1)
+    const none = { id: { equals: '000000000000000000000000' } }
+    // past guard sampling (the first 32 checked calls of each compiled access function run the
+    // exact lane)
+    for (let i = 0; i < 40; i++) {
+      await payload.update({
+        id: allowed.id,
+        collection: 'constrained',
+        data: { title: `w${i}` },
+        overrideAccess: false,
+      })
+      await payload.delete({ collection: 'constrained', overrideAccess: false, where: none })
+    }
+    const hitsBefore = { ...fuseWriteStats()?.hits }
+
+    const updated = await payload.update({
+      id: allowed.id,
+      collection: 'constrained',
+      data: { title: 'u', views: 2 },
+      overrideAccess: false,
+    })
+    await expect(
+      payload.update({
+        id: denied.id,
+        collection: 'constrained',
+        data: { title: 'u' },
+        overrideAccess: false,
+      }),
+    ).rejects.toThrow('You are not allowed to perform this action.')
+    const patched = await restClient.PATCH(`/constrained/${denied.id}`, {
+      body: JSON.stringify({ title: 'p' }),
+    })
+    const patchedJson = await patched.json()
+    const missing = await restClient.PATCH(`/constrained/${none.id.equals}`, {
+      body: JSON.stringify({ title: 'p' }),
+    })
+    const many = await payload.update({
+      collection: 'constrained',
+      data: { title: 'm' },
+      overrideAccess: false,
+      where: { id: { in: [allowed.id, denied.id] } },
+    })
+    const restMany = await restClient.PATCH('/constrained', {
+      body: JSON.stringify({ title: 'r' }),
+      query: { where: { id: { in: [allowed.id, denied.id] } } },
+    })
+    const restManyJson = await restMany.json()
+    await expect(
+      payload.delete({ id: denied.id, collection: 'constrained', overrideAccess: false }),
+    ).rejects.toThrow('You are not allowed to perform this action.')
+    const restDenied = await restClient.DELETE(`/constrained/${denied.id}`)
+    const second = await create('constrained', 3)
+    const deletedMany = await payload.delete({
+      collection: 'constrained',
+      overrideAccess: false,
+      where: { id: { in: [denied.id, second.id] } },
+    })
+    const deleted = await payload.delete({
+      id: allowed.id,
+      collection: 'constrained',
+      overrideAccess: false,
+    })
+    const left = await payload.find({ collection: 'constrained', overrideAccess: true })
+
+    expect(updated).toMatchObject({ id: allowed.id, title: 'u', views: 2 })
+    expect(patched.status).toBe(403)
+    expect(patchedJson.errors[0].message).toBe('You are not allowed to perform this action.')
+    expect(missing.status).toBe(403)
+    expect(many.docs.map((doc) => doc.id)).toStrictEqual([allowed.id])
+    expect(many.errors).toStrictEqual([])
+    expect(restMany.status).toBe(200)
+    expect(restManyJson.docs.map((doc) => doc.id)).toStrictEqual([allowed.id])
+    expect(restDenied.status).toBe(403)
+    expect(deletedMany.docs.map((doc) => doc.id)).toStrictEqual([second.id])
+    expect(deleted).toMatchObject({ id: allowed.id, title: 'r' })
+    expect(left.docs.map((doc) => doc.id)).toStrictEqual([denied.id])
+
+    // drafts: the constraint on the latest version (`version.views`), else on the main document
+    const draftDoc = await create('constrainedDrafts', 1)
+    // past its access function's guard sampling
+    for (let i = 0; i < 34; i++) {
+      await payload.update({
+        id: draftDoc.id,
+        collection: 'constrainedDrafts',
+        data: { title: `d${i}` },
+        draft: true,
+        overrideAccess: false,
+      })
+    }
+    const draftSave = await payload.update({
+      id: draftDoc.id,
+      collection: 'constrainedDrafts',
+      data: { views: -1 },
+      draft: true,
+      overrideAccess: false,
+    })
+    // the latest version no longer matches: upstream reads the main document (views 1)
+    const fromMain = await payload.update({
+      id: draftDoc.id,
+      collection: 'constrainedDrafts',
+      data: { title: 'main' },
+      draft: true,
+      overrideAccess: false,
+    })
+    const published = await payload.update({
+      id: draftDoc.id,
+      collection: 'constrainedDrafts',
+      data: { _status: 'published', title: 'pub', views: -2 },
+      overrideAccess: false,
+    })
+    await expect(
+      payload.update({
+        id: draftDoc.id,
+        collection: 'constrainedDrafts',
+        data: { title: 'no' },
+        overrideAccess: false,
+      }),
+    ).rejects.toThrow('You are not allowed to perform this action.')
+
+    expect(draftSave).toMatchObject({ title: 'd33', views: -1 })
+    expect(fromMain).toMatchObject({ title: 'main', views: 1 })
+    expect(published).toMatchObject({ title: 'pub', views: -2, _status: 'published' })
+    const hits = fuseWriteStats()?.hits
+    if (
+      hits &&
+      process.env.PAYLOAD_RS_FUSE_WRITES !== 'off' &&
+      process.env.PAYLOAD_ENGINE !== 'ts'
+    ) {
+      // `updated`, and the draft saves and the publish after the drafts' warm-up
+      expect(hits.updateByID).toBeGreaterThanOrEqual((hitsBefore.updateByID ?? 0) + 4)
+      expect(hits.updateMany).toBeGreaterThanOrEqual((hitsBefore.updateMany ?? 0) + 2)
+      expect(hits.deleteMany).toBeGreaterThanOrEqual((hitsBefore.deleteMany ?? 0) + 1)
+      expect(hits.deleteByID).toBeGreaterThanOrEqual((hitsBefore.deleteByID ?? 0) + 1)
+    }
+  })
+
   test('should have served writes without lane differences', async () => {
     const stats = fuseWriteStats()
 

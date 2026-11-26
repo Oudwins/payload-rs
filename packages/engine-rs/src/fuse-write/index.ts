@@ -20,6 +20,7 @@ import type { FusedWriteTarget } from './targets.js'
 
 import { sanitizeSortQuery } from '../../../payload/src/collections/operations/utilities/sanitizeSortQuery.js'
 import { combineQueries } from '../../../payload/src/database/combineQueries.js'
+import { sanitizeWhereQuery } from '../../../payload/src/database/sanitizeWhereQuery.js'
 import { appendNonTrashedFilter } from '../../../payload/src/utilities/appendNonTrashedFilter.js'
 import {
   evaluateCompiledAccess,
@@ -155,6 +156,12 @@ export const fuseWrite = (name: string, args: Any, exact: Exact) => {
 }
 
 type Checked = { payload: Any; target: FusedWriteTarget }
+
+/**
+ * A by-id write past its guards; `accessWhere`: the update / delete access result when it is a
+ * where constraint (upstream combines it into the stored-document read).
+ */
+type CheckedByID = { accessWhere?: unknown } & Checked
 
 const checkCreate = (args: Any) => {
   if (!hasDataProperties(args, createArgKeys)) {
@@ -399,19 +406,22 @@ const noteRun = (collection: Any, read: FusedRead, text: string) => {
 const placeholderID = '000000000000000000000000'
 
 /** The fused `findByID` request of the created document (create's `afterRead`). */
-const resultRead = (args: Any, id: string) =>
-  fusedFindByIDRequest({
-    id,
-    collection: args.collection,
-    depth: args.depth,
-    draft: args.draft,
-    // the operation's own afterRead: field read access and population's nested finds follow
-    // `overrideAccess` (the collection's read access is not checked, `fusedFindByIDRequest`)
-    overrideAccess: args.overrideAccess,
-    populate: args.populate,
-    req: args.req,
-    showHiddenFields: args.showHiddenFields,
-  })
+const resultRead = (args: Any, id: string, storedAccess?: unknown) =>
+  fusedFindByIDRequest(
+    {
+      id,
+      collection: args.collection,
+      depth: args.depth,
+      draft: args.draft,
+      // the operation's own afterRead: field read access and population's nested finds follow
+      // `overrideAccess` (the collection's read access is not checked, `fusedFindByIDRequest`)
+      overrideAccess: args.overrideAccess,
+      populate: args.populate,
+      req: args.req,
+      showHiddenFields: args.showHiddenFields,
+    },
+    storedAccess,
+  )
 
 /** The temporary TS prepare (`PAYLOAD_RS_FUSE_WRITES_PREPARE=ts`, creates only, never a default). */
 const isTSPrepare = process.env.PAYLOAD_RS_FUSE_WRITES_PREPARE === 'ts'
@@ -723,8 +733,8 @@ const serializedPerDocument = <T>(key: string, run: () => Promise<T>): Promise<T
 /**
  * The guards of a fused `updateByID` / `deleteByID` (FUSED_WRITES.md section 13): besides the
  * create's, an ObjectId id, no `trash` (trashed documents and restores), and without
- * `overrideAccess` an update / delete access that grants without a where constraint (the stored
- * document's read is then the result read's).
+ * `overrideAccess` a compiled update / delete access that grants (`true`, or a where constraint,
+ * which the stored-document read combines with the id as upstream's does).
  */
 const checkByID = (name: ByIDName, args: Any) => {
   const isUpdate = name === 'updateByID'
@@ -785,6 +795,7 @@ const checkByID = (name: ByIDName, args: Any) => {
     count(stats.ineligible, `read:${readPlan.reason}`)
     return undefined
   }
+  let accessWhere: unknown
   if (!args.overrideAccess) {
     const evaluated = evaluateCompiledAccess(isUpdate ? plan.access.update : plan.access.delete, {
       id,
@@ -796,7 +807,7 @@ const checkByID = (name: ByIDName, args: Any) => {
       return guard(evaluated.reason)
     }
     if (evaluated.value !== true) {
-      return guard('access:where')
+      accessWhere = evaluated.value
     }
   }
   const target = getFusedWriteTarget(payload.db)
@@ -814,7 +825,7 @@ const checkByID = (name: ByIDName, args: Any) => {
       return guard('backoff:populate:related')
     }
   }
-  const read = resultRead(args, id)
+  const read = resultRead(args, id, accessWhere)
   if (!read) {
     return guard('read')
   }
@@ -828,13 +839,18 @@ const checkByID = (name: ByIDName, args: Any) => {
   ) {
     return guard('backoff:populate:related')
   }
-  return { payload, target }
+  return { accessWhere, payload, target }
 }
 
 /** What preparing and running a fused updateByID / deleteByID produced (a string: a bail). */
-const fusedByID = async ({ target }: Checked, name: ByIDName, args: Any, isShadow: boolean) => {
-  // the result read's `findOne` is also the stored-document read
-  const fused = resultRead(args, args.id)
+const fusedByID = async (
+  { accessWhere, target }: CheckedByID,
+  name: ByIDName,
+  args: Any,
+  isShadow: boolean,
+) => {
+  // the result read's `findOne` is also the stored-document read (with the access constraint)
+  const fused = resultRead(args, args.id, accessWhere)
   if (!fused) {
     return { bail: 'read' }
   }
@@ -844,7 +860,7 @@ const fusedByID = async ({ target }: Checked, name: ByIDName, args: Any, isShado
       return { bail: 'populate:unserved' }
     }
   }
-  const prepared = await target.prepareByID(name, args, unserved)
+  const prepared = await target.prepareByID(name, args, unserved, accessWhere)
   if (typeof prepared === 'string') {
     return { bail: prepared }
   }
@@ -861,7 +877,7 @@ const fusedByID = async ({ target }: Checked, name: ByIDName, args: Any, isShado
   return { read, result, state: prepared.state }
 }
 
-const runByID = async (checked: Checked, name: ByIDName, args: Any, exact: Exact) => {
+const runByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact: Exact) => {
   let outcome: Awaited<ReturnType<typeof fusedByID>>
   try {
     outcome = await fusedByID(checked, name, args, false)
@@ -895,7 +911,7 @@ const runByID = async (checked: Checked, name: ByIDName, args: Any, exact: Exact
   return result
 }
 
-const shadowByID = async (checked: Checked, name: ByIDName, args: Any, exact: Exact) => {
+const shadowByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact: Exact) => {
   installReplay()
   installObjectIdReplay(checked.target.objectIdClass)
   installBsonObjectIdReplay(checked.target.rowIdClass)
@@ -1159,6 +1175,7 @@ const checkBulk = (name: BulkName, args: Any) => {
     // delete.ts throws its APIError before anything else
     return guard('disableBulkDelete')
   }
+  let accessResult: unknown = true
   if (!args.overrideAccess) {
     // field write access is evaluated per call in each document's prepare (`fieldAccessRequest`),
     // the results' field read access and population access in the result read (as the by-id
@@ -1172,8 +1189,10 @@ const checkBulk = (name: BulkName, args: Any) => {
     if (evaluated.reason !== undefined) {
       return guard(evaluated.reason)
     }
-    if (evaluated.value !== true) {
-      return guard('access:where')
+    accessResult = evaluated.value
+    if (accessResult !== true && sanitizeRewrites(config, payload, accessResult)) {
+      // upstream's `sanitizeWhereQuery` of the combined where would rewrite (and mutate) it
+      return guard('access:where:sanitize')
     }
   }
   if (isUpdate && readPlan.hasRelations && readPlan.relations.includes(config.slug)) {
@@ -1183,11 +1202,11 @@ const checkBulk = (name: BulkName, args: Any) => {
   if (typeof target === 'string') {
     return guard(target)
   }
-  // update.ts / delete.ts `payload.db.find` (access `true`: `combineQueries` keeps the where)
+  // update.ts / delete.ts `payload.db.find` of `combineQueries(where, accessResult)`
   const fullWhere = appendNonTrashedFilter({
     enableTrash: config.trash,
     trash: false,
-    where: combineQueries(args.where, true),
+    where: combineQueries(args.where, accessResult as never),
   })
   const db: Record<string, unknown> = isUpdate
     ? {
@@ -1223,6 +1242,13 @@ const checkBulk = (name: BulkName, args: Any) => {
     return guard('backoff:populate:related')
   }
   return { payload, read, target }
+}
+
+/** Whether `sanitizeWhereQuery` would change `where` (virtual paths: upstream rewrites in place). */
+const sanitizeRewrites = (config: Any, payload: Any, where: unknown) => {
+  const copy = structuredClone(where)
+  sanitizeWhereQuery({ fields: config.flattenedFields, payload, where: copy as never })
+  return canonical(copy) !== canonical(where)
 }
 
 const isBulkSort = (sort: unknown) =>
