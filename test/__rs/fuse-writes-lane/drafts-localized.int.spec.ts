@@ -131,6 +131,52 @@ test.suite('fuse-writes drafts localized', { config: './drafts-localized.config.
     expect(published).toMatchObject({ _status: 'published', title: 'n2' })
   })
 
+  test('should publish all locales of a collection without localized fields', async ({
+    payload,
+  }) => {
+    const doc = await payload.create({
+      collection: 'bulletins',
+      data: { title: 'b', items: [{ item: 'a' }], extra: { count: 1 } },
+      locale: 'de',
+      overrideAccess: true,
+    })
+
+    const updated = await payload.update({
+      id: doc.id,
+      collection: 'bulletins',
+      data: { extra: { count: 2 } },
+      locale: 'en',
+      overrideAccess: true,
+    })
+    const many = await payload.update({
+      collection: 'bulletins',
+      data: { title: 'many' },
+      overrideAccess: true,
+      where: { id: { equals: doc.id } },
+    })
+
+    expect(doc).toMatchObject({ _status: 'draft', title: 'b' })
+    expect(updated.extra.count).toBe(2)
+    expect(many.docs[0]).toMatchObject({ title: 'many' })
+  })
+
+  test('should reject an invalid publish of all locales', async ({ payload }) => {
+    const doc = await payload.create({
+      collection: 'bulletins',
+      data: { title: 'b' },
+      overrideAccess: true,
+    })
+
+    await expect(
+      payload.update({
+        id: doc.id,
+        collection: 'bulletins',
+        data: { extra: { count: 10 } },
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Extra > Count')
+  })
+
   test('should delete documents with a localized status', async ({ payload }) => {
     const doc = await payload.create({
       collection: 'articles',

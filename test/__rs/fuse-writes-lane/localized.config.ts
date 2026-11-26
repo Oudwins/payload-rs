@@ -73,6 +73,35 @@ export default buildConfigWithDefaults({
           },
         ],
       },
+      {
+        // named tabs, localized and not
+        slug: 'magazines',
+        fields: [
+          { name: 'title', type: 'text', localized: true, required: true },
+          {
+            type: 'tabs',
+            tabs: [
+              {
+                name: 'intro',
+                localized: true,
+                fields: [
+                  { name: 'lead', type: 'text', required: true },
+                  { name: 'items', type: 'array', fields: [{ name: 'item', type: 'text' }] },
+                ],
+              },
+              {
+                name: 'facts',
+                fields: [
+                  { name: 'caption', type: 'text', localized: true },
+                  { name: 'pages', type: 'number', defaultValue: 1 },
+                  { name: 'editor', type: 'relationship', relationTo: 'authors' },
+                ],
+              },
+              { label: 'Plain', fields: [{ name: 'flat', type: 'text' }] },
+            ],
+          },
+        ],
+      },
     ],
   },
 })

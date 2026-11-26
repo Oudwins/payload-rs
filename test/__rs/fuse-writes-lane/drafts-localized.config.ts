@@ -36,6 +36,19 @@ export default buildConfigWithDefaults({
         fields: [{ name: 'title', type: 'text' }],
         versions: { drafts: true },
       },
+      {
+        // no localized fields: every publish validates all locales
+        slug: 'bulletins',
+        fields: [
+          { name: 'title', type: 'text', required: true },
+          { name: 'items', type: 'array', fields: [{ name: 'item', type: 'text', required: true }] },
+          {
+            type: 'tabs',
+            tabs: [{ name: 'extra', fields: [{ name: 'count', type: 'number', max: 9 }] }],
+          },
+        ],
+        versions: { drafts: true },
+      },
     ],
   },
 })

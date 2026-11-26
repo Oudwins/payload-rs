@@ -152,6 +152,54 @@ test.suite('fuse-writes-lane localized', { config: './localized.config.ts' }, ()
     expect(deleted.id).toBe(post.id)
   })
 
+  test('should write named tabs in two locales', async ({ payload }) => {
+    const author = await payload.create({
+      collection: 'authors',
+      data: { name: 'editor' },
+      overrideAccess: true,
+    })
+    const doc = await payload.create({
+      collection: 'magazines',
+      data: {
+        title: 'english',
+        intro: { lead: 'lead', items: [{ item: 'a' }] },
+        facts: { caption: 'caption', editor: author.id },
+        flat: 'flat',
+      },
+      depth: 1,
+      overrideAccess: true,
+    })
+
+    const german = await payload.update({
+      id: doc.id,
+      collection: 'magazines',
+      data: { title: 'deutsch', intro: { lead: 'Einleitung' }, facts: { caption: 'Bild' } },
+      locale: 'de',
+      overrideAccess: true,
+    })
+    const all = await payload.findByID({
+      id: doc.id,
+      collection: 'magazines',
+      locale: 'all',
+      overrideAccess: true,
+    })
+
+    expect(doc.facts.editor).toMatchObject({ id: author.id })
+    expect(german.intro.lead).toBe('Einleitung')
+    expect(all.intro).toMatchObject({ de: { lead: 'Einleitung' }, en: { lead: 'lead' } })
+    expect(all.facts.caption).toStrictEqual({ de: 'Bild', en: 'caption' })
+  })
+
+  test('should reject a named tab missing its required field', async ({ payload }) => {
+    await expect(
+      payload.create({
+        collection: 'magazines',
+        data: { title: 't', intro: {} },
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Intro > Lead')
+  })
+
   test('should have served writes without lane differences', () => {
     if (process.env.PAYLOAD_RS_FUSE_WRITES === 'off' || process.env.PAYLOAD_ENGINE === 'ts') {
       return
