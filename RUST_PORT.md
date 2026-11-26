@@ -271,6 +271,49 @@ WP-N (2026-11-26), the slowest MongoDB scenarios of round 9:
   - typical logout 0.88, findDistinct 0.92-0.95 (upstream's method, the Rust core operation
     around it).
 
+WP-Q (2026-11-26), the read scenarios WP-N left below TS:
+
+- **Relationship paths on the fused MongoDB read lane.**
+  - Upstream's `buildSearchParam` resolves a one-hop relationship path with a sub-query:
+    `SubModel.find(SubModel.buildQuery(...)).lean().select({ _id: true })`, then `$in` of the
+    ids. It uses no lookup.
+  - The fused encoder now re-states that branch. The reads carry the cast sub-queries and the
+    path of the `$in` array each one fills. The native call runs them one after the other, before
+    the count and the find, as upstream does.
+  - Covered: hasMany, paths in groups and arrays, `and` / `or`, several operators on one path.
+  - Still on the exact lane: two or more hops, joins, related collections with custom ids, and
+    the fused writes' own reads. Polymorphic relationships have no hop (`related.value`) and stay
+    behind the `where` guard.
+  - Shadow mode traces the Node driver calls too, so the exact lane's sub-queries are compared.
+  - The fused lane's array casts read mongoose 9's `embeddedSchemaType`. `caster` no longer
+    exists, so every hasMany cast had been refused as `mongo:error`.
+- **findDistinct on the driver lane.** Upstream's statements, with its two `Model.aggregate`
+  calls on the Rust client (`mongoDriverAggregateRaw`, driver API 2). The documents are decoded
+  by the driver's js-bson.
+- **Harness counters**, `--fuse shadow --fuse-writes shadow`:
+  - `mongo:where:relationship-path` 24 -> 0 (1 `...:custom-id`);
+  - `mongo:error` 19 -> 0;
+  - fused read hits 7,768 -> 7,809;
+  - 0 lane-shadow differences.
+- **Perf**: MongoDB, 1k posts, `ts / rs`, rust-engine-port HEAD -> this tree. Medians of 3
+  interleaved processes (5 for hooks).
+  - `find where and/or + relationship path`: typical 0.86 -> 1.37, complex 0.91 -> 1.34, hooks
+    0.89 -> 0.87. The hooks shape has collection hooks, so it is not fused-eligible.
+  - `findDistinct`: typical 0.97 -> 1.18, complex 0.96 -> 1.45, hooks 0.96 -> 1.17.
+  - logout and jobs queue (5 rounds): typical 0.96 -> 1.00 and 0.98 -> 0.98, complex 0.95 ->
+    0.97 and 1.17 -> 0.98, hooks 0.93 -> 0.95 and 0.93 -> 0.93, all within noise.
+    `jobs.queue` is one upstream `payload.db.create` plus `jobAfterRead`, and no single part of
+    either profile stands out.
+- **Verification:**
+  - MongoDB `--engine default` = baseline. Two 90 s timeouts under machine load (cli
+    `migrate:reset --help`, file-versioning PDFs and videos) passed when rerun alone.
+  - The same run with read and write lane-shadow: 3330 / 164 / 422, 0 differences.
+  - Shadow 8/8 files, 0 divergences. Parity 503/503 in 3 of 3 runs.
+  - SQLite `--fuse shadow` = baseline, 0 lane differences.
+  - Glue / driver lane / HTTP lanes / fn-compile / switch: 33/33, 4/4, 18/18, 39/39, 9/9.
+  - Corpus 21/21; lane suites 75/75 with and without `--fuse shadow`.
+  - Packaging and the default-path check: OK.
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).

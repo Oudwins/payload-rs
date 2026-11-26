@@ -14,7 +14,7 @@ import { test } from '../../__helpers/int/vitest.js'
  */
 const seed = async (payload: Payload) => {
   const create = (collection: 'authors' | 'categories' | 'posts', data: Record<string, unknown>) =>
-    payload.create({ collection, data, overrideAccess: true } as never) as Promise<{ id: string }>
+    payload.create({ collection, data, overrideAccess: true })
   const categories = []
   for (const title of ['news', 'sport', 'travel']) {
     categories.push(await create('categories', { title }))
@@ -146,10 +146,7 @@ test.suite('fuse-populate where', { config: './config.ts' }, () => {
     })
 
     expect(names).toEqual(['alan turing'])
-    expect(populated.docs.map((doc) => (doc.author as { name: string }).name)).toEqual([
-      'ada lovelace',
-      'ada lovelace',
-    ])
+    expect(populated.docs.map((doc) => doc.author?.name)).toEqual(['ada lovelace', 'ada lovelace'])
   })
 
   test('should keep upstream semantics outside one hop', async ({ payload }) => {
