@@ -684,12 +684,14 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     const updated = await payload.update({
       id: doc.id,
       collection: 'settings',
-      data: { config: [true], meta: { extra: { on: false } } },
+      data: { config: [true], cover: author.id, meta: { extra: { on: false } } },
+      depth: 0,
       overrideAccess: true,
     })
 
     expect(doc.meta).toMatchObject({ author: { id: author.id }, extra: { on: true } })
     expect(updated.config).toStrictEqual([true])
+    expect(updated.cover).toBe(author.id)
     expect(updated.meta.extra).toStrictEqual({ on: false })
     await expect(
       payload.create({ collection: 'settings', data: { title: 'x' }, overrideAccess: true }),

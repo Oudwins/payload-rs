@@ -650,6 +650,29 @@ const draftCases = (f: Fixtures): Case[] => [
   },
 ]
 
+const uploadCases = (f: Fixtures): Case[] =>
+  [
+    { name: 'single', data: { required: f.author } },
+    { name: 'missing required', data: { image: f.author } },
+    { name: 'empty string', data: { required: f.author, image: '' } },
+    { name: 'populated', data: { required: { id: f.author2 } } },
+    { name: 'gallery', data: { required: f.author, gallery: [f.author, { id: f.author2 }] } },
+    {
+      name: 'gallery too long',
+      data: { required: f.author, gallery: [f.author, f.author, f.author] },
+    },
+    {
+      name: 'poly',
+      data: { required: f.author, either: { relationTo: 'authors', value: f.author } },
+    },
+    {
+      name: 'poly unknown',
+      data: { required: f.author, either: { relationTo: 'other', value: 'x' } },
+    },
+    { name: 'invalid id', data: { required: 'nope' } },
+    { name: 'number id', data: { required: 5 } },
+  ].map((c) => ({ ...c, collection: 'withUploads' }))
+
 const jsonCases = (): Case[] =>
   [
     { name: 'object', data: { data: { a: 1, b: [true, null, 'x'] }, required: { r: 1 } } },
@@ -724,6 +747,12 @@ const tabbedUpdates = (f: Fixtures): Case[] =>
   ].map((c) => ({ ...c, collection: 'tabbed' }))
 
 test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
+  test('upload field creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'upload create', uploadCases(f), f)
+    finish('upload create')
+  })
+
   test('json creates', async ({ payload }) => {
     const f = await fixtures(payload)
     await runAll(payload, 'json create', jsonCases(), f)

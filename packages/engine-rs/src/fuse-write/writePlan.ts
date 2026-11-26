@@ -53,6 +53,7 @@ const modelledTypes = new Set([
   'tabs',
   'text',
   'textarea',
+  'upload',
 ])
 
 /** Validator option keys the default validators of the modelled types read (validations.ts). */
@@ -250,7 +251,9 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
   if (!tab && !modelledTypes.has(type)) {
     return ineligible(`field:${type}`)
   }
-  const out: Record<string, unknown> = { t: type }
+  // an upload field is a relationship everywhere on the write path (beforeValidate, beforeChange,
+  // the transforms: `relationship || upload`) except its validator (`upload`, the same code)
+  const out: Record<string, unknown> = { t: type === 'upload' ? 'relationship' : type }
   const named = 'name' in field
   if (named) {
     if (typeof field.name !== 'string' || objectPrototypeKeys.has(field.name)) {
@@ -343,7 +346,7 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
           options[key] = value
         }
       }
-      if (type === 'relationship' && field.filterOptions !== undefined) {
+      if ((type === 'relationship' || type === 'upload') && field.filterOptions !== undefined) {
         // a static `filterOptions` (a where, `true` / `false`): the validator returns `true` for
         // an empty value without I/O, and its `payloadDataLoader.find` for any other value is a
         // bail of payload-core-validate's host in the prepare
@@ -396,7 +399,8 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
         out.m = 1
       }
       break
-    case 'relationship': {
+    case 'relationship':
+    case 'upload': {
       const relationTo = field.relationTo
       if (typeof relationTo === 'string') {
         builder.relations.add(relationTo)

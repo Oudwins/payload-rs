@@ -538,7 +538,7 @@ fn run_validator(
     t: &translate,
   };
   let result = payload_core_validate::validate(validator, &value, &options, &req).map_err(|e| Bail::new(format!("validate:{e}")))?;
-  let jobs = if validator == Validator::Relationship {
+  let jobs = if matches!(validator, Validator::Relationship | Validator::Upload) {
     match payload_core_validate::relationship_prefix(&value, &options, &req).map_err(|e| Bail::new(format!("validate:{e}")))? {
       Some(_) => 1,
       None => 3,

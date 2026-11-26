@@ -226,6 +226,20 @@ export default buildConfigWithDefaults({
         ],
       },
       {
+        slug: 'media',
+        fields: [],
+        upload: { staticDir: path.resolve(dirname, 'media') },
+      },
+      {
+        slug: 'withUploads',
+        fields: [
+          { name: 'image', type: 'upload', relationTo: 'media' },
+          { name: 'required', type: 'upload', relationTo: 'media', required: true },
+          { name: 'gallery', type: 'upload', hasMany: true, maxRows: 2, relationTo: 'media' },
+          { name: 'either', type: 'upload', relationTo: ['media', 'authors'] },
+        ],
+      },
+      {
         slug: 'jsons',
         fields: [
           { name: 'data', type: 'json' },

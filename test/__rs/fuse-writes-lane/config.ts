@@ -112,11 +112,17 @@ export default buildConfigWithDefaults({
         ],
       },
       {
-        // json fields and named tabs
+        slug: 'media',
+        fields: [],
+        upload: { staticDir: path.resolve(dirname, 'media') },
+      },
+      {
+        // json, upload fields and named tabs
         slug: 'settings',
         fields: [
           { name: 'title', type: 'text', required: true },
           { name: 'config', type: 'json', required: true },
+          { name: 'cover', type: 'upload', relationTo: 'media' },
           {
             type: 'tabs',
             tabs: [
