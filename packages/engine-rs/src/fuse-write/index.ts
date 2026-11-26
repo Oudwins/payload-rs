@@ -567,8 +567,35 @@ const fuseByID = (name: ByIDName, args: Any, exact: Exact) => {
     return undefined
   }
   return mode === 'shadow'
-    ? shadowByID(checked, name, args, exact)
+    ? serializedPerDocument(`${args.collection.config.slug}:${String(args.id)}`, () =>
+        shadowByID(checked, name, args, exact),
+      )
     : runByID(checked, name, args, exact)
+}
+
+/**
+ * The write lane-shadow of one by-id call compares the fused run, the exact run and a state read
+ * made one after the other, which holds only while no other call writes the same document in
+ * between: concurrent shadowed writes of one document (e.g. test/versions' parallel draft saves)
+ * run one at a time, in call order. Shadow mode only; upstream's own write conflicts between
+ * concurrent transactions are an interleaving outcome, not a lane difference.
+ */
+const documentQueues = new Map<string, Promise<unknown>>()
+
+const serializedPerDocument = <T>(key: string, run: () => Promise<T>): Promise<T> => {
+  const previous = documentQueues.get(key) ?? Promise.resolve()
+  const current = previous.then(run, run)
+  const settled = current.then(
+    () => undefined,
+    () => undefined,
+  )
+  documentQueues.set(key, settled)
+  void settled.then(() => {
+    if (documentQueues.get(key) === settled) {
+      documentQueues.delete(key)
+    }
+  })
+  return current
 }
 
 /**
