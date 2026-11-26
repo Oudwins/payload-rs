@@ -98,7 +98,14 @@ subset. On shared servers, `--mongodb-server <url>` selects the MongoDB server a
   mutating ones (each group shuffled), then throughput, so reads still see the seeded data. No
   scenario's number depends on one fixed predecessor; `--order suite` keeps the catalogue order.
 - `--cpus <list>` pins every bench process with `taskset` (e.g. `--cpus 0-7`; MongoDB and other
-  servers are not pinned by the suite).
+  servers are not pinned by the suite). The CPU set changes the Rust engine's numbers more than
+  TypeScript's: an operation hands work between the JS thread and the engine's worker threads
+  several times, and each hand-off to a sleeping thread on another core pays a wake-up. Measured
+  (`find limit 10 depth 2`, complex, 1k posts, one process, 2000 iterations): TS 4.0-4.1 ms on
+  every set; Rust 3.8-4.4 ms on some sets and placements and 5.5-6.6 ms on others, switching
+  within a process when the scheduler moves threads. Compare runs only with the same `--cpus`,
+  and read a Rust-only slowdown of populate-heavy reads with a wide interval as placement, not as
+  engine work, until a focused A/B confirms it.
 - Per scenario: `gc()`, warmup runs (the first records the result fingerprint and hook calls), then
   timed iterations until at least `--min-iterations` and `--min-time-ms` (capped by
   `--max-iterations` / `--max-time-ms`). Per-iteration setup (e.g. creating the document a delete

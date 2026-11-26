@@ -175,6 +175,7 @@ function buildModel(results) {
   ]
   return {
     byCategory: summarize('category'),
+    byShape: summarize('shape'),
     bySurface: summarize('surface'),
     engines,
     isPaired: engines.includes('ts') && engines.includes('rs'),
@@ -415,6 +416,7 @@ function markdown({ model, results }) {
       }
       return `${table}\n`
     }
+    md += summaryTable('Summary by shape', model.byShape, 'shape')
     md += summaryTable('Summary by surface', model.bySurface, 'surface')
     md += summaryTable('Summary by category', model.byCategory, 'category')
     const slower = model.pairs
