@@ -226,6 +226,19 @@ export default buildConfigWithDefaults({
         ],
       },
       {
+        slug: 'jsons',
+        fields: [
+          { name: 'data', type: 'json' },
+          { name: 'required', type: 'json', required: true },
+          { name: 'withDefault', type: 'json', defaultValue: { a: [1, 2], b: { c: null } } },
+          {
+            name: 'rows',
+            type: 'array',
+            fields: [{ name: 'payload', type: 'json' }],
+          },
+        ],
+      },
+      {
         // named tabs (the perf suite's complex shape has one), next to unnamed ones
         slug: 'tabbed',
         fields: [

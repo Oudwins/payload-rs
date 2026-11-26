@@ -650,6 +650,29 @@ const draftCases = (f: Fixtures): Case[] => [
   },
 ]
 
+const jsonCases = (): Case[] =>
+  [
+    { name: 'object', data: { data: { a: 1, b: [true, null, 'x'] }, required: { r: 1 } } },
+    { name: 'array', data: { data: [1, 2.5, -0, { n: {} }], required: [0] } },
+    { name: 'scalars', data: { data: 'text', required: 5 } },
+    { name: 'missing required', data: { data: {} } },
+    { name: 'empty object required', data: { required: {} } },
+    { name: 'null', data: { data: null, required: false } },
+    { name: 'large numbers', data: { required: { big: 2 ** 40, neg: -(2 ** 31) - 1 } } },
+    { name: 'rows', data: { required: 1, rows: [{ payload: { k: 'v' } }, {}] } },
+    { name: 'dollar key', data: { required: { $set: 1 } } },
+    { name: 'dotted key', data: { required: { 'a.b': 1 } } },
+    { name: 'nested empty', data: { required: { a: {}, b: [] } } },
+  ].map((c) => ({ ...c, collection: 'jsons' }))
+
+const jsonUpdates = (): Case[] =>
+  [
+    { name: 'replace', data: { data: { z: 1 } }, seed: { data: { required: 1, data: { a: 1 } } } },
+    { name: 'clear', data: { data: null }, seed: { data: { required: 1, data: { a: 1 } } } },
+    { name: 'clear required', data: { required: null }, seed: { data: { required: 1 } } },
+    { name: 'untouched', data: { rows: [] }, seed: { data: { required: { deep: [1] } } } },
+  ].map((c) => ({ ...c, collection: 'jsons' }))
+
 const tabbedFull = (f: Fixtures) => ({
   title: 't',
   details: { summary: 's', score: 3, author: f.author, links: [{ url: 'u1' }, { url: 'u2' }] },
@@ -701,6 +724,18 @@ const tabbedUpdates = (f: Fixtures): Case[] =>
   ].map((c) => ({ ...c, collection: 'tabbed' }))
 
 test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
+  test('json creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'json create', jsonCases(), f)
+    finish('json create')
+  })
+
+  test('json updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'json update', jsonUpdates(), f)
+    finish('json update')
+  })
+
   test('tabbed creates', async ({ payload }) => {
     const f = await fixtures(payload)
     await runAll(payload, 'tabbed create', tabbedCreates(f), f)

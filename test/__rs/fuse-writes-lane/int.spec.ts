@@ -668,6 +668,34 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     expect(result).toStrictEqual({ docs: [], errors: [] })
   })
 
+  test('should write json fields and named tabs', async ({ payload }) => {
+    const author = await payload.create({
+      collection: 'authors',
+      data: { name: 'Json' },
+      overrideAccess: true,
+    })
+    const doc = await payload.create({
+      collection: 'settings',
+      data: { title: 's', config: { a: [1, { b: 2.5 }], c: null }, meta: { author: author.id } },
+      depth: 1,
+      overrideAccess: true,
+    })
+
+    const updated = await payload.update({
+      id: doc.id,
+      collection: 'settings',
+      data: { config: [true], meta: { extra: { on: false } } },
+      overrideAccess: true,
+    })
+
+    expect(doc.meta).toMatchObject({ author: { id: author.id }, extra: { on: true } })
+    expect(updated.config).toStrictEqual([true])
+    expect(updated.meta.extra).toStrictEqual({ on: false })
+    await expect(
+      payload.create({ collection: 'settings', data: { title: 'x' }, overrideAccess: true }),
+    ).rejects.toThrow('The following field is invalid: Config')
+  })
+
   test('should have served writes without lane differences', async () => {
     const stats = fuseWriteStats()
 

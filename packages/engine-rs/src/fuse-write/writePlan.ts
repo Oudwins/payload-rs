@@ -44,6 +44,7 @@ const modelledTypes = new Set([
   'date',
   'email',
   'group',
+  'json',
   'number',
   'relationship',
   'richText',
@@ -272,6 +273,10 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
   }
   if (type === 'date' && field.timezone) {
     return ineligible('date:timezone')
+  }
+  if (type === 'json' && field.jsonSchema) {
+    // the validator's `validateJSONSchema` (zod) is not ported
+    return ineligible('json:jsonSchema')
   }
   const label = labelPlan(field.label)
   if (label !== undefined) {

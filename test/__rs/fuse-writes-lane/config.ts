@@ -111,6 +111,26 @@ export default buildConfigWithDefaults({
           },
         ],
       },
+      {
+        // json fields and named tabs
+        slug: 'settings',
+        fields: [
+          { name: 'title', type: 'text', required: true },
+          { name: 'config', type: 'json', required: true },
+          {
+            type: 'tabs',
+            tabs: [
+              {
+                name: 'meta',
+                fields: [
+                  { name: 'extra', type: 'json', defaultValue: { on: true } },
+                  { name: 'author', type: 'relationship', relationTo: 'authors' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
     ],
     blocks: [{ slug: 'callout', fields: [{ name: 'note', type: 'text' }] }],
   },

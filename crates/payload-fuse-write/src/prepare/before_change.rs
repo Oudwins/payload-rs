@@ -162,6 +162,16 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
         };
         return push_error(&s, field, &level, message, &path);
       }
+      if field.kind == Kind::Json {
+        if !skip_validation && value.as_str().is_some() {
+          // `jsonError`: whether `JSON.parse(value)` throws (not modelled)
+          return run.fail(Bail::new("json:string"));
+        }
+        if has_operator_like_keys(&run.heap.borrow(), &value) {
+          // mongoose's `castUpdate` walks `$` / dotted keys of a Mixed value as paths
+          return run.fail(Bail::new("json:keys"));
+        }
+      }
       if !skip_validation {
         if let Some(result) = validate(&s, field, &value, &path).await {
           if let Some(message) = result {
@@ -418,6 +428,17 @@ fn authorship_before_change(s: &S<'_, '_>, which: Authorship, level: &Level) -> 
 /// The authorship fields are top-level (sanitization appends them to `collection.fields`).
 fn level_root(s: &S<'_, '_>) -> V {
   V::Ref(s.run.root_data.get().unwrap_or_default())
+}
+
+/// Whether a value holds a key starting with `$` or containing `.` at any depth.
+fn has_operator_like_keys(heap: &Heap, value: &V) -> bool {
+  let Some(r) = value.as_ref() else {
+    return false;
+  };
+  if let Some(items) = heap.arr(r) {
+    return items.iter().any(|item| has_operator_like_keys(heap, item));
+  }
+  heap.obj(r).is_some_and(|o| o.iter().any(|(key, item)| key.starts_with('$') || key.contains('.') || has_operator_like_keys(heap, item)))
 }
 
 /// `hasInvalidFieldValueShape({ field, value })`.
