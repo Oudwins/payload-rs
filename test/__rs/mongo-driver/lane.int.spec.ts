@@ -238,6 +238,15 @@ describe('driver lane', () => {
     await payload.findGlobal({ depth: 0, slug: 'settings' })
     await payload.findGlobalVersions({ depth: 0, limit: 5, slug: 'settings' })
     await payload.countGlobalVersions({ global: 'settings' })
+    await payload.findDistinct({ collection: 'posts', field: 'title', sort: 'title' })
+    await payload.findDistinct({ collection: 'posts', field: 'views', limit: 2, page: 2 })
+    await payload.findDistinct({ collection: 'posts', field: 'tags', sort: '-tags' })
+    await payload.findDistinct({ collection: 'posts', field: 'related.title', limit: 5 })
+    await payload.findDistinct({
+      collection: 'posts',
+      field: 'publishedAt',
+      where: { views: { greater_than: 1 } },
+    })
 
     const servedNow = delta(before, served())
     for (const method of [
@@ -245,6 +254,7 @@ describe('driver lane', () => {
       'countGlobalVersions',
       'countVersions',
       'find',
+      'findDistinct',
       'findGlobal',
       'findGlobalVersions',
       'findOne',

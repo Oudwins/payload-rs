@@ -5,10 +5,12 @@
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
 
 /** crates/payload-mongo-driver/node/mod.rs `API_VERSION`. */
-const MONGO_DRIVER_API_VERSION = 1
+const MONGO_DRIVER_API_VERSION = 2
 
 export type DriverBinding = {
   aggregate: (client: number, plan: number, args: Uint8Array) => Promise<string>
+  /** findDistinct's `Model.aggregate`: the documents as the BSON document `{ docs }` (rejects on a bail). */
+  aggregateRaw: (client: number, args: Uint8Array) => Promise<Uint8Array>
   close: (client: number) => Promise<void>
   command: (client: number, database: null | string, command: Uint8Array) => Promise<Uint8Array>
   connect: (url: string, specJson: string) => Promise<string>
@@ -32,6 +34,7 @@ export type DriverBinding = {
 
 type DriverAddon = {
   mongoDriverAggregate?: DriverBinding['aggregate']
+  mongoDriverAggregateRaw?: DriverBinding['aggregateRaw']
   mongoDriverApiVersion?: () => number
   mongoDriverClose?: DriverBinding['close']
   mongoDriverCommand?: DriverBinding['command']
@@ -67,6 +70,7 @@ export const getDriverBinding = (): DriverBinding | null => {
   }
   binding = {
     aggregate: addon.mongoDriverAggregate!,
+    aggregateRaw: addon.mongoDriverAggregateRaw!,
     close: addon.mongoDriverClose!,
     command: addon.mongoDriverCommand!,
     connect: addon.mongoDriverConnect!,

@@ -72,6 +72,7 @@ export const engineAddonExports = [
   'hooksBeforeChangeBinding',
   'hooksBeforeValidateBinding',
   'mongoDriverAggregate',
+  'mongoDriverAggregateRaw',
   'mongoDriverApiVersion',
   'mongoDriverClose',
   'mongoDriverCommand',

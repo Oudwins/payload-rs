@@ -239,11 +239,12 @@ describe('withRustMongoEngine (live engine)', () => {
     ]) {
       expect(served(method), method).toBeGreaterThan(0)
     }
-    // every method of `upstreamMethods` is upstream's, never the live write binding's
+    // every method of `upstreamMethods` is upstream's, never the live write binding's; the driver
+    // lane serves `findDistinct` (upstream's statements, its aggregates on the Rust driver)
     const writes = getMongoLiveWrite()!
     for (const method of upstreamMethods) {
       expect(payload.db[method], method).not.toBe(writes[method])
-      expect(served(method), method).toBe(0)
+      expect(served(method), method).toBe(method === 'findDistinct' ? 1 : 0)
     }
     expect(payload.db.create.name).toBe('create')
   })

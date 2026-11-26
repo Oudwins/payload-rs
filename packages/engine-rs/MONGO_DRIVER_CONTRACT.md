@@ -46,7 +46,7 @@ then `installDriverLane(adapter)`. `PAYLOAD_ENGINE=ts` runs upstream (nothing of
 
 ## Read methods
 
-`count`, `countGlobalVersions`, `countVersions`, `find`, `findGlobal`, `findGlobalVersions`,
+`count`, `countGlobalVersions`, `countVersions`, `find`, `findDistinct`, `findGlobal`, `findGlobalVersions`,
 `findOne`, `findVersions`, `queryDrafts`. Each is upstream's db-mongodb method
 (packages/db-mongodb/src/<method>.ts) statement by statement: upstream's `getCollection` /
 `getGlobal`, `flattenWhereToOperators`, `buildSortParam`, `buildQuery`, `buildProjectionFromSelect`,
@@ -55,6 +55,14 @@ then `installDriverLane(adapter)`. `PAYLOAD_ENGINE=ts` runs upstream (nothing of
 db-mongodb `aggregatePaginate`. The I/O steps (`Model.paginate`, `Model.findOne`,
 `Model.countDocuments`, `Model.estimatedDocumentCount`, `Model.aggregate`) and the read
 `transform` run in Rust.
+
+`findDistinct` (upstream's method stays the adapter's, `upstreamMethods`; the lane wraps it) is
+findDistinct.ts statement by statement as well: its two `Model.aggregate(pipeline, { session })`
+calls (the `$count` pipeline, then the values) run one after the other on the Rust client
+(`mongoDriverAggregateRaw`: the Node driver's `aggregate` without options), whose documents come
+back untransformed as the BSON document `{ docs }` and are decoded by the driver's js-bson with
+the Node driver's defaults, so upstream's `JSON.parse(JSON.stringify(...))` of the group ids sees
+the values mongoose would return. Inside a transaction it runs on the mongoose lane.
 
 Casting is mongoose's own: the lane builds the very `Query` the replaced call would build
 (`Model.find(query, projection, queryOptions).select().sort().lean().skip().limit()` of

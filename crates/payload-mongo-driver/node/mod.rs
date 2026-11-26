@@ -16,7 +16,7 @@ use payload_mongo_driver::{ConnectSpec, LaneError, ReadTarget};
 type Resolver<T> = Box<dyn FnOnce(Env) -> Result<T> + Send>;
 
 /// The driver lane API version (MONGO_DRIVER_CONTRACT.md); the glue requires it.
-const API_VERSION: u32 = 1;
+const API_VERSION: u32 = 2;
 
 static CALLS: AtomicU64 = AtomicU64::new(0);
 static SERVED: AtomicU64 = AtomicU64::new(0);
@@ -166,6 +166,30 @@ pub fn mongo_driver_aggregate<'env>(env: &'env Env, client: u32, plan: u32, args
     let count = std::mem::replace(&mut args.count, payload_mongo_driver::CountSpec::None);
     payload_mongo_driver::aggregate(target, pipeline, args.collation.take(), count).await
   })
+}
+
+/// db-mongodb `findDistinct`'s `Model.aggregate(pipeline)` (`ReadArgs` `collection`, `database`,
+/// `pipeline`): resolves with the documents as the BSON document `{ docs: [...] }`, rejects with
+/// the reason the call runs on the mongoose lane instead (a driver error, malformed arguments).
+#[napi]
+pub fn mongo_driver_aggregate_raw<'env>(env: &'env Env, client: u32, args: BufferSlice) -> Result<Object<'env>> {
+  let decoded = read_args(&args);
+  let (deferred, promise) = env.create_deferred::<Buffer, Resolver<Buffer>>()?;
+  payload_mongo_driver::runtime().spawn(async move {
+    let result = async {
+      let mut args = decoded?;
+      let pipeline = args.pipeline.take().ok_or(LaneError::Bail("aggregate without pipeline"))?;
+      payload_mongo_driver::aggregate_raw(client, args.database.as_deref(), &args.collection, pipeline).await
+    };
+    match result.await {
+      Ok(doc) => {
+        let bytes = doc.into_bytes();
+        deferred.resolve(Box::new(move |_| Ok(Buffer::from(bytes))));
+      }
+      Err(error) => deferred.reject(Error::new(Status::GenericFailure, error.to_string())),
+    }
+  });
+  Ok(promise)
 }
 
 /// A command (js-bson document) on the client's database (or `database`): resolves with the reply

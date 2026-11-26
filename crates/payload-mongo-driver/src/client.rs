@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use mongodb::bson::{Document, RawDocumentBuf, doc};
+use mongodb::bson::{Document, RawArrayBuf, RawDocumentBuf, doc};
 use mongodb::options::{
   AggregateOptions, ClientOptions, Collation, CountOptions, EstimatedDocumentCountOptions, FindOneOptions, FindOptions,
   Hint,
@@ -587,6 +587,27 @@ pub fn transform_raw(plan_id: u32, flags: Flags, lean_with_id: bool, bytes: &[u8
     write_doc(&mut out, raw, &plan, flags, shape)?;
     rest = &rest[length..];
   }
+  Ok(out)
+}
+
+/// db-mongodb `findDistinct`'s `Model.aggregate(pipeline, { session })` outside a transaction (the
+/// Node driver's `aggregate` without options): its documents, untransformed, as the BSON document
+/// `{ docs: [...] }`.
+pub async fn aggregate_raw(
+  client_id: u32,
+  database: Option<&str>,
+  collection_name: &str,
+  pipeline: Vec<Document>,
+) -> Result<RawDocumentBuf> {
+  let state = client(client_id)?;
+  let coll = collection(&state, database, collection_name);
+  let mut cursor = coll.aggregate(pipeline).await?;
+  let mut docs = RawArrayBuf::new();
+  while cursor.advance().await? {
+    docs.push(cursor.current().to_raw_document_buf());
+  }
+  let mut out = RawDocumentBuf::new();
+  out.append("docs", docs);
   Ok(out)
 }
 

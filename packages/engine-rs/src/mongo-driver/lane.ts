@@ -34,6 +34,7 @@ import { getSession } from '../../../db-mongodb/src/utilities/getSession.js'
 import { combineQueries } from '../../../payload/src/database/combineQueries.js'
 import { flattenWhereToOperators } from '../../../payload/src/database/flattenWhereToOperators.js'
 import { flattenAllFields } from '../../../payload/src/utilities/flattenAllFields.js'
+import { getFieldByPath } from '../../../payload/src/utilities/getFieldByPath.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
 import { buildVersionGlobalFields } from '../../../payload/src/versions/buildGlobalFields.js'
 import { isTracing, traceDriverOperation, untraced } from '../shadow-mongo/trace.js'
@@ -72,6 +73,7 @@ export type LaneMethod =
   | 'countGlobalVersions'
   | 'countVersions'
   | 'find'
+  | 'findDistinct'
   | 'findGlobal'
   | 'findGlobalVersions'
   | 'findOne'
@@ -83,6 +85,7 @@ export const laneMethods: readonly LaneMethod[] = [
   'countGlobalVersions',
   'countVersions',
   'find',
+  'findDistinct',
   'findGlobal',
   'findGlobalVersions',
   'findOne',
@@ -1080,6 +1083,373 @@ const count = async function count(this: Any, lane: DriverLane, args: Any) {
   return laneCount({ adapter: this, hasNearConstraint, lane, locale, Model, query, req })
 }
 
+/** `sanitizeGroupID` of db-mongodb findDistinct.ts (module-private there). */
+const sanitizeGroupID = (id: any) => {
+  if (id && typeof id === 'object' && '_field' in id) {
+    return id._field
+  }
+  return id
+}
+
+/** `getSortAggregation` of db-mongodb findDistinct.ts (module-private there). */
+const getSortAggregation = ({
+  fieldPath,
+  hasSortAggregationAndHasMany,
+  sortDirection,
+  sortProperty,
+}: {
+  fieldPath: string
+  hasSortAggregationAndHasMany: boolean
+  sortDirection: -1 | 1
+  sortProperty: string
+}): Record<string, -1 | 1> => {
+  let resolvedSortProperty: string
+  if (hasSortAggregationAndHasMany) {
+    if (sortProperty === fieldPath) {
+      resolvedSortProperty = `_id._field`
+    } else {
+      resolvedSortProperty = `_id._sort`
+    }
+  } else {
+    resolvedSortProperty = sortProperty === fieldPath ? '_id' : '_sort'
+  }
+  return { [`${resolvedSortProperty}`]: sortDirection }
+}
+
+/**
+ * db-mongodb's findDistinct.ts statement by statement, with `Model.aggregate(pipeline, { session })`
+ * on the Rust driver (the documents come back as BSON and are decoded by the driver's js-bson, as
+ * the Node driver decodes them for mongoose). Inside a transaction the call runs on the mongoose
+ * lane (upstream's method).
+ */
+const findDistinct = async function findDistinct(this: Any, lane: DriverLane, args: Any) {
+  if (lane.session || lane.txn !== undefined) {
+    throw new Fallback('findDistinct in a transaction')
+  }
+  const { collectionConfig, Model } = getCollection({
+    adapter: this,
+    collectionSlug: args.collection,
+  })
+  if (!isPristineModel(lane, Model)) {
+    throw new Fallback('model not pristine')
+  }
+  if (isDiscriminatorModel(Model)) {
+    // mongoose's `prepareDiscriminatorPipeline` would add a stage
+    throw new Fallback('aggregate on a discriminator model')
+  }
+
+  const { where = {} } = args
+
+  let sortAggregation: Any[] = []
+
+  const sort = buildSortParam({
+    adapter: this,
+    config: this.payload.config,
+    fields: collectionConfig.flattenedFields,
+    locale: args.locale,
+    sort: args.sort ?? args.field,
+    sortAggregation,
+    timestamps: true,
+  })
+
+  const query = await buildQuery({
+    adapter: this,
+    collectionSlug: args.collection,
+    fields: collectionConfig.flattenedFields,
+    locale: args.locale,
+    where,
+  })
+
+  const fieldPathResult = getFieldByPath({
+    config: this.payload.config,
+    fields: collectionConfig.flattenedFields,
+    includeRelationships: true,
+    path: args.field,
+  })
+  let fieldPath = args.field
+  if (fieldPathResult?.pathHasLocalized && args.locale) {
+    fieldPath = fieldPathResult.localizedPath.replace('<locale>', args.locale)
+  }
+
+  const page = args.page || 1
+
+  let sortProperty = Object.keys(sort)[0]!
+  const sortDirection = sort[sortProperty] === 'asc' ? 1 : -1
+
+  let currentFields = collectionConfig.flattenedFields
+  let foundField: Any = null
+
+  let rels: {
+    fieldPath: string
+    relationTo: string
+  }[] = []
+
+  let tempPath = ''
+  let insideRelation = false
+
+  const segments = args.field.split('.')
+
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]
+    const field = currentFields.find((e: Any) => e.name === segment)
+    if (rels.length) {
+      insideRelation = true
+    }
+
+    if (!field) {
+      break
+    }
+
+    if (tempPath) {
+      tempPath = `${tempPath}.${field.name}`
+    } else {
+      tempPath = field.name
+    }
+
+    if ('flattenedFields' in field) {
+      currentFields = field.flattenedFields
+      continue
+    }
+
+    if (
+      (field.type === 'relationship' || field.type === 'upload') &&
+      typeof field.relationTo === 'string'
+    ) {
+      if (i === segments.length - 2 && segments[i + 1] === 'id') {
+        foundField = field
+        fieldPath = tempPath
+        break
+      }
+      rels.push({ fieldPath: tempPath, relationTo: field.relationTo })
+      currentFields = this.payload.collections[field.relationTo]?.config.flattenedFields
+      continue
+    }
+    foundField = field
+  }
+
+  const resolvedField = foundField || fieldPathResult?.field
+  const isHasManyValue = resolvedField && 'hasMany' in resolvedField && resolvedField
+
+  let relationLookup: Any[] | null = null
+
+  if (!insideRelation) {
+    rels = []
+  }
+
+  if (rels.length) {
+    if (sortProperty.startsWith('_')) {
+      const sortWithoutRelationPrefix = sortProperty.replace(/^_+/, '')
+      const lastFieldPath = rels.at(-1)?.fieldPath as string
+      if (sortWithoutRelationPrefix.startsWith(lastFieldPath)) {
+        sortProperty = sortWithoutRelationPrefix
+      }
+    }
+    relationLookup = []
+    for (const { fieldPath, relationTo } of rels) {
+      sortAggregation = sortAggregation.filter((each) => {
+        if ('$lookup' in each && each.$lookup.as.replace(/^_+/, '') === fieldPath) {
+          return false
+        }
+
+        return true
+      })
+      const { collectionConfig: foreignCollectionConfig, Model: foreignModel } = getCollection({
+        adapter: this,
+        collectionSlug: relationTo,
+      })
+      const relatedAccess = args.relatedAccess?.[fieldPath]
+      const relatedAccessQuery = relatedAccess
+        ? await buildQuery({
+            adapter: this,
+            collectionSlug: relationTo,
+            fields: foreignCollectionConfig.flattenedFields,
+            locale: args.locale,
+            where: relatedAccess,
+          })
+        : null
+
+      relationLookup.push({
+        $lookup: {
+          as: fieldPath,
+          from: foreignModel.collection.name,
+          ...(relatedAccessQuery
+            ? {
+                let: { relatedIDs: `$${fieldPath}` },
+                pipeline: [
+                  {
+                    $match: {
+                      $and: [
+                        {
+                          $expr: {
+                            $cond: {
+                              else: { $eq: ['$_id', '$$relatedIDs'] },
+                              if: { $isArray: '$$relatedIDs' },
+                              then: { $in: ['$_id', '$$relatedIDs'] },
+                            },
+                          },
+                        },
+                        relatedAccessQuery,
+                      ],
+                    },
+                  },
+                ],
+              }
+            : {
+                foreignField: '_id',
+                localField: fieldPath,
+              }),
+        },
+      })
+      relationLookup.push({ $unwind: `$${fieldPath}` })
+    }
+  }
+
+  let $unwind: any = ''
+  let $group: any = null
+  if (
+    isHasManyValue &&
+    sortAggregation.length &&
+    sortAggregation[0] &&
+    '$lookup' in sortAggregation[0]
+  ) {
+    $unwind = { path: `$${sortAggregation[0].$lookup.as}`, preserveNullAndEmptyArrays: true }
+    $group = {
+      _id: {
+        _field: `$${sortAggregation[0].$lookup.as}._id`,
+        _sort: `$${sortProperty}`,
+      },
+    }
+  } else if (isHasManyValue) {
+    $unwind = { path: `$${args.field}`, preserveNullAndEmptyArrays: true }
+  }
+
+  if (!$group) {
+    $group = {
+      _id: `$${fieldPath}`,
+      ...(sortProperty === fieldPath
+        ? {}
+        : {
+            _sort: { $max: `$${sortProperty}` },
+          }),
+    }
+  }
+
+  const pipeline: Any[] = [
+    {
+      $match: query,
+    },
+    ...(sortAggregation.length > 0 ? sortAggregation : []),
+    ...(relationLookup?.length ? relationLookup : []),
+    ...($unwind
+      ? [
+          {
+            $unwind,
+          },
+        ]
+      : []),
+    {
+      $group,
+    },
+    {
+      $sort: getSortAggregation({
+        fieldPath,
+        hasSortAggregationAndHasMany: Boolean(isHasManyValue) && Boolean(sortAggregation.length),
+        sortDirection,
+        sortProperty,
+      }),
+    },
+  ]
+
+  // upstream's `getSession(this, args.req)`: no session outside a transaction (checked above)
+  const aggregate = (stages: Any[]) => driverAggregate(lane, Model, stages)
+
+  const getValues = async () => {
+    return aggregate(pipeline).then((res: Any[]) =>
+      res.map((each) => ({
+        [args.field]: JSON.parse(JSON.stringify(sanitizeGroupID(each._id))),
+      })),
+    )
+  }
+
+  if (args.limit) {
+    pipeline.push({
+      $skip: (page - 1) * args.limit,
+    })
+    pipeline.push({ $limit: args.limit })
+
+    const countPipeline: Any[] = [
+      {
+        $match: query,
+      },
+      ...(sortAggregation.length > 0 ? sortAggregation : []),
+      ...(relationLookup?.length ? relationLookup : []),
+      ...($unwind
+        ? [
+            {
+              $unwind,
+            },
+          ]
+        : []),
+      {
+        $group,
+      },
+      { $count: 'count' },
+    ]
+
+    const totalDocs = await aggregate(countPipeline).then((res: Any[]) => res[0]?.count ?? 0)
+    const totalPages = Math.ceil(totalDocs / args.limit)
+    const hasPrevPage = page > 1
+    const hasNextPage = totalPages > page
+    const pagingCounter = (page - 1) * args.limit + 1
+
+    return {
+      hasNextPage,
+      hasPrevPage,
+      limit: args.limit,
+      nextPage: hasNextPage ? page + 1 : null,
+      page,
+      pagingCounter,
+      prevPage: hasPrevPage ? page - 1 : null,
+      totalDocs,
+      totalPages,
+      values: await getValues(),
+    }
+  }
+
+  const values = await getValues()
+
+  return {
+    hasNextPage: false,
+    hasPrevPage: false,
+    limit: 0,
+    page: 1,
+    pagingCounter: 1,
+    totalDocs: values.length,
+    totalPages: 1,
+    values,
+  }
+}
+
+const isDiscriminatorModel = (Model: Any) =>
+  Boolean(Model.schema?.discriminatorMapping || Model.discriminators)
+
+/**
+ * `Model.aggregate(stages, { session: undefined })` outside a transaction (mongoose sends the
+ * Node driver's `aggregate(stages, { session: undefined })`), on the Rust driver: the documents,
+ * decoded by js-bson with the Node driver's defaults.
+ */
+const driverAggregate = async (lane: DriverLane, Model: Any, stages: Any[]) => {
+  const collection = Model.collection.collectionName
+  const args = serializeArgs(lane, { collection, pipeline: stages })
+  const bytes = await lane.binding.aggregateRaw(lane.clientID, args).catch((error: Error) => {
+    throw new Fallback(`driver: ${error.message}`)
+  })
+  if (isTracing()) {
+    traceDriverOperation(collection, 'aggregate', [stages, { session: undefined }])
+  }
+  return lane.BSON.deserialize(bytes).docs
+}
+
 const countVersions = async function countVersions(this: Any, lane: DriverLane, args: Any) {
   const { collection: collectionSlug, locale, req, where = {} } = args
   const { collectionConfig, Model } = getCollection({
@@ -1391,6 +1761,7 @@ const implementations: Record<
   countGlobalVersions,
   countVersions,
   find,
+  findDistinct,
   findGlobal,
   findGlobalVersions,
   findOne,
