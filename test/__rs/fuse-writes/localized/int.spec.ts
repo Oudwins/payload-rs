@@ -274,6 +274,31 @@ const magazines = (f: Fixtures): Case[] =>
     },
   ].map((c) => ({ ...c, collection: 'magazines' }))
 
+const localizedTabs = (): Case[] =>
+  [
+    { name: 'empty localized tab', data: { tabLocalized: {} }, locale: 'en' },
+    { name: 'title only', data: { tabLocalized: { title: 'hello en' } }, locale: 'en' },
+    { name: 'array', data: { tabLocalized: { array: [{ title: 'a' }] } }, locale: 'en' },
+    { name: 'group', data: { tabLocalized: { group: { heading: 'h' } } }, locale: 'de' },
+    {
+      name: 'deep',
+      data: { deep: { array: [{ title: 't' }] }, tab: { title: 'x' } },
+      locale: 'de',
+    },
+    {
+      name: 'update es title',
+      data: { tabLocalized: { title: 'hello es' } },
+      locale: 'fr',
+      seed: { data: { tabLocalized: { title: 'hello en' } } },
+    },
+    {
+      name: 'update es array',
+      data: { tabLocalized: { array: [{ title: 'hello es' }] } },
+      locale: 'de',
+      seed: { data: { tabLocalized: { array: [{ title: 'hello en' }] } } },
+    },
+  ].map((c) => ({ ...c, collection: 'tabs' }))
+
 const bulletin = {
   title: 'B',
   items: [{ item: 'a' }, { item: 'b' }],
@@ -325,7 +350,7 @@ test.suite('fused writes: localized write-side corpus', { config: './config.ts' 
 
   test('localized named tabs', async ({ payload }) => {
     const f = await fixtures(payload)
-    await runAll(payload, 'localized tabs', magazines(f), f)
+    await runAll(payload, 'localized tabs', [...magazines(f), ...localizedTabs()], f)
     finish('localized tabs')
   })
 

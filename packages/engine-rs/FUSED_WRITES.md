@@ -851,7 +851,8 @@ release addon, mongod 8.2 rs0):
   documents are the main documents (update.ts reads `payload.db.find`).
 - Guards: `drafts:localizedPublish` (a localized config, drafts, and `!draft && !(localizeStatus
   && locale !== 'all')`: upstream validates every locale with
-  `validateLocalWithLocaleKeyedData`); the prepare bails `drafts:localePublish` (with
+  `validateLocalWithLocaleKeyedData`; since WP-O only with the TS prepare, the Rust prepare
+  runs that validation, section 12.4); the prepare bails `drafts:localePublish` (with
   `localizeStatus` an update that is not a draft save and publishes the request's locale) and
   `drafts:statusString`.
 

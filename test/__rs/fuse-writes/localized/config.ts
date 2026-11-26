@@ -124,6 +124,47 @@ export default buildConfigWithDefaults({
         ],
       },
       {
+        // test/localization's `tabs`: containers inside a localized named tab
+        slug: 'tabs',
+        fields: [
+          {
+            type: 'tabs',
+            tabs: [
+              {
+                name: 'tabLocalized',
+                localized: true,
+                fields: [
+                  { name: 'title', type: 'text' },
+                  { name: 'array', type: 'array', fields: [{ name: 'title', type: 'text' }] },
+                  { name: 'group', type: 'group', fields: [{ name: 'heading', type: 'text' }] },
+                ],
+              },
+              { name: 'tab', fields: [{ name: 'title', type: 'text', localized: true }] },
+              {
+                name: 'deep',
+                fields: [
+                  {
+                    name: 'array',
+                    type: 'array',
+                    fields: [{ name: 'title', type: 'text', localized: true }],
+                  },
+                  {
+                    name: 'blocks',
+                    type: 'blocks',
+                    blocks: [
+                      {
+                        slug: 'first',
+                        fields: [{ name: 'title', type: 'text', localized: true }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      {
         // drafts without localized fields: every publish validates all locales
         slug: 'bulletins',
         fields: [

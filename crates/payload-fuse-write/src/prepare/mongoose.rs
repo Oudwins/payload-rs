@@ -328,7 +328,9 @@ fn to_bson(heap: &Heap, value: &Cv, in_array: bool, minimize: bool) -> Result<Op
       }
       Bson::Array(out)
     }
-    Cv::Doc(doc, own) => Bson::Document(to_document(heap, doc, minimize || *own)?),
+    // `$toObject` recomputes `minimize` per subdocument from its own schema unless the caller
+    // passed it (`_calledWithOptions`; the save path passes none)
+    Cv::Doc(doc, own) => Bson::Document(to_document(heap, doc, *own)?),
   }))
 }
 
