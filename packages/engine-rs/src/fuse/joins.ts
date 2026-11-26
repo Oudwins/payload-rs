@@ -206,16 +206,48 @@ const evaluateAccess = (joinCollectionConfig: Any, req: Any, predict: boolean) =
   ) {
     return guard('joins:access:result')
   }
+  if (typeof value === 'object') {
+    returnsWhere.add(fn)
+  }
   return value
+}
+
+/**
+ * Read access functions seen returning a where constraint (on a lane, or reported by the core's
+ * `populate:access:where:<slug>` bail): only these are predicted for population's nested finds,
+ * the others are evaluated by the core alone (a performance decision: a prediction costs an
+ * evaluation in JS per call).
+ */
+const returnsWhere = new WeakSet<object>()
+
+/** Records that `fn` returned a where constraint. */
+export const noteAccessWhere = (fn: unknown) => {
+  if (typeof fn === 'function') {
+    returnsWhere.add(fn)
+  }
+}
+
+/** The core's bail for an unpredicted where of collection `slug`'s read access (`!` + reason). */
+export const noteAccessWhereBail = (payload: Any, text: string) => {
+  const prefix = '!populate:access:where:'
+  if (text.startsWith(prefix)) {
+    const slug = text.slice(prefix.length)
+    if (payload && Object.hasOwn(payload.collections, slug)) {
+      noteAccessWhere(payload.collections[slug].config.access?.read)
+    }
+  }
 }
 
 /**
  * The where constraint a nested find's `executeAccess` of `collectionConfig`'s read access would
  * return for `req` (population, src/fuse/populate.ts: the core evaluates it again where the nested
  * find runs, `populate::nested_access`); `undefined` when it is not one (a boolean, which the
- * core evaluates on its own, or no prediction).
+ * core evaluates on its own, a function not seen returning a where, or no prediction).
  */
 export const predictedAccessWhere = (collectionConfig: Any, req: Any) => {
+  if (!returnsWhere.has(collectionConfig.access?.read)) {
+    return undefined
+  }
   try {
     const value: Any = evaluateAccess(collectionConfig, req, true)
     return typeof value === 'object' ? value : undefined

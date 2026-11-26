@@ -36,7 +36,7 @@ export type PopulationContext = {
    */
   loadTransactionID?: unknown
   /** the `overrideAccess` the operation's own `afterRead` gets (its loads' keys) */
-  ownOverrideAccess: unknown
+  ownOverrideAccess: Any
   payload: Any
   /**
    * A relationship of the read collection itself reaches a collection the nested finds do not
@@ -107,7 +107,7 @@ export const populationRequest = ({
   draft: unknown
   fieldAccessIDs: Map<unknown, number>
   /** findByID's `overrideAccess = false` default (find and the writes pass theirs as given) */
-  ownOverrideAccess?: unknown
+  ownOverrideAccess?: Any
   payload: Any
   plan: { eligible: true } & CollectionPlan
   req: Any

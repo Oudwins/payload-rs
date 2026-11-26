@@ -35,6 +35,7 @@ import {
 } from '../mongo-driver/lane.js'
 import { verifyMode } from '../mongo-driver/verify.js'
 import { installDriverTrace, isTracing, runTraced, type TraceEvent } from '../shadow-mongo/trace.js'
+import { isInertTree } from './inert.js'
 import { registerFusedTarget } from './targets.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- mirrors untyped upstream code */
@@ -343,6 +344,57 @@ const joinStages = (
 const relatedBackend = (
   lane: DriverLane,
   slug: string,
+  args: {
+    accessWhere: unknown
+    draft: unknown
+    joins: unknown
+    locale: Any
+    select: Any
+    sort: Any
+  },
+): { backend: unknown } | string => {
+  try {
+    mongooseTypes = lane.mongoose.Types
+    const resolved = entity(lane, slug)
+    // the same inputs give the same reads: cached per model (a JSON key of JSON-like inputs)
+    const { accessWhere, draft, joins, locale, select, sort } = args
+    const isCacheable = [accessWhere, joins, select, sort].every(
+      (value) => value === undefined || typeof value !== 'object' || isInertTree(value, false),
+    )
+    const key = isCacheable
+      ? JSON.stringify([resolved.plan, accessWhere, Boolean(draft), joins, locale, select, sort])
+      : undefined
+    let cache = relatedBackends.get(resolved.Model)
+    const cached = key === undefined ? undefined : cache?.get(key)
+    if (cached !== undefined) {
+      return cached
+    }
+    const result = buildRelatedBackend(lane, slug, resolved, args)
+    if (key !== undefined) {
+      if (!cache || cache.size >= 256) {
+        cache = new Map()
+        relatedBackends.set(resolved.Model, cache)
+      }
+      cache.set(key, result)
+    }
+    return result
+  } catch (error) {
+    if (error instanceof Unsupported) {
+      return `mongo:${error.message}`
+    }
+    if (error instanceof Fallback) {
+      return `mongo:${error.reason}`
+    }
+    return 'mongo:error'
+  }
+}
+
+const relatedBackends = new WeakMap<object, Map<string, { backend: unknown } | string>>()
+
+const buildRelatedBackend = (
+  lane: DriverLane,
+  slug: string,
+  { adapter, collectionConfig, Model, plan }: ReturnType<typeof entity>,
   {
     accessWhere,
     draft,
@@ -360,8 +412,6 @@ const relatedBackend = (
   },
 ): { backend: unknown } | string => {
   try {
-    mongooseTypes = lane.mongoose.Types
-    const { adapter, collectionConfig, Model, plan } = entity(lane, slug)
     if (adapter.payload.collections[slug]?.customIDType) {
       return 'mongo:populate:custom-id'
     }

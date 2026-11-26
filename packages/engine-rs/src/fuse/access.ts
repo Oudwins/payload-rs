@@ -3,6 +3,7 @@ import { skipCompilation } from '../../../payload/src/utilities/skipCompilation.
 import { getCompiledFunction } from '../compile/compileFunction.js'
 import { evaluateOnLane, laneFunction } from '../compile/index.js'
 import { isInertTree } from './inert.js'
+import { noteAccessWhere } from './joins.js'
 
 type Any = any
 
@@ -46,8 +47,11 @@ export const compiledAccess = (
   if (!value) {
     return { reason: 'access:denied' }
   }
-  if (typeof value === 'object' && !isInertTree(value, true)) {
-    return { reason: 'access:where' }
+  if (typeof value === 'object') {
+    if (!isInertTree(value, true)) {
+      return { reason: 'access:where' }
+    }
+    noteAccessWhere(access)
   }
   return { value }
 }

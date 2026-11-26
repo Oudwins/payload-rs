@@ -23,7 +23,7 @@ import { getNativeEngine } from '../native.js'
 import { createFunctionRegistry, serializeForEngine } from '../serialize.js'
 import { compiledAccess, laneFieldAccess } from './access.js'
 import { hasDataProperties, isInertTree, isPlainDataObject, isPlainObject } from './inert.js'
-import { fusedJoinQuery, hasJoins } from './joins.js'
+import { fusedJoinQuery, hasJoins, noteAccessWhereBail } from './joins.js'
 import { getCollectionPlan } from './plan.js'
 import {
   comparePopulated,
@@ -401,7 +401,8 @@ const isRequestValue = (value: unknown) =>
   value === false ||
   (Array.isArray(value) && value.every((item) => typeof item === 'string'))
 
-const buildFindRequest = (args: Any): Fused | undefined => {
+/** `isText`: the text lane's call (`fusedOperationText`), which does not populate. */
+const buildFindRequest = (args: Any, isText = false): Fused | undefined => {
   const prepared = prepare('find', args)
   if (!prepared) {
     return undefined
@@ -465,21 +466,25 @@ const buildFindRequest = (args: Any): Fused | undefined => {
   if (!Number.isFinite(depth) || typeof currentDepth !== 'number') {
     return guard('depth')
   }
+  const isPopulated = Boolean(depth && currentDepth <= depth && plan.hasRelations)
+  if (isPopulated && isText) {
+    // the dataloader / request state of a populated result needs its objects
+    return guard('populate:text')
+  }
   const fieldAccessIDs = new Map<unknown, number>()
-  const population =
-    depth && currentDepth <= depth && plan.hasRelations
-      ? populationRequest({
-          args,
-          currentDepth,
-          depth,
-          draft,
-          fieldAccessIDs,
-          payload,
-          plan,
-          req,
-          target,
-        })
-      : undefined
+  const population = isPopulated
+    ? populationRequest({
+        args,
+        currentDepth,
+        depth,
+        draft,
+        fieldAccessIDs,
+        payload,
+        plan,
+        req,
+        target,
+      })
+    : undefined
   if (typeof population === 'string') {
     return guard(population)
   }
@@ -589,7 +594,11 @@ export const fuseFind = (args: Any, exact: Exact): Promise<Any> | undefined => {
   return fused && runFused(fused, args, exact)
 }
 
-const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | undefined => {
+const buildFindByIDRequest = (
+  args: Any,
+  isOperationResult = false,
+  isText = false,
+): Fused | undefined => {
   const prepared = prepare('findByID', args, isOperationResult)
   if (!prepared) {
     return undefined
@@ -645,24 +654,27 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
   if (!Number.isFinite(depth) || typeof currentDepth !== 'number') {
     return guard('depth')
   }
+  const isPopulated = Boolean(depth && currentDepth <= depth && plan.hasRelations)
+  if (isPopulated && isText) {
+    return guard('populate:text')
+  }
   const fieldAccessIDs = new Map<unknown, number>()
-  const population =
-    depth && currentDepth <= depth && plan.hasRelations
-      ? populationRequest({
-          args,
-          currentDepth,
-          depth,
-          draft: replaceWithVersion,
-          fieldAccessIDs,
-          // findByID destructures `overrideAccess = false`
-          ownOverrideAccess:
-            isOperationResult || args.overrideAccess !== undefined ? args.overrideAccess : false,
-          payload,
-          plan,
-          req,
-          target,
-        })
-      : undefined
+  const population = isPopulated
+    ? populationRequest({
+        args,
+        currentDepth,
+        depth,
+        draft: replaceWithVersion,
+        fieldAccessIDs,
+        // findByID destructures `overrideAccess = false`
+        ownOverrideAccess:
+          isOperationResult || args.overrideAccess !== undefined ? args.overrideAccess : false,
+        payload,
+        plan,
+        req,
+        target,
+      })
+    : undefined
   if (typeof population === 'string') {
     return guard(population)
   }
@@ -858,6 +870,7 @@ const settle = (
 ): Promise<Any> | undefined => {
   if (text.charCodeAt(0) === 33 /* ! */) {
     count(stats.bails, text.slice(1))
+    noteAccessWhereBail(population?.payload, text)
     return undefined
   }
   count(stats.hits, op)
@@ -886,6 +899,7 @@ const shadow = async (fused: Fused, args: Any, exact: Exact): Promise<Any> => {
   const isBail = text.charCodeAt(0) === 33
   if (isBail) {
     count(stats.bails, text.slice(1))
+    noteAccessWhereBail(fused.population?.payload, text)
   } else {
     count(stats.hits, op)
   }
@@ -1022,10 +1036,10 @@ export const fusedPageRequest = (
   return { op: 'find', payload: db.payload, population: population?.context, request, target }
 }
 
-const requestBuilders: Record<Op, (args: Any) => Fused | undefined> = {
+const textRequestBuilders: Record<Op, (args: Any) => Fused | undefined> = {
   count: buildCountRequest,
-  find: buildFindRequest,
-  findByID: buildFindByIDRequest,
+  find: (args) => buildFindRequest(args, true),
+  findByID: (args) => buildFindByIDRequest(args, false, true),
 }
 
 /**
@@ -1049,7 +1063,7 @@ export const fusedOperationText = ({
   }
   let fused: Fused | undefined
   try {
-    fused = requestBuilders[operation](operationArgs)
+    fused = textRequestBuilders[operation](operationArgs)
   } catch {
     return guard('error')
   }

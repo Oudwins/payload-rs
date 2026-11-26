@@ -500,6 +500,8 @@ fn nested_access(
       }
       Ok(true)
     }
+    // a where the TS side did not predict: it predicts this collection's from now on
+    (Ok(Value::Object(_)), None) => Err(Bail::new(format!("populate:access:where:{slug}"))),
     (Ok(_), _) => Err(Bail::new("populate:access:result")),
     (Err(bail), _) => Err(Bail::new(format!("populate:access:bail:{}", bail.reason()))),
   }
