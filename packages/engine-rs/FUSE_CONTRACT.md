@@ -140,7 +140,8 @@ A collection is eligible for reads when:
   anything else bails `populate:access:*`), compiled field read access only (section 2), compiled
   read access of the collections their joins read (section 8) and no `defaultSort` (sort path
   validation checks field permissions), else `populate:access`; the text lane
-  (`fusedOperationText`) does not populate. The keys of the operation's own loads carry its
+  (`fusedOperationText`) does not populate (it guards `populate:text` before building the
+  population request). The keys of the operation's own loads carry its
   `afterRead` `overrideAccess` (findByID's default `false`).
 - a write operation's own result read (`fusedFindByIDRequest`, src/fuse-write) does not check the
   collection's read access (the operations do not); its field read access and population follow
@@ -367,7 +368,10 @@ not `locale: 'all'` (`joins:allLocales`), a joined collection read without draft
   guard sampling at the real call), with the nested `req` (`req.query.depth`), bailing
   `populate:joins:access:changed` when a result differs from the prediction.
 - **Collection read access returning a where** in a nested find (the perf suite's complex posts,
-  loaded as a join's `docs`): predicted the same way (`predictedAccessWhere`), the nested reads
+  loaded as a join's `docs` with a `maxDepth` above the default 1): predicted the same way
+  (`predictedAccessWhere`; only for functions seen returning a where, on a lane or through the
+  core's `populate:access:where:<slug>` bail, since a prediction costs a JS evaluation per call),
+  the nested reads
   hold `combineQueries({ id: { in } }, where)`'s `buildQuery`: `{ $and: [<ids>, <where's query>] }`
   (`related.backend.accessFilter`, cast by mongoose for `Model.find`, or `accessMatch`, uncast, for
   the aggregation); the request carries the prediction (`related[slug].accessResult`) and the core

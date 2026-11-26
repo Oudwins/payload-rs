@@ -719,7 +719,7 @@ the enum rejects), plus the plan's ineligibility for `pattern`. The corpus is 44
 absent required key, a string json, a null group, an update whose stored document lacks a
 defaulted array), 0 differences.
 
-## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, WP-S, WP-V, status 2026-11-26)
+## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, WP-S, WP-U, WP-V, status 2026-11-26)
 
 Built and on by default since WP-K (`PAYLOAD_RS_FUSE_WRITES=off` restores the exact lane for
 every write; WP-J's default-on commit was held until update-many / delete-many were fused, see
@@ -1386,6 +1386,73 @@ per call, population access, `access:populate` / `access:fields`), localized jso
 schema, the schema keywords not converted (`pattern` / `format` need JS regex and zod's formats),
 `plan:field:slug` 78, `prepare:drafts:localizedPublish:unique` 90, `plan:field:condition` 75,
 `populate:related` (joins without `overrideAccess`, WP-U).
+
+**WP-U (2026-11-26)**: join fields without `overrideAccess`, finds with join stages, join query
+values and localized joins on the read side (FUSE_CONTRACT.md sections 3, 8 and 9); the write
+dispatch is unchanged. `sanitizeJoinQuery` is re-stated by `fusedJoinQuery` (src/fuse/joins.ts):
+the joined collections' compiled read access is combined into each join's `where` (evaluated
+through `evaluateOnLane` by the operation's own read; predicted for population's nested finds and
+evaluated again by the core where each one runs, `nested_join_access`, guard sampling there), and
+the caller's `joins` object gets upstream's in-place changes replayed. A nested find whose
+collection's read access returns a where (predicted only for functions seen returning one)
+combines it into its reads (`accessFilter` / `accessMatch`, checked by the core). `find` with join
+stages runs `aggregatePaginate` with its result meta in Rust (`aggregate_page_result`). Found on
+the way: findByID's own population keys carry its `overrideAccess = false` default (a REST
+findByID's keys held `null`), the nested aggregations send `aggregatePaginate`'s `$skip: 0`, and a
+join field's own `where` reaches its `$match`.
+
+Measured, full MongoDB harness with `--fuse shadow --fuse-writes shadow` (WP-S's `wps_mf` →
+WP-U's `wpu_mf2`; reads hits / bails / guards / ineligible): 3469 / 283 / 5283 / 2959 → 3566 /
+277 / 5286 / 2995, findByID hits 948 → 974, find 2477 → 2540; gone: `mongo:joins:find` 21,
+`mongo:joins:localized` 4, `mongo:joins:where` 2; new: `joins:access:verify` 3 (guard sampling).
+Writes: hits 4853 → 4947 (updateByID 433 → 526), `populate:related` 129 → 126 (what remains are
+result reads loading collections whose read plans are ineligible: uploads, polymorphic joins,
+collection hooks). Lane differences 0 (both lanes).
+
+Bars on the final tree (release addon, mongod 8.2 rs0): the harness with `--engine default` 3330 /
+164 / 422, equal to `.rs-baseline/mongodb-all.json` (test/cli differs by the worktree path; storage
+emulators and hmr absent; fused read hits 3512, fused writes 3954 creates, 485 updateByID, 234
+deleteByID, 4 update-many, 216 delete-many), the harness with both shadows 3330 / 164 / 422 and 0
+lane differences; the 8 shadow files 971 / 0 / 46, 0 divergences; parity 503/503 (twice); driver
+lane 4/4; glue 33/33; HTTP lanes 18/18; fn-compile 39/39; the corpus 28/28; the lane suites 94/94
+in default and with both shadows (new: `fuse-populate/joins-access.int.spec.ts`: a where-returning
+and a denying joined access at depth 3, REST reads of a collection with joins incl. a paginated
+find, the replayed `joins` object, join query `limit` / `page` / `count` / `sort` / `where`,
+localized joins; 22/22 of fuse-populate on the TS engine); SQLite with `--fuse shadow` equal to
+`.rs-baseline/sqlite-all.json` by relative path (test/cli: the worktree path; create-payload-app:
+11 baseline failures pass), 0 lane differences; packaging OK.
+
+Perf (WP-U, test/__rs/perf, MongoDB 1k posts, release addon, packed install verified against the
+builds, 3 interleaved rounds per cell, CPUs 22-31; `ts/rs` per category as in WP-S's table, [95% t
+interval over the rounds]; before = rust-engine-port at ff46138b, after = this tree):
+
+| shape   | surface | read                                | create                              | update                              | partial-update                      | delete                              |
+| ------- | ------- | ----------------------------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- |
+| typical | local   | 1.52 [1.26-1.85] → 1.68 [1.56-1.81] | 1.50 [1.32-1.70] → 1.60 [1.47-1.74] | 2.23 [1.73-2.88] → 2.37 [2.25-2.50] | 2.12 [1.63-2.75] → 2.21 [1.74-2.80] | 1.40 [0.58-3.35] → 1.52 [1.29-1.81] |
+| typical | rest    | 1.49 [1.32-1.69] → 1.51 [1.39-1.64] | 1.30 [1.12-1.51] → 1.12 [0.62-2.02] | 1.38 [1.34-1.42] → 1.27 [1.14-1.43] | 1.87 [1.39-2.51] → 1.82 [1.40-2.37] | 1.25 [1.02-1.53] → 1.18 [0.69-2.01] |
+| typical | graphql | 1.27 [1.04-1.56] → 1.22 [1.02-1.45] | 1.29 [0.87-1.92] → 1.10 [0.59-2.04] | -                                   | 1.82 [1.08-3.09] → 1.73 [1.24-2.43] | 1.24 [0.75-2.03] → 1.06 [0.65-1.75] |
+| complex | local   | 1.62 [1.50-1.74] → 1.69 [1.60-1.78] | 1.38 [1.19-1.60] → 1.51 [1.47-1.56] | 2.19 [1.70-2.83] → 2.45 [2.42-2.47] | 1.90 [1.29-2.79] → 2.19 [2.03-2.37] | 1.45 [1.24-1.69] → 1.32 [1.27-1.37] |
+| complex | rest    | 1.12 [0.97-1.30] → 1.30 [1.10-1.53] | 0.99 [0.88-1.11] → 1.18 [0.82-1.71] | 0.96 [0.93-0.99] → 0.95 [0.95-0.95] | 0.95 [0.83-1.09] → 0.91 [0.86-0.95] | 0.89 [0.74-1.07] → 1.17 [1.03-1.32] |
+| complex | graphql | 1.31 [1.07-1.61] → 1.31 [1.10-1.55] | 1.59 [1.35-1.87] → 1.34 [0.80-2.26] | -                                   | 0.97 [0.93-1.00] → 0.96 [0.87-1.05] | 1.06 [0.53-2.13] → 1.26 [1.03-1.54] |
+
+Per round, complex REST (before → after): `GET /posts/:id` 0.60 / 0.68 / 0.61 → 1.13 / 1.29 / 1.07
+(its default depth 2 populates `author`, whose join to the posts now fuses), `GET /posts limit 10
+depth 2` 1.00 / 0.82 / 1.02 → 1.18 / 1.30 / 1.11, `POST /posts` 0.92 / 1.04 / 0.96 → 0.94 / 1.64 /
+1.70, `DELETE /posts/:id` 0.99 / 0.91 / 0.86 → 1.25 / 1.51 / 1.53. The complex REST updates
+(`PATCH /posts/:id`, 0.86-0.93) stay on the exact lane: the posts' update access returns a where
+constraint, which the write guard refuses (`access.update` must compile to `true`). The typical
+and GraphQL cells run the same code on both trees; their differences are within the intervals.
+A first set of post-change rounds measured the depth-2 REST read at 0.82-1.04: per call, the
+population request predicted every related collection's read access in JS (an evaluation with a
+request snapshot each) and the text lane built a populating request before refusing it; only
+functions seen returning a where are predicted now, the nested backends are cached and the text
+lane refuses before building (second commit).
+
+What is left (WP-U): where-returning update / delete access in the fused writes (the complex
+REST `PATCH`), write result reads loading collections with ineligible read plans
+(`populate:related` 126), polymorphic joins (`joins` ineligible 129 read calls), join queries with
+relationship-path `where`s (sub-queries), `locale: 'all'` joins, joins of draft collections read
+with `draft`.
 
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
