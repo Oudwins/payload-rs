@@ -716,12 +716,67 @@ const runFused = (fused: Fused, args: Any, exact: Exact): Promise<Any> | undefin
   if (mode === 'shadow') {
     return shadow(fused, args, exact)
   }
+  const backoffKey = populateBackoffKey(fused, args)
+  if (backoffKey && isBackingOff(args.collection, backoffKey)) {
+    return guard('backoff:populate:related')
+  }
   const text = runNative(fused)
   if (typeof text !== 'string') {
     // an asynchronous backend: a bail continues on the exact lane
-    return text.then((resolved) => settle(fused, resolved) ?? exact())
+    return text.then((resolved) => {
+      if (backoffKey) {
+        notePopulated(args.collection, backoffKey, resolved)
+      }
+      return settle(fused, resolved) ?? exact()
+    })
+  }
+  if (backoffKey) {
+    notePopulated(args.collection, backoffKey, text)
   }
   return settle(fused, text)
+}
+
+/**
+ * `populate:related` is a bail the native lane can only take after its reads ran (a loaded
+ * relationship points to a collection the nested finds do not serve, e.g. one with a join
+ * field), and it repeats for the same kind of call whenever the documents hold such values. After
+ * one, the calls of that kind (collection, operation, depth, the related collections the request
+ * serves) back off: the next 1, 2, 4, ... up to 64 run the exact lane directly
+ * (`backoff:populate:related`); a call the lane serves resets it. A performance decision only:
+ * both lanes give upstream's result. Shadow mode does not back off. The fused writes keep their
+ * own per-collection backoff (src/fuse-write).
+ */
+type Backoff = { next: number; skip: number }
+
+const populateBackoff = new WeakMap<object, Map<string, Backoff>>()
+
+const populateBackoffKey = ({ op, population }: Fused, args: Any) =>
+  population &&
+  `${op}:${String(args.depth)}:${population.topCurrentDepth}:${Object.keys(population.selects).join(',')}`
+
+const isBackingOff = (collection: object, key: string) => {
+  const state = populateBackoff.get(collection)?.get(key)
+  if (!state || state.skip === 0) {
+    return false
+  }
+  state.skip--
+  return true
+}
+
+const notePopulated = (collection: object, key: string, text: string) => {
+  const states = populateBackoff.get(collection)
+  if (text === '!populate:related') {
+    const state = states?.get(key) ?? { next: 1, skip: 0 }
+    state.skip = state.next
+    state.next = Math.min(state.next * 2, 64)
+    if (states) {
+      states.set(key, state)
+    } else {
+      populateBackoff.set(collection, new Map([[key, state]]))
+    }
+  } else if (text.charCodeAt(0) !== 33 /* ! */) {
+    states?.delete(key)
+  }
 }
 
 const settle = ({ op, population }: Fused, text: string): Promise<Any> | undefined => {
