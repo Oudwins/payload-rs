@@ -312,7 +312,9 @@ alike, and the two validators are the same code).
 
 Ineligible (the plan builder returns a reason): user functions anywhere on the write path that are
 not in `payloadOwnFunctions` / `defaultFieldValidators` (hooks, `validate`, `defaultValue`,
-`access`, `admin.condition`, `filterOptions`), custom ID fields, `localization.filterAvailableLocales`,
+`access`, `admin.condition`, `filterOptions`) other than the compiled ones of 12.7 (field
+`validate`, field `beforeValidate` / `beforeChange` hooks, a relationship's function
+`filterOptions`), custom ID fields, `localization.filterAvailableLocales`,
 `drafts.schedulePublish`, upload / auth collections, join fields, blocks (until their discriminators are modelled),
 point / code / radio fields, json fields with a `jsonSchema`, rich text other than lexical with
 default features (step 3), `timezone` dates, a tab with an `admin.condition`, mongoose schema features the casting does not model (setters other
@@ -577,13 +579,85 @@ cases: 259 equal (193 written, 66 invalid), 23 bails, 0 differences.
 
 Not yet: autosave (`updateLatestVersion`), a locale publish with `localizeStatus`
 (`buildLocalizedPublishData`), global block references, link and block node validations (form
-state), function `filterOptions` (section 13, WP-O).
+state), a function `filterOptions` given a value (section 13, WP-O; an empty value: 12.7).
 
 For WP-H, per operation: lexical's `afterChange` hook is the identity for every input the library
 accepts (no node ids, so its `originalNodeIDMap` is empty); the field `afterChange` traversal has
 no other own hooks on eligible collections.
 
-## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, status 2026-11-25)
+### 12.7 Compiled user functions (WP-P, 2026-11-26)
+
+User functions on the write path that the function compiler compiles (FN_COMPILE_CONTRACT.md,
+owner decision D5) run in the prepare, at upstream's point and with upstream's argument object,
+as one tick each (`await callUserFunction(fn, ...)` of a call that settles at once). Files:
+`prepare/user_fn.rs` (argument objects, evaluation), `writePlan.ts` `userFunctionPlan`.
+
+- **Plan**: a field's `val` (validate) or an entry of its `hooks.beforeValidate` /
+  `hooks.beforeChange` is `{ fn, keys, props }`: the `FnId` (`compileFunction`, memoized per
+  function; payload's `init` compiles the config's functions with the Rust core), the keys the
+  function reads of its argument object (`argKeys`; `keys` absent: it takes no such argument;
+  `null`, i.e. it may read any key: ineligible `...:args`), and `props`: the keys that are not
+  built per call, as `encodeSnapshot(snapshot(...))` taken when the plan is built (validate:
+  `{ ...field }[key]`, the field's own enumerable data property, watched; hooks: `field` only,
+  `{ ...tab, type: 'tab' }` for a tab; any other hook key, e.g. `context`, `indexPath`,
+  `schemaPath`, `siblingFields`, is ineligible `...:key`). A function that does not compile is
+  ineligible (`...:compile`). plan.ts accepts a user function only when a lane may use it
+  (`laneFunction`: guards installed, compiled, active).
+- **Per call** (`Run::user_fn_lane_call`): the first use of a function in a prepare call bails
+  when it is de-optimised (`fn:inactive`) or when guard mode wants to see the call
+  (`lane_should_verify`: the first 32 checked calls, then 1 in 256: `fn:verify`; the exact lane's
+  call-site guard verifies). A create bails before any statement, an update inside its
+  transaction before writing (the driver aborts).
+- **validate** (beforeChange, after `hasInvalidFieldValueShape`, when validation is not
+  skipped): `fn(value, options)` with `options` a partial object of the keys it reads:
+  `id`, `blockData` (the enclosing block row), `collectionSlug`, `data`
+  (`deepMergeWithSourceArrays(originalDoc, data)` of the traversal's top-level values at that
+  moment), `event: 'submit'`, `jsonError` (`undefined`: a json string bails earlier),
+  `operation`, `overrideAccess`, `path` (segments), `preferences: { fields: {} }`,
+  `previousValue` (`siblingDoc[name]`), `req`, `siblingData` (`deepMergeWithSourceArrays(siblingDoc,
+  siblingData)`), `skipCompilation`, and the field properties of `props`. A string result is the
+  error message (the field's error as for the default validators), anything else is valid. The
+  merge is deepmerge's (`isMergeableObject`, target keys first, source arrays kept by
+  reference, inherited `Object.prototype` names skipped); `Date` targets with object sources and
+  other typed values (ObjectIds) bail. All heap values of one call are exported with one memo and
+  converted together, so objects shared in JS stay `===` for the function (`value ===
+  siblingData[name]` of an array holds as in JS).
+- **Field hooks** (`beforeValidate` after the fallback value, `beforeChange` before
+  `hasInvalidFieldValueShape`, both before access / validation as upstream): `hook(args)` with
+  the keys it reads of `blockData` (beforeChange; beforeValidate does not track it: bails),
+  `collection` (a partial `{ slug }`), `data` (the traversal's top-level data, live, not
+  merged), `field`, `global: null`, `operation`, `originalDoc`, `overrideAccess`, `path`,
+  `previousSiblingDoc`, `previousValue`, `req`, `siblingData`, `siblingDocWithLocales`
+  (beforeChange), `skipCompilation`, `value` (beforeValidate: the fallback for an undefined
+  value). The `_status` path bails (upstream passes `docForHooks`). The result upstream assigns
+  to `siblingData[name]` when not `undefined`: a primitive, or `value` itself (the same
+  object, `Arc::ptr_eq`); any other object bails (`fn:hook:result`: JS would assign that object,
+  shared with what the hook took it from).
+- **`req`**: the dispatch sends `encodeSnapshot(snapshotRequest(req))` when a function of the
+  plan reads `req` (`readsReq`); the prepare drops `context` (Payload's own hooks write to it
+  during the operation: reading it bails). The all-locales publish validation (12.4) runs its
+  passes on a new `createPayloadRequest`: a function reading `req` bails there.
+- **Bails**: the evaluation's (`fn:throws`, `fn:value not in the snapshot`, ...), more than one
+  tick (`fn:ticks`: an `await`, an adopted promise), a missing request (`fn:req`).
+- **Function `filterOptions`** of a relationship / upload field: `validateFilterOptions` calls it
+  (and reads the database) only for a truthy value; the plan marks the field (`fof`) and the
+  prepare bails there (`filterOptions:function`), so writes leaving the relationship empty are
+  fused. `req.payloadAPI` is not needed for this and stays out of the snapshot.
+- Not compiled into the prepare: field `afterChange` and collection hooks (`beforeValidate`,
+  `beforeChange`, `afterChange`, `beforeRead` / `afterRead` of the result read); the perf
+  suite's hooks shape increments a captured counter in every hook, a side effect the compiler
+  rejects.
+
+Corpus groups `validated create` / `validated update` (41 cases: value-only, `req`,
+`previousValue`, `data` / `siblingData` merges with stored documents, `blockData`, `path` and
+field properties, an async validator, error order of several failures; bails: an `await`, a
+throwing validator, function `filterOptions` with a value) and `field hooks create` / `field
+hooks update` (18: trimming, values from `data` / `siblingData` / `previousValue` /
+`previousSiblingDoc` / `originalDoc` / `collection`, a constant hook, a hook before a validator,
+block rows; bails: a hook returning a copied array, `blockData` in beforeValidate). The corpus
+is 348 cases: 316 equal (230 written, 86 invalid), 32 bails, 0 differences.
+
+## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, status 2026-11-26)
 
 Built and on by default since WP-K (`PAYLOAD_RS_FUSE_WRITES=off` restores the exact lane for
 every write; WP-J's default-on commit was held until update-many / delete-many were fused, see
@@ -610,7 +684,9 @@ prepare is never a default: it exists to prove the drivers, the transaction and 
 
 **Eligibility** (plan, per collection): no collection hooks on any write path, no root
 `afterError`; every field hook / `defaultValue` function in `payloadOwnFunctions`, every
-`validate` in `defaultFieldValidators`; no `filterOptions` function, join, point, virtual field,
+`validate` in `defaultFieldValidators`, or (since WP-P) a compiled `validate` / field
+`beforeValidate` / `beforeChange` hook a lane may use (section 12.7); no `filterOptions`
+function other than a relationship's / upload's (12.7), join, point, virtual field,
 block references; not upload, auth, scheduled publish (`drafts.schedulePublish`), custom ID,
 no `select` function; WP-A's read plan eligible. **Guards** (per call): inert args and `data` (no Dates yet),
 accepted `req` kinds, no `transactionID`, no `disableTransaction`, no `autosave` (`draft` since
@@ -976,7 +1052,7 @@ gains over WP-L's table are WP-M's depth-2 result reads, the write side being un
 
 Not built (WP-O), with what each needs:
 
-- **Function `filterOptions`** (554, of which 484 in test/versions' `Drafts`: `({ req }) =>
+- **Function `filterOptions`** (WP-P: calls whose value is empty are fused, 12.7; what follows is for a value. WP-O counted 554, of which 484 in test/versions' `Drafts`: `({ req }) =>
   req.payloadAPI === 'REST' ? req.method === 'POST' : true`). Three parts: (1) the compiled
   function evaluated in the dispatch per `relationTo` (`evaluateRequestOnlyAccess`-style, guard
   sampling kept); this one reads `req.payloadAPI`, which `capturedRequest` (compile/snapshot.ts)
@@ -1001,6 +1077,73 @@ Not built (WP-O), with what each needs:
   `enforceMaxVersions`; else a new version) and the second call sends `findOneAndUpdate` of the
   latest version (`{ createdAt: <its createdAt>, latest: true, parent, updatedAt: now, version }`,
   db-mongodb `updateVersion`) or the version insert.
+
+**Compiled user functions (WP-P, 2026-11-26)**: section 12.7 (validators, field hooks, function
+`filterOptions` with an empty value). The dispatch is otherwise unchanged except for a backoff:
+two driver bails come only after the statements ran (abort, then the exact lane reruns the
+call) and tend to repeat for a collection: `populate:related` (the result read loads a
+collection the fused reads do not serve, e.g. the perf suite's `authors` with its join field,
+whenever a document holds such a relationship value) and `byID:maxVersions` (a document past
+`maxPerDoc` versions: the exact lane deletes the old versions). After one of them the run lanes
+back off per collection and kind of call (`backoff:<reason>` guards: the next 1, 2, 4, ... up to
+64 calls whose result read can reach an unserved collection, respectively updates, run the exact
+lane directly; such a call the lane runs through resets it, so a GraphQL write at depth 0 is not
+held back by the Local API's populating ones); the shadow lanes do not back off. The complex shape exposed both once its validator compiled: every
+Local / REST write populates `author`, and its documents pass `maxPerDoc: 10` during the run;
+without the backoff its partial updates measured 0.84x of TS against 1.06x with fused writes
+off. A static guard on the population alone cost about 650 harness hits (collections whose
+relationships to unserved collections are mostly empty). Enforcing `maxPerDoc` in the driver
+(upstream's `deleteVersions({ updatedAt: { less_than_equal }, parent })` after the find) and
+joins in population would turn these into fused writes.
+
+Measured, full MongoDB harness (WP-O's runs → WP-P's, release-independent counts):
+
+| run                                      | hits        | bails      | guards      | ineligible  |
+| ---------------------------------------- | ----------- | ---------- | ----------- | ----------- |
+| `--fuse shadow --fuse-writes shadow`     | 4459 → 4497 | 905 → 1413 | 2411 → 2505 | 4301 → 3666 |
+| `--engine default` (fused writes served) | 4458 → 4488 | 905 → 1340 | 2413 → 2587 | 4312 → 3681 |
+
+Ineligible reasons that moved (shadow run): `field:filterOptions` 554 → 39, `field:validate` 215
+→ 195, `field:hooks:beforeChange` 104 → 30, `field:hooks:beforeValidate` 46 → 0 (of the 150
+field-hook-ineligible calls 120 pass that reason; the collection hooks, `hooks:beforeRead` 673,
+`hooks:afterRead`, `hooks:beforeOperation` 377, are unchanged: their functions have side effects
+or are not compiled). The newly eligible calls mostly stop at the next unmodelled feature:
+`plan:group:unnamed` 32 → 454 (test/versions' `Drafts`: an unnamed group, which the write plan
+does not model yet; the largest single lever left on this path), `prepare:fn:verify` 67 (guard
+sampling's first calls), `drafts:schedulePublish` 76 (deletes); hits +38 (shadow) / +30
+(default; there the backoff guards 82 calls, `backoff:populate:related`, and the late
+`populate:related` bails drop from 122 to 50). Bars on the final tree: both harness runs 3330 / 164 / 422, equal to
+`.rs-baseline/mongodb-all.json` (test/cli differs by the worktree path; storage emulators and hmr
+absent; one earlier default run during a machine load spike, 15-minute load average 31, had three
+90 s timeouts in queues/schedules, trash and upload-transformers, clean when rerun alone, and the
+rerun of the whole harness was clean), 0 lane-shadow and 0 fused-write differences; the 8 shadow files 971 / 0 / 46, 0
+divergences; parity 503/503; driver lane 4/4; glue 33/33; HTTP lanes 18/18; fn-compile 39/39;
+the corpus 25/25 (348 cases, 316 equal, 32 bails); the lane suites 75/75 (default) and the write
+lane suites 60/60 (shadow; new `validate.int.spec.ts`: value-only, `req`, `previousValue`
+validators past guard sampling, compiled field hooks, an opted-out validator); packaging OK.
+
+Perf (WP-P, test/__rs/perf, MongoDB 1k posts, release addon, packed install verified against
+the builds: the addon, engine-rs, payload and db-mongodb dist identical; `ts/rs`, `off` =
+`rs-fused-off` → `on`; per scenario the median of 3 passes, geometric mean per category):
+
+| shape   | surface | create      | update      | partial-update | delete      | versions    | locale      |
+| ------- | ------- | ----------- | ----------- | -------------- | ----------- | ----------- | ----------- |
+| complex | local   | 1.18 → 1.19 | 1.13 → 1.01 | 1.14 → 1.10    | 1.02 → 0.97 | 1.10 → 0.99 | 1.34 → 1.35 |
+| complex | rest    | 1.10 → 1.01 | 1.08 → 1.05 | 1.15 → 1.06    | 1.01 → 0.98 | 1.19 → 1.04 | 1.42 → 1.32 |
+| complex | graphql | 1.06 → 1.41 | -           | 1.04 → 1.00    | 0.96 → 1.20 | 0.96 → 0.97 | 1.51 → 1.26 |
+| hooks   | local   | 1.20 → 1.23 | 1.08 → 1.10 | 1.01 → 1.04    | 1.05 → 1.04 | -           | -           |
+| hooks   | rest    | 1.04 → 1.11 | 0.97 → 0.98 | 0.92 → 0.89    | 0.91 → 0.91 | -           | -           |
+| hooks   | graphql | 1.03 → 1.11 | -           | 0.96 → 0.98    | -           | -           | -           |
+
+The complex shape's writes now fuse where their result read does not populate: GraphQL
+`createPost` 1.41x and `deletePost` 1.20x of TS (both 1.0 with fused writes off; `updatePost`
+stays on the exact lane: the collection's update access returns a where constraint). Its Local
+API and REST writes (default depth 2) populate `author`, and the `authors` collection has a join
+field, which the fused reads do not serve: they run the exact lane through the backoff, at the
+`off` speed (the passes spread by up to 20% per scenario; before the backoff its partial updates
+were 0.84x against 1.06x off). The hooks shape never fuses a write (every hook increments a
+captured counter): its on / off columns run the same code. An earlier set of three passes put the
+hooks rows at 0.89-1.15 on both sides, the spread of single processes on this machine.
 
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon

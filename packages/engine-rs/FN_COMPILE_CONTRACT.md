@@ -123,6 +123,9 @@ The real function is the authority. Two places verify:
   function when guards are installed and `lane_should_verify` says false.
 - On the exact lane compiled functions are only verified, never substituted: tick counts there stay
   upstream's.
+- The fused writes' prepare (FUSED_WRITES.md section 12.7) evaluates compiled field validators
+  and field `beforeValidate` / `beforeChange` hooks; it asks `lane_should_verify` on a function's
+  first use in a prepare call and bails on true.
 
 ## 4. Opt-out
 
