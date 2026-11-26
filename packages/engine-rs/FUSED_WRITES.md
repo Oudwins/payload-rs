@@ -303,12 +303,19 @@ The JSON (`v: 1`) holds:
   of `schema.tree`, every path's SchemaType (`instance`, sub schema of document arrays, static
   `default`), nested paths, `versionKey`, `strict`.
 
+Added 2026-11-26 (WP-O): a `tabs` field's `tabs` are field entries of type `tab` (upstream's
+`{ ...tab, type: 'tab' }`; a named tab has `n`, `l`, its hooks, `access` and static `d` like any
+named field, its label as sanitization leaves it, `toWords(name)` by default); `u` marks a
+`unique` field; `json` fields (`t: 'json'`, `val: 'json'`); an `upload` field is written as
+`t: 'relationship'` with `val: 'upload'` (upstream's write path treats `relationship || upload`
+alike, and the two validators are the same code).
+
 Ineligible (the plan builder returns a reason): user functions anywhere on the write path that are
 not in `payloadOwnFunctions` / `defaultFieldValidators` (hooks, `validate`, `defaultValue`,
 `access`, `admin.condition`, `filterOptions`), custom ID fields, `localization.filterAvailableLocales`,
 `drafts.schedulePublish`, upload / auth collections, join fields, blocks (until their discriminators are modelled),
-point / json / code / radio / upload fields, rich text other than lexical with default features
-(step 3), `timezone` dates, mongoose schema features the casting does not model (setters other
+point / code / radio fields, json fields with a `jsonSchema`, rich text other than lexical with
+default features (step 3), `timezone` dates, a tab with an `admin.condition`, mongoose schema features the casting does not model (setters other
 than `_id`'s, discriminators, maps, `Decimal128`, `Buffer`, `BigInt`, non-strict schemas).
 
 ### 12.2 The call context
@@ -444,9 +451,21 @@ create's `docWithLocalesForFields` (`{}` when reached and allowed, else `{ _stat
 also decides `_isNewDoc`). A draft-save update builds the version from beforeChange's result
 with `versionData.updatedAt = now` (timestamps) and returns `draft: true`; the version's
 `autosave` is `ctx.autosave` (`updateLatestVersion` is not modelled: the dispatch guards
-`autosave`). Bails: a localized config with drafts whose operation would publish all locales
-(`!draft && !(localizeStatus && locale !== 'all')`: upstream then runs
-`validateLocalWithLocaleKeyedData`, `drafts:localizedPublish`); with `localizeStatus` a
+`autosave`). A localized config with drafts whose operation publishes all locales
+(`!draft && !(localizeStatus && locale !== 'all')`, i.e. collections without localized fields:
+sanitization sets `localizeStatus` exactly when there are) runs upstream's
+`validateLocalWithLocaleKeyedData` after beforeChange (WP-O, 2026-11-26): per locale code
+(`resolveValidationLocales('all')`), on its own heap, beforeChange's result flattened to that
+locale (`flattenDataByLocale`) goes through beforeChange again as runValidationLifecycle runs it
+with `skipMutationHooks` (`skipHooks`: no field or editor hooks, so no readings;
+`isValidationOperation`: no localized-fallback skip; the operation `create` / `update`, the
+pass's `req.locale`; create: `doc` and `docWithLocales` one `{}`; update: `{ ...data, id }`,
+`docWithLocales` the operation's as beforeChange left it, `originalDoc` its `originalDoc` for
+the request's locale, else `docWithLocales` flattened). A pass without errors is unobservable
+(cloned request, context and data); any error bails (`drafts:localizedPublish:invalid`: the
+exact lane throws the aggregated, deduplicated `ValidationError`), as does a `unique` field
+anywhere (`drafts:localizedPublish:unique`: `validateUniqueConstraints` reads the database).
+The passes' `mergeLocaleActions` only change their discarded data and are not run. Bails: with `localizeStatus` a
 beforeChange `_status` that is a string (`drafts:statusString`) and an update that is not a
 draft save and publishes the request's locale (`buildLocalizedPublishData` reads the main
 document, `drafts:localePublish`). For an update the caller passes `docWithLocales` /
@@ -510,6 +529,9 @@ Ported and in the corpus, per field kind (no drafts):
 | array (row ids from the registry)          | `0` / `'0'`, rows, `getExistingRowDoc` | array                         | document arrays                                                    |
 | blocks (the field's own blocks)            | block lookup, `blockType`              | blocks (no `filterOptions`)   | embedded discriminators, block `minimize`                          |
 | group, row, collapsible, unnamed tabs      | placeholders, traversal                | `() => true`                  | single nested subdocuments                                         |
+| named tabs (localized or not, WP-O)        | as a named group                       | none (tabs have no validate)  | single nested subdocuments, locale-keyed when localized            |
+| json (no `jsonSchema`, WP-O)               | fallback, defaults                     | json (strings bail)           | Mixed; `$` / dotted keys bail                                      |
+| upload fields (WP-O)                       | as relationship                        | upload                        | as relationship                                                    |
 | createdBy / updatedBy (registry hooks)     | submitted marks in `req.context`       | relationship                  | Mixed                                                              |
 | createdAt / updatedAt                      | -                                      | none                          | Date cast, stamps from the readings                                |
 | richText (lexical, features without hooks) | `req.context.internal.richText[path]`  | `hasText`, `validateNodes`    | Mixed                                                              |
@@ -548,10 +570,14 @@ validation), draft-save updates, publishes over a latest draft, a localized `_st
 config (draft saves); corpus groups `drafts` (14: 11 written, 3 invalid) and `localized drafts`
 (9: 7 written, 2 bails by design: `drafts:localePublish`, `drafts:localizedPublish`).
 
-Not yet: autosave (`updateLatestVersion`), publishing all locales of a localized config
-(`validateLocalWithLocaleKeyedData`), a locale publish with `localizeStatus`
-(`buildLocalizedPublishData`), named tabs, global block references, link and block node
-validations (form state).
+WP-O (2026-11-26): named tabs, the all-locales publish validation (12.4), json and upload fields;
+corpus groups `tabbed create` / `tabbed update` (21), `localized tabs` (11), `all locales
+publish` (11), `json create` / `json update` (15), `upload create` (10). The corpus is now 282
+cases: 259 equal (193 written, 66 invalid), 23 bails, 0 differences.
+
+Not yet: autosave (`updateLatestVersion`), a locale publish with `localizeStatus`
+(`buildLocalizedPublishData`), global block references, link and block node validations (form
+state), function `filterOptions` (section 13, WP-O).
 
 For WP-H, per operation: lexical's `afterChange` hook is the identity for every input the library
 accepts (no node ids, so its `originalNodeIDMap` is empty); the field `afterChange` traversal has

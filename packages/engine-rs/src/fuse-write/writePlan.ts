@@ -105,10 +105,9 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
   const builder: Builder = { fieldAccess: [], payload, relations: new Set(), volatile: [] }
   try {
     const config = collection.config
+    // `localization.filterAvailableLocales` (a user function) runs on the eligible write paths only
+    // in the all-locales publish validation (`resolveValidationLocales`), where the prepare bails
     const localization = payload.config.localization
-    if (localization && localization.filterAvailableLocales) {
-      ineligible('localization:filterAvailableLocales')
-    }
     if (config.auth) {
       ineligible('auth')
     }
@@ -173,7 +172,11 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
       // slugs bail in the prepare
       globalBlocks: Object.keys(payload.blocks ?? {}),
       localization: localization
-        ? { defaultLocale: localization.defaultLocale, localeCodes: localization.localeCodes }
+        ? {
+            defaultLocale: localization.defaultLocale,
+            filterAvailableLocales: Boolean(localization.filterAvailableLocales),
+            localeCodes: localization.localeCodes,
+          }
         : null,
       relations,
       schema: schemaPlan(Model.schema),

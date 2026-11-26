@@ -20,6 +20,8 @@ export default buildConfigWithDefaults({
     localization: {
       defaultLocale: 'en',
       fallback: true,
+      // runs on no write path the fused writes take (no publish of all locales here)
+      filterAvailableLocales: ({ locales }) => locales,
       locales: ['en', 'de', 'fr'],
     },
     collections: [

@@ -112,6 +112,10 @@ fn validate_all_locales(run: &Run<'_>, result: Ref, source: Option<(Ref, Ref)>) 
   if plan.fields.iter().any(Field::has_unique) {
     return Err(Bail::new("drafts:localizedPublish:unique"));
   }
+  if localization.filter_available_locales {
+    // `resolveValidationLocales` calls it (a user function)
+    return Err(Bail::new("drafts:localizedPublish:filterAvailableLocales"));
+  }
   let (data, source) = {
     let heap = run.heap.borrow();
     let source = source.map(|(doc_with_locales, original_doc)| (heap.export(&V::Ref(doc_with_locales)), heap.export(&V::Ref(original_doc))));

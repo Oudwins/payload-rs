@@ -308,6 +308,8 @@ pub struct Versions {
 pub struct Localization {
   pub default_locale: String,
   pub locale_codes: Vec<String>,
+  /// `localization.filterAvailableLocales` is set (a user function).
+  pub filter_available_locales: bool,
 }
 
 #[derive(Debug)]
@@ -382,6 +384,7 @@ pub fn decode(text: &str) -> Result<WritePlan, String> {
     None | Some(Json::Null) => None,
     Some(l) => Some(Localization {
       default_locale: l.get("defaultLocale").and_then(Json::as_str).ok_or_else(|| bad("localization"))?.to_string(),
+      filter_available_locales: l.get("filterAvailableLocales").and_then(Json::as_bool).unwrap_or(false),
       locale_codes: match l.get("localeCodes") {
         Some(Json::Array(codes)) => codes.iter().map(|c| c.as_str().map(str::to_string).ok_or_else(|| bad("localization"))).collect::<Result<_, _>>()?,
         _ => return Err(bad("localization")),
