@@ -1022,7 +1022,9 @@ const laneCount = async ({
   req: Any
 }) => {
   const useEstimatedCount = hasNearConstraint || !query || Object.keys(query).length === 0
-  const options: Any = { session: await getSession(adapter, req) }
+  await getSession(adapter, req)
+  // in a transaction the session I/O carries the session (`sessionCount`)
+  const options: Any = { session: undefined }
   if (adapter.collation) {
     options.collation = localeCollation(adapter, locale)
   }
@@ -1043,11 +1045,20 @@ const laneCount = async ({
     count = countSpec(countCast)
   }
   const args = { collection: Model.collection.collectionName, count }
+  if (lane.session) {
+    const [totalDocs] = await inSession(lane, [sessionCount(lane, Model, count, countCast)])
+    if (isTracing()) {
+      traceCount(args.collection, countCast)
+    }
+    return { totalDocs }
+  }
+  if (lane.txn !== undefined && count === 'estimated') {
+    // the `count` command is not allowed in a transaction: the mongoose lane reproduces upstream
+    throw new Fallback('estimated count in a transaction')
+  }
   if (isTracing()) {
     traceCount(args.collection, countCast)
   }
-  // inside a transaction `castQuery` hands the call to the mongoose lane (its options carry the
-  // session)
   const totalDocs = outcome(await lane.binding.count(lane.clientID, serializeArgs(lane, args)))
   return { totalDocs }
 }
@@ -1241,11 +1252,10 @@ const findGlobal = async function findGlobal(this: Any, lane: DriverLane, args: 
     locale,
     where: combineQueries({ globalType: { equals: globalSlug } }, where),
   })
-  const options: Any = {
-    lean: true,
-    select: buildProjectionFromSelect({ adapter: this, fields, select }),
-    session: await getSession(this, req),
-  }
+  const projection = buildProjectionFromSelect({ adapter: this, fields, select })
+  await getSession(this, req)
+  // in a transaction the session I/O carries the session (`laneFindOne`)
+  const options: Any = { lean: true, select: projection, session: undefined }
   const cast = castQuery(Model.findOne(query, {}, options), findOptionKeys)
   return laneFindOne(lane, Model, cast, plan, this)
 }
