@@ -554,6 +554,8 @@ const shadowCreate = async (checked: Checked, args: Any, exact: Exact) => {
 type ByIDName = 'deleteByID' | 'updateByID'
 
 const fuseByID = (name: ByIDName, args: Any, exact: Exact) => {
+  // read before `isPlainObject` narrows `args` to unknown values
+  const collection = args?.collection
   if (!isPlainObject(args)) {
     return guard('args')
   }
@@ -567,7 +569,7 @@ const fuseByID = (name: ByIDName, args: Any, exact: Exact) => {
     return undefined
   }
   return mode === 'shadow'
-    ? serializedPerDocument(`${args.collection.config.slug}:${String(args.id)}`, () =>
+    ? serializedPerDocument(`${collection.config.slug}:${String(args.id)}`, () =>
         shadowByID(checked, name, args, exact),
       )
     : runByID(checked, name, args, exact)
