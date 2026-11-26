@@ -587,6 +587,14 @@ pub fn call(func: Local, this: Local, args: &[Local]) -> JsResult<Local> {
   raw_call(func, this, args)
 }
 
+/// `func.call(this, ...args)` without the call guard: for the engine's own JS helpers (the hosts'
+/// named helpers), which are never compiled user functions, so the guard would only add its
+/// argument array and trampoline call to every crossing.
+#[track_caller]
+pub fn call_unguarded(func: Local, this: Local, args: &[Local]) -> JsResult<Local> {
+  raw_call(func, this, args)
+}
+
 #[track_caller]
 fn raw_call(func: Local, this: Local, args: &[Local]) -> JsResult<Local> {
   let mut out = ptr::null_mut();

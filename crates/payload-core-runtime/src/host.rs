@@ -105,7 +105,7 @@ pub fn host() -> JsResult<Rc<Host>> {
 }
 
 pub fn call_host(f: &Persist, args: &[Local]) -> JsResult<Local> {
-  js::call(f.get(), js::undefined(), args)
+  js::call_unguarded(f.get(), js::undefined(), args)
 }
 
 /// `o[k]` with JS semantics for any `o` (TypeError on null/undefined, primitive wrappers).
@@ -164,7 +164,7 @@ pub fn has(o: Local, k: Local) -> JsResult<bool> {
       f
     }
   };
-  Ok(js::truthy(js::call(helper, js::undefined(), &[k, o])?))
+  Ok(js::truthy(js::call_unguarded(helper, js::undefined(), &[k, o])?))
 }
 
 /// The current value of the global binding `name` (`Object`, `Array`, `Promise`, ...), read now:

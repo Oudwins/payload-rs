@@ -198,7 +198,7 @@ pub fn spawn_tail(future: impl Future<Output = JsResult<Tail>> + 'static) -> JsR
         let Some(helper) = helper else {
           return Err(js::engine_error("core runtime not initialized"));
         };
-        return js::call(helper, js::undefined(), &[promise, value.get()]);
+        return js::call_unguarded(helper, js::undefined(), &[promise, value.get()]);
       }
       let (deferred, promise) = js::create_promise()?;
       match result {
@@ -459,7 +459,7 @@ pub fn await_call_returning(helper: Local, args: &[Local]) -> (AwaitJs, Local) {
   let mut all = [js::undefined(); MAX_ARGS];
   all[0] = js::number(f64::from(token));
   all[1..=args.len()].copy_from_slice(args);
-  match js::call(helper, js::undefined(), &all[..=args.len()]) {
+  match js::call_unguarded(helper, js::undefined(), &all[..=args.len()]) {
     Ok(returned) => (AwaitJs { state: AwaitState::Waiting(slot) }, returned),
     Err(e) => {
       release(token);
@@ -523,7 +523,7 @@ impl Future for AwaitJs {
           release(token);
           return Poll::Ready(Err(js::engine_error("core runtime not initialized")));
         };
-        if let Err(e) = js::call(helper, js::undefined(), &[value, js::number(token as f64)]) {
+        if let Err(e) = js::call_unguarded(helper, js::undefined(), &[value, js::number(token as f64)]) {
           release(token);
           return Poll::Ready(Err(e));
         }

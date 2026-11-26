@@ -115,7 +115,7 @@ pub fn host() -> JsResult<Rc<QueryHost>> {
 
 /// Calls a helper (`this` undefined).
 pub fn call(f: &Persist, args: &[Local]) -> JsResult<Local> {
-  js::call(f.get(), js::undefined(), args)
+  js::call_unguarded(f.get(), js::undefined(), args)
 }
 
 pub fn val(v: Local) -> JsResult<Val> {

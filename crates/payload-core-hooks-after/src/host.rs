@@ -78,5 +78,5 @@ pub fn host() -> JsResult<Rc<Host>> {
 }
 
 pub fn call(f: &Persist, args: &[Local]) -> JsResult<Local> {
-  js::call(f.get(), js::undefined(), args)
+  js::call_unguarded(f.get(), js::undefined(), args)
 }

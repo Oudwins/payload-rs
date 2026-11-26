@@ -95,7 +95,7 @@ pub fn call(name: &str, args: &[Local]) -> JsResult<Local> {
       f
     }
   };
-  js::call(f, js::undefined(), args)
+  js::call_unguarded(f, js::undefined(), args)
 }
 
 /// Calls the host helper `name` and keeps the result across awaits.

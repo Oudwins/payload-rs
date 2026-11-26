@@ -37,7 +37,7 @@ pub fn install(obj: Local) -> JsResult<()> {
 /// Calls the host helper `name` with `this === undefined`.
 pub fn call(name: &str, args: &[Local]) -> JsResult<Local> {
   if let Some(f) = HELPERS.with(|c| c.borrow().get(name).map(Persist::get)) {
-    return js::call(f, js::undefined(), args);
+    return js::call_unguarded(f, js::undefined(), args);
   }
   let f = HOST.with(|h| match h.borrow().as_ref() {
     Some(host) => js::get_named(host.get(), name),
@@ -48,7 +48,7 @@ pub fn call(name: &str, args: &[Local]) -> JsResult<Local> {
   }
   let persisted = Persist::new(f)?;
   HELPERS.with(|c| c.borrow_mut().insert(name.to_string(), persisted));
-  js::call(f, js::undefined(), args)
+  js::call_unguarded(f, js::undefined(), args)
 }
 
 /// Calls the host helper `name` and keeps the result across awaits.

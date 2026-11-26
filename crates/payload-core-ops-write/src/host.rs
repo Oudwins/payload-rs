@@ -11,6 +11,7 @@
 //! upstream utilities call back, e.g. `write` of `runCloudFileUpdate`).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
 use std::rc::Rc;
@@ -25,6 +26,8 @@ pub use payload_core_ops::host::{
 
 pub struct Host {
   pub obj: Persist,
+  /// Helpers by name, looked up on `obj` once (like the read operations' host).
+  helpers: RefCell<HashMap<String, Rc<Persist>>>,
   /// Field traversals to call instead of the Rust ports (`PAYLOAD_OPS_WRITE_TRAVERSALS=ts`):
   /// isolates the operations from the traversals in differential runs.
   pub traversals: Option<Persist>,
@@ -38,7 +41,7 @@ thread_local! {
 pub fn install(obj: Local) -> JsResult<()> {
   let traversals = js::get_named(obj, "traversals")?;
   let traversals = if js::type_of(traversals) == Type::Object { Some(Persist::new(traversals)?) } else { None };
-  let host = Host { obj: Persist::new(obj)?, traversals };
+  let host = Host { obj: Persist::new(obj)?, helpers: RefCell::default(), traversals };
   HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
   Ok(())
 }
@@ -61,11 +64,19 @@ pub fn calls() -> u64 {
 /// Calls the host helper `name` with `this === undefined`.
 pub fn call(name: &str, args: &[Local]) -> JsResult<Local> {
   let h = host()?;
-  let f = js::get_named(h.obj.get(), name)?;
-  if js::type_of(f) != Type::Function {
-    return Err(js::engine_error(&format!("core write ops host helper `{name}` is missing")));
-  }
-  js::call(f, js::undefined(), args)
+  let cached = h.helpers.borrow().get(name).cloned();
+  let f = match cached {
+    Some(f) => f.get(),
+    None => {
+      let f = js::get_named(h.obj.get(), name)?;
+      if js::type_of(f) != Type::Function {
+        return Err(js::engine_error(&format!("core write ops host helper `{name}` is missing")));
+      }
+      h.helpers.borrow_mut().insert(name.to_string(), Rc::new(Persist::new(f)?));
+      f
+    }
+  };
+  js::call_unguarded(f, js::undefined(), args)
 }
 
 /// Calls the host helper `name` and keeps the result across awaits.
