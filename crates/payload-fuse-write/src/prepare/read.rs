@@ -72,11 +72,9 @@ fn flattened<'f>(fields: &'f [Field], out: &mut Vec<&'f Field>) {
   for field in fields {
     match field.kind {
       Kind::Row | Kind::Collapsible => flattened(&field.fields, out),
-      Kind::Tabs => {
-        for tab in &field.tabs {
-          flattened(&tab.fields, out);
-        }
-      }
+      // a named tab stays one field (`{ ...tab, type: 'tab', flattenedFields }`)
+      Kind::Tabs => flattened(&field.tabs, out),
+      Kind::Tab if !field.affects_data() => flattened(&field.fields, out),
       _ if field.affects_data() => out.push(field),
       _ => {}
     }
@@ -98,7 +96,7 @@ fn strip_fields(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref, 
     if !value.truthy() || !Heap::is_object_like(&value) {
       continue;
     }
-    if !matches!(field.kind, Kind::Array | Kind::Group | Kind::Blocks) {
+    if !matches!(field.kind, Kind::Array | Kind::Group | Kind::Tab | Kind::Blocks) {
       continue;
     }
     let child_localized = parent_localized || field.localized;
@@ -158,7 +156,7 @@ fn strip_value(plan: &WritePlan, heap: &mut Heap, field: &Field, holder: Ref, ke
         *arr = kept;
       }
     }
-    Kind::Group => {
+    Kind::Group | Kind::Tab => {
       let Some(r) = value.as_ref().filter(|r| heap.obj(*r).is_some()) else {
         return Err(Bail::new("read:group"));
       };
@@ -223,7 +221,7 @@ fn sanitize(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref, pare
           sanitize(plan, heap, &field.fields, r, child_localized)?;
         }
       }
-      Kind::Group => {
+      Kind::Group | Kind::Tab if field.affects_data() => {
         let value = heap.get(&target, name);
         for r in super::transform::group_refs(heap, &value, localized)? {
           sanitize(plan, heap, &field.fields, r, child_localized)?;
@@ -237,12 +235,8 @@ fn sanitize(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref, pare
           }
         }
       }
-      Kind::Row | Kind::Collapsible => sanitize(plan, heap, &field.fields, data, parent_localized)?,
-      Kind::Tabs => {
-        for tab in &field.tabs {
-          sanitize(plan, heap, &tab.fields, data, parent_localized)?;
-        }
-      }
+      Kind::Row | Kind::Collapsible | Kind::Tab => sanitize(plan, heap, &field.fields, data, parent_localized)?,
+      Kind::Tabs => sanitize(plan, heap, &field.tabs, data, parent_localized)?,
       _ => {}
     }
   }

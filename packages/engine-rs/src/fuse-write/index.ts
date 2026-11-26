@@ -182,7 +182,7 @@ const checkCreate = (args: Any) => {
   ) {
     return guard('args:options')
   }
-  if (isLocalizedPublish(args)) {
+  if (isTSPrepare && isLocalizedPublish(args)) {
     return guard('drafts:localizedPublish')
   }
   if (args.select !== undefined && args.select !== null) {
@@ -246,11 +246,15 @@ const resultRead = (args: Any, id: string) =>
     showHiddenFields: args.showHiddenFields,
   })
 
+/** The temporary TS prepare (`PAYLOAD_RS_FUSE_WRITES_PREPARE=ts`, creates only, never a default). */
+const isTSPrepare = process.env.PAYLOAD_RS_FUSE_WRITES_PREPARE === 'ts'
+
 /**
  * Whether a create / update of a collection with drafts on a localized config publishes all
  * locales (`config.localization && hasDraftsEnabled && publishAllLocales`, `publishAllLocales`
  * without the argument: `!draft && !(localizeStatus && locale !== 'all')`): upstream then runs
- * `validateLocalWithLocaleKeyedData`, which the prepare does not model (it bails there too).
+ * `validateLocalWithLocaleKeyedData`, which the Rust prepare models (section 12.4) and the TS
+ * prepare does not (guarded).
  */
 const isLocalizedPublish = (args: Any) => {
   const drafts = args.collection.config.versions?.drafts
@@ -567,9 +571,6 @@ const checkByID = (name: ByIDName, args: Any) => {
     }
     if (collection.config.trash && 'deletedAt' in data) {
       return guard('trash')
-    }
-    if (isLocalizedPublish(args)) {
-      return guard('drafts:localizedPublish')
     }
   }
   const payload = req.payload

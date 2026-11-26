@@ -650,7 +650,69 @@ const draftCases = (f: Fixtures): Case[] => [
   },
 ]
 
+const tabbedFull = (f: Fixtures) => ({
+  title: 't',
+  details: { summary: 's', score: 3, author: f.author, links: [{ url: 'u1' }, { url: 'u2' }] },
+  flat: 'flat',
+  seo: { keywords: ['k1'], meta: { note: 'n' }, inner: { deep: 'x' } },
+})
+
+const tabbedCreates = (f: Fixtures): Case[] =>
+  [
+    { name: 'full', data: tabbedFull(f) },
+    { name: 'title only (summary missing)', data: { title: 't' } },
+    { name: 'details only', data: { title: 't', details: { summary: 's' } } },
+    { name: 'details null', data: { title: 't', details: null } },
+    { name: 'details string', data: { title: 't', details: 'nope' } },
+    { name: 'details array', data: { title: 't', details: [] } },
+    { name: 'score too large', data: { title: 't', details: { summary: 's', score: 11 } } },
+    { name: 'link missing url', data: { title: 't', details: { summary: 's', links: [{}] } } },
+    {
+      name: 'too many keywords',
+      data: { title: 't', details: { summary: 's' }, seo: { keywords: ['a', 'b', 'c'] } },
+    },
+    {
+      name: 'inner deep empty',
+      data: { title: 't', details: { summary: 's' }, seo: { inner: { deep: '' } } },
+    },
+    { name: 'author string', data: { title: 't', details: { summary: 's', author: '' } } },
+    { name: 'unknown key in tab', data: { title: 't', details: { summary: 's', other: 1 } } },
+    { name: 'user', data: { title: 't', details: { summary: 's' } }, user: true },
+  ].map((c) => ({ ...c, collection: 'tabbed' }))
+
+const tabbedUpdates = (f: Fixtures): Case[] =>
+  [
+    { name: 'title', data: { title: 'u' }, seed: { data: tabbedFull(f) } },
+    { name: 'details summary', data: { details: { summary: 'u' } }, seed: { data: tabbedFull(f) } },
+    { name: 'clear summary', data: { details: { summary: '' } }, seed: { data: tabbedFull(f) } },
+    { name: 'seo meta', data: { seo: { meta: { note: 'm' } } }, seed: { data: tabbedFull(f) } },
+    { name: 'details null', data: { details: null }, seed: { data: tabbedFull(f) } },
+    {
+      name: 'links by id',
+      data: { details: { links: [{ url: 'only' }] } },
+      seed: { data: tabbedFull(f) },
+    },
+    { name: 'empty data', data: {}, seed: { data: tabbedFull(f) } },
+    {
+      name: 'raw: tab missing and a tab scalar',
+      data: { title: 'r' },
+      seed: { raw: { title: 'raw', details: 'scalar', seo: { junk: 1, inner: { deep: 'q' } } } },
+    },
+  ].map((c) => ({ ...c, collection: 'tabbed' }))
+
 test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
+  test('tabbed creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'tabbed create', tabbedCreates(f), f)
+    finish('tabbed create')
+  })
+
+  test('tabbed updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'tabbed update', tabbedUpdates(f), f)
+    finish('tabbed update')
+  })
+
   test('drafts creates and updates', async ({ payload }) => {
     const f = await fixtures(payload)
     await runAll(payload, 'drafts', draftCases(f), f)

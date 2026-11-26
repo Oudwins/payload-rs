@@ -24,6 +24,8 @@ pub enum Kind {
   RichText,
   Row,
   Select,
+  /// One tab of a `tabs` field (`{ ...tab, type: 'tab' }`), named or not.
+  Tab,
   Tabs,
   Text,
   Textarea,
@@ -44,6 +46,7 @@ impl Kind {
       "richText" => Kind::RichText,
       "row" => Kind::Row,
       "select" => Kind::Select,
+      "tab" => Kind::Tab,
       "tabs" => Kind::Tabs,
       "text" => Kind::Text,
       "textarea" => Kind::Textarea,
@@ -66,6 +69,7 @@ impl Kind {
       Kind::RichText => "richText",
       Kind::Row => "row",
       Kind::Select => "select",
+      Kind::Tab => "tab",
       Kind::Tabs => "tabs",
       Kind::Text => "text",
       Kind::Textarea => "textarea",
@@ -186,14 +190,25 @@ pub struct Field {
   pub validate: Validate,
   pub label: Label,
   pub fields: Vec<Field>,
-  pub tabs: Vec<Tab>,
+  /// A `tabs` field's tabs, each a `Kind::Tab` field (a named tab has its `name`).
+  pub tabs: Vec<Field>,
   pub lexical: Option<Lexical>,
   /// `field.localized` (sanitization keeps it only with localization).
   pub localized: bool,
   pub blocks: Vec<Block>,
+  /// `field.unique` (a named field).
+  pub unique: bool,
 }
 
 impl Field {
+  /// Whether this field or one under it is `unique`.
+  pub fn has_unique(&self) -> bool {
+    self.unique
+      || self.fields.iter().any(Field::has_unique)
+      || self.tabs.iter().any(Field::has_unique)
+      || self.blocks.iter().any(|b| b.fields.iter().any(Field::has_unique))
+  }
+
   /// `field.blocks.find((block) => block.slug === blockType)`
   pub fn block(&self, block_type: &str) -> Option<&Block> {
     self.blocks.iter().find(|b| b.slug == block_type)
@@ -205,12 +220,6 @@ impl Field {
 pub struct Block {
   pub slug: String,
   /// `block.labels?.singular`
-  pub label: Label,
-  pub fields: Vec<Field>,
-}
-
-#[derive(Debug)]
-pub struct Tab {
   pub label: Label,
   pub fields: Vec<Field>,
 }
@@ -473,10 +482,13 @@ fn decode_field(json: &Json) -> Result<Field, String> {
     None => Vec::new(),
   };
   let tabs = match json.get("tabs") {
-    Some(Json::Array(tabs)) => tabs
-      .iter()
-      .map(|tab| Ok(Tab { fields: decode_fields(tab.get("f"))?, label: decode_label(tab.get("label")) }))
-      .collect::<Result<_, String>>()?,
+    Some(tabs @ Json::Array(_)) => {
+      let tabs = decode_fields(Some(tabs))?;
+      if tabs.iter().any(|tab| tab.kind != Kind::Tab) {
+        return Err(bad("field.tabs"));
+      }
+      tabs
+    }
     Some(_) => return Err(bad("field.tabs")),
     None => Vec::new(),
   };
@@ -558,6 +570,7 @@ fn decode_field(json: &Json) -> Result<Field, String> {
     relation_to,
     required: flag("req"),
     tabs,
+    unique: flag("u"),
     validate,
   })
 }

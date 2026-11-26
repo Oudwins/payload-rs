@@ -123,6 +123,55 @@ export default buildConfigWithDefaults({
           },
         ],
       },
+      {
+        // drafts without localized fields: every publish validates all locales
+        slug: 'bulletins',
+        fields: [
+          { name: 'title', type: 'text', required: true, maxLength: 20 },
+          {
+            name: 'items',
+            type: 'array',
+            fields: [{ name: 'item', type: 'text', required: true }],
+          },
+          { name: 'meta', type: 'group', fields: [{ name: 'count', type: 'number', max: 9 }] },
+          {
+            type: 'tabs',
+            tabs: [{ name: 'extra', fields: [{ name: 'note', type: 'text', defaultValue: 'n' }] }],
+          },
+          { name: 'body', type: 'richText', editor: lexicalEditor() },
+        ],
+        versions: { drafts: true },
+      },
+      {
+        // named tabs: localized, and not localized holding localized fields
+        slug: 'magazines',
+        fields: [
+          { name: 'title', type: 'text', localized: true, required: true },
+          {
+            type: 'tabs',
+            tabs: [
+              {
+                name: 'intro',
+                localized: true,
+                fields: [
+                  { name: 'lead', type: 'text', required: true },
+                  { name: 'words', type: 'number', defaultValue: 0 },
+                  { name: 'items', type: 'array', fields: [{ name: 'item', type: 'text' }] },
+                ],
+              },
+              {
+                name: 'facts',
+                fields: [
+                  { name: 'caption', type: 'text', localized: true },
+                  { name: 'pages', type: 'number', defaultValue: 1 },
+                  { name: 'editor', type: 'relationship', relationTo: 'authors' },
+                ],
+              },
+              { label: 'Plain', fields: [{ name: 'flat', type: 'text', localized: true }] },
+            ],
+          },
+        ],
+      },
     ],
   },
 })

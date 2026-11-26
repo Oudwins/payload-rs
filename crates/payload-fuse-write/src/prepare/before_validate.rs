@@ -13,7 +13,7 @@ use super::Bail;
 use super::IdUse;
 use super::exec::tick;
 use super::heap::{Heap, Node, Ref, V};
-use super::plan::{DefaultValue, Field, Kind, OwnHook, RelationTo, Tab};
+use super::plan::{DefaultValue, Field, Kind, OwnHook, RelationTo};
 use super::run::{Operation, S};
 
 pub type Task<'r, T> = Pin<Box<dyn Future<Output = T> + 'r>>;
@@ -50,27 +50,6 @@ fn traverse_fields<'r, 'e: 'r>(s: S<'r, 'e>, fields: &'r [Field], sibling_data: 
     let promises = fields
       .iter()
       .map(|field| s.exec.spawn(promise(s.clone(), field, sibling_data.clone(), sibling_doc.clone(), parent_path.clone())))
-      .collect();
-    s.exec.all(promises).wait().await;
-  })
-}
-
-/// `traverseFields` over `field.tabs.map((tab) => ({ ...tab, type: 'tab' }))`.
-fn traverse_tabs<'r, 'e: 'r>(s: S<'r, 'e>, tabs: &'r [Tab], sibling_data: V, sibling_doc: V, parent_path: String) -> Task<'r, ()> {
-  Box::pin(async move {
-    if has_dotted_keys(&s.run.heap.borrow(), &sibling_data) {
-      return s.run.fail(Bail::new("beforeValidate:dottedKeys"));
-    }
-    let promises = tabs
-      .iter()
-      .map(|tab| {
-        let s2 = s.clone();
-        let (sibling_data, sibling_doc, parent_path) = (sibling_data.clone(), sibling_doc.clone(), parent_path.clone());
-        s.exec.spawn(async move {
-          // an unnamed tab: `await traverseFields({ fields: tab.fields, siblingData, siblingDoc })`
-          s2.exec.spawn(traverse_fields(s2.clone(), &tab.fields, sibling_data, sibling_doc, parent_path)).wait().await;
-        })
-      })
       .collect();
     s.exec.all(promises).wait().await;
   })
@@ -220,7 +199,19 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, sibling_data: V, sibling_
         s.exec.spawn(traverse_fields(s.clone(), &field.fields, group_data, group_doc, path)).wait().await;
       }
       Kind::Tabs => {
-        s.exec.spawn(traverse_tabs(s.clone(), &field.tabs, sibling_data.clone(), sibling_doc.clone(), parent_path.clone())).wait().await;
+        // `traverseFields` over `field.tabs.map((tab) => ({ ...tab, type: 'tab' }))`
+        s.exec.spawn(traverse_fields(s.clone(), &field.tabs, sibling_data.clone(), sibling_doc.clone(), parent_path.clone())).wait().await;
+      }
+      Kind::Tab if field.affects_data() => {
+        // a named tab: like a named group
+        let name = field.name.as_deref().unwrap_or_default();
+        let Some((tab_data, tab_doc)) = run.check(group_siblings(&s, sd, &sibling_doc, name)) else {
+          return;
+        };
+        s.exec.spawn(traverse_fields(s.clone(), &field.fields, tab_data, tab_doc, path)).wait().await;
+      }
+      Kind::Tab => {
+        s.exec.spawn(traverse_fields(s.clone(), &field.fields, sibling_data.clone(), sibling_doc.clone(), parent_path.clone())).wait().await;
       }
       Kind::RichText => {
         let name = field.name.as_deref().unwrap_or_default();

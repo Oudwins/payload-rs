@@ -12,7 +12,7 @@ use super::before_validate::{INTERNAL_KEY, SUBMITTED_AUTHORSHIP_KEY, before_vali
 use super::exec::Exec;
 use super::heap::{Heap, Ref, V};
 use super::mongoose::{apply_set, build_insert, cast_set_update};
-use super::plan::WritePlan;
+use super::plan::{Field, Kind, WritePlan};
 use super::read::read_document;
 use super::run::{Operation, Run, S};
 use super::transform::{iso, transform_write};
@@ -37,15 +37,6 @@ fn new_run<'e>(
   }
   if plan.localization.is_some() != ctx.locale.is_some() {
     return Err(Bail::new("locale:missing"));
-  }
-  if let Some(drafts) = &plan.drafts {
-    // `config.localization && hasDraftsEnabled && publishAllLocales`: the operation then runs
-    // `validateLocalWithLocaleKeyedData` (a second validation lifecycle, not modelled).
-    // `publishAllLocales = !draft && !(localizeStatus && locale !== 'all')` (no
-    // `publishAllLocales` argument: the dispatch guards it; `locale: 'all'` bailed above)
-    if plan.localization.is_some() && !ctx.draft && !drafts.localize_status {
-      return Err(Bail::new("drafts:localizedPublish"));
-    }
   }
   Ok(Run {
     locale: ctx.locale.map(str::to_string),
@@ -72,7 +63,226 @@ fn new_run<'e>(
     status_field_access: Cell::new(false),
     saving_draft,
     autosave: ctx.autosave,
+    validation_pass: false,
   })
+}
+
+/// `config.localization && hasDraftsEnabled && publishAllLocales` (`publishAllLocales = !draft &&
+/// !(localizeStatus && locale !== 'all')`; no `publishAllLocales` argument: the dispatch guards
+/// it; `locale: 'all'` bailed in `new_run`): the operation validates every locale with
+/// `validateLocalWithLocaleKeyedData` after its beforeChange (create.ts, utilities/update.ts; with
+/// `localizeStatus` only for an authorized all-locales status, which needs `locale: 'all'`).
+fn publishes_all_locales(plan: &WritePlan, draft: bool) -> bool {
+  plan.localization.is_some() && plan.drafts.as_ref().is_some_and(|d| !d.localize_status) && !draft
+}
+
+/// The readings a validation pass would take (none: it skips the field hooks).
+struct NoReadings;
+
+impl super::Entropy for NoReadings {
+  fn now(&mut self) -> Result<f64, Bail> {
+    Err(Bail::new("drafts:localizedPublish:clock"))
+  }
+
+  fn object_id(&mut self, _used_for: IdUse) -> Result<[u8; 12], Bail> {
+    Err(Bail::new("drafts:localizedPublish:objectId"))
+  }
+}
+
+/// `validateLocalWithLocaleKeyedData({ data: dataWithLocales, locale: 'all' })`
+/// (collections/operations/local/validate.ts, utilities/runLocaleScopedValidation.ts,
+/// operations/validate.ts, utilities/runValidationLifecycle.ts with `skipAccessControl` and
+/// `skipMutationHooks`): per locale code (`resolveValidationLocales`), on independent copies, the
+/// data flattened to that locale (`flattenDataByLocale`) goes through beforeChange with
+/// `skipHooks` and `isValidationOperation` on a request of that locale, then
+/// `validateUniqueConstraints`. A pass without errors has no observable effect (the request,
+/// its context and the data are clones; no hook runs, no reading is taken); any error bails, the
+/// exact lane throws the aggregated `ValidationError`. Unique fields bail (their check reads the
+/// database).
+///
+/// create: no id and no source data (`docWithLocales` and `originalDoc` are one `{}`); update:
+/// `sourceData` is the operation's `docWithLocales` and `publicationHookDoc` (its `originalDoc`
+/// here) as beforeChange left them, `originalDoc` of a pass being the latter for the request's
+/// locale, else `docWithLocales` flattened to the pass's locale.
+fn validate_all_locales(run: &Run<'_>, result: Ref, source: Option<(Ref, Ref)>) -> Result<(), Bail> {
+  let plan = run.plan;
+  let Some(localization) = &plan.localization else {
+    return Ok(());
+  };
+  if plan.fields.iter().any(Field::has_unique) {
+    return Err(Bail::new("drafts:localizedPublish:unique"));
+  }
+  let (data, source) = {
+    let heap = run.heap.borrow();
+    let source = source.map(|(doc_with_locales, original_doc)| (heap.export(&V::Ref(doc_with_locales)), heap.export(&V::Ref(original_doc))));
+    (heap.export(&V::Ref(result)), source)
+  };
+  let mut seen: Vec<&str> = Vec::new();
+  for locale in &localization.locale_codes {
+    if seen.contains(&locale.as_str()) {
+      continue;
+    }
+    seen.push(locale);
+    let mut readings = NoReadings;
+    let pass = Run {
+      locale: Some(locale.clone()),
+      merge_locale_actions: RefCell::new(Vec::new()),
+      bail: RefCell::new(None),
+      context_order: RefCell::new(Vec::new()),
+      entropy: RefCell::new(&mut readings),
+      errors: RefCell::new(Vec::new()),
+      fallback_language: run.fallback_language,
+      heap: RefCell::new(Heap::default()),
+      id: run.id.clone(),
+      internal: Cell::new(None),
+      is_new_doc: Cell::new(None),
+      language: run.language,
+      operation: run.operation,
+      override_access: run.override_access,
+      field_access: run.field_access,
+      plan,
+      restoring_version: false,
+      root_data: Cell::new(None),
+      submitted: Cell::new(None),
+      t: run.t,
+      user: run.user.clone(),
+      status_field_access: Cell::new(false),
+      saving_draft: false,
+      autosave: false,
+      validation_pass: true,
+    };
+    let data = import_obj(&pass, &data, "data")?;
+    flatten_by_locale(plan, &mut pass.heap.borrow_mut(), &plan.fields, data, locale, false)?;
+    let (doc, doc_with_locales) = match &source {
+      None => {
+        let doc = pass.heap.borrow_mut().new_obj();
+        (doc, doc)
+      }
+      Some((doc_with_locales, original_doc)) => {
+        let original = if run.locale.as_deref() == Some(locale.as_str()) {
+          import_obj(&pass, original_doc, "originalDoc")?
+        } else {
+          let copy = import_obj(&pass, doc_with_locales, "docWithLocales")?;
+          flatten_by_locale(plan, &mut pass.heap.borrow_mut(), &plan.fields, copy, locale, false)?;
+          copy
+        };
+        (original, import_obj(&pass, doc_with_locales, "docWithLocales")?)
+      }
+    };
+    // `beforeChange({ data: id === undefined ? data : { ...data, id } })`, then its deep copy
+    let data = match &run.id {
+      Some(id) => {
+        let mut heap = pass.heap.borrow_mut();
+        let spread = heap.spread(data);
+        let id = heap.import(id)?;
+        heap.set(spread, "id", id)?;
+        spread
+      }
+      None => data,
+    };
+    pass.root_data.set(Some(data));
+    drive(&pass, |s| before_change(s, data, V::Ref(doc), V::Ref(doc_with_locales)))?;
+    if !pass.errors.borrow().is_empty() {
+      return Err(Bail::new("drafts:localizedPublish:invalid"));
+    }
+  }
+  Ok(())
+}
+
+/// A value `flattenFields` descends into (`value && typeof value === 'object' &&
+/// !Array.isArray(value)`): plain objects; typed values (dates, ObjectIds) bail.
+fn flatten_object(heap: &Heap, value: &V) -> Result<Option<Ref>, Bail> {
+  match value {
+    V::Date(_) | V::Oid(_) => Err(Bail::new("flatten:typed")),
+    V::Ref(r) if heap.obj(*r).is_some() => Ok(Some(*r)),
+    _ => Ok(None),
+  }
+}
+
+/// `getLocaleValue({ locale, value })`.
+fn locale_value(heap: &Heap, value: &V, locale: &str) -> Result<V, Bail> {
+  Ok(match flatten_object(heap, value)? {
+    Some(r) => heap.get(&V::Ref(r), locale),
+    None => value.clone(),
+  })
+}
+
+/// The rows `flattenFields` descends into (`row && typeof row === 'object'`).
+fn flatten_rows(heap: &Heap, value: &V) -> Result<Vec<Ref>, Bail> {
+  let Some(rows) = value.as_ref().and_then(|r| heap.arr(r)) else {
+    return Ok(Vec::new());
+  };
+  let mut out = Vec::with_capacity(rows.len());
+  for row in rows {
+    match flatten_object(heap, row)? {
+      Some(r) => out.push(r),
+      None if Heap::is_object_like(row) => return Err(Bail::new("flatten:row")),
+      None => {}
+    }
+  }
+  Ok(out)
+}
+
+/// `flattenDataByLocale`'s `flattenFields` (utilities/flattenDataByLocale.ts) on `data` in place
+/// (the caller passes a copy).
+fn flatten_by_locale(plan: &WritePlan, heap: &mut Heap, fields: &[Field], data: Ref, locale: &str, parent_localized: bool) -> Result<(), Bail> {
+  let target = V::Ref(data);
+  for field in fields {
+    if field.affects_data() && field.kind != Kind::Tab {
+      let name = field.name.as_deref().unwrap_or_default();
+      if plan.localized_here(field, parent_localized) {
+        let value = locale_value(heap, &heap.get(&target, name), locale)?;
+        heap.set(data, name, value)?;
+      }
+      // `data[field.name] = transformStoredFieldValue(...)`: the identity for the modelled types
+      // (the assignment still makes the key an own property)
+      let value = heap.get(&target, name);
+      heap.set(data, name, value.clone())?;
+      let nested = parent_localized || field.localized;
+      match field.kind {
+        Kind::Array => {
+          for r in flatten_rows(heap, &value)? {
+            flatten_by_locale(plan, heap, &field.fields, r, locale, nested)?;
+          }
+        }
+        Kind::Blocks => {
+          for r in flatten_rows(heap, &value)? {
+            if let Some(block) = super::transform::block_of_row_loose(heap, field, r)? {
+              flatten_by_locale(plan, heap, &block.fields, r, locale, nested)?;
+            }
+          }
+        }
+        Kind::Group => {
+          if let Some(r) = flatten_object(heap, &value)? {
+            flatten_by_locale(plan, heap, &field.fields, r, locale, nested)?;
+          }
+        }
+        _ => {}
+      }
+      continue;
+    }
+    match field.kind {
+      Kind::Collapsible | Kind::Row => flatten_by_locale(plan, heap, &field.fields, data, locale, parent_localized)?,
+      Kind::Tabs => {
+        for tab in &field.tabs {
+          match tab.name.as_deref() {
+            Some(name) => {
+              if plan.localized_here(tab, parent_localized) {
+                let value = locale_value(heap, &heap.get(&target, name), locale)?;
+                heap.set(data, name, value)?;
+              }
+              if let Some(r) = flatten_object(heap, &heap.get(&target, name))? {
+                flatten_by_locale(plan, heap, &tab.fields, r, locale, parent_localized || tab.localized)?;
+              }
+            }
+            None => flatten_by_locale(plan, heap, &tab.fields, data, locale, parent_localized)?,
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+  Ok(())
 }
 
 /// `isSavingDraft`'s data write (create.ts / utilities/update.ts: `data._status = 'draft'`, before
@@ -152,6 +362,7 @@ pub fn prepare_create(plan: &WritePlan, data: &JsVal, ctx: &mut WriteCtx<'_>) ->
   // `isSavingDraft = draft && hasDraftsEnabled && !publishAllLocales` (`draft` makes
   // `publishAllLocales` false)
   let saving_draft = ctx.draft && plan.drafts.is_some();
+  let publish_all_locales = publishes_all_locales(plan, ctx.draft);
   let run = new_run(plan, ctx, Operation::Create, None, saving_draft)?;
   let data = import_obj(&run, data, "data")?;
   if run.heap.borrow().has(&V::Ref(data), "id") {
@@ -184,6 +395,9 @@ pub fn prepare_create(plan: &WritePlan, data: &JsVal, ctx: &mut WriteCtx<'_>) ->
     return Ok(Prepared { caller_data: Some(caller_data), context_writes, outcome: Err(invalid) });
   }
   check_localized_status(&run, copy)?;
+  if publish_all_locales {
+    validate_all_locales(&run, copy, None)?;
+  }
   let write = create_statements(&run, copy)?;
   Ok(Prepared { caller_data: Some(caller_data), context_writes, outcome: Ok(write) })
 }
@@ -271,6 +485,7 @@ pub fn prepare_update(plan: &WritePlan, id: &JsVal, data: &JsVal, input: &Update
   // `isSavingDraft = draft && hasDraftsEnabled && data._status !== 'published' &&
   // !publishAllLocales` (`draft` makes `publishAllLocales` false)
   let saving_draft = ctx.draft && plan.drafts.is_some() && data.get("_status").as_str() != Some("published");
+  let publish_all_locales = publishes_all_locales(plan, ctx.draft);
   let run = new_run(plan, ctx, Operation::Update, Some(id.clone()), saving_draft)?;
   // updateByID: `deepCopyObjectSimple(data)`; the caller's object is not touched
   let data = import_obj(&run, data, "data")?;
@@ -293,6 +508,9 @@ pub fn prepare_update(plan: &WritePlan, id: &JsVal, data: &JsVal, input: &Update
     return Ok(Prepared { caller_data: None, context_writes, outcome: Err(invalid) });
   }
   check_localized_status(&run, copy)?;
+  if publish_all_locales {
+    validate_all_locales(&run, copy, Some((doc_with_locales, original_doc)))?;
+  }
   let write = if run.saving_draft { draft_statements(&run, copy)? } else { update_statements(&run, copy, &input.stored)? };
   Ok(Prepared { caller_data: None, context_writes, outcome: Ok(write) })
 }

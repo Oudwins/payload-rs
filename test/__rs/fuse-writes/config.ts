@@ -225,6 +225,50 @@ export default buildConfigWithDefaults({
           },
         ],
       },
+      {
+        // named tabs (the perf suite's complex shape has one), next to unnamed ones
+        slug: 'tabbed',
+        fields: [
+          { name: 'title', type: 'text', required: true },
+          {
+            type: 'tabs',
+            label: 'Sections',
+            tabs: [
+              {
+                name: 'details',
+                fields: [
+                  { name: 'summary', type: 'text', required: true },
+                  { name: 'score', type: 'number', defaultValue: 1, max: 10 },
+                  { name: 'author', type: 'relationship', relationTo: 'authors' },
+                  {
+                    name: 'links',
+                    type: 'array',
+                    fields: [{ name: 'url', type: 'text', required: true }],
+                  },
+                ],
+              },
+              { label: 'Plain', fields: [{ name: 'flat', type: 'text', defaultValue: 'f' }] },
+              {
+                name: 'seo',
+                label: { de: 'Suche', en: 'Search' },
+                fields: [
+                  { name: 'keywords', type: 'text', hasMany: true, maxRows: 2 },
+                  { name: 'meta', type: 'group', fields: [{ name: 'note', type: 'text' }] },
+                  {
+                    type: 'tabs',
+                    tabs: [
+                      {
+                        name: 'inner',
+                        fields: [{ name: 'deep', type: 'text', required: true, defaultValue: 'd' }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
     ],
   },
 })

@@ -10,7 +10,7 @@ use payload_engine::js::{JsVal, Obj as JsObj};
 use super::before_validate::{Task, block_to_match, existing_row_doc};
 use super::exec::{tick, ticks};
 use super::heap::{Heap, Ref, V};
-use super::plan::{Authorship, Field, Kind, Label, Lexical, NodeValidation, OwnHook, RelationTo, Tab, Validate};
+use super::plan::{Authorship, Field, Kind, Label, Lexical, NodeValidation, OwnHook, RelationTo, Validate};
 use super::run::{Operation, S};
 use super::{Bail, FieldError, IdUse};
 
@@ -52,7 +52,7 @@ pub fn before_change<'r, 'e: 'r>(s: S<'r, 'e>, data: Ref, doc: V, doc_with_local
       skip_validation: run.saving_draft && run.plan.drafts.as_ref().is_some_and(|d| !d.validate),
     };
     s.exec.spawn(traverse_fields(s.clone(), &run.plan.fields, level)).wait().await;
-    if run.failed() || !run.errors.borrow().is_empty() {
+    if run.failed() || !run.errors.borrow().is_empty() || run.validation_pass {
       return;
     }
     // `for (const action of mergeLocaleActions) await action()`
@@ -99,28 +99,6 @@ fn traverse_fields<'r, 'e: 'r>(s: S<'r, 'e>, fields: &'r [Field], level: Level) 
   })
 }
 
-fn traverse_tabs<'r, 'e: 'r>(s: S<'r, 'e>, tabs: &'r [Tab], level: Level) -> Task<'r, ()> {
-  Box::pin(async move {
-    let promises = tabs
-      .iter()
-      .map(|tab| {
-        let s2 = s.clone();
-        let mut inner = level.clone();
-        s.exec.spawn(async move {
-          // an unnamed tab: `getTranslatedLabel(field?.label || field.name)`
-          inner.label_path = match tab_label(&s2, &tab.label) {
-            LabelText::False => inner.label_path,
-            LabelText::Text(text) => inner.label_path.map(|parent| build_field_label(&parent, text.as_deref())),
-            LabelText::Unknown => None,
-          };
-          s2.exec.spawn(traverse_fields(s2.clone(), &tab.fields, inner)).wait().await;
-        })
-      })
-      .collect();
-    s.exec.all(promises).wait().await;
-  })
-}
-
 fn join_path(parent: &str, name: &str) -> String {
   if parent.is_empty() { name.to_string() } else { format!("{parent}.{name}") }
 }
@@ -142,6 +120,7 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
       if let Some(localization) = &run.plan.localization {
         let operation_locale = run.locale.as_deref().unwrap_or(&localization.default_locale);
         if localized_here
+          && !run.validation_pass
           && operation_locale != localization.default_locale
           && matches!(field.kind, Kind::Array | Kind::Blocks)
           && matches!(run.get(&level.data, name), V::Null)
@@ -149,7 +128,8 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
           skip_validation = true;
         }
       }
-      for hook in &field.before_change {
+      // `!skipHooks && field.hooks?.beforeChange`
+      for hook in field.before_change.iter().filter(|_| !run.validation_pass) {
         let hooked = match hook {
           OwnHook::RowIdBeforeChange => {
             let value = run.get(&level.data, name);
@@ -298,8 +278,38 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
         s.exec.spawn(traverse_fields(s.clone(), &field.fields, inner)).wait().await;
       }
       Kind::Tabs => {
-        // `getTranslatedLabel(field?.label || '')`: tabs carry no label in the modelled configs
-        s.exec.spawn(traverse_tabs(s.clone(), &field.tabs, level.clone())).wait().await;
+        // `traverseFields` over `field.tabs.map((tab) => ({ ...tab, type: 'tab' }))`, labelled
+        // `getTranslatedLabel(field?.label || '')`
+        let mut inner = level.clone();
+        inner.label_path = match &field.label {
+          Label::False => level.label_path.clone(),
+          label => match translated_label(&s, label, "") {
+            LabelText::Text(text) => level.label_path.as_ref().map(|parent| build_field_label(parent, text.as_deref())),
+            _ => None,
+          },
+        };
+        s.exec.spawn(traverse_fields(s.clone(), &field.tabs, inner)).wait().await;
+      }
+      Kind::Tab if field.affects_data() => {
+        // a named tab: like a named group
+        let Some(mut inner) = run.check(group_level(&s, field, sd, &level, &path)) else {
+          return;
+        };
+        inner.parent_is_localized = child_localized;
+        s.exec.spawn(traverse_fields(s.clone(), &field.fields, inner)).wait().await;
+      }
+      Kind::Tab => {
+        // an unnamed tab: `getTranslatedLabel(field?.label || field.name)`
+        let mut inner = level.clone();
+        inner.label_path = match tab_label(&s, &field.label) {
+          LabelText::False => level.label_path.clone(),
+          LabelText::Text(text) => level.label_path.as_ref().map(|parent| build_field_label(parent, text.as_deref())),
+          LabelText::Unknown => None,
+        };
+        s.exec.spawn(traverse_fields(s.clone(), &field.fields, inner)).wait().await;
+      }
+      Kind::RichText if run.validation_pass => {
+        // `!skipHooks && editor.hooks.beforeChange`: no hook
       }
       Kind::RichText => {
         // lexical's editor `beforeChange` hook: without node ids (beforeValidate bailed on them)

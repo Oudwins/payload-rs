@@ -142,7 +142,9 @@ fn traverse(plan: &WritePlan, heap: &mut Heap, fields: &[Field], container: Ref,
           traverse(plan, heap, &field.fields, r, child_localized)?;
         }
       }
-      Kind::Group => {
+      // a named tab (payload's `traverseFields`, `fillEmpty: false`): skipped unless its value is
+      // an object, then like a group
+      Kind::Group | Kind::Tab if field.affects_data() => {
         let value = heap.get(&target, name);
         for r in group_refs(heap, &value, localized)? {
           traverse(plan, heap, &field.fields, r, child_localized)?;
@@ -156,12 +158,8 @@ fn traverse(plan: &WritePlan, heap: &mut Heap, fields: &[Field], container: Ref,
           }
         }
       }
-      Kind::Row | Kind::Collapsible => traverse(plan, heap, &field.fields, container, parent_localized)?,
-      Kind::Tabs => {
-        for tab in &field.tabs {
-          traverse(plan, heap, &tab.fields, container, parent_localized)?;
-        }
-      }
+      Kind::Row | Kind::Collapsible | Kind::Tab => traverse(plan, heap, &field.fields, container, parent_localized)?,
+      Kind::Tabs => traverse(plan, heap, &field.tabs, container, parent_localized)?,
       _ => {}
     }
   }

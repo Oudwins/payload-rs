@@ -210,7 +210,125 @@ const updates = (f: Fixtures): Case[] =>
     },
   ].map((c) => ({ ...c, collection: 'posts' }))
 
+const magazine = (f: Fixtures) => ({
+  title: 'M',
+  intro: { lead: 'L', words: 5, items: [{ item: 'i1' }] },
+  facts: { caption: 'C', pages: 3, editor: f.author },
+  flat: 'F',
+})
+
+const magazineStored = (f: Fixtures) => ({
+  title: { en: 'm en', de: 'm de' },
+  intro: {
+    en: { lead: 'lead en', words: 1, items: [{ id: '64b7f0f0f0f0f0f0f0f0f0a1', item: 'x' }] },
+    de: { lead: 'lead de', words: 2 },
+  },
+  facts: { caption: { en: 'c en', fr: 'c fr' }, pages: 4, editor: new BSON.ObjectId(f.author) },
+  flat: { en: 'f en' },
+  createdAt: new Date(1_600_000_000_000),
+  updatedAt: new Date(1_600_000_000_000),
+})
+
+const magazines = (f: Fixtures): Case[] =>
+  [
+    { name: 'create en full', data: magazine(f), locale: 'en' },
+    { name: 'create de full', data: magazine(f), locale: 'de' },
+    { name: 'create fr title only', data: { title: 'fr' }, locale: 'fr' },
+    { name: 'create de intro null', data: { title: 't', intro: null }, locale: 'de' },
+    { name: 'create en missing lead', data: { title: 't', intro: { words: 1 } }, locale: 'en' },
+    {
+      name: 'update de lead',
+      data: { intro: { lead: 'neu' } },
+      locale: 'de',
+      seed: { data: magazine(f) },
+    },
+    {
+      name: 'update fr caption',
+      data: { facts: { caption: 'cfr' } },
+      locale: 'fr',
+      seed: { data: magazine(f) },
+    },
+    {
+      name: 'all locales: fr intro',
+      data: { intro: { lead: 'fr lead' } },
+      locale: 'fr',
+      seed: { raw: magazineStored(f) },
+    },
+    {
+      name: 'all locales: de pages',
+      data: { facts: { pages: 9 } },
+      locale: 'de',
+      seed: { raw: magazineStored(f) },
+    },
+    {
+      name: 'all locales: en clear lead',
+      data: { intro: { lead: '' } },
+      locale: 'en',
+      seed: { raw: magazineStored(f) },
+    },
+    {
+      name: 'raw: unknown locale key in a tab',
+      data: { title: 'x' },
+      locale: 'en',
+      seed: { raw: { title: { en: 'a' }, intro: { en: { lead: 'l' }, zz: { lead: 'q' } } } },
+    },
+  ].map((c) => ({ ...c, collection: 'magazines' }))
+
+const bulletin = {
+  title: 'B',
+  items: [{ item: 'a' }, { item: 'b' }],
+  meta: { count: 2 },
+  extra: { note: 'x' },
+  body: richText('body'),
+}
+
+const bulletins = (): Case[] =>
+  [
+    { name: 'create publish en', data: bulletin, locale: 'en' },
+    { name: 'create publish de', data: bulletin, locale: 'de' },
+    { name: 'create publish title only', data: { title: 't' }, locale: 'fr' },
+    { name: 'create publish invalid', data: { title: 't', meta: { count: 10 } }, locale: 'en' },
+    { name: 'create publish missing item', data: { title: 't', items: [{}] }, locale: 'de' },
+    { name: 'create draft', data: { items: [{}] }, draft: true, locale: 'en' },
+    { name: 'update publish', data: { title: 'u' }, locale: 'en', seed: { data: bulletin } },
+    {
+      name: 'update publish de',
+      data: { meta: { count: 3 } },
+      locale: 'de',
+      seed: { data: bulletin },
+    },
+    { name: 'update publish invalid', data: { title: '' }, locale: 'en', seed: { data: bulletin } },
+    {
+      name: 'publish over a draft',
+      data: { items: [{ item: 'c' }] },
+      locale: 'fr',
+      seed: {
+        data: { title: 'd' },
+        draft: true,
+        updates: [{ data: { title: 'd2' }, draft: true }],
+      },
+    },
+    {
+      name: 'raw: publish over locale-keyed values',
+      data: { title: 'r' },
+      locale: 'de',
+      seed: { raw: { title: { en: 'x' }, meta: { en: { count: 1 } }, _status: 'draft' } },
+    },
+  ].map((c) => ({ ...c, collection: 'bulletins' }))
+
 test.suite('fused writes: localized write-side corpus', { config: './config.ts' }, () => {
+  test('localized publishes of all locales', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'all locales publish', bulletins(), f)
+    finish('all locales publish')
+  })
+
+  test('localized named tabs', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'localized tabs', magazines(f), f)
+    finish('localized tabs')
+  })
+
   test('localized drafts', async ({ payload }) => {
     const f = await fixtures(payload)
     const cases: Case[] = [

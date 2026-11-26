@@ -236,12 +236,17 @@ const ownKind = (fn: unknown) => {
   return portedKinds.has(kind) ? kind : ineligible(`field:${own.kind}`)
 }
 
-const fieldPlan = (builder: Builder, field: Any) => {
-  if (typeof field !== 'object' || field === null || typeof field.type !== 'string') {
+/**
+ * `tab`: a tab of a `tabs` field, which upstream's traversals hand on as `{ ...tab, type: 'tab' }`
+ * (a fresh object per call: the functions that would receive it, tab hooks, access and
+ * validators, are user functions and make the collection ineligible here).
+ */
+const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
+  if (typeof field !== 'object' || field === null || (!tab && typeof field.type !== 'string')) {
     return ineligible('field:shape')
   }
-  const type = field.type
-  if (!modelledTypes.has(type)) {
+  const type = tab ?? field.type
+  if (!tab && !modelledTypes.has(type)) {
     return ineligible(`field:${type}`)
   }
   const out: Record<string, unknown> = { t: type }
@@ -350,11 +355,16 @@ const fieldPlan = (builder: Builder, field: Any) => {
   if ('required' in field && field.required) {
     out.req = 1
   }
+  if (named && field.unique) {
+    // validateUniqueConstraints (on-demand validation) reads the database for these
+    out.u = 1
+  }
   switch (type) {
     case 'array':
     case 'collapsible':
     case 'group':
     case 'row':
+    case 'tab':
       if (type === 'group' && !named) {
         return ineligible('group:unnamed')
       }
@@ -400,12 +410,7 @@ const fieldPlan = (builder: Builder, field: Any) => {
       out.lx = lexicalPlan(builder, field)
       break
     case 'tabs':
-      out.tabs = field.tabs.map((tab: Any) => {
-        if ('name' in tab) {
-          return ineligible('tabs:named')
-        }
-        return { f: fieldsPlan(builder, tab.fields), label: labelPlan(tab.label) }
-      })
+      out.tabs = field.tabs.map((tab: Any) => fieldPlan(builder, tab, 'tab'))
       break
     default:
       break

@@ -65,6 +65,10 @@ pub struct Run<'e> {
   pub saving_draft: bool,
   /// The operation's `autosave` argument.
   pub autosave: bool,
+  /// A `validateLocalWithLocaleKeyedData` pass (runValidationLifecycle with
+  /// `skipMutationHooks`): beforeChange with `skipHooks` and `isValidationOperation`; its
+  /// `mergeLocaleActions` change only the pass's discarded data and are not run.
+  pub validation_pass: bool,
 }
 
 impl<'e> Run<'e> {
