@@ -925,6 +925,83 @@ decision, or a second native call), a locale publish with `localizeStatus` (13:
 `buildLocalizedPublishData` on the main document read with `locale: 'all'`), update-many with
 `draft` (`queryDrafts`).
 
+**Widened (WP-O, 2026-11-26)**: named tabs, the all-locales publish validation, json and upload
+fields, configs with `localization.filterAvailableLocales` (section 12; the dispatch and the
+drivers are unchanged except that the `drafts:localizedPublish` guard now applies to the TS
+prepare only). On the way, the harness's test/localization `tabs` collection showed that
+mongoose computes `minimize` per subdocument from its own schema on the save path (a group
+inside a localized tab keeps its `{}` under the locale wrapper, whose schema minimizes): the
+document building no longer inherits a parent's `minimize` (corpus cases added).
+
+The MongoDB harness with `--fuse shadow --fuse-writes shadow` (release addon): 3330 / 164 /
+422, equal to `.rs-baseline/mongodb-all.json` (test/cli differs by the worktree path; storage
+emulators and hmr absent), 0 lane-shadow differences, 0 fused-write differences. Fused writes
+compared: 3858 creates, 167 updateByID, 229 deleteByID, 6 update-many, 210 delete-many (WP-L:
+3247 / 85 / 229 / 4 / 207). Gone: `plan:tabs:named` 312 (WP-M's count), the guard
+`drafts:localizedPublish` 599, `plan:localization:filterAvailableLocales` 149, `plan:field:upload` 117. What these now reach instead, largest first: `prepare:drafts:localizedPublish:unique` 90
+(`validateUniqueConstraints` would read the database: a read in the Rust transaction, as
+upstream's `fieldValueExists`, would lift it), `plan:json:jsonSchema` 141 (every json field of
+the harness has a `jsonSchema`: zod), `plan:field:condition` 65, `plan:field:code` 33,
+`plan:group:unnamed` 32, `populate:related` 142 (the read side). Remaining largest overall:
+guards `transaction` 761, `file` 605, `disableTransaction` 292, `access:verify` 183; ineligible
+`hooks:beforeRead` 777, `hooks:afterRead` 623, `field:filterOptions` 554, `hooks:beforeOperation`
+378; bails `plan:date:timezone` 131.
+
+Also at 0 differences on the final tree: the harness with `--engine default` (3330 / 164 / 422,
+equal to the baseline, the plugin-ecommerce settlement test passed; fused writes served 3857
+creates, 167 updateByID, 229 deleteByID, 6 update-many, 210 delete-many), the 8 shadow files
+(971 / 0 / 46, 0 divergences), parity 503/503, driver lane 4/4, glue 33/33, the corpus 21/21
+(`PAYLOAD_ENGINE=ts`, 289 cases: 266 equal, 23 bails), the lane suites 69/69 (default and
+shadow; new: named tabs in two locales, a named tab's required field, json / upload / named tab
+writes, all-locales publishes incl. update-many and an invalid one, a config with
+`filterAvailableLocales`), packaging OK.
+
+Perf (WP-O, test/__rs/perf, MongoDB 1k posts, release addon, packed install verified against
+the builds: the addon, engine-rs, payload and db-mongodb dist identical; `ts/rs`, `off` =
+`rs-fused-off` → `on`; per scenario the median of 3 passes, geometric mean per category):
+
+| shape   | surface | create      | update      | partial-update | delete      | versions    | locale      |
+| ------- | ------- | ----------- | ----------- | -------------- | ----------- | ----------- | ----------- |
+| typical | local   | 1.09 → 1.47 | 1.01 → 2.31 | 0.98 → 1.57    | 0.96 → 1.01 | -           | -           |
+| typical | rest    | 0.94 → 1.18 | 0.95 → 1.36 | 0.89 → 1.74    | 0.95 → 1.02 | -           | -           |
+| typical | graphql | 1.10 → 1.27 | -           | 1.01 → 1.35    | 0.97 → 1.29 | -           | -           |
+| complex | local   | 1.02 → 1.03 | 0.99 → 1.01 | 1.00 → 1.01    | 0.97 → 1.00 | 1.11 → 1.07 | 1.40 → 1.29 |
+| complex | rest    | 0.93 → 0.96 | 0.99 → 1.01 | 0.94 → 0.96    | 0.99 → 0.89 | 1.01 → 0.97 | 1.17 → 1.09 |
+| complex | graphql | 1.06 → 1.04 | -           | 1.07 → 1.02    | 1.01 → 0.93 | 0.97 → 0.94 | 1.22 → 1.12 |
+
+The complex shape still runs no fused write: beside its named tab it has a user `validate`
+(`field:validate`), and its versions scenarios publish with drafts on a non-localized config, so
+its on / off columns run the same code and differ by the run-to-run spread (the typical REST
+gains over WP-L's table are WP-M's depth-2 result reads, the write side being unchanged there).
+
+Not built (WP-O), with what each needs:
+
+- **Function `filterOptions`** (554, of which 484 in test/versions' `Drafts`: `({ req }) =>
+  req.payloadAPI === 'REST' ? req.method === 'POST' : true`). Three parts: (1) the compiled
+  function evaluated in the dispatch per `relationTo` (`evaluateRequestOnlyAccess`-style, guard
+  sampling kept); this one reads `req.payloadAPI`, which `capturedRequest` (compile/snapshot.ts)
+  and `payload_fn_ir::lanes::request` do not carry yet, and functions reading `data` /
+  `siblingData` / `id` would need the validation data (`deepMergeWithSourceArrays(doc, data)`),
+  which exists only inside the prepare; (2) the validator's `payloadDataLoader.find({ collection,
+  depth: 0, disableErrors: true, limit: 0, overrideAccess, pagination: false, where: { and: [{ id:
+  { in } }, filter] } })` run as a fused `find` in the Rust transaction: the prepare is pure, so
+  it would return the lookups it needs and the drivers would run them and call it again with the
+  results (creates prepare in JS before the transaction today, so the create driver would take
+  the prepare request too); (3) `payloadDataLoader.find` caches its promise in the request's
+  dataloader closure (`findQueries`): a later identical find on the same request reuses it, which
+  the fused lane cannot prime from outside. The ticks of `validateFilterOptions` (two awaited
+  calls) only matter with other validation errors (error order), where the prepare would bail.
+- **Autosave** (in `args:options`): creates are the plain create with `version.autosave = true`
+  plus upstream's `updateLatestVersion` find (`findVersions`, `parent` of the new id, `-updatedAt`,
+  `limit: 1`), which finds nothing for a generated id; skipping it is a command-stream change like
+  the approved max-versions skip, so the create driver should send it (and bail on a result).
+  updateByID draft saves need a second native call: the first (in the transaction) runs the
+  stored reads and that find and returns whether the latest version has `autosave: true`; JS
+  then takes the readings of the branch upstream takes (`updateVersion`: no version `_id`, no
+  `enforceMaxVersions`; else a new version) and the second call sends `findOneAndUpdate` of the
+  latest version (`{ createdAt: <its createdAt>, latest: true, parent, updatedAt: now, version }`,
+  db-mongodb `updateVersion`) or the version insert.
+
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
 byte-identical; `ts/rs` ratios, per scenario the median of 3 processes per variant, geometric
