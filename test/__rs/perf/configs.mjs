@@ -384,7 +384,8 @@ const collectionHooks = (hookCounter) => {
   const count = (name) => hookCounter && (hookCounter[name] = (hookCounter[name] ?? 0) + 1)
   return {
     afterChange: [({ doc }) => (count('afterChange'), doc)],
-    afterDelete: [() => count('afterDelete')],
+    // returns the document: a truthy return value replaces the deleted document in the result
+    afterDelete: [({ doc }) => (count('afterDelete'), doc)],
     afterOperation: [({ result }) => (count('afterOperation'), result)],
     afterRead: [({ doc }) => (count('afterRead'), doc)],
     beforeChange: [({ data }) => (count('beforeChange'), data)],

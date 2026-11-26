@@ -36,16 +36,20 @@
  * default). NODE_ENV=production.
  *
  * Fails (exit 1) when a process crashes, an rs process did not map the engine addon or a ts
- * process did, a scenario errors on one engine only, or ts and rs fingerprints of a scenario differ
- * (checked per round).
+ * process did, a scenario errors (on one engine or on both), or ts and rs fingerprints of a scenario
+ * differ (checked per round), or the installed perf app does not match the packed builds.
+ * The app is installed from its own pnpm store (.rs-runs/perf/pnpm-store) and verified file by file
+ * against the tarballs and `--addon` before anything runs (also with `--reuse`).
  * Writes <out>/results.json (everything, incl. every timed sample), <out>/scenarios.csv (one row
  * per database x shape x size x engine x scenario with every statistic), <out>/samples.csv (one row
  * per timed iteration), <out>/startup.csv, <out>/report.md and <out>/report.html (interactive
  * charts with filters), and the raw per-process results in <out>/cells/.
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -147,6 +151,7 @@ const isScenarios = !argv.includes('--no-scenarios')
 const isVerbose = argv.includes('--verbose')
 
 const appDir = path.join(root, '.rs-runs/perf/app')
+const packedDir = path.join(root, '.rs-runs/perf/packed')
 const cellsDir = path.join(options.out, 'cells')
 fs.mkdirSync(cellsDir, { recursive: true })
 const failures = []
@@ -158,6 +163,7 @@ const fail = (message) => {
 if (!isReuse || !fs.existsSync(path.join(appDir, 'node_modules/payload'))) {
   install()
 }
+verifyInstall()
 for (const file of ['bench.mjs', 'configs.mjs', 'scenarios.mjs', 'stats.mjs']) {
   fs.copyFileSync(path.join(here, file), path.join(appDir, file))
 }
@@ -226,7 +232,6 @@ function install() {
   const platform = createRequire(import.meta.url)(path.join(root, 'packages/engine-rs/addon.cjs'))
     .platformPackageName()
     .slice('@payloadcms/engine-rs-'.length)
-  const packedDir = path.join(root, '.rs-runs/perf/packed')
   const addonsDir = path.join(root, '.rs-runs/perf/addons')
   fs.rmSync(addonsDir, { force: true, recursive: true })
   fs.mkdirSync(path.join(addonsDir, platform), { recursive: true })
@@ -274,11 +279,82 @@ function install() {
     .map(([name, tarball]) => `  '${name}': 'file:${tarball}'`)
     .join('\n')
   fs.writeFileSync(path.join(appDir, 'pnpm-workspace.yaml'), `overrides:\n${overrides}\n`)
+  // a store of its own: the shared store can hand back another checkout's files for the same
+  // `file:` tarball names (pnpm 11 reads pnpm_config_*, not npm_config_*)
   execFileSync(
     'pnpm',
     ['install', '--ignore-scripts', '--prefer-offline', '--config.confirmModulesPurge=false'],
-    { cwd: appDir, stdio: 'inherit' },
+    {
+      cwd: appDir,
+      env: { ...process.env, pnpm_config_store_dir: path.join(root, '.rs-runs/perf/pnpm-store') },
+      stdio: 'inherit',
+    },
   )
+}
+
+/**
+ * Every file of every packed tarball must be installed in the perf app byte for byte, and the
+ * installed addon must be `--addon`: an install that linked other files (another checkout's
+ * build) or a `--reuse` app older than the addon fails the run before anything is measured.
+ */
+function verifyInstall() {
+  const sha256 = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+  const pnpmDir = path.join(appDir, 'node_modules/.pnpm')
+  const installedDir = (name) => {
+    const direct = path.join(appDir, 'node_modules', name)
+    const nested = fs.existsSync(direct)
+      ? direct
+      : fs
+          .readdirSync(pnpmDir)
+          .map((entry) => path.join(pnpmDir, entry, 'node_modules', name))
+          .find((dir) => fs.existsSync(path.join(dir, 'package.json')))
+    return nested && fs.realpathSync(nested)
+  }
+  const mismatches = []
+  const unpacked = fs.mkdtempSync(path.join(os.tmpdir(), 'rs-perf-verify-'))
+  try {
+    for (const tarball of fs.readdirSync(packedDir).filter((file) => file.endsWith('.tgz'))) {
+      const dir = path.join(unpacked, tarball)
+      fs.mkdirSync(dir)
+      execFileSync('tar', ['-xzf', path.join(packedDir, tarball), '-C', dir])
+      const packageDir = path.join(dir, 'package')
+      const { name } = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'))
+      const installed = installedDir(name)
+      if (!installed) {
+        mismatches.push(`${name}: not installed`)
+        continue
+      }
+      const files = fs
+        .readdirSync(packageDir, { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => path.relative(packageDir, path.join(entry.parentPath, entry.name)))
+      const differing = files.filter((file) => {
+        const target = path.join(installed, file)
+        return !fs.existsSync(target) || sha256(target) !== sha256(path.join(packageDir, file))
+      })
+      if (differing.length > 0) {
+        mismatches.push(
+          `${name}: ${differing.length} of ${files.length} files differ from ${tarball} (${differing.slice(0, 5).join(', ')})`,
+        )
+      }
+      if (
+        files.includes('payload-engine.node') &&
+        sha256(path.join(installed, 'payload-engine.node')) !== sha256(options.addon)
+      ) {
+        mismatches.push(
+          `${name}: the installed addon is not --addon ${options.addon}${isReuse ? ' (rebuilt after the app was installed? run without --reuse)' : ''}`,
+        )
+      }
+    }
+  } finally {
+    fs.rmSync(unpacked, { force: true, recursive: true })
+  }
+  if (mismatches.length > 0) {
+    throw new Error(
+      `the perf app ${appDir} does not match the packed builds in ${packedDir}:\n${mismatches.join('\n')}`,
+    )
+  }
+  console.log('perf app: every installed file matches the packed tarballs and --addon')
 }
 
 /** A fresh database for one cell: `{ location, drop }`. */
@@ -700,6 +776,11 @@ function checkRound({ database, outputs: { rs, ts }, round, shape, size }) {
       fail(
         `${where}: error on one engine only: ts ${tsScenario.error?.message ?? 'ok'} / rs ${rsScenario.error?.message ?? 'ok'}`,
       )
+      continue
+    }
+    if (tsScenario.error) {
+      // a scenario that measures nothing (a bug of the scenario or of the config shape)
+      fail(`${where}: errors on both engines: ${tsScenario.error.message}`)
       continue
     }
     if (JSON.stringify(tsScenario.fingerprint) !== JSON.stringify(rsScenario.fingerprint)) {

@@ -118,9 +118,11 @@ subset. On shared servers, `--mongodb-server <url>` selects the MongoDB server a
   the per-round speedups and the per-process median range; `samples.csv` adds the round of each
   sample (`process`).
 - Correctness guards (the run fails): an rs process that did not map the engine addon or a ts
-  process that did (`/proc/self/maps`), a scenario that errors on one engine only, and ts / rs
+  process that did (`/proc/self/maps`), a scenario that errors (on one engine, or on both: it measures nothing), and ts / rs
   differences in the result fingerprint (keys, array lengths, pagination counters, deterministic
-  values) or in the number of hook calls.
+  values) or in the number of hook calls; an installed perf app that differs from the packed
+  tarballs or from `--addon` (checked file by file before anything runs, also with `--reuse`; the
+  app installs from its own pnpm store, `.rs-runs/perf/pnpm-store`).
 - Seed data is deterministic (seeded PRNG); fresh documents of each scenario come from its own
   index range, so both engines create the same data.
 
