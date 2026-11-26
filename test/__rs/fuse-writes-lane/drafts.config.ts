@@ -49,6 +49,12 @@ export default buildConfigWithDefaults({
         fields: [{ name: 'title', type: 'text' }],
         versions: { drafts: true, maxPerDoc: 2 },
       },
+      {
+        // versions without drafts past `maxPerDoc`
+        slug: 'cappedPlain',
+        fields: [{ name: 'title', type: 'text' }],
+        versions: { maxPerDoc: 2 },
+      },
     ],
   },
 })

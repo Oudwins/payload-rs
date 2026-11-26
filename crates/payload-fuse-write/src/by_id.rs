@@ -22,8 +22,8 @@
 //!    and `$set` applied to `value` must give `value`). A draft save (`isSavingDraft`) sends no
 //!    `findAndModify`: its version comes from beforeChange's result;
 //! 5. with versions `saveVersion`: the version insert, the latest flip, `enforceMaxVersions`'
-//!    `find` (`skip: max, limit: 1`), which bails when it finds a version (the exact lane deletes
-//!    the old versions);
+//!    `find` (`skip: max, limit: 1`) and, when it finds a version with an `updatedAt`, its
+//!    `deleteVersions` (`updatedAt <= ` that version's, of the parent);
 //! 6. the result: `afterRead` (population in the transaction) of saveVersion's returned version
 //!    (`version` with `id = parent`), or without versions of the `findAndModify` value; then the
 //!    commit.
@@ -37,7 +37,7 @@
 //! collection by src/fuse-write/mongo.ts and given this call's id).
 
 use payload_fuse_mongo::{find_stored, run_document, update_inputs};
-use payload_mongo_driver::mongodb::bson::{Bson, Document, RawDocument, RawDocumentBuf, rawdoc};
+use payload_mongo_driver::mongodb::bson::{Bson, Document, RawBsonRef, RawDocument, RawDocumentBuf, rawdoc};
 use payload_mongo_driver::{FindSpec, find_raw, find_spec};
 
 use crate::ops::version_statements;
@@ -76,6 +76,9 @@ pub struct ByIDRequest {
   /// updateByID with drafts: `getLatestCollectionVersion`'s `findVersions` of the parent's latest
   /// version (the versions collection is `versions`'s).
   pub latest: Option<FindSpec>,
+  /// updateByID: `enforceMaxVersions`' `deleteVersions` filter (cast `{ updatedAt: {
+  /// less_than_equal }, parent: { equals: id } }`) and the sentinel date its `updatedAt` holds.
+  pub max_delete: Option<(Document, Bson)>,
 }
 
 /// Decodes `{ op: 'updateByID' | 'deleteByID', d?, c, t: <BSON { q, lf?, mf?, vq?, pf? }>, lc?,
@@ -124,7 +127,24 @@ pub fn decode(request: &RawDocument) -> Result<ByIDRequest, String> {
   if latest.is_some() && versions.is_none() {
     return Err("byID:lv".to_string());
   }
-  Ok(ByIDRequest { op, database: text("d"), collection: text("c").ok_or("byID:c")?, query, lock, update, versions, preferences, latest })
+  let max_delete = match (sub("md"), template.get("ms").map_err(|e| e.to_string())?) {
+    (Some(filter), Some(sentinel)) => {
+      Some((Document::try_from(filter.as_ref()).map_err(|e| e.to_string())?, Bson::try_from(sentinel).map_err(|e| e.to_string())?))
+    }
+    _ => None,
+  };
+  Ok(ByIDRequest {
+    op,
+    database: text("d"),
+    collection: text("c").ok_or("byID:c")?,
+    query,
+    lock,
+    update,
+    versions,
+    preferences,
+    latest,
+    max_delete,
+  })
 }
 
 /// Runs `request` in transaction `txn`, then its result read and the commit (or, with `state`, the
@@ -331,9 +351,22 @@ pub(crate) async fn update_document(
       if let Some(find) = max_find {
         let find = FindSpec { filter: find.filter.clone(), sort: find.sort.clone(), skip: find.skip, limit: find.limit, ..FindSpec::default() };
         let found = find_raw(client, database.as_deref(), versions, find, Some(txn)).await.map_err(|_| "!byID:maxVersions:find")?;
-        if !found.is_empty() {
-          // the exact lane deletes the versions past `max`
-          return Err("!byID:maxVersions".to_string());
+        if let Some(oldest) = found.first() {
+          // `oldestAllowedDoc?.updatedAt` (read-transformed: a Date becomes its ISO string, which
+          // the delete's cast turns back into the same Date): truthy, then `deleteVersions`
+          let updated_at = match oldest.get("updatedAt").map_err(|_| "!byID:maxVersions:updatedAt")? {
+            None | Some(RawBsonRef::Null) | Some(RawBsonRef::Undefined) => None,
+            Some(RawBsonRef::DateTime(date)) if date.try_to_rfc3339_string().is_ok() => Some(Bson::DateTime(date)),
+            Some(_) => return Err("!byID:maxVersions:updatedAt".to_string()),
+          };
+          if let Some(updated_at) = updated_at {
+            let (filter, sentinel) = request.max_delete.as_ref().ok_or("!byID:maxVersions")?;
+            let mut filter = filter.clone();
+            if replace_value(&mut filter, sentinel, &updated_at) == 0 {
+              return Err("!byID:maxVersions:template".to_string());
+            }
+            send(client, txn, database.clone(), delete_command(versions, to_raw(&filter)?), true).await?;
+          }
         }
       }
       returned
@@ -366,6 +399,22 @@ fn returned_version(version: &Document) -> Result<RawDocumentBuf, String> {
   }
   doc.insert("_id", parent);
   to_raw(&doc)
+}
+
+/// Replaces every `from` value in `doc` (nested documents and arrays) with `to`; the count.
+fn replace_value(doc: &mut Document, from: &Bson, to: &Bson) -> usize {
+  fn walk(value: &mut Bson, from: &Bson, to: &Bson) -> usize {
+    if value == from {
+      *value = to.clone();
+      return 1;
+    }
+    match value {
+      Bson::Document(doc) => doc.iter_mut().map(|(_, v)| walk(v, from, to)).sum(),
+      Bson::Array(items) => items.iter_mut().map(|v| walk(v, from, to)).sum(),
+      _ => 0,
+    }
+  }
+  doc.iter_mut().map(|(_, v)| walk(v, from, to)).sum()
 }
 
 /// mongoose's `deleteMany(filter)` (no options): the `delete` command.

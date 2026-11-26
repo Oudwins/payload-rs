@@ -559,6 +559,8 @@ const writePlanID = (plan: WritePlanResult, json: string) => {
 const sentinelHex = randomBytes(12).toString('hex')
 const sentinelBytes = Buffer.from(sentinelHex, 'hex')
 const sentinelText = Buffer.from(sentinelHex, 'latin1')
+/** The `updatedAt` of the max-versions delete's template (`md`), replaced per call by Rust. */
+const sentinelDate = new Date(Date.UTC(2000, 0, 1) + randomBytes(4).readUInt32BE() * 1000)
 
 type Template = { bytes: Buffer; hex: number[]; raw: number[] }
 
@@ -679,6 +681,20 @@ const buildByIDTemplate = async (lane: DriverLane, slug: string): Promise<string
     }
     if (max > 0) {
       parts.mf = versionsFind(parent, max)
+      // the `deleteVersions` of `enforceMaxVersions` when the find returns a version: its
+      // `updatedAt` (read-transformed, an ISO string) replaces the sentinel date `ms` in the cast
+      parts.md = castFilter(
+        VersionModel,
+        await buildQuery({
+          adapter,
+          fields,
+          where: {
+            parent: { equals: sentinelHex },
+            updatedAt: { less_than_equal: sentinelDate.toISOString() },
+          },
+        }),
+      )
+      parts.ms = sentinelDate
     }
     if (isDrafts) {
       // getLatestCollectionVersion: updateByID's where (access `true`, no trash) with the version

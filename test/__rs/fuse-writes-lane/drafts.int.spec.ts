@@ -202,6 +202,65 @@ test.suite('fuse-writes drafts', { config: './drafts.config.ts' }, () => {
     expect(versions.docs.map((version) => version.version.title).sort()).toStrictEqual(['2', '3'])
   })
 
+  test('should delete versions past maxPerDoc in the fused updates', async ({ payload }) => {
+    const isFused = fuseWriteStats() !== undefined && process.env.PAYLOAD_RS_FUSE_WRITES !== 'off'
+    const before = fuseWriteStats()?.hits.updateByID ?? 0
+    const plain = await payload.create({
+      collection: 'cappedPlain',
+      data: { title: '0' },
+      overrideAccess: true,
+    })
+    const drafted = await payload.create({
+      collection: 'capped',
+      data: { title: '0' },
+      overrideAccess: true,
+    })
+
+    for (const title of ['1', '2', '3', '4']) {
+      await payload.update({
+        id: plain.id,
+        collection: 'cappedPlain',
+        data: { title },
+        overrideAccess: true,
+      })
+      await payload.update({
+        id: drafted.id,
+        collection: 'capped',
+        data: { title },
+        draft: title !== '4',
+        overrideAccess: true,
+      })
+    }
+    await payload.update({
+      collection: 'cappedPlain',
+      data: { title: 'many' },
+      overrideAccess: true,
+      where: { id: { equals: plain.id } },
+    })
+    const plainVersions = await payload.findVersions({
+      collection: 'cappedPlain',
+      overrideAccess: true,
+      where: { parent: { equals: plain.id } },
+    })
+    const draftedVersions = await payload.findVersions({
+      collection: 'capped',
+      overrideAccess: true,
+      where: { parent: { equals: drafted.id } },
+    })
+
+    expect(plainVersions.docs.map((version) => version.version.title).sort()).toStrictEqual([
+      '4',
+      'many',
+    ])
+    expect(draftedVersions.docs.map((version) => version.version.title).sort()).toStrictEqual([
+      '3',
+      '4',
+    ])
+    if (isFused) {
+      expect(fuseWriteStats()!.hits.updateByID - before).toBe(8)
+    }
+  })
+
   test('should delete a document with drafts and its versions', async ({ payload }) => {
     const doc = await payload.create({
       collection: 'drafts',
