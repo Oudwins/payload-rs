@@ -18,6 +18,7 @@ import { sanitizeQueryValue } from '../../../db-mongodb/src/queries/sanitizeQuer
 import { buildProjectionFromSelect } from '../../../db-mongodb/src/utilities/buildProjectionFromSelect.js'
 import { getCollection } from '../../../db-mongodb/src/utilities/getEntity.js'
 import { getLocalizedPaths } from '../../../payload/src/database/getLocalizedPaths.js'
+import { fieldShouldBeLocalized } from '../../../payload/src/fields/config/types.js'
 import { validOperatorSet } from '../../../payload/src/types/constants.js'
 import { deepMergeWithCombinedArrays } from '../../../payload/src/utilities/deepMerge.js'
 import { escapeRegExp } from '../../../payload/src/utilities/escapeRegExp.js'
@@ -181,14 +182,118 @@ const entity = (lane: DriverLane, collectionSlug: string) => {
     adapter.payload.config,
     () => collectionConfig.fields,
   )
-  if (
-    Object.keys(collectionConfig.joins ?? {}).length ||
-    collectionConfig.polymorphicJoins?.length
-  ) {
-    // `buildJoinAggregation` would add stages
-    unsupported('joins')
+  if (collectionConfig.polymorphicJoins?.length) {
+    unsupported('joins:polymorphic')
   }
   return { adapter, collectionConfig, Model, plan }
+}
+
+/**
+ * db-mongodb `buildJoinAggregation` (utilities/buildJoinAggregation.ts) of a collection's joins
+ * (no polymorphic joins: `entity`), for the joins the fused reads serve: one collection, the
+ * main collection's documents (no `versions`), a join query of `where: {}` only (`overrideAccess`
+ * or a read access of `true`, no `where` on the field), not localized, not all locales, and a
+ * joined collection read without drafts. `joins`: the sanitized `JoinQuery` db-mongodb gets.
+ * Aggregation pipelines are not cast by mongoose: the stages are sent as built.
+ */
+const joinStages = (
+  adapter: Any,
+  collectionConfig: Any,
+  {
+    draftsEnabled,
+    joins,
+    locale,
+    projection,
+  }: { draftsEnabled: unknown; joins: Any; locale: Any; projection: Any },
+) => {
+  const joinConfig = collectionConfig.joins ?? {}
+  if (joins === false || Object.keys(joinConfig).length === 0) {
+    return []
+  }
+  if (!adapter.useJoinAggregations) {
+    // db-mongodb resolves them with follow-up finds (`resolveJoins`)
+    unsupported('resolveJoins')
+  }
+  const localization = adapter.payload.config.localization
+  const stages: Any[] = []
+  for (const slug of Object.keys(joinConfig)) {
+    for (const join of joinConfig[slug]) {
+      if (projection && !projection[join.joinPath]) {
+        continue
+      }
+      if (joins?.[join.joinPath] === false) {
+        continue
+      }
+      const joinedConfig = adapter.payload.collections[join.field.collection]?.config
+      if (typeof join.field.collection !== 'string' || !joinedConfig) {
+        unsupported('joins:collection')
+      }
+      if (draftsEnabled && joinedConfig.versions?.drafts) {
+        unsupported('joins:drafts')
+      }
+      const query = joins?.[join.joinPath] || {}
+      for (const key of Object.keys(query)) {
+        if (key !== 'where' || Object.keys(query.where ?? {}).length > 0) {
+          unsupported(`joins:${key}`)
+        }
+      }
+      if (localization && locale === 'all') {
+        unsupported('joins:allLocales')
+      }
+      if (
+        localization &&
+        locale &&
+        fieldShouldBeLocalized({ field: join.field, parentIsLocalized: join.parentIsLocalized })
+      ) {
+        unsupported('joins:localized')
+      }
+      const limit = join.field.defaultLimit ?? 10
+      const sort = buildSortParam({
+        adapter,
+        config: adapter.payload.config,
+        fields: joinedConfig.flattenedFields,
+        locale,
+        sort: join.field.defaultSort || joinedConfig.defaultSort,
+        timestamps: true,
+      })
+      const sortProperty = Object.keys(sort)[0]!
+      // `JoinModel.buildQuery({ where: {} })`
+      const pipeline: Any[] = [
+        { $match: {} },
+        { $sort: { [sortProperty]: sort[sortProperty] === 'asc' ? 1 : -1 } },
+      ]
+      if (limit > 0) {
+        pipeline.push({ $limit: limit + 1 })
+      }
+      const polymorphicSuffix = Array.isArray(join.targetField.relationTo) ? '.value' : ''
+      const foreignField = join.getForeignPath
+        ? `${join.getForeignPath({ locale })}${polymorphicSuffix}`
+        : `${join.field.on}${polymorphicSuffix}`
+      const as = join.joinPath
+      const { Model: JoinModel } = getCollection({ adapter, collectionSlug: joinedConfig.slug })
+      stages.push(
+        {
+          $lookup: {
+            as: `${as}.docs`,
+            foreignField,
+            from: JoinModel.collection.name,
+            localField: '_id',
+            pipeline,
+          },
+        },
+        {
+          $addFields: {
+            [`${as}.docs`]: { $map: { as: 'doc', in: '$$doc._id', input: `$${as}.docs` } },
+            [`${as}.hasNextPage`]: { $gt: [{ $size: `$${as}.docs` }, limit || Number.MAX_VALUE] },
+          },
+        },
+      )
+      if (limit > 0) {
+        stages.push({ $addFields: { [`${as}.docs`]: { $slice: [`$${as}.docs`, limit] } } })
+      }
+    }
+  }
+  return stages
 }
 
 /**
@@ -199,7 +304,21 @@ const entity = (lane: DriverLane, collectionSlug: string) => {
 const relatedBackend = (
   lane: DriverLane,
   slug: string,
-  { locale, select, sort: sortArg }: { locale: Any; select: Any; sort: Any },
+  {
+    draft,
+    joins,
+    locale,
+    overrideAccess,
+    select,
+    sort: sortArg,
+  }: {
+    draft: unknown
+    joins: unknown
+    locale: Any
+    overrideAccess: boolean
+    select: Any
+    sort: Any
+  },
 ): { backend: unknown } | string => {
   try {
     mongooseTypes = lane.mongoose.Types
@@ -230,6 +349,38 @@ const relatedBackend = (
           select,
         })
       : undefined
+    if (joins !== false && Object.keys(collectionConfig.joins ?? {}).length > 0) {
+      if (!overrideAccess) {
+        // the nested find's `sanitizeJoinQuery` runs the joined collections' read access
+        return 'mongo:populate:joins:access'
+      }
+      // the nested find sanitizes `joins: {}` with `overrideAccess` to `{ [path]: { where: {} } }`
+      const stages = joinStages(adapter, collectionConfig, {
+        draftsEnabled: draft,
+        joins: {},
+        locale,
+        projection,
+      })
+      if (stages.length > 0) {
+        // `aggregatePaginate` (`pagination: false`, `limit: 0`): `$match` (built natively), the
+        // sort, the join stages, the projection
+        const $sort: Record<string, -1 | 1> = {}
+        for (const [key, value] of Object.entries(sort)) {
+          $sort[key] = value === 'desc' ? -1 : 1
+        }
+        const after: Any[] = [{ $sort }, ...stages]
+        if (projection) {
+          after.push({ $project: projection })
+        }
+        return {
+          backend: {
+            collection: Model.collection.collectionName,
+            pipeline: Buffer.from(lane.BSON.serialize({ stages: after })).toString('hex'),
+            plan,
+          },
+        }
+      }
+    }
     return {
       backend: {
         collection: Model.collection.collectionName,
@@ -330,6 +481,16 @@ const findReads = (lane: DriverLane, args: Any): { plan: number } & Record<strin
     if (limit === 0) {
       paginationOptions.pagination = false
     }
+  }
+  const stages = joinStages(adapter, collectionConfig, {
+    draftsEnabled: args.draftsEnabled,
+    joins,
+    locale,
+    projection: paginationOptions.projection,
+  })
+  if (stages.length > 0) {
+    // `aggregatePaginate` with its own result meta: not served yet
+    unsupported('joins:find')
   }
   return {
     ...paginateReads(Model, query, paginationOptions),
@@ -463,6 +624,29 @@ const findOneReads = (lane: DriverLane, args: Any): { plan: number } & Record<st
     fields: collectionConfig.flattenedFields,
     select,
   })
+  const stages = joinStages(adapter, collectionConfig, {
+    draftsEnabled: args.draftsEnabled,
+    joins,
+    locale,
+    projection,
+  })
+  if (stages.length > 0) {
+    if (subqueries.length > 0) {
+      unsupported('joins:subqueries')
+    }
+    // `aggregatePaginate({ limit: 1, pagination: false, projection, query, joinAggregation })`
+    // (the uncast query: aggregation pipelines are not cast)
+    const pipeline: Any[] = [{ $match: query }, { $limit: 1 }, ...stages]
+    if (projection) {
+      pipeline.push({ $project: projection })
+    }
+    return {
+      collection: Model.collection.collectionName,
+      op: 'findOne',
+      pipeline,
+      plan,
+    }
+  }
   const find: Record<string, unknown> = { filter: castFilter(Model.schema, query) }
   const execProjection = projectionForExec(Model, 'findOne', projection)
   if (execProjection !== undefined) {
@@ -1211,7 +1395,9 @@ const shadowExact = async <T>(
   installDriverTrace(lane.mongoose.mongo?.Collection)
   const events: TraceEvent[] = []
   const result = await runTraced({ describe: (args) => args, events }, exact)
-  const operations = events.filter((event) => 'op' in event && event.op !== 'aggregate')
+  const operations = events.filter(
+    (event) => 'op' in event && (event.op !== 'aggregate' || reads.pipeline),
+  )
   if (operations.length === 0) {
     return result
   }
@@ -1295,6 +1481,10 @@ const expectedOperations = (reads: Any) => {
       spec.hint = count.hint
     }
     out.push({ ...main, op: 'countDocuments', spec })
+  }
+  if (reads.pipeline) {
+    // `Model.aggregate(pipeline, { collation, session })`: traced as `[pipeline, options]`
+    out.push({ ...main, op: 'aggregate', spec: { filter: reads.pipeline } })
   }
   if (reads.find) {
     const { filter, ...options } = reads.find

@@ -649,6 +649,38 @@ pub async fn find_raw(
   Ok(docs)
 }
 
+/// The raw documents of an aggregate on `collection_name` (no options: what `Model.aggregate(
+/// pipeline, { session })` sends), inside the Rust-owned transaction `txn` when given (the fused
+/// lanes' population of collections with joins).
+pub async fn aggregate_docs_raw(
+  client_id: u32,
+  database: Option<&str>,
+  collection_name: &str,
+  pipeline: Vec<Document>,
+  txn: Option<u32>,
+) -> Result<Vec<RawDocumentBuf>> {
+  let state = client(client_id)?;
+  let coll = collection(&state, database, collection_name);
+  let mut docs = Vec::new();
+  match txn {
+    Some(txn) => {
+      let mut session = txn_session(txn).await?;
+      let session = session.get();
+      let mut cursor = coll.aggregate(pipeline).session(&mut *session).await?;
+      while cursor.advance(&mut *session).await? {
+        docs.push(cursor.current().to_raw_document_buf());
+      }
+    }
+    None => {
+      let mut cursor = coll.aggregate(pipeline).await?;
+      while cursor.advance().await? {
+        docs.push(cursor.current().to_raw_document_buf());
+      }
+    }
+  }
+  Ok(docs)
+}
+
 /// The raw document of a `findOne` on `collection_name` (the Node driver's `find` with `limit: 1`,
 /// `singleBatch: true`), inside the Rust-owned transaction `txn` when given (the fused writes'
 /// stored-document read).

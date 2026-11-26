@@ -217,8 +217,24 @@ const fieldPlan = (builder: Builder, field: Any): Record<string, unknown> => {
       out.b = local
       break
     }
-    case 'join':
-      return ineligible('join')
+    case 'join': {
+      // population of the join's `docs` (relationshipPopulationPromise); the docs themselves come
+      // from the backend's join aggregation (src/fuse/mongo.ts `joinStages`)
+      const collectionSlug = watch(builder, field, 'collection')
+      if (typeof collectionSlug !== 'string') {
+        return ineligible('join:polymorphic')
+      }
+      builder.hasRelations = true
+      out.r = collectionSlug
+      builder.relations.add(collectionSlug)
+      const maxDepth = watch(builder, field, 'maxDepth')
+      if (typeof maxDepth === 'number') {
+        out.md = maxDepth
+      } else if (maxDepth !== undefined) {
+        return ineligible('join:maxDepth')
+      }
+      break
+    }
     case 'relationship':
     case 'upload': {
       builder.hasRelations = true
@@ -308,7 +324,8 @@ export const buildCollectionPlan = (collection: Any): CollectionPlan => {
       ineligible('select:function')
     }
     const joins = watch(builder, config, 'joins') as Any
-    if (joins && Object.keys(joins).length > 0) {
+    // only the MongoDB backend runs the join aggregations (src/fuse/mongo.ts `joinStages`)
+    if (joins && Object.keys(joins).length > 0 && payload.db?.name !== 'mongoose') {
       ineligible('joins')
     }
     if ((watch(builder, config, 'polymorphicJoins') as Any)?.length) {

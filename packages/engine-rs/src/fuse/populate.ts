@@ -274,7 +274,14 @@ const relatedEntry = ({
   const sort = sanitizeSortQuery({ fields: config.flattenedFields, sort: defaultSort })
   let backend: unknown = null
   if (target.relatedBackend) {
-    const result = target.relatedBackend(slug, { locale: req.locale, select: findSelect, sort })
+    const result = target.relatedBackend(slug, {
+      draft,
+      joins: req.payloadAPI === 'GraphQL' ? false : {},
+      locale: req.locale,
+      overrideAccess,
+      select: findSelect,
+      sort,
+    })
     if (typeof result === 'string') {
       return undefined
     }

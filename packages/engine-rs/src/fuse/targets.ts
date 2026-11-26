@@ -24,7 +24,16 @@ export type FusedTarget = {
    */
   relatedBackend?: (
     slug: string,
-    args: { locale: unknown; select: unknown; sort: unknown },
+    args: {
+      /** the nested finds' `draft` (`draftsEnabled` of their `payload.db.find`) */
+      draft: unknown
+      /** the nested finds' `joins` argument (`false` for GraphQL, else `{}`) */
+      joins: unknown
+      locale: unknown
+      overrideAccess: boolean
+      select: unknown
+      sort: unknown
+    },
   ) => { backend: unknown } | string
   /** Runs one fused request (JSON), returning the result JSON or `!<reason>`. */
   run: (requestJson: string, payload?: unknown) => Promise<string> | string

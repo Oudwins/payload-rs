@@ -36,6 +36,10 @@ pub struct MongoReads {
   count: CountSpec,
   flags: Flags,
   subqueries: Vec<SubQuery>,
+  /// `findOne` of a collection with joins: db-mongodb's `aggregatePaginate` pipeline (`$match`,
+  /// `$limit: 1`, the join stages, `$project`), sent without options (`Model.aggregate(pipeline,
+  /// { collation: undefined, session })`) instead of `find`.
+  pipeline: Option<Vec<Document>>,
 }
 
 /// A relationship path's sub-query (db-mongodb `buildSearchParam`, one hop):
@@ -138,6 +142,7 @@ impl MongoReads {
       count: args.count,
       flags: args.flags,
       subqueries: sub_queries(&doc)?,
+      pipeline: args.pipeline,
     })
   }
 
@@ -303,7 +308,7 @@ pub fn run_documents(
 /// the Rust-owned transaction `txn`: the `findOne` of `reads` (the write's result read, whose
 /// `findOne` is that same read), the raw document or `None`.
 pub async fn find_stored(client_id: u32, reads: &MongoReads, txn: u32) -> Result<Option<RawDocumentBuf>, String> {
-  let (ReadOp::FindOne, Some(find)) = (reads.op, reads.find.as_ref()) else {
+  let (ReadOp::FindOne, Some(find), None) = (reads.op, reads.find.as_ref(), &reads.pipeline) else {
     return Err("stored:read".to_string());
   };
   if !reads.subqueries.is_empty() {
@@ -330,7 +335,7 @@ pub async fn find_stored(client_id: u32, reads: &MongoReads, txn: u32) -> Result
 /// `pagination: false`) inside the Rust-owned transaction `txn`: the `find` of `reads` (which has
 /// no count), the raw documents in the cursor's order.
 pub async fn find_stored_many(client_id: u32, reads: &MongoReads, txn: u32) -> Result<Vec<RawDocumentBuf>, String> {
-  let (ReadOp::Find { pagination: false, .. }, CountSpec::None) = (reads.op, &reads.count) else {
+  let (ReadOp::Find { pagination: false, .. }, CountSpec::None, None) = (reads.op, &reads.count, &reads.pipeline) else {
     return Err("stored:find".to_string());
   };
   if !reads.subqueries.is_empty() {
@@ -468,11 +473,26 @@ async fn load(client_id: u32, reads: &mut MongoReads, convert: &Convert) -> Resu
   reads.resolve_subqueries(&state).await?;
   let coll = collection(&state, reads.database.as_deref(), &reads.collection);
   Ok(match reads.op {
+    ReadOp::Find { .. } if reads.pipeline.is_some() => return Err(LaneError::Bail("aggregate:find").into()),
     ReadOp::Find { pagination, limit, page } => {
       // mongoose-paginate-v2: the count is started first, both in flight
       let (count, docs) =
         tokio::join!(run_count(&coll, &reads.count), run_find(&coll, reads.find.as_ref(), convert, true));
       Loaded::Page { count: count?, docs: docs?, pagination, limit, page }
+    }
+    ReadOp::FindOne if reads.pipeline.is_some() => {
+      if !reads.subqueries.is_empty() {
+        return Err(LaneError::Bail("aggregate:subqueries").into());
+      }
+      let pipeline = reads.pipeline.clone().unwrap_or_default();
+      let mut cursor = coll.aggregate(pipeline).await?;
+      // `docs[0] ?? null` of the aggregation (raw documents: `_id`, no `leanWithId`)
+      if cursor.advance().await? {
+        let raw = cursor.current().to_raw_document_buf();
+        Loaded::One(Some(convert.document(&raw, false)?))
+      } else {
+        Loaded::One(None)
+      }
     }
     ReadOp::FindOne => {
       let find = reads.find.as_ref().ok_or(LaneError::Bail("findOne without find"))?;
@@ -601,6 +621,37 @@ impl ReadSession for MongoSession<'_> {
     condition.insert("_id", id_condition);
     let mut filter = Document::new();
     filter.insert("$and", Bson::Array(vec![Bson::Document(condition)]));
+    let lane_bail = |error: LaneError| match error {
+      LaneError::Bail(reason) => bail(reason),
+      LaneError::Driver(_) => bail("driver"),
+    };
+    if let Some(stages) = backend.get("pipeline").as_str() {
+      // a collection with joins: `aggregatePaginate`'s `[{ $match: query }, ...stages]` (the
+      // uncast `buildQuery` of the ids is this same filter), raw documents (no `leanWithId`)
+      let mut pipeline = vec![{
+        let mut stage = Document::new();
+        stage.insert("$match", filter);
+        stage
+      }];
+      pipeline.extend(pipeline_stages(stages)?);
+      let convert = Convert {
+        plan,
+        flags: self.backend.flags,
+        fields: Some(Arc::clone(&related.plan)),
+        leaves: self.backend.leaves.clone(),
+      };
+      let raws = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(payload_mongo_driver::aggregate_docs_raw(
+          self.backend.client,
+          self.backend.database.as_deref(),
+          &collection_name,
+          pipeline,
+          self.backend.txn,
+        ))
+      })
+      .map_err(lane_bail)?;
+      return raws.iter().map(|raw| convert.document(raw, false)).collect();
+    }
     let find = FindSpec {
       filter,
       sort: to_document(backend.get("sort"))?,
@@ -615,10 +666,6 @@ impl ReadSession for MongoSession<'_> {
       flags: self.backend.flags,
       fields: Some(Arc::clone(&related.plan)),
       leaves: self.backend.leaves.clone(),
-    };
-    let lane_bail = |error: LaneError| match error {
-      LaneError::Bail(reason) => bail(reason),
-      LaneError::Driver(_) => bail("driver"),
     };
     if let Some(txn) = self.backend.txn {
       let database = self.backend.database.as_deref();
@@ -642,6 +689,22 @@ impl ReadSession for MongoSession<'_> {
         Failure::Fuse(bail) => bail,
       })
   }
+}
+
+/// The stages after `$match` of a nested find's aggregation: hex of the js-bson document
+/// `{ stages: [...] }` the TS side serialized (src/fuse/mongo.ts `relatedBackend`).
+fn pipeline_stages(hex: &str) -> FuseResult<Vec<Document>> {
+  let bad = || bail("populate:pipeline");
+  if hex.len() % 2 != 0 {
+    return Err(bad());
+  }
+  let bytes = (0..hex.len())
+    .step_by(2)
+    .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).map_err(|_| bad()))
+    .collect::<FuseResult<Vec<u8>>>()?;
+  let doc = Document::from_reader(bytes.as_slice()).map_err(|_| bad())?;
+  let Ok(stages) = doc.get_array("stages") else { return Err(bad()) };
+  stages.iter().map(|stage| stage.as_document().cloned().ok_or_else(bad)).collect()
 }
 
 /// A JSON-like sort / projection as js-bson serializes it (integers as int32).

@@ -497,7 +497,8 @@ impl<'a> Walk<'a, '_, '_, '_> {
         let doc = sibling_at(root, &self.path)?;
         self.relationship(field, doc, parent_localized)?;
       } else if field.kind == Kind::Join {
-        return Err(Bail::new("join"));
+        let doc = sibling_at(root, &self.path)?;
+        self.join(field, doc, parent_localized)?;
       }
     }
 
@@ -892,6 +893,53 @@ impl<'a> Walk<'a, '_, '_, '_> {
 
   /// `relationshipPopulationPromise` without population (`depth && currentDepth <= depth` false
   /// for this field, else the call bails): ids are normalized like upstream's `populate()`.
+  /// `relationshipPopulationPromise` of a join field (one collection): every truthy entry of
+  /// `siblingDoc[name].docs` (its `id` when truthy) is populated into `docs[index]`; joins are not
+  /// filtered for `null`s.
+  fn join(&mut self, field: &Field, doc: &mut Obj, parent_localized: bool) -> FuseResult<()> {
+    let args = self.args;
+    let name = field.name.as_deref().unwrap_or("");
+    if !matches!(field.relation_to, RelationTo::One(_)) {
+      return Err(Bail::new("join:collection"));
+    }
+    if field.localized && !parent_localized && args.locale.as_deref() == Some("all") && is_object(doc.get(name)) {
+      return Err(Bail::new("join:locales"));
+    }
+    let depth = match field.max_depth {
+      Some(max) if max < args.depth => max,
+      _ => args.depth,
+    };
+    let ctx = Populate { field, depth, args, poly: false };
+    match doc.get_mut(name) {
+      // `Array.isArray(siblingDoc[field.name])`: not a value the join aggregation produces
+      Some(JsVal::Arr(_)) => Err(Bail::new("join:array")),
+      Some(JsVal::Obj(join)) if matches!(join.get("docs"), Some(JsVal::Arr(_))) => {
+        let join = std::sync::Arc::make_mut(join);
+        let Some(JsVal::Arr(rows)) = join.get_mut("docs") else { return Err(Bail::new("join:docs")) };
+        let rows = std::sync::Arc::make_mut(rows);
+        for (index, row) in rows.iter_mut().enumerate() {
+          if !row.truthy() {
+            continue;
+          }
+          let id = match &*row {
+            JsVal::Obj(o) => o.get("id").filter(|id| id.truthy()).cloned(),
+            _ => None,
+          };
+          let data = id.unwrap_or_else(|| row.clone());
+          if let Some((relation, id)) = ctx.populate(&data, row)? {
+            let mut path = self.path.clone();
+            path.push(Seg::Key(name.to_string()));
+            path.push(Seg::Key("docs".to_string()));
+            path.push(Seg::Index(index));
+            self.load(relation, id, depth, path, false)?;
+          }
+        }
+        Ok(())
+      }
+      _ => Ok(()),
+    }
+  }
+
   fn relationship(&mut self, field: &Field, doc: &mut Obj, parent_localized: bool) -> FuseResult<()> {
     let args = self.args;
     let name = field.name.as_deref().unwrap_or("");
