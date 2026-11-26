@@ -137,6 +137,82 @@ export default buildConfigWithDefaults({
           },
         ],
       },
+      {
+        // a json field with a `jsonSchema` and dates with timezones
+        slug: 'events',
+        fields: [
+          { name: 'title', type: 'text', required: true },
+          {
+            name: 'details',
+            type: 'json',
+            jsonSchema: {
+              fileMatch: ['a://b/details.json'],
+              schema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  seats: { type: 'integer', minimum: 1 },
+                  tags: { type: 'array', items: { type: 'string' } },
+                  venue: { enum: ['hall', 'park'] },
+                },
+                required: ['venue'],
+              },
+              uri: 'a://b/details.json',
+            },
+          },
+          { name: 'startsAt', type: 'date', required: true, timezone: true },
+          {
+            name: 'endsAt',
+            type: 'date',
+            timezone: {
+              defaultTimezone: 'Europe/London',
+              supportedTimezones: [
+                { label: 'London', value: 'Europe/London' },
+                { label: 'Tokyo', value: 'Asia/Tokyo' },
+              ],
+            },
+          },
+          {
+            name: 'slots',
+            type: 'array',
+            fields: [{ name: 'at', type: 'date', timezone: true }],
+          },
+        ],
+        versions: { maxPerDoc: 2 },
+      },
+      {
+        // array and blocks defaults (row ids for the default rows, mongoose's document array
+        // defaults)
+        slug: 'presets',
+        fields: [
+          { name: 'title', type: 'text' },
+          {
+            name: 'steps',
+            type: 'array',
+            defaultValue: [{ label: 'one' }, { label: 'two' }],
+            fields: [{ name: 'label', type: 'text' }],
+          },
+          {
+            name: 'layout',
+            type: 'blocks',
+            defaultValue: [{ blockType: 'card', note: 'n' }],
+            blocks: [{ slug: 'card', fields: [{ name: 'note', type: 'text' }] }],
+          },
+          {
+            name: 'meta',
+            type: 'group',
+            fields: [
+              {
+                name: 'links',
+                type: 'array',
+                defaultValue: [{ url: 'u' }],
+                fields: [{ name: 'url', type: 'text' }],
+              },
+            ],
+          },
+        ],
+        versions: true,
+      },
     ],
     blocks: [{ slug: 'callout', fields: [{ name: 'note', type: 'text' }] }],
   },

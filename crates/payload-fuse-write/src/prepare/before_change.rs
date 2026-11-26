@@ -544,7 +544,7 @@ async fn validate(s: &S<'_, '_>, field: &Field, value: &V, path: &str, level: &L
       let outcome = if *validator == Validator::RichText {
         lexical_validate(s, field, field_options, value)
       } else {
-        run_validator(s, *validator, field_options, value, path)
+        run_validator(s, *validator, field_options, value, path, level)
       };
       let (result, job_ticks) = match outcome {
         Ok(result) => result,
@@ -574,10 +574,16 @@ fn run_validator(
   field_options: &JsVal,
   value: &V,
   path: &str,
+  level: &Level,
 ) -> Result<(ValidationResult, usize), Bail> {
   let run = s.run;
-  let value = run.heap.borrow().export(value);
   let mut options = field_options.as_obj().cloned().unwrap_or_default();
+  if validator == Validator::Date && field_options.get("timezone").truthy() {
+    // the date validator reads `siblingData[`${name}_tz`]`
+    // (`deepMergeWithSourceArrays(siblingDoc, siblingData)`): the key of that merge
+    options.insert("siblingData".to_string(), timezone_sibling_data(s, field_options, level)?);
+  }
+  let value = run.heap.borrow().export(value);
   let extras: [(&str, JsVal); 7] = [
     ("id", run.id.clone().unwrap_or_default()),
     ("collectionSlug", JsVal::str(&*run.plan.slug)),
@@ -609,6 +615,23 @@ fn run_validator(
     1
   };
   Ok((result, jobs))
+}
+
+/// The date validator's `siblingData`, reduced to the `<name>_tz` key it reads: deepmerge copies
+/// the source's (`siblingData`) value when it has the key (a copy of an object is an object), else
+/// the target's (`siblingDoc`).
+fn timezone_sibling_data(s: &S<'_, '_>, field_options: &JsVal, level: &Level) -> Result<JsVal, Bail> {
+  let name = field_options.get("name").as_str().ok_or_else(|| Bail::new("timezone:name"))?;
+  let key = format!("{name}_tz");
+  let heap = s.run.heap.borrow();
+  let selected = if heap.has(&level.data, &key) {
+    heap.get(&level.data, &key)
+  } else if heap.has(&level.doc, &key) {
+    heap.get(&level.doc, &key)
+  } else {
+    return Ok(JsVal::obj(JsObj::new()));
+  };
+  Ok(JsVal::obj(JsObj::from_iter([(key, heap.export(&selected))])))
 }
 
 /// lexical's `richTextValidate` (richtext-lexical validate/) behind payload's `validations.richText`:
@@ -785,7 +808,8 @@ impl Translate for MaybeTranslate<'_> {
   }
 }
 
-/// The validators of the modelled fields call no JS.
+/// The validators of the modelled fields call no JS (a json field's `jsonSchema` is checked on
+/// the write plan's conversion of it).
 struct NoHost;
 
 impl ValidateHost for NoHost {
@@ -801,8 +825,14 @@ impl ValidateHost for NoHost {
     Err(EngineError::internal("logger"))
   }
 
-  fn validate_json_schema(&self, _json_schema: &JsVal, _value: &JsVal) -> EngineResult<ValidationResult> {
-    Err(EngineError::internal("jsonSchema"))
+  /// `validateJSONSchema`: the write plan's conversion of the schema (`json_schema`); zod's
+  /// message for a rejected value is not built here (a bail, the exact lane validates).
+  fn validate_json_schema(&self, json_schema: &JsVal, value: &JsVal) -> EngineResult<ValidationResult> {
+    match super::json_schema::accepts(json_schema, value) {
+      Ok(true) => Ok(ValidationResult::Valid),
+      Ok(false) => Err(EngineError::internal("jsonSchema:invalid")),
+      Err(reason) => Err(EngineError::internal(format!("jsonSchema:{reason}"))),
+    }
   }
 
   fn rich_text_validate(&self, _editor: &JsVal, _value: &JsVal, _options: &JsVal) -> EngineResult<ValidationResult> {

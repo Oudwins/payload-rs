@@ -317,6 +317,9 @@ pub enum PathDefault {
   Array(JsVal),
   /// `_id`'s `auto` ObjectId default, run after setters.
   Auto,
+  /// A document array's array default (its wrapper of `[].concat(default)`, a function default
+  /// without `$runBeforeSetters`): applied after `$set(obj)` when the path is still `undefined`.
+  AfterSetters(JsVal),
 }
 
 #[derive(Debug)]
@@ -682,9 +685,10 @@ fn decode_path(json: &Json) -> Result<Path, String> {
   let default = match json.get("d") {
     None => PathDefault::None,
     Some(Json::String(s)) if s == "auto" => PathDefault::Auto,
-    Some(d) => match (d.get("s"), d.get("arr")) {
-      (Some(s), None) => PathDefault::Static(JsVal::from_json(s)),
-      (None, Some(a)) => PathDefault::Array(JsVal::from_json(a)),
+    Some(d) => match (d.get("s"), d.get("arr"), d.get("after")) {
+      (Some(s), None, None) => PathDefault::Static(JsVal::from_json(s)),
+      (None, Some(a), None) => PathDefault::Array(JsVal::from_json(a)),
+      (None, None, Some(a)) => PathDefault::AfterSetters(JsVal::from_json(a)),
       _ => return Err(bad("path.d")),
     },
   };

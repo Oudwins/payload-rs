@@ -253,6 +253,169 @@ export default buildConfigWithDefaults({
         ],
       },
       {
+        // json fields with a `jsonSchema` (FUSED_WRITES.md section 12.6): test/fields' schema and
+        // the keywords the prepare's conversion models
+        slug: 'schemaJsons',
+        fields: [
+          {
+            name: 'json',
+            type: 'json',
+            jsonSchema: {
+              fileMatch: ['a://b/foo.json'],
+              schema: {
+                type: 'object',
+                properties: {
+                  array: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        object: {
+                          type: 'object',
+                          additionalProperties: false,
+                          properties: {
+                            array: { type: 'array', items: { type: 'number' } },
+                            text: { type: 'string' },
+                          },
+                        },
+                        text: { type: 'string' },
+                      },
+                    },
+                  },
+                  foo: { enum: ['bar', 'foobar'] },
+                  number: { enum: [10, 5] },
+                },
+              },
+              uri: 'a://b/foo.json',
+            },
+          },
+          {
+            name: 'typed',
+            type: 'json',
+            required: true,
+            jsonSchema: {
+              fileMatch: ['a://b/typed.json'],
+              schema: {
+                type: 'object',
+                additionalProperties: { type: ['integer', 'null'], minimum: 0, maximum: 100 },
+                description: 'scores',
+                properties: {
+                  name: { type: 'string', minLength: 1, maxLength: 4 },
+                  tags: { type: 'array', items: { type: 'string' }, maxItems: 2, minItems: 1 },
+                  flag: { type: 'boolean' },
+                  ratio: { type: 'number', exclusiveMaximum: 1, exclusiveMinimum: 0 },
+                  kind: { const: 'k' },
+                },
+                required: ['name'],
+              },
+              uri: 'a://b/typed.json',
+            },
+          },
+        ],
+      },
+      {
+        // a keyword the conversion does not model (`pattern`): ineligible, the exact lane runs
+        slug: 'patternJsons',
+        fields: [
+          {
+            name: 'patterned',
+            type: 'json',
+            jsonSchema: {
+              fileMatch: ['a://b/pattern.json'],
+              schema: { type: 'string', pattern: '^a' },
+              uri: 'a://b/pattern.json',
+            },
+          },
+        ],
+      },
+      {
+        // array and blocks fields with a `defaultValue`: mongoose's document arrays wrap their
+        // array default in a function default it applies after the setters
+        slug: 'defaultRows',
+        fields: [
+          { name: 'title', type: 'text' },
+          {
+            name: 'rows',
+            type: 'array',
+            defaultValue: [{ text: 'a' }, { text: 'b', count: 2 }],
+            fields: [
+              { name: 'text', type: 'text' },
+              { name: 'count', type: 'number', defaultValue: 1 },
+            ],
+          },
+          {
+            name: 'layout',
+            type: 'blocks',
+            defaultValue: [{ blockType: 'note' }],
+            blocks: [{ slug: 'note', fields: [{ name: 'body', type: 'text', defaultValue: 'b' }] }],
+          },
+          {
+            name: 'group',
+            type: 'group',
+            fields: [
+              {
+                name: 'items',
+                type: 'array',
+                defaultValue: [{ label: 'x' }],
+                fields: [{ name: 'label', type: 'text' }],
+              },
+            ],
+          },
+        ],
+        versions: { maxPerDoc: 5 },
+      },
+      {
+        // dates with timezones (FUSED_WRITES.md section 12.6): the `<name>_tz` select sanitization
+        // inserts, required timezones, defaults, timezones in rows, groups and blocks
+        slug: 'zonedDates',
+        fields: [
+          { name: 'plain', type: 'date' },
+          { name: 'zoned', type: 'date', timezone: true },
+          { name: 'zonedRequired', type: 'date', required: true, timezone: true },
+          {
+            name: 'fixed',
+            type: 'date',
+            timezone: {
+              defaultTimezone: 'Europe/London',
+              supportedTimezones: [{ label: 'London', value: 'Europe/London' }],
+            },
+          },
+          {
+            name: 'tzRequired',
+            type: 'date',
+            timezone: { defaultTimezone: 'America/New_York', required: true },
+          },
+          {
+            name: 'offsets',
+            type: 'date',
+            timezone: {
+              defaultTimezone: '+05:30',
+              supportedTimezones: [
+                { label: 'UTC+5:30', value: '+05:30' },
+                { label: 'UTC-8', value: '-08:00' },
+              ],
+            },
+          },
+          {
+            name: 'rows',
+            type: 'array',
+            fields: [{ name: 'at', type: 'date', timezone: true }],
+          },
+          { name: 'group', type: 'group', fields: [{ name: 'at', type: 'date', timezone: true }] },
+          {
+            name: 'blocks',
+            type: 'blocks',
+            blocks: [
+              {
+                slug: 'dated',
+                fields: [{ name: 'at', type: 'date', required: true, timezone: true }],
+              },
+            ],
+          },
+        ],
+      },
+      {
         // compiled user validators (FUSED_WRITES.md section 12.7): what they read of the
         // options object, the merged data, ticks, identity, a throwing one
         slug: 'validated',

@@ -1,3 +1,5 @@
+import { expect } from 'vitest'
+
 /**
  * Differential corpus of the fused writes' write-side library (packages/engine-rs/FUSED_WRITES.md
  * section 12): every case runs upstream's `create` / `update` on the TS engine and
@@ -10,6 +12,7 @@
  */
 import type { Case, Fixtures } from './corpus.js'
 
+import { buildWritePlan } from '../../../packages/engine-rs/src/fuse-write/writePlan.js'
 import { test } from '../../__helpers/int/vitest.js'
 import { requireTsEngine } from '../requireTsEngine.js'
 import { finish, fixtures, runAll } from './corpus.js'
@@ -696,6 +699,166 @@ const jsonUpdates = (): Case[] =>
     { name: 'untouched', data: { rows: [] }, seed: { data: { required: { deep: [1] } } } },
   ].map((c) => ({ ...c, collection: 'jsons' }))
 
+const schemaJsonCases = (): Case[] =>
+  [
+    { name: 'valid enum', data: { json: { foo: 'bar' }, typed: { name: 'ab' } } },
+    { name: 'invalid enum', data: { json: { foo: 'bad' }, typed: { name: 'ab' } } },
+    { name: 'number enum', data: { json: { number: 5, baz: 'kept' }, typed: { name: 'n' } } },
+    { name: 'negative zero enum', data: { json: { number: -0 }, typed: { name: 'n' } } },
+    {
+      name: 'nested strict objects',
+      data: {
+        json: { array: [{ text: 'a', object: { array: [1, 2.5], text: 't' } }, {}] },
+        typed: { name: 'n' },
+      },
+    },
+    { name: 'strict extra key', data: { json: { array: [{ other: 1 }] }, typed: { name: 'n' } } },
+    { name: 'not an object', data: { json: [1], typed: { name: 'n' } } },
+    { name: 'empty values', data: { json: {}, typed: [] } },
+    { name: 'null json', data: { json: null, typed: { name: 'n' } } },
+    { name: 'missing required', data: { json: { foo: 'bar' } } },
+    { name: 'empty required', data: { typed: {} } },
+    {
+      name: 'catchall integers',
+      data: { typed: { name: 'n', score: 5, other: null, zero: 0, top: 100 } },
+    },
+    { name: 'catchall out of range', data: { typed: { name: 'n', score: 101 } } },
+    { name: 'catchall fraction', data: { typed: { name: 'n', score: 1.5 } } },
+    { name: 'catchall string', data: { typed: { name: 'n', score: '5' } } },
+    { name: 'required key absent', data: { typed: { flag: true } } },
+    { name: 'code points', data: { typed: { name: '😀😀😀😀' } } },
+    { name: 'too long', data: { typed: { name: 'abcde' } } },
+    { name: 'empty name', data: { typed: { name: '' } } },
+    {
+      name: 'every keyword',
+      data: { typed: { name: 'abcd', tags: ['a', 'b'], flag: false, ratio: 0.5, kind: 'k' } },
+    },
+    { name: 'too many items', data: { typed: { name: 'n', tags: ['a', 'b', 'c'] } } },
+    { name: 'too few items', data: { typed: { name: 'n', tags: [] } } },
+    { name: 'exclusive bound', data: { typed: { name: 'n', ratio: 1 } } },
+    { name: 'wrong const', data: { typed: { name: 'n', kind: 'x' } } },
+    { name: 'scalar value', data: { typed: 5 } },
+    { name: 'false value', data: { typed: false } },
+    { name: 'string value', data: { typed: '{"name":"n"}' } },
+  ].map((c) => ({ ...c, collection: 'schemaJsons' }))
+
+const schemaJsonUpdates = (): Case[] =>
+  [
+    {
+      name: 'replace valid',
+      data: { typed: { name: 'm', flag: true } },
+      seed: { data: { typed: { name: 'n' } } },
+    },
+    {
+      name: 'replace invalid',
+      data: { json: { foo: 'nope' } },
+      seed: { data: { typed: { name: 'n' } } },
+    },
+    {
+      name: 'untouched stored',
+      data: { json: { foo: 'foobar' } },
+      seed: { data: { typed: { name: 'n', score: 3 } } },
+    },
+    {
+      name: 'invalid stored, untouched',
+      data: { json: { foo: 'bar' } },
+      seed: { raw: { typed: { name: 'toolong', score: -1 } } },
+    },
+    {
+      name: 'clear',
+      data: { json: null },
+      seed: { data: { json: { foo: 'bar' }, typed: { name: 'n' } } },
+    },
+  ].map((c) => ({ ...c, collection: 'schemaJsons' }))
+
+const defaultRowsCases = (): Case[] =>
+  [
+    { name: 'defaults', data: {} },
+    { name: 'given rows', data: { rows: [{ text: 'x' }], layout: [], group: { items: [] } } },
+    { name: 'null rows', data: { rows: null, layout: null, group: { items: null } } },
+    { name: 'null group', data: { title: 't', group: null } },
+  ].map((c) => ({ ...c, collection: 'defaultRows' }))
+
+const defaultRowsUpdates = (): Case[] =>
+  [
+    { name: 'title', data: { title: 'u' }, seed: { data: {} } },
+    { name: 'clear rows', data: { rows: null, layout: [] }, seed: { data: {} } },
+    { name: 'stored without rows', data: { title: 'u' }, seed: { raw: { title: 'raw' } } },
+  ].map((c) => ({ ...c, collection: 'defaultRows' }))
+
+const zonedFull = () => ({
+  plain: '2024-01-02T03:04:05.000Z',
+  zoned: '2027-08-12T10:00:00.000+00:00',
+  zoned_tz: 'Europe/London',
+  zonedRequired: '2027-08-12T01:00:00.000Z',
+  zonedRequired_tz: 'Asia/Tokyo',
+  fixed: '2025-10-29T20:00:00.000+00:00',
+  offsets: '2027-08-12T04:30:00.000Z',
+  offsets_tz: '-08:00',
+  rows: [{ at: '2025-01-31T09:00:00.549Z', at_tz: 'Europe/Berlin' }, { at: null }],
+  group: { at: '2025-01-31T09:00:00.000Z', at_tz: 'Europe/Berlin' },
+  blocks: [{ blockType: 'dated', at: '2025-01-31T09:00:00.000Z', at_tz: 'Europe/Berlin' }],
+})
+
+const zonedCreates = (): Case[] =>
+  [
+    { name: 'full', data: zonedFull() },
+    {
+      name: 'required only',
+      data: { zonedRequired: '2027-08-12T01:00:00.000Z', zonedRequired_tz: 'Europe/London' },
+    },
+    { name: 'required timezone missing', data: { zonedRequired: '2027-08-12T01:00:00.000Z' } },
+    {
+      name: 'required timezone empty',
+      data: { zonedRequired: '2027-08-12T01:00:00.000Z', zonedRequired_tz: '' },
+    },
+    { name: 'required date missing', data: { zonedRequired_tz: 'Europe/London' } },
+    {
+      name: 'unsupported timezone',
+      data: { zonedRequired: '2027-08-12T01:00:00.000Z', zonedRequired_tz: 'UTC' },
+    },
+    {
+      name: 'timezone without date',
+      data: { ...zonedFull(), zoned: undefined, tzRequired_tz: 'America/New_York' },
+    },
+    { name: 'invalid date', data: { ...zonedFull(), zoned: 'not a date' } },
+    { name: 'unsupported fixed timezone', data: { ...zonedFull(), fixed_tz: 'Asia/Tokyo' } },
+    { name: 'given fixed timezone', data: { ...zonedFull(), fixed_tz: 'Europe/London' } },
+    { name: 'null timezone', data: { ...zonedFull(), zoned_tz: null } },
+    {
+      name: 'block timezone missing',
+      data: { ...zonedFull(), blocks: [{ blockType: 'dated', at: '2025-01-31T09:00:00.000Z' }] },
+    },
+    { name: 'block date missing', data: { ...zonedFull(), blocks: [{ blockType: 'dated' }] } },
+    { name: 'tz required, no date', data: { ...zonedFull(), tzRequired_tz: null } },
+  ].map((c) => ({ ...c, collection: 'zonedDates' }))
+
+const zonedUpdates = (): Case[] =>
+  [
+    { name: 'date only', data: { zoned: '2030-01-01T00:00:00.000Z' }, seed: { data: zonedFull() } },
+    { name: 'timezone only', data: { zoned_tz: 'Asia/Tokyo' }, seed: { data: zonedFull() } },
+    {
+      name: 'required date, stored timezone',
+      data: { zonedRequired: '2030-01-01T00:00:00.000Z' },
+      seed: { data: zonedFull() },
+    },
+    {
+      name: 'required timezone cleared',
+      data: { zonedRequired_tz: null },
+      seed: { data: zonedFull() },
+    },
+    {
+      name: 'stored without timezone',
+      data: { plain: '2030-01-01T00:00:00.000Z' },
+      seed: { raw: { zonedRequired: new Date(1_800_000_000_000) } },
+    },
+    {
+      name: 'rows replaced',
+      data: { rows: [{ at: '2030-01-01T00:00:00.000Z' }] },
+      seed: { data: zonedFull() },
+    },
+  ].map((c) => ({ ...c, collection: 'zonedDates' }))
+
 const tabbedFull = (f: Fixtures) => ({
   title: 't',
   details: { summary: 's', score: 3, author: f.author, links: [{ url: 'u1' }, { url: 'u2' }] },
@@ -956,6 +1119,50 @@ test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
     const f = await fixtures(payload)
     await runAll(payload, 'json update', jsonUpdates(), f)
     finish('json update')
+  })
+
+  test('json schema creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'json schema create', schemaJsonCases(), f)
+    finish('json schema create')
+  })
+
+  test('json schema updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'json schema update', schemaJsonUpdates(), f)
+    finish('json schema update')
+  })
+
+  test('json schema keywords the prepare does not model make the collection ineligible', ({
+    payload,
+  }) => {
+    expect(buildWritePlan({ collection: payload.collections.patternJsons, payload }).reason).toBe(
+      'json:jsonSchema:pattern',
+    )
+  })
+
+  test('array defaults: creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'array defaults create', defaultRowsCases(), f)
+    finish('array defaults create')
+  })
+
+  test('array defaults: updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'array defaults update', defaultRowsUpdates(), f)
+    finish('array defaults update')
+  })
+
+  test('timezone creates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'timezone create', zonedCreates(), f)
+    finish('timezone create')
+  })
+
+  test('timezone updates', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'timezone update', zonedUpdates(), f)
+    finish('timezone update')
   })
 
   test('tabbed creates', async ({ payload }) => {

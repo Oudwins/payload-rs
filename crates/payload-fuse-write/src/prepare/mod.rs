@@ -7,6 +7,7 @@ mod before_change;
 mod before_validate;
 mod exec;
 mod heap;
+mod json_schema;
 mod mongoose;
 mod ops;
 pub mod plan;

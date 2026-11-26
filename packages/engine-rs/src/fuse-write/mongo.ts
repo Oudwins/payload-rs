@@ -267,7 +267,7 @@ const captureCreateReadings = (
   data: Any,
   hasVersions: boolean,
 ) => {
-  const rows = countMissingRowIds(fields, data)
+  const rows = countMissingRowIds(fields, data, true)
   if (rows === undefined) {
     return undefined
   }
@@ -287,8 +287,15 @@ const captureCreateReadings = (
   return { clock, documentID, ids }
 }
 
-/** Array rows without an `id` in `data` (row ids beforeValidate generates), in traversal order. */
-const countMissingRowIds = (fields: Any[], data: Any): number | undefined => {
+/**
+ * Array rows without an `id` in `data` (row ids beforeValidate generates), in traversal order.
+ * `isCreate`: beforeValidate's fallback of a field missing from `data` is its `defaultValue` (a
+ * create's `doc` is empty), so the rows of array / blocks defaults count, and a missing named
+ * group or tab is the `{}` placeholder beforeValidate gives it (whose fields' defaults count). An
+ * update's fallbacks come from the stored document, which is read in the transaction: a row id
+ * they take that is not counted here bails the prepare.
+ */
+const countMissingRowIds = (fields: Any[], data: Any, isCreate = false): number | undefined => {
   if (typeof data !== 'object' || data === null) {
     return 0
   }
@@ -296,7 +303,8 @@ const countMissingRowIds = (fields: Any[], data: Any): number | undefined => {
   for (const field of fields) {
     let nested: number | undefined = 0
     if (field.type === 'array' || field.type === 'blocks') {
-      const rows = data[field.name]
+      const rows =
+        isCreate && data[field.name] === undefined ? field.defaultValue : data[field.name]
       for (const row of Array.isArray(rows) ? rows : []) {
         if (typeof row === 'object' && row !== null && 'id' in row && !row.id) {
           return undefined
@@ -309,7 +317,7 @@ const countMissingRowIds = (fields: Any[], data: Any): number | undefined => {
         if (!Array.isArray(rowFields)) {
           return undefined
         }
-        nested = countMissingRowIds(rowFields, row)
+        nested = countMissingRowIds(rowFields, row, isCreate)
         if (nested === undefined) {
           return undefined
         }
@@ -319,7 +327,11 @@ const countMissingRowIds = (fields: Any[], data: Any): number | undefined => {
     }
     if (field.type === 'tabs') {
       for (const tab of field.tabs) {
-        nested = countMissingRowIds(tab.fields, 'name' in tab ? data[tab.name] : data)
+        nested = countMissingRowIds(
+          tab.fields,
+          'name' in tab ? placeholder(data[tab.name], isCreate) : data,
+          isCreate,
+        )
         if (nested === undefined) {
           return undefined
         }
@@ -328,7 +340,11 @@ const countMissingRowIds = (fields: Any[], data: Any): number | undefined => {
       continue
     }
     if (Array.isArray(field.fields)) {
-      nested = countMissingRowIds(field.fields, 'name' in field ? data[field.name] : data)
+      nested = countMissingRowIds(
+        field.fields,
+        'name' in field ? placeholder(data[field.name], isCreate) : data,
+        isCreate,
+      )
       if (nested === undefined) {
         return undefined
       }
@@ -337,6 +353,10 @@ const countMissingRowIds = (fields: Any[], data: Any): number | undefined => {
   }
   return count
 }
+
+/** A named group's / tab's data in beforeValidate: a non-object becomes `{}`. */
+const placeholder = (value: unknown, isCreate: boolean) =>
+  isCreate && typeof value !== 'object' ? {} : value
 
 /**
  * A value in the boundary's tree encoding `fuseWritePrepare` decodes (`decode_value_bson`):

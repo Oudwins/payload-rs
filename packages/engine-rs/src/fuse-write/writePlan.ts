@@ -299,13 +299,6 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
   if (field.admin?.condition) {
     return ineligible('field:condition')
   }
-  if (type === 'date' && field.timezone) {
-    return ineligible('date:timezone')
-  }
-  if (type === 'json' && field.jsonSchema) {
-    // the validator's `validateJSONSchema` (zod) is not ported
-    return ineligible('json:jsonSchema')
-  }
   const label = labelPlan(field.label)
   if (label !== undefined) {
     out.label = label
@@ -402,6 +395,14 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
         }
       } else if (field.filterOptions) {
         return ineligible('field:filterOptions')
+      }
+      if (type === 'json' && field.jsonSchema) {
+        options.jsonSchema = jsonSchemaPlan(builder, field)
+      }
+      if (type === 'date' && field.timezone) {
+        // the validator reads `timezone` (truthiness) and the sibling `<name>_tz` (the select
+        // field sanitization inserts after this one, a field of the plan like any other)
+        options.timezone = true
       }
       out.vo = options
     }
@@ -579,6 +580,235 @@ const userFunctionPlan = (
 }
 
 /**
+ * A json field's `jsonSchema` as the prepare checks it (crates/payload-fuse-write
+ * `prepare/json_schema.rs`): upstream's `validateJSONSchema` runs zod's `fromJSONSchema` on
+ * `jsonSchema.schema` (a JSON round trip of it) and `safeParse`s the value; this converts the
+ * schema the way `fromJSONSchema` does, for the keywords the prepare models, into its nodes, and
+ * makes the collection ineligible (`json:jsonSchema:<keyword>`) for anything else. Without both
+ * `uri` and `schema`, `validateJSONSchema` fetches the schema (and replaces `jsonSchema.schema`
+ * with the promise): ineligible. A localized json field pushes its `mergeLocaleActions` entry
+ * after the validator settles, which takes more ticks with a schema than the prepare models.
+ */
+const jsonSchemaPlan = (builder: Builder, field: Any) => {
+  if (field.localized) {
+    return ineligible('json:jsonSchema:localized')
+  }
+  const jsonSchema = watch(builder, field, 'jsonSchema')
+  if (typeof jsonSchema !== 'object' || !watch(builder, jsonSchema, 'uri')) {
+    return ineligible('json:jsonSchema:fetch')
+  }
+  const schema = watch(builder, jsonSchema, 'schema')
+  if (!schema) {
+    return ineligible('json:jsonSchema:fetch')
+  }
+  let normalized: unknown
+  try {
+    normalized = JSON.parse(JSON.stringify(schema))
+  } catch {
+    return ineligible('json:jsonSchema:json')
+  }
+  return jsonSchemaNode(normalized)
+}
+
+/**
+ * The zod keywords the conversion models (`$schema` only picks the draft, which matters for refs;
+ * a boolean `exclusiveMinimum` / `exclusiveMaximum` makes `minimum` / `maximum` exclusive in every
+ * draft, as zod reads them).
+ */
+const jsonSchemaKeys = new Set([
+  '$comment',
+  '$schema',
+  'additionalProperties',
+  'const',
+  'default',
+  'description',
+  'enum',
+  'exclusiveMaximum',
+  'exclusiveMinimum',
+  'items',
+  'maximum',
+  'maxItems',
+  'maxLength',
+  'minimum',
+  'minItems',
+  'minLength',
+  'properties',
+  'readOnly',
+  'required',
+  'type',
+])
+
+const isLiteral = (value: unknown) =>
+  value === null || ['boolean', 'number', 'string'].includes(typeof value)
+
+/** zod's `convertSchema` (from-json-schema.ts) for the modelled keywords. */
+const jsonSchemaNode = (schema: unknown): unknown => {
+  if (typeof schema === 'boolean') {
+    return { k: schema ? 'any' : 'never' }
+  }
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    return ineligible('json:jsonSchema:shape')
+  }
+  const s: Any = schema
+  for (const key of Object.keys(s)) {
+    // other keys are metadata for zod's registry (no effect on parsing), except the ones it
+    // treats (composition, refs, ids, patterns, formats, tuples, ...): not modelled
+    if (!jsonSchemaKeys.has(key) && zodKeywords.has(key)) {
+      return ineligible(`json:jsonSchema:${key}`)
+    }
+  }
+  if (s.enum !== undefined) {
+    if (!Array.isArray(s.enum) || !s.enum.every(isLiteral)) {
+      return ineligible('json:jsonSchema:enum')
+    }
+    return { k: s.enum.length === 0 ? 'never' : 'lit', v: s.enum }
+  }
+  if (s.const !== undefined) {
+    return isLiteral(s.const) ? { k: 'lit', v: [s.const] } : ineligible('json:jsonSchema:const')
+  }
+  if (Array.isArray(s.type)) {
+    const options = s.type.map((type: unknown) => jsonSchemaNode({ ...s, type }))
+    return options.length === 0
+      ? { k: 'never' }
+      : options.length === 1
+        ? options[0]
+        : { k: 'union', o: options }
+  }
+  const number = (key: string) => (typeof s[key] === 'number' ? s[key] : undefined)
+  switch (s.type) {
+    case 'array':
+      if (Array.isArray(s.items) || s.prefixItems !== undefined) {
+        return ineligible('json:jsonSchema:tuple')
+      }
+      return {
+        e: s.items === undefined ? { k: 'any' } : jsonSchemaNode(s.items),
+        k: 'arr',
+        max: number('maxItems'),
+        min: number('minItems'),
+      }
+    case 'boolean':
+      return { k: 'bool' }
+    case 'integer':
+    case 'number':
+      return {
+        gt:
+          number('exclusiveMinimum') ??
+          (s.exclusiveMinimum === true ? number('minimum') : undefined),
+        gte: s.exclusiveMinimum === true ? undefined : number('minimum'),
+        int: s.type === 'integer',
+        k: 'num',
+        lt:
+          number('exclusiveMaximum') ??
+          (s.exclusiveMaximum === true ? number('maximum') : undefined),
+        lte: s.exclusiveMaximum === true ? undefined : number('maximum'),
+      }
+    case 'null':
+      return { k: 'null' }
+    case 'object': {
+      const properties = s.properties || {}
+      if (typeof properties !== 'object' || Array.isArray(properties)) {
+        return ineligible('json:jsonSchema:properties')
+      }
+      if (s.required !== undefined && !Array.isArray(s.required)) {
+        // `new Set(schema.required || [])`: a string's characters, a throw for others
+        return ineligible('json:jsonSchema:required')
+      }
+      const required = new Set(s.required ?? [])
+      const additional = s.additionalProperties
+      if (
+        additional !== undefined &&
+        typeof additional !== 'boolean' &&
+        (typeof additional !== 'object' || additional === null || Array.isArray(additional))
+      ) {
+        return ineligible('json:jsonSchema:additionalProperties')
+      }
+      return {
+        k: 'obj',
+        p: Object.entries(properties).map(([name, property]) =>
+          name === '__proto__'
+            ? ineligible('json:jsonSchema:__proto__')
+            : { n: name, r: required.has(name) ? 1 : undefined, s: jsonSchemaNode(property) },
+        ),
+        x:
+          additional === false
+            ? 'strict'
+            : typeof additional === 'object'
+              ? jsonSchemaNode(additional)
+              : 'pass',
+      }
+    }
+    case 'string':
+      return { k: 'str', max: number('maxLength'), min: number('minLength') }
+    case undefined:
+      return { k: 'any' }
+    default:
+      // zod throws `Unsupported type`: `validateJSONSchema` returns its message
+      return ineligible('json:jsonSchema:type')
+  }
+}
+
+/** The keys zod's `fromJSONSchema` gives a meaning (`RECOGNIZED_KEYS`, plus the `$schema` drafts). */
+const zodKeywords = new Set([
+  '$anchor',
+  '$comment',
+  '$defs',
+  '$dynamicAnchor',
+  '$dynamicRef',
+  '$id',
+  '$ref',
+  '$schema',
+  '$vocabulary',
+  'additionalItems',
+  'additionalProperties',
+  'allOf',
+  'anyOf',
+  'const',
+  'contains',
+  'contentEncoding',
+  'contentMediaType',
+  'contentSchema',
+  'default',
+  'definitions',
+  'dependentRequired',
+  'dependentSchemas',
+  'description',
+  'else',
+  'enum',
+  'exclusiveMaximum',
+  'exclusiveMinimum',
+  'format',
+  'id',
+  'if',
+  'items',
+  'maxContains',
+  'maximum',
+  'maxItems',
+  'maxLength',
+  'maxProperties',
+  'minContains',
+  'minimum',
+  'minItems',
+  'minLength',
+  'minProperties',
+  'multipleOf',
+  'not',
+  'nullable',
+  'oneOf',
+  'pattern',
+  'patternProperties',
+  'prefixItems',
+  'properties',
+  'propertyNames',
+  'readOnly',
+  'required',
+  'then',
+  'type',
+  'unevaluatedItems',
+  'unevaluatedProperties',
+  'uniqueItems',
+])
+
+/**
  * A select's `options` as its validator reads them (`option.value`, never the label): an option
  * whose label is a function (drafts' `_status`, `({ t }) => t('version:draft')`) keeps only its
  * `value`; anything else as configured.
@@ -726,6 +956,22 @@ const pathPlan = (path: string, type: Any) => {
         ineligible('schema:default')
       }
       out.d = { arr: value }
+    } else if (
+      type.$isMongooseDocumentArray &&
+      !defaultValue.$runBeforeSetters &&
+      type.options &&
+      Object.hasOwn(type.options, 'default') &&
+      type.options.default !== null &&
+      type.options.default !== undefined &&
+      typeof type.options.default !== 'function'
+    ) {
+      // a document array's wrapper of its array default (`fn.call(this)` of the array default
+      // `[].concat(default)`), a function default that runs after the setters
+      const value = [].concat(type.options.default)
+      if (!isInertTree(value, false)) {
+        ineligible('schema:default')
+      }
+      out.d = { after: value }
     } else {
       ineligible('schema:default')
     }

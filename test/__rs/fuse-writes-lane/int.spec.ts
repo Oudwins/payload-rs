@@ -698,6 +698,102 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     ).rejects.toThrow('The following field is invalid: Config')
   })
 
+  test('should write json fields with a jsonSchema and dates with timezones', async ({
+    payload,
+  }) => {
+    const hitsBefore = { ...fuseWriteStats()?.hits }
+    const doc = await payload.create({
+      collection: 'events',
+      data: {
+        title: 'e',
+        details: { seats: 3, tags: ['a'], venue: 'hall' },
+        startsAt: '2027-08-12T01:00:00.000Z',
+        startsAt_tz: 'Asia/Tokyo',
+        slots: [{ at: '2027-08-12T02:00:00.000Z', at_tz: 'Europe/Berlin' }, {}],
+      },
+      overrideAccess: true,
+    })
+
+    const updated = await payload.update({
+      id: doc.id,
+      collection: 'events',
+      data: {
+        details: { venue: 'park' },
+        endsAt: '2027-08-13T00:00:00.000Z',
+        endsAt_tz: 'Asia/Tokyo',
+      },
+      overrideAccess: true,
+    })
+    const many = await payload.update({
+      collection: 'events',
+      data: { startsAt: '2028-01-01T00:00:00.000Z' },
+      overrideAccess: true,
+      where: { id: { equals: doc.id } },
+    })
+
+    expect(doc).toMatchObject({
+      details: { seats: 3, tags: ['a'], venue: 'hall' },
+      endsAt_tz: 'Europe/London',
+      startsAt_tz: 'Asia/Tokyo',
+    })
+    expect(doc.slots[0]).toMatchObject({ at_tz: 'Europe/Berlin' })
+    expect(updated).toMatchObject({ details: { venue: 'park' }, endsAt_tz: 'Asia/Tokyo' })
+    expect(many.docs[0]).toMatchObject({
+      startsAt: '2028-01-01T00:00:00.000Z',
+      startsAt_tz: 'Asia/Tokyo',
+    })
+    await expect(
+      payload.create({
+        collection: 'events',
+        data: {
+          title: 'x',
+          details: { venue: 'roof' },
+          startsAt: '2027-08-12T01:00:00.000Z',
+          startsAt_tz: 'Asia/Tokyo',
+        },
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Details')
+    await expect(
+      payload.create({
+        collection: 'events',
+        data: { title: 'x', startsAt: '2027-08-12T01:00:00.000Z' },
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Starts At')
+    await payload.delete({ id: doc.id, collection: 'events', overrideAccess: true })
+    const hits = fuseWriteStats()?.hits
+    if (
+      hits &&
+      process.env.PAYLOAD_RS_FUSE_WRITES !== 'off' &&
+      process.env.PAYLOAD_ENGINE !== 'ts'
+    ) {
+      expect(hits.create).toBeGreaterThan(hitsBefore.create ?? 0)
+      expect(hits.updateByID).toBeGreaterThan(hitsBefore.updateByID ?? 0)
+      expect(hits.updateMany).toBeGreaterThan(hitsBefore.updateMany ?? 0)
+    }
+  })
+
+  test('should create documents with array defaults', async ({ payload }) => {
+    const hitsBefore = fuseWriteStats()?.hits.create ?? 0
+    const doc = await payload.create({ collection: 'presets', data: {}, overrideAccess: true })
+    const given = await payload.create({
+      collection: 'presets',
+      data: { title: 'g', steps: [{ label: 'x' }], meta: {} },
+      overrideAccess: true,
+    })
+
+    expect(doc.steps.map((step) => step.label)).toStrictEqual(['one', 'two'])
+    expect(doc.steps.every((step) => typeof step.id === 'string')).toBe(true)
+    expect(doc.layout).toMatchObject([{ blockType: 'card', note: 'n' }])
+    expect(doc.meta.links).toMatchObject([{ url: 'u' }])
+    expect(given.steps).toMatchObject([{ label: 'x' }])
+    expect(given.meta.links).toMatchObject([{ url: 'u' }])
+    if (process.env.PAYLOAD_RS_FUSE_WRITES !== 'off' && process.env.PAYLOAD_ENGINE !== 'ts') {
+      expect(fuseWriteStats()?.hits.create).toBe(hitsBefore + 2)
+    }
+  })
+
   test('should have served writes without lane differences', async () => {
     const stats = fuseWriteStats()
 

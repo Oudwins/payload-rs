@@ -54,7 +54,8 @@ pub fn build_insert(heap: &Heap, schema: &Schema, data: &V, new_id: &mut dyn FnM
 
 /// The `new Constructor(obj)` of a (sub)document: the defaults mongoose applies before the
 /// setters (static ones, arrays, and the top-level `_id`'s `auto` ObjectId, whose reading
-/// `new_id` takes), `$set(obj)` with `getKeysInSchemaOrder`, then the reorder by `schema.tree`.
+/// `new_id` takes), `$set(obj)` with `getKeysInSchemaOrder`, the defaults it applies after the
+/// setters (document arrays' array defaults), then the reorder by `schema.tree`.
 fn construct(
   heap: &Heap,
   schema: &Schema,
@@ -81,7 +82,7 @@ fn construct(
         }
         continue;
       }
-      PathDefault::None => continue,
+      PathDefault::None | PathDefault::AfterSetters(_) => continue,
     };
     let mut scratch = Heap::default();
     let value = scratch.import(default)?;
@@ -111,6 +112,21 @@ fn construct(
       }
       // strict: not a path of the schema
       None => {}
+    }
+  }
+  // `applyDefaults(..., isBeforeSetters: false)`: function defaults that run after the setters
+  for (name, path) in &schema.paths {
+    let PathDefault::AfterSetters(default) = &path.default else {
+      continue;
+    };
+    if doc.get(name).is_some_and(|value| !matches!(value, Cv::Undef)) {
+      continue;
+    }
+    let mut scratch = Heap::default();
+    let value = scratch.import(default)?;
+    let cast = cast_path(&scratch, path, name, &value, validate_enums)?;
+    if !matches!(cast, Cv::Undef) {
+      doc.insert(name.clone(), cast);
     }
   }
   let mut ordered = IndexMap::with_capacity(doc.len());
