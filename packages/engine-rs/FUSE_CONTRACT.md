@@ -273,8 +273,19 @@ reads the driver lane would send, without mongoose:
 
 - upstream's planning: `buildSortParam` (no relationship sort: `sortAggregation` stays empty),
   `buildProjectionFromSelect`, `sanitizeQueryValue`, and `parseParams` / `buildAndOrConditions` /
-  `buildSearchParam` re-stated synchronously without their sub-query branches (relationship /
-  join hops, nested relationship queries, `near` / geo / `all` / `not_like` run the exact lane);
+  `buildSearchParam` re-stated synchronously (join hops, more than one relationship hop, nested
+  relationship queries, `near` / geo / `all` / `not_like` run the exact lane);
+- a one-hop relationship path (`'author.name': { like }`, also hasMany relationships, paths in
+  groups / arrays, inside `and` / `or`): `buildSearchParam`'s sub-query, `SubModel.buildQuery` of
+  `{ [subPath]: { [operator]: val } }` on the related collection, cast like any filter, with
+  mongoose's projection of `.select({ _id: true })`. The reads carry the sub-queries
+  (`subqueries: [{ collection, filter, projection, path }]`, in upstream's order); the count's and
+  the find's filters hold an empty `$in` array at `path` (keys and array indices), the one array
+  the parse produced for that sub-query, on a field whose cast keeps ObjectIds as they are. The
+  native call runs the sub-queries one after the other (upstream awaits each inside `buildQuery`,
+  before the count and the find), puts each one's `_id`s at its `path`, then the reads. Related
+  collections with custom ids and documents whose `_id` is not an ObjectId run the exact lane;
+  the fused writes' own reads (inside their transaction) take no sub-queries;
 - mongoose's casting (`cast.js`) re-stated for the cases where it is the identity (a string on a
   String path, a finite number on a Number path, an ObjectId on an ObjectId path, a valid Date on
   a Date path, a boolean on a Boolean path, `null` / `undefined`, Mixed paths, prefix paths of
@@ -298,7 +309,10 @@ address in the job's table, written as the driver lane's JSON text of the subtre
 never reaches into one, because only plan leaves become raw. Canonical text converts everything.
 Shadow mode also runs the exact lane traced and compares its driver
 operations (filter, sort, projection, skip, limit, hint, collation as js-bson serializes them)
-with the fused reads.
+with the fused reads. The exact lane's sub-queries run on mongoose, so shadow mode also traces
+the Node driver's `Collection` calls; the ids at a sub-query's `path` are taken from the exact
+lane's command (they must be ObjectIds: what the same sub-query returned there; the results are
+compared on their own).
 
 ## 9. Population (depth >= 1)
 

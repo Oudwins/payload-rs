@@ -33,7 +33,7 @@ import {
   planFor,
 } from '../mongo-driver/lane.js'
 import { verifyMode } from '../mongo-driver/verify.js'
-import { isTracing, runTraced, type TraceEvent } from '../shadow-mongo/trace.js'
+import { installDriverTrace, isTracing, runTraced, type TraceEvent } from '../shadow-mongo/trace.js'
 import { registerFusedTarget } from './targets.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- mirrors untyped upstream code */
@@ -102,7 +102,7 @@ export const registerFusedMongoTarget = ({
     }
     const target: FusedTarget = {
       backend: 'mongodb',
-      encode: (method, args) => encode(lane, method, args),
+      encode: (method, args, isWriteRead) => encode(lane, method, args, isWriteRead),
       relatedBackend: (slug, args) => relatedBackend(lane, slug, args),
       run: (requestJson, payload) => {
         const { bytes, client, plan } = payload as MongoPayload
@@ -126,6 +126,7 @@ const encode = (
   lane: DriverLane,
   method: 'count' | 'find' | 'findOne',
   args: Any,
+  isWriteRead: boolean,
 ): { db: string; payload: MongoPayload } | string => {
   try {
     mongooseTypes = lane.mongoose.Types
@@ -135,7 +136,14 @@ const encode = (
         : method === 'findOne'
           ? findOneReads(lane, args)
           : countReads(lane, args)
-    const { plan, ...rest } = reads
+    const { plan, subqueries, ...rest } = reads
+    if (subqueries) {
+      if (isWriteRead) {
+        // the fused writes read their stored documents inside their transaction, without sub-queries
+        return 'mongo:where:relationship-path:write'
+      }
+      rest.subqueries = subqueries
+    }
     if (lane.view.allowAdditionalKeys) {
       rest.allowAdditionalKeys = true
     }
@@ -278,10 +286,11 @@ const findReads = (lane: DriverLane, args: Any): { plan: number } & Record<strin
   if (sortAggregation.length > 0) {
     unsupported('sort:aggregation')
   }
-  const query = buildFilter({
+  const { query, subqueries } = buildFilter({
     adapter,
     collectionSlug,
     fields: collectionConfig.flattenedFields,
+    lane,
     locale,
     where,
   })
@@ -322,7 +331,11 @@ const findReads = (lane: DriverLane, args: Any): { plan: number } & Record<strin
       paginationOptions.pagination = false
     }
   }
-  return { ...paginateReads(Model, query, paginationOptions), plan }
+  return {
+    ...paginateReads(Model, query, paginationOptions),
+    plan,
+    subqueries: subqueryReads(Model.schema, query, subqueries),
+  }
 }
 
 /** mongoose-paginate-v2 `paginate(query, options)` (src/index.js) up to its two queries. */
@@ -437,10 +450,11 @@ const findOneReads = (lane: DriverLane, args: Any): { plan: number } & Record<st
   if (!adapter.useJoinAggregations && joins && Object.keys(joins).length > 0) {
     unsupported('resolveJoins')
   }
-  const query = buildFilter({
+  const { query, subqueries } = buildFilter({
     adapter,
     collectionSlug,
     fields: collectionConfig.flattenedFields,
+    lane,
     locale,
     where,
   })
@@ -454,7 +468,13 @@ const findOneReads = (lane: DriverLane, args: Any): { plan: number } & Record<st
   if (execProjection !== undefined) {
     find.projection = execProjection
   }
-  return { collection: Model.collection.collectionName, find, op: 'findOne', plan }
+  return {
+    collection: Model.collection.collectionName,
+    find,
+    op: 'findOne',
+    plan,
+    subqueries: subqueryReads(Model.schema, query, subqueries),
+  }
 }
 
 /** db-mongodb `count` (the driver lane's `laneCount`). */
@@ -464,10 +484,11 @@ const countReads = (lane: DriverLane, args: Any): { plan: number } & Record<stri
   if (hasNear(where)) {
     unsupported('near')
   }
-  const query = buildFilter({
+  const { query, subqueries } = buildFilter({
     adapter,
     collectionSlug,
     fields: collectionConfig.flattenedFields,
+    lane,
     locale,
     where,
   })
@@ -482,40 +503,66 @@ const countReads = (lane: DriverLane, args: Any): { plan: number } & Record<stri
     }
     count = countSpec(Model, query, options)
   }
-  return { collection: Model.collection.collectionName, count, op: 'count', plan }
+  return {
+    collection: Model.collection.collectionName,
+    count,
+    op: 'count',
+    plan,
+    subqueries: subqueryReads(Model.schema, query, subqueries),
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
 // `buildQuery` (db-mongodb queries/parseParams.ts, buildAndOrConditions.ts, buildSearchParams.ts)
 
+/**
+ * `buildQuery`: the query and the relationship sub-queries its `buildSearchParam`s run, in their
+ * order (each one's ids fill the query's `$in` array `ids`).
+ */
 const buildFilter = ({
   adapter,
   collectionSlug,
   fields,
+  lane,
   locale,
   where,
 }: {
   adapter: Any
   collectionSlug: string
   fields: Any[]
+  lane: DriverLane
   locale: Any
   where: Any
-}) =>
-  parseParams({
+}) => {
+  const subqueries: SubQuery[] = []
+  const query = parseParams({
     collectionSlug,
     fields,
+    lane,
     locale,
     parentIsLocalized: false,
     payload: adapter.payload,
+    subqueries,
     where,
   })
+  return { query, subqueries }
+}
+
+/**
+ * The sub-query of a relationship path (`buildSearchParam`'s `paths.length > 1` branch, one hop):
+ * `SubModel.find(subQuery).lean().select({ _id: true })` as mongoose sends it, and the `$in` array
+ * of the parent query its ids fill.
+ */
+type SubQuery = { collection: string; filter: Any; ids: unknown[]; projection: unknown }
 
 type ParseArgs = {
   collectionSlug: string
   fields: Any[]
+  lane: DriverLane
   locale: Any
   parentIsLocalized: boolean
   payload: Any
+  subqueries: SubQuery[]
   where: Any
 }
 
@@ -626,10 +673,12 @@ const buildSearchParam = ({
   collectionSlug,
   fields,
   incomingPath,
+  lane,
   locale,
   operator,
   parentIsLocalized,
   payload,
+  subqueries,
   val,
 }: { incomingPath: string; operator: string; val: unknown } & Omit<ParseArgs, 'where'>):
   | { path?: string; value?: Any }
@@ -676,8 +725,8 @@ const buildSearchParam = ({
   if (!paths[0]) {
     return undefined
   }
-  if (paths.length > 1) {
-    // a relationship / join hop: sub-queries
+  if (paths.length > 2) {
+    // more than one relationship hop: sub-queries that depend on each other
     unsupported('where:relationship-path')
   }
   const [{ field, path }] = paths
@@ -701,11 +750,24 @@ const buildSearchParam = ({
     return undefined
   }
   const { operator: formattedOperator, rawQuery, val: formattedValue } = sanitizedQueryValue as Any
-  if (rawQuery) {
+  if (rawQuery && paths.length === 1) {
     return { value: rawQuery }
   }
   if (!formattedOperator) {
     return undefined
+  }
+  if (paths.length > 1) {
+    return relationshipSearchParam({
+      formattedOperator,
+      lane,
+      locale,
+      parentField: field,
+      path,
+      payload,
+      related: paths[1],
+      subqueries,
+      val,
+    })
   }
   if (!validOperatorSet.has(formattedOperator)) {
     return undefined
@@ -761,6 +823,119 @@ const buildSearchParam = ({
     return { path, value: formattedValue }
   }
   return { path, value: { [operatorKey]: formattedValue } }
+}
+
+/**
+ * `buildSearchParam`'s sub-query of a one-hop relationship path (`i === 0` with
+ * `pathsToQuery.length === 1`): `SubModel.buildQuery` of `{ [subPath]: { [formattedOperator]: val } }`,
+ * then `SubModel.find(subQuery).lean().select({ _id: true })`, whose ids make
+ * `{ path, value: { $in } }`. The find runs natively before the call's reads (the `$in` array stays
+ * empty here). Related collections with ObjectId ids only: `$in` holds the documents' `_id`s.
+ */
+const relationshipSearchParam = ({
+  formattedOperator,
+  lane,
+  locale,
+  parentField,
+  path,
+  payload,
+  related: { collectionSlug, path: subPath },
+  subqueries,
+  val,
+}: {
+  formattedOperator: string
+  lane: DriverLane
+  locale: Any
+  parentField: Any
+  path: string
+  payload: Any
+  related: Any
+  subqueries: SubQuery[]
+  val: unknown
+}) => {
+  if (!parentField) {
+    return undefined
+  }
+  if (!collectionSlug) {
+    // upstream's APIError
+    return unsupported('where:relationship-path')
+  }
+  if (payload.collections[collectionSlug]?.customIDType) {
+    unsupported('where:relationship-path:custom-id')
+  }
+  const { collectionConfig, Model: SubModel } = getCollection({
+    adapter: lane.view,
+    collectionSlug,
+  })
+  if (!isPristineModel(lane, SubModel)) {
+    unsupported('model')
+  }
+  const nested: SubQuery[] = []
+  // `SubModel.buildQuery` (getBuildQueryPlugin): `parseParams` on the related collection
+  const subQuery = parseParams({
+    collectionSlug,
+    fields: collectionConfig.flattenedFields,
+    lane,
+    locale,
+    parentIsLocalized: false,
+    payload,
+    subqueries: nested,
+    where: { [subPath]: { [formattedOperator]: val } },
+  })
+  if (nested.length > 0) {
+    unsupported('where:relationship-path')
+  }
+  const ids: unknown[] = []
+  subqueries.push({
+    collection: SubModel.collection.collectionName,
+    filter: castFilter(SubModel.schema, subQuery),
+    ids,
+    projection: projectionForExec(SubModel, 'find', { _id: true }),
+  })
+  return { path, value: { $in: ids } }
+}
+
+/**
+ * The sub-queries of `query` for the native call, each with the path of its `$in` array in the
+ * cast filter (`castFilter` keeps the query's structure), where its ids go. The array must occur
+ * exactly once, as the `$in` of a path whose cast keeps ObjectIds as they are.
+ */
+const subqueryReads = (schema: Any, query: Any, subqueries: SubQuery[]) => {
+  if (subqueries.length === 0) {
+    return undefined
+  }
+  const found = new Map<unknown, string[][]>(subqueries.map(({ ids }) => [ids, []]))
+  const visit = (value: Any, path: string[]) => {
+    if (Array.isArray(value)) {
+      const paths = found.get(value)
+      if (paths) {
+        paths.push(path)
+        return
+      }
+      value.forEach((item, index) => visit(item, [...path, String(index)]))
+    } else if (isPOJO(value)) {
+      for (const key of Object.keys(value)) {
+        visit(value[key], [...path, key])
+      }
+    }
+  }
+  visit(query, [])
+  return subqueries.map(({ collection, filter, ids, projection }) => {
+    const [slot, ...more] = found.get(ids)!
+    if (!slot || more.length > 0 || slot.length < 2 || slot.at(-1) !== '$in') {
+      return unsupported('where:relationship-path:slot')
+    }
+    const key = slot.at(-2)!
+    const probe = new mongooseTypes.ObjectId()
+    if (castFilter(schema, { [key]: { $in: [probe] } })[key].$in[0] !== probe) {
+      unsupported('where:relationship-path:cast')
+    }
+    const read: Record<string, unknown> = { collection, filter, path: slot }
+    if (projection !== undefined) {
+      read.projection = projection
+    }
+    return read
+  })
 }
 
 /** mongoose's `Types` (db-mongodb's copy, whose `ObjectId` `sanitizeQueryValue` builds ids with). */
@@ -935,13 +1110,16 @@ const castOperator = (schematype: Any, operator: string, value: Any): Any => {
 const isStringType = (schematype: Any): boolean =>
   schematype.instance === 'String' ||
   schematype.instance === 'Mixed' ||
-  (schematype.$isMongooseArray && schematype.caster?.instance === 'String')
+  (schematype.$isMongooseArray && schematype.embeddedSchemaType?.instance === 'String')
 
 /** `schematype.castForQuery(null, value)` for a value that is not `null`. */
 const castValue = (schematype: Any, value: Any): Any => {
   if (schematype.$isMongooseArray && !schematype.schema) {
-    // a primitive array: its caster's cast
-    return castValue(schematype.caster, value)
+    // a primitive array (`SchemaArray._castForQuery`): its embedded schema type's cast
+    if (!schematype.embeddedSchemaType || schematype.embeddedSchemaType.discriminators) {
+      unsupported('cast:array')
+    }
+    return castValue(schematype.embeddedSchemaType, value)
   }
   // `applySetters` runs the setters first; `resetId` (mongoose's `_id` setter) returns query values
   // as they are
@@ -1018,7 +1196,8 @@ const castSort = (sort: Any) => {
  * Runs the exact lane with its driver operations traced (the driver lane reports the Node driver
  * calls its commands stand for) and compares them with `reads`: the same operations in the same
  * order, with the same filter, sort, projection, skip, limit, hint and collation (as js-bson
- * serializes them). Untraced exact runs (nothing reported) are not compared.
+ * serializes them). Untraced exact runs (nothing reported) are not compared. The relationship
+ * sub-queries of `buildQuery` run on mongoose: the Node driver's `Collection` calls are traced too.
  */
 const shadowExact = async <T>(
   lane: DriverLane,
@@ -1029,6 +1208,7 @@ const shadowExact = async <T>(
   if (isTracing()) {
     return exact()
   }
+  installDriverTrace(lane.mongoose.mongo?.Collection)
   const events: TraceEvent[] = []
   const result = await runTraced({ describe: (args) => args, events }, exact)
   const operations = events.filter((event) => 'op' in event && event.op !== 'aggregate')
@@ -1039,14 +1219,17 @@ const shadowExact = async <T>(
   const serialize = (value: unknown) =>
     Buffer.from(lane.BSON.serialize({ value }, { ignoreUndefined: false })).toString('hex')
   // the operation's own reads come first (population's nested finds follow)
-  const actual = operations.slice(0, expected.length).map((event) => {
+  const actualSpecs = operations.slice(0, expected.length).map((event) => {
     const { args, collection, op } = event as { args: Any[]; collection: unknown; op: string }
-    return { collection, op, spec: serialize(operationSpec(op, args)) }
+    return { collection, op, spec: operationSpec(op, args) }
   })
-  const wanted = expected.map(({ op, spec }) => ({
-    collection: reads.collection,
+  const actual = actualSpecs.map(({ spec, ...rest }) => ({ ...rest, spec: serialize(spec) }))
+  const wanted = expected.map(({ collection, hasSubqueryIDs, op, spec }, index) => ({
+    collection,
     op,
-    spec: serialize(spec),
+    spec: serialize(
+      hasSubqueryIDs ? withSubqueryIDs(reads.subqueries, spec, actualSpecs[index]?.spec) : spec,
+    ),
   }))
   if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
     report({
@@ -1080,12 +1263,29 @@ const operationSpec = (op: string, args: Any[]) => {
   return spec
 }
 
-/** The driver calls the fused reads stand for, in the driver lane's trace order. */
+/**
+ * The driver calls the fused reads stand for, in the driver lane's trace order: the relationship
+ * sub-queries (mongoose's `find`s inside `buildQuery`), then the count and the find, whose filters
+ * hold the sub-queries' ids (`hasSubqueryIDs`).
+ */
 const expectedOperations = (reads: Any) => {
-  const out: { op: string; spec: Record<string, unknown> }[] = []
+  const out: {
+    collection: unknown
+    hasSubqueryIDs: boolean
+    op: string
+    spec: Record<string, unknown>
+  }[] = []
+  for (const { collection, filter, projection } of reads.subqueries ?? []) {
+    const spec: Record<string, unknown> = { filter }
+    if (projection !== undefined) {
+      spec.projection = projection
+    }
+    out.push({ collection, hasSubqueryIDs: false, op: 'find', spec })
+  }
+  const main = { collection: reads.collection, hasSubqueryIDs: Boolean(reads.subqueries) }
   const count = reads.count
   if (count === 'estimated') {
-    out.push({ op: 'estimatedDocumentCount', spec: {} })
+    out.push({ ...main, op: 'estimatedDocumentCount', spec: {} })
   } else if (count) {
     const spec: Record<string, unknown> = { filter: count.filter }
     if (count.collation !== undefined) {
@@ -1094,7 +1294,7 @@ const expectedOperations = (reads: Any) => {
     if (count.hint !== undefined) {
       spec.hint = count.hint
     }
-    out.push({ op: 'countDocuments', spec })
+    out.push({ ...main, op: 'countDocuments', spec })
   }
   if (reads.find) {
     const { filter, ...options } = reads.find
@@ -1104,11 +1304,45 @@ const expectedOperations = (reads: Any) => {
         spec[key] = options[key]
       }
     }
-    out.push({ op: reads.op === 'findOne' ? 'findOne' : 'find', spec })
+    out.push({ ...main, op: reads.op === 'findOne' ? 'findOne' : 'find', spec })
     if (reads.op === 'findOne') {
       // the driver's `findOne` is a `find` with `limit: 1` / `singleBatch` (both traced)
-      out.push({ op: 'find', spec })
+      out.push({ ...main, op: 'find', spec })
     }
   }
   return out
+}
+
+/**
+ * `spec` with the exact lane's ids (`actual`, the traced call's spec) at the sub-queries' `$in`
+ * paths of its filter: the ids are what the same sub-query returned to the exact lane (the
+ * results are compared on their own); they must be an array of ObjectIds.
+ */
+const withSubqueryIDs = (subqueries: Any[], spec: Record<string, unknown>, actual: Any) => {
+  let filter = spec.filter
+  for (const { path } of subqueries) {
+    let ids = actual?.filter
+    for (const key of path) {
+      ids = ids?.[key]
+    }
+    if (
+      !Array.isArray(ids) ||
+      !ids.every((id) => id instanceof mongooseTypes.ObjectId || id?._bsontype === 'ObjectId')
+    ) {
+      return spec
+    }
+    filter = setAt(filter, path, ids)
+  }
+  return { ...spec, filter }
+}
+
+/** A copy of `value` with `item` at `path` (copies along the path only). */
+const setAt = (value: Any, path: string[], item: unknown): Any => {
+  if (path.length === 0) {
+    return item
+  }
+  const [key, ...rest] = path as [string, ...string[]]
+  const copy = Array.isArray(value) ? [...value] : { ...value }
+  copy[key] = setAt(value?.[key], rest, item)
+  return copy
 }

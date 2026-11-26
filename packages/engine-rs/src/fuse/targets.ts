@@ -11,11 +11,12 @@ export type FusedTarget = {
   /**
    * The `db` part of a request for `payload.db[method](args)` and what `run` needs besides the
    * request, or the reason the call cannot be fused. Without it the `db` part is the args
-   * serialized for the engine.
+   * serialized for the engine. `isWriteRead`: the read of a fused write (src/fuse-write).
    */
   encode?: (
     method: 'count' | 'find' | 'findOne',
     args: Record<string, unknown>,
+    isWriteRead: boolean,
   ) => { db: string; payload: unknown } | string
   /**
    * Population: what the backend's nested finds of collection `slug` need besides their args

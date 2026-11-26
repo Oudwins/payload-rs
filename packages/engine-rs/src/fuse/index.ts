@@ -374,14 +374,18 @@ const serializeDbArgs = (args: unknown): string | undefined => {
   return registry.functions.length === 0 ? json : undefined
 }
 
-/** The `db` part of a request for `payload.db[method](args)` on `target`, or a guard reason. */
+/**
+ * The `db` part of a request for `payload.db[method](args)` on `target`, or a guard reason.
+ * `isWriteRead`: a fused write's read (its stored documents, inside its transaction).
+ */
 const encodeDb = (
   target: FusedTarget,
   method: 'count' | 'find' | 'findOne',
   args: Record<string, unknown>,
+  isWriteRead = false,
 ): { db: string; payload: unknown } | string => {
   if (target.encode) {
-    return target.encode(method, args)
+    return target.encode(method, args, isWriteRead)
   }
   const db = serializeDbArgs(args)
   return db === undefined ? 'db:functions' : { db, payload: undefined }
@@ -606,15 +610,20 @@ const buildFindByIDRequest = (args: Any, isOperationResult = false): Fused | und
     trash,
     where: combineQueries({ id: { equals: id } }, overrideAccess ? true : (accessResult as never)),
   })
-  const db = encodeDb(target, 'findOne', {
-    collection: config.slug,
-    draftsEnabled: replaceWithVersion,
-    joins: req.payloadAPI === 'GraphQL' ? false : joins === false ? false : joins || {},
-    locale: req.locale,
-    req: { fallbackLocale: undefined, locale: undefined, payloadAPI: undefined },
-    select,
-    where: fullWhere,
-  })
+  const db = encodeDb(
+    target,
+    'findOne',
+    {
+      collection: config.slug,
+      draftsEnabled: replaceWithVersion,
+      joins: req.payloadAPI === 'GraphQL' ? false : joins === false ? false : joins || {},
+      locale: req.locale,
+      req: { fallbackLocale: undefined, locale: undefined, payloadAPI: undefined },
+      select,
+      where: fullWhere,
+    },
+    isOperationResult,
+  )
   if (typeof db === 'string') {
     return guard(db)
   }
@@ -858,7 +867,7 @@ export const fusedPageRequest = (
   if (typeof population === 'string') {
     return population
   }
-  const db = encodeDb(target, 'find', dbArgs)
+  const db = encodeDb(target, 'find', dbArgs, true)
   if (typeof db === 'string') {
     return db
   }

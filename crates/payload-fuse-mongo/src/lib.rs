@@ -24,9 +24,10 @@ use payload_mongo_driver::value::{V, decode_array, decode_document};
 use payload_mongo_driver::{CountSpec, FindSpec, Flags, LaneError, read_args};
 
 /// The reads of one fused call (js-bson): the driver lane's `ReadArgs` (`collection`,
-/// `database`, `find`, `count`, `allowAdditionalKeys`) plus `op` (`find` | `findOne` | `count`)
-/// and, for `find`, the inputs of mongoose-paginate-v2's result `meta`: `{ pagination, limit,
-/// page }` (its local `pagination`, `limit` and `page` after option parsing).
+/// `database`, `find`, `count`, `allowAdditionalKeys`) plus `op` (`find` | `findOne` | `count`),
+/// for `find` the inputs of mongoose-paginate-v2's result `meta`: `{ pagination, limit, page }`
+/// (its local `pagination`, `limit` and `page` after option parsing), and the relationship
+/// sub-queries `buildQuery` runs first (`subqueries`, [`SubQuery`]).
 pub struct MongoReads {
   database: Option<String>,
   collection: String,
@@ -34,6 +35,69 @@ pub struct MongoReads {
   find: Option<FindSpec>,
   count: CountSpec,
   flags: Flags,
+  subqueries: Vec<SubQuery>,
+}
+
+/// A relationship path's sub-query (db-mongodb `buildSearchParam`, one hop):
+/// `SubModel.find(subQuery).lean().select({ _id: true })` on `collection` with the cast `filter`
+/// and mongoose's `projection`; its documents' `_id`s (ObjectIds) become the `$in` array at
+/// `path` (keys and array indices) of the count's and the find's filters, which hold an empty
+/// array there.
+struct SubQuery {
+  collection: String,
+  filter: Document,
+  projection: Option<Document>,
+  path: Vec<String>,
+}
+
+fn sub_queries(doc: &Document) -> Result<Vec<SubQuery>, LaneError> {
+  let bad = || LaneError::Bail("subqueries");
+  let items = match doc.get("subqueries") {
+    None | Some(Bson::Null) => return Ok(Vec::new()),
+    Some(Bson::Array(items)) => items,
+    Some(_) => return Err(bad()),
+  };
+  items
+    .iter()
+    .map(|item| {
+      let Bson::Document(item) = item else { return Err(bad()) };
+      let path = item.get_array("path").map_err(|_| bad())?;
+      Ok(SubQuery {
+        collection: item.get_str("collection").map_err(|_| bad())?.to_string(),
+        filter: item.get_document("filter").map_err(|_| bad())?.clone(),
+        projection: match item.get("projection") {
+          None | Some(Bson::Null) => None,
+          Some(Bson::Document(projection)) => Some(projection.clone()),
+          Some(_) => return Err(bad()),
+        },
+        path: path.iter().map(|key| key.as_str().map(str::to_string).ok_or_else(bad)).collect::<Result<_, _>>()?,
+      })
+    })
+    .collect()
+}
+
+/// Puts `ids` at `path` of `filter`, where the TS side left an empty array.
+fn set_ids(filter: &mut Document, path: &[String], ids: &[Bson]) -> Result<(), LaneError> {
+  let bad = || LaneError::Bail("subquery path");
+  let (last, parents) = path.split_last().ok_or_else(bad)?;
+  let mut slot = filter.get_mut(&parents.first().ok_or_else(bad)?[..]).ok_or_else(bad)?;
+  for key in &parents[1..] {
+    slot = match slot {
+      Bson::Document(doc) => doc.get_mut(&key[..]).ok_or_else(bad)?,
+      Bson::Array(items) => items.get_mut(key.parse::<usize>().map_err(|_| bad())?).ok_or_else(bad)?,
+      _ => return Err(bad()),
+    };
+  }
+  match slot {
+    Bson::Document(doc) => match doc.get_mut(&last[..]) {
+      Some(Bson::Array(items)) if items.is_empty() => {
+        items.extend_from_slice(ids);
+        Ok(())
+      }
+      _ => Err(bad()),
+    },
+    _ => Err(bad()),
+  }
 }
 
 #[derive(Clone, Copy)]
@@ -73,7 +137,34 @@ impl MongoReads {
       find: args.find,
       count: args.count,
       flags: args.flags,
+      subqueries: sub_queries(&doc)?,
     })
+  }
+
+  /// Runs the sub-queries one after the other (upstream awaits each inside `buildQuery`, in the
+  /// where's order), puts their ids into the count's and the find's filters and drops them.
+  async fn resolve_subqueries(&mut self, state: &DriverClient) -> Result<(), LaneError> {
+    for sub in std::mem::take(&mut self.subqueries) {
+      let coll = collection(state, self.database.as_deref(), &sub.collection);
+      let mut options = FindOptions::default();
+      options.projection = sub.projection;
+      let mut cursor = coll.find(sub.filter).with_options(options).await?;
+      let mut ids = Vec::new();
+      while cursor.advance().await? {
+        // `doc._id` when its string form is a valid ObjectId: only ObjectId ids are fused
+        match cursor.current().get("_id") {
+          Ok(Some(payload_mongo_driver::mongodb::bson::RawBsonRef::ObjectId(id))) => ids.push(Bson::ObjectId(id)),
+          _ => return Err(LaneError::Bail("subquery:id")),
+        }
+      }
+      if let CountSpec::Documents { filter, .. } = &mut self.count {
+        set_ids(filter, &sub.path, &ids)?;
+      }
+      if let Some(find) = self.find.as_mut() {
+        set_ids(&mut find.filter, &sub.path, &ids)?;
+      }
+    }
+    Ok(())
   }
 }
 
@@ -103,7 +194,7 @@ impl Convert {
 
 /// Runs `reads` on client `client_id`, then the fused operation `request_json` on their
 /// documents (driver transform plan `plan_id`). Returns the result JSON or `!<reason>`.
-pub async fn run(client_id: u32, plan_id: u32, reads: MongoReads, request_json: String) -> String {
+pub async fn run(client_id: u32, plan_id: u32, mut reads: MongoReads, request_json: String) -> String {
   let plan = match plan(plan_id) {
     Ok(plan) => plan,
     Err(_) => return "!mongo:plan".to_string(),
@@ -113,7 +204,7 @@ pub async fn run(client_id: u32, plan_id: u32, reads: MongoReads, request_json: 
     None => (None, false),
   };
   let convert = Convert { plan: Arc::clone(&plan), flags: reads.flags, leaves: (!canonical).then(RawLeaves::default), fields };
-  let loaded = match load(client_id, &reads, &convert).await {
+  let loaded = match load(client_id, &mut reads, &convert).await {
     Ok(loaded) => loaded,
     Err(Failure::Lane(LaneError::Bail(reason))) => return format!("!mongo:{reason}"),
     Err(Failure::Lane(LaneError::Driver(_))) => return "!mongo:driver".to_string(),
@@ -215,6 +306,9 @@ pub async fn find_stored(client_id: u32, reads: &MongoReads, txn: u32) -> Result
   let (ReadOp::FindOne, Some(find)) = (reads.op, reads.find.as_ref()) else {
     return Err("stored:read".to_string());
   };
+  if !reads.subqueries.is_empty() {
+    return Err("stored:subquery".to_string());
+  }
   let find = FindSpec {
     filter: find.filter.clone(),
     sort: find.sort.clone(),
@@ -239,6 +333,10 @@ pub async fn find_stored_many(client_id: u32, reads: &MongoReads, txn: u32) -> R
   let (ReadOp::Find { pagination: false, .. }, CountSpec::None) = (reads.op, &reads.count) else {
     return Err("stored:find".to_string());
   };
+  if !reads.subqueries.is_empty() {
+    // the fused writes read inside their transaction; relationship sub-queries are read lanes only
+    return Err("stored:subquery".to_string());
+  }
   let Some(find) = reads.find.as_ref() else { return Ok(Vec::new()) };
   let find = FindSpec {
     filter: find.filter.clone(),
@@ -365,8 +463,9 @@ async fn run_find(
   Ok(docs)
 }
 
-async fn load(client_id: u32, reads: &MongoReads, convert: &Convert) -> Result<Loaded, Failure> {
+async fn load(client_id: u32, reads: &mut MongoReads, convert: &Convert) -> Result<Loaded, Failure> {
   let state = client(client_id)?;
+  reads.resolve_subqueries(&state).await?;
   let coll = collection(&state, reads.database.as_deref(), &reads.collection);
   Ok(match reads.op {
     ReadOp::Find { pagination, limit, page } => {
