@@ -222,6 +222,55 @@ Still ineligible for fused writes:
 - user hooks (the hooks shape);
 - uploads, json fields, timezone dates.
 
+WP-N (2026-11-26), the slowest MongoDB scenarios of round 9:
+
+- **Causes found.**
+  - payload's JS `executeAccess` was the Rust port. For its JS callers (entity permissions,
+    llm instructions) the crossings and engine task cost far more than the TS function: auth
+    (JWT) and `GET /access`.
+  - The compile guard decided sampling with two addon calls per guarded call.
+  - Every Rust-to-JS call of the engine's own helpers, and every await of the executor, went
+    through the guard trampoline (an argument array built through Node-API, a JS frame, a WeakMap
+    lookup).
+  - The global, jobs and upsert writes and `findDistinct` ran on their live ports.
+  - In a transaction, `findGlobal` and the counts fell back to their live ports (the session was
+    in the cast query's options): every global update read the current global through the live
+    `findGlobal`.
+- **Fixed.**
+  - JS `executeAccess` is upstream's.
+  - The guard's sampling policy runs in JS.
+  - `js::call_unguarded` is used for the engine's helpers; user functions and adapter methods
+    still go through the guard.
+  - `upstreamMethods` (was `upstreamWriteMethods`) adds those writes and `findDistinct`; the glue
+    spec asserts it.
+  - The lane takes the session for those reads like it does for `findOne` / `find`.
+- **Measured, not kept.**
+  - Upstream's `getBuildQueryPlugin` for the `Model.buildQuery` statics: neutral.
+  - Upstream's TS operations for the ineligible (exact-lane) writes: neutral.
+  - TS traversals under the Rust operations: neutral.
+  - The exact lane's remaining cost is spread thin; no single part of it dominates.
+- **Perf**: MongoDB, 1k posts, `ts / rs` medians of 3 processes per engine, interleaved (5 for
+  hooks), round 9 tree -> this tree:
+  - typical:
+    - auth (JWT) 0.80 -> 1.06, `GET /access` 0.86 -> 1.15;
+    - updateGlobal 0.91 -> 0.98, `POST /globals/settings` 0.88 -> 0.98, `updateSetting` 0.91 -> 0.99;
+    - jobs queue 0.90 -> 0.96, findDistinct 0.90 -> 0.92, duplicate 1.00 -> 1.03;
+    - delete by id 1.76 -> 2.05, `DELETE /posts/:id` 1.67.
+  - complex:
+    - auth 0.76 -> 1.24, `/access` 1.00 -> 1.25;
+    - delete 0.90 -> 1.01, `DELETE` 0.90 -> 1.00;
+    - updateGlobal 0.97 -> 1.09, `POST /globals` 0.93 -> 1.09, `updateSetting` 0.94 -> 1.13;
+    - partial updates 1.00-1.11 -> 1.09-1.19, logout 0.89 -> 1.09, duplicate 1.03 -> 1.10;
+    - countVersions 1.48, findByID draft 1.48, findByID depth 2 1.18.
+  - hooks:
+    - auth 0.83 -> 1.19;
+    - writes 0.91-0.98 -> 0.97-1.00.
+- **Still below TS.**
+  - `find where and/or + relationship path`: typical 0.85, hooks 0.81. The fused read lane
+    guards `mongo:where:relationship-path` (a Rust sub-query would be needed).
+  - typical logout 0.88, findDistinct 0.92-0.95 (upstream's method, the Rust core operation
+    around it).
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).
