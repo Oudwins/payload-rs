@@ -51,8 +51,8 @@ pub fn lane_in_warmup(id: FnId) -> bool {
 /// side can verify it (the guard wrapper compares there). True until the function has
 /// [`Policy::first`] verified (or bailed) calls, then once [`Policy::sample_every`] lane calls
 /// have passed since its last verification: that call is marked due, so the call-site guard
-/// verifies the exact lane's call ([`take_verify`]). Counts lane calls separately from the JS
-/// wrapper's calls.
+/// verifies the exact lane's call ([`take_verify`]), and so is every other function halfway due
+/// ([`mark_halfway_due`]). Counts lane calls separately from the JS wrapper's calls.
 pub fn lane_should_verify(id: FnId) -> bool {
   let Some(e) = registry::entry(id) else { return true };
   let p = policy();
@@ -66,7 +66,28 @@ pub fn lane_should_verify(id: FnId) -> bool {
   }
   e.lane_calls.store(0, Ordering::Relaxed);
   e.verify_due.store(true, Ordering::Relaxed);
+  mark_halfway_due(p);
   true
+}
+
+/// At a lane's sample: every active function halfway due (half of [`Policy::sample_every`] lane
+/// calls since its last verification) is marked due and its lane count restarted. The sampled
+/// operation's exact lane verifies the functions it calls ([`take_verify`]); without the mark,
+/// the operations running concurrently with it would each send the operation's other functions,
+/// which reach their own sample in those operations, to the exact lane before it calls them. A
+/// marked function the exact lane does not call is verified at its next JS call, or samples
+/// again after `sample_every` more lane calls.
+fn mark_halfway_due(p: Policy) {
+  let half = p.sample_every.div_ceil(2);
+  for id in 0..registry::len() as FnId {
+    if let Some(e) = registry::entry(id)
+      && e.lane_calls.load(Ordering::Relaxed) >= half
+      && registry::is_active(id)
+    {
+      e.lane_calls.store(0, Ordering::Relaxed);
+      e.verify_due.store(true, Ordering::Relaxed);
+    }
+  }
 }
 
 /// For the call-site guard, on a call of `id` in JS (the exact lane): whether to verify it besides

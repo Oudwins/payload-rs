@@ -124,7 +124,13 @@ The real function is the authority. Two places verify:
   call-site guard also verifies a JS call of a function halfway due (half of `sample_every` lane
   calls since its last verification), so the functions one operation uses are verified together
   in the operations that one of them sent to the exact lane, instead of each sending operations
-  of its own. A verification restarts the lane count. A lane may only use a compiled function
+  of its own. A verification restarts the lane count. When a lane call is sampled, every other
+  active function halfway due is marked due at once and its lane count restarted
+  (`guard::mark_halfway_due`, WP-AA): the sampled operation's exact lane verifies the ones it
+  calls, and the operations running concurrently with it no longer each send its other functions
+  (which reach their own sample there before the exact lane calls them) to the exact lane. A
+  marked function the exact lane does not call is verified at its next JS call, or samples again
+  after `sample_every` more lane calls. A lane may only use a compiled function
   when guards are installed and `lane_should_verify` says false.
 - On the exact lane compiled functions are only verified, never substituted: tick counts there stay
   upstream's.
