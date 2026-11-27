@@ -397,6 +397,66 @@ Throughput under concurrent load, Rust / TS requests per second at x64:
 - Fused writes, with the prepare in the driver (WP-Y), use 0.3-0.4 ms of JS-thread time per write, against 4-6 ms on TS.
 - Single-request latency is still database-bound: about 1.3-1.5x geomean over the perf suite (interleaved multi-process rounds, `test/__rs/perf/README.md`).
 
+WP-AA (2026-11-27), REST JS-thread time and the create x8 collapse (MongoDB, typical, 1k posts,
+cores 16-31):
+
+- **Profiles** (inspector, timed window, x64, µs of JS thread per request):
+  - REST GET /posts limit 10 (343): the bench client's `response.json()` 66 (TS pays it too);
+    the JWT user lookup (`findByID`) 49, a third of it the read's encoding; the byte-lane find 36;
+    `new Response(text)` 33 (the text encoded to bytes); request building 35 (qs 9, JWT 9);
+    the access pre-decision 13; GC and `(program)` 29.
+  - REST POST (875): the fused create 290 (its result read 124: the request snapshot for the
+    population's access 31, the encoding 27; the prepare 85; `structuredClone` of data and
+    context 28); the user lookup 64; `Response.json` 39 and the populated result's
+    materialization 36; request building and routing 75; the bench client 69. The exact lane ran
+    1.8-2.6% of the REST writes (verification samples), about 100 µs per request on PATCH.
+  - REST PATCH (840): the same parts; its exact-lane samples 124 under `processTicksAndRejections`.
+- **Landed**:
+  - A lane sample marks every other function halfway due (`guard::mark_halfway_due`): the
+    operations running concurrently with a sampled one no longer each send its other functions
+    to the exact lane. REST PATCH exact-lane operations 137 -> 96 per 5.3k.
+  - Fused Mongo reads reuse their encodings (FUSE_CONTRACT.md section 8): by-id `findOne` from a
+    sentinel-id template (the user lookup, `findByID`, the writes' result reads: 23 -> 9 µs),
+    any other read from its repeated argument tree. Shadow mode compares each reused encoding.
+  - Fused creates with the Rust prepare work on `data` and `req.context` uncopied.
+- **Throughput** (base app vs this tree's app, one fresh process each, alternating, 4 rounds;
+  rs req/s new / base with the 95% interval, JS-thread ms per request, rs / ts):
+
+| scenario                 | x8 new/base      | x64 new/base     | JS ms x64     | x64 rs/ts   |
+| ------------------------ | ---------------- | ---------------- | ------------- | ----------- |
+| find limit 10            | 1.02 [0.97-1.07] | 1.04 [0.98-1.10] | 0.123 > 0.117 | 11.5 > 12.0 |
+| findByID                 | 1.18 [1.16-1.20] | 1.26 [1.20-1.34] | 0.060 > 0.049 | 8.1 > 10.2  |
+| REST GET /posts limit 10 | 0.99 [0.89-1.10] | 1.06 [1.03-1.09] | 0.388 > 0.375 | 5.7 > 6.0   |
+| create                   | 0.99 [0.94-1.05] | 1.18 [1.12-1.26] | 0.404 > 0.335 | 10.9 > 12.9 |
+| update scalar field      | 1.06 [0.92-1.22] | 1.07 (3 rounds)  | 0.296 > 0.259 | 15.5 > 16.6 |
+| REST POST /posts         | 1.07 [0.96-1.19] | 1.12 [1.01-1.24] | 0.947 > 0.844 | 5.7 > 6.4   |
+| REST PATCH /posts/:id    | 1.05 [0.97-1.13] | 1.16 [1.04-1.28] | 0.904 > 0.809 | 7.2 > 8.3   |
+
+Geomean new/base 1.07 over the 14 scenarios. Update x64 had one round on a slow journal (see
+below; 1,387 req/s at the same JS time); the other three rounds give 1.07. The x8 scenarios are
+latency-bound (event-loop utilization 0.3-0.75), so JS-thread time moves them less.
+
+- Single-request latency (local / rest / graphql, 2 alternating rounds, new / base): 1.086 /
+  1.155 / 1.128; the scenarios under 0.95 there were at or above 1.0 in a 6-round rerun.
+- **The create x8 collapse** is the server's journal: a commit waits for its journal sync, the
+  syncs run one at a time, and in the collapsed windows one took 1.8-5.3 ms instead of 0.6 ms.
+  Every mongod here shares one encrypted disk; synced writes on it (`dd oflag=dsync`) reproduce
+  the collapse. Not in the engine (MONGO_DRIVER_CONTRACT.md, "Driver runtime workers").
+- **Not done**: byte lanes for write responses (the populated result's text would have to come
+  from the core canonical, with its dataloader priming skipped only where no user code can
+  observe it); `new Response` from bytes instead of a string (about 15 µs on REST GET).
+- **Verification** (final tree, cores 16-31):
+  - MongoDB `--engine default` = baseline (3330 / 164 / 422; cli path, emulators, hmr), 8,709
+    fused read hits. The first run caught a stale reused encoding: test/database sets
+    `payload.db.collation` between two finds, so the adapter's runtime settings are now part of
+    every key.
+  - The same with `--fuse shadow --fuse-writes shadow`: 3330 / 164 / 422, 0 lane differences.
+  - Shadow 8/8 files, 22,519 calls, 0 divergences. Parity 503/503.
+  - Glue / driver lane / HTTP lanes / fn-compile / switch: 33/33, 4/4, 18/18, 39/39, 9/9.
+  - Corpus 37/37; lane suites 101/101 with and without `--fuse shadow --fuse-writes shadow`.
+  - SQLite `--fuse shadow`: 134/135 identical, 0 lane differences (create-payload-app: failed ->
+    passed, as before). PostgreSQL 131/135 (= baseline). Packaging and default-path check: OK.
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).

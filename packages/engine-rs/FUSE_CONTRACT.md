@@ -306,7 +306,8 @@ reads the driver lane would send, without mongoose:
   counts, `skip` / `limit`, collation) and result `meta`.
 
 The encoded reads are reused (WP-AA): the encoding is a function of the arguments, the model and
-the lane's settings (`allowAdditionalKeys`), so per model
+the adapter settings users may change at runtime (`collation`, `useJoinAggregations`,
+`allowAdditionalKeys`, part of every key), so per model
 
 - a `findOne` whose `where` is one `id` equal to a 24-hex id (bare or as `combineQueries`' one
   `and` clause), without `select` or joins arguments, takes the encoding of the same call with a

@@ -107,7 +107,18 @@ rounds. Latency is the geometric mean over 47 Local API and 14 REST single-reque
   and the sweep with 4 and 6 workers did not repeat it.
 - `create` x8 sometimes collapses for one round (2,600 → 470-720 req/s, event-loop utilization
   0.28, CPU per request x2). It hits 3 and 6 workers alike: in 8 rounds with only the throughput
-  scenarios, both collapsed in the same round. It is not a worker-count effect (open).
+  scenarios, both collapsed in the same round. It is not a worker-count effect. Cause (WP-AA):
+  the server's journal flushes. A commit waits for its journal sync (a single-node replica set,
+  majority write concern), and the syncs run one at a time. In the collapsed windows a sync took
+  1.8-5.3 ms instead of 0.6 ms (`serverStatus().wiredTiger.log`, polled every 250 ms), so the
+  journal was busy 65% of the time at a third of the commits. Every mongod on this machine
+  shares one encrypted disk, and other suites' servers write to it. Synced writes from `dd
+  oflag=dsync` on that disk reproduce it: `create` x8 2,032 → 1,273 req/s, `update` x8 1,243 →
+  345 (event-loop utilization 0.23, JS-thread and CPU time per request x2.5). At x8 the Rust
+  engine is latency-bound (event-loop utilization 0.3-0.75), so a longer commit shows directly in
+  its throughput; TS at x8 is JS-bound at about 210 req/s and does not notice. The JS-thread
+  time per request rises because fewer completions share each event-loop turn. Nothing in the
+  engine causes it. The same signature hit `REST POST` x8 and `update` x64 in single rounds.
 - Reproduce with `node test/__rs/perf/run.mjs --surfaces throughput --engines
   ts,rs-threads-3,rs-threads-6 --cpus <set>`. `rs-threads-<n>` is the default selection with
   `PAYLOAD_MONGO_DRIVER_THREADS=<n>`.
