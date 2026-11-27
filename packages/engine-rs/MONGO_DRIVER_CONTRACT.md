@@ -28,8 +28,89 @@ then `installDriverLane(adapter)`. `PAYLOAD_ENGINE=ts` runs upstream (nothing of
 | `node`                 | no driver lane: everything on the live engine / mongoose (the Node driver) |
 
 `PAYLOAD_MONGO_DRIVER_VERIFY=true|strict` runs the lane differential (below);
-`PAYLOAD_MONGO_DRIVER_THREADS` sets the driver runtime's workers (default half the CPUs the process
-may run on, 2 to 3; FUSED_WRITES.md section 13, WP-X).
+`PAYLOAD_MONGO_DRIVER_THREADS` sets the driver runtime's workers (default below).
+
+### Driver runtime workers (WP-Z)
+
+Every Rust client and lane call runs on one tokio runtime (`client.rs` `runtime`). Its worker count
+is `PAYLOAD_MONGO_DRIVER_THREADS` when set (a positive integer), else
+`clamp(cpus / 3 + 1, 2, 6)`. Here `cpus` is `std::thread::available_parallelism`: the process's
+affinity mask (taskset, cpusets) and its cgroup CPU quota (v1 and v2, rounded down), whichever is
+smaller. It is read once, when the runtime starts.
+
+| CPUs    | 1-5 | 6-8 | 9-11 | 12-14 | 15+ |
+| ------- | --- | --- | ---- | ----- | --- |
+| workers | 2   | 3   | 4    | 5     | 6   |
+
+The fused reads' and writes' Rust work (BSON decode, transforms, prepare) runs on these workers.
+`find` and `update` throughput under load grows with them. `findByID` and REST requests are bound by
+the JS thread, and extra workers cost them throughput: wake-ups, and on hyper-threads the sibling of
+the JS thread's core. Measured with the perf suite: release addon, typical shape, 1k posts, MongoDB
+8.2 rs0 on loopback (not pinned), 3 interleaved rounds per set, i9-13900HX. CPUs 0-15 are 8 P-cores
+with 2 hyper-threads each; CPUs 16-31 are 16 E-cores in clusters of 4. Each cell is the geometric
+mean over the 7 throughput scenarios of the per-round ratios, with the 95% t interval over the
+rounds. Latency is the geometric mean over 47 Local API and 14 REST single-request scenarios
+(1/median).
+
+| set                   | workers  | x8 vs ts | x64 vs ts | x8 vs 3 workers  | x64 vs 3 workers | CPU / req x8, x64 vs 3 | local, rest latency vs 3 |
+| --------------------- | -------- | -------- | --------- | ---------------- | ---------------- | ---------------------- | ------------------------ |
+| 4 E-cores (16-19)     | 2 (dflt) | 6.04     | 6.27      | 0.99 [0.96-1.02] | 0.90 [0.84-0.96] | 0.97, 0.99             | 0.99, 0.98               |
+|                       | 3        | 6.09     | 6.97      | 1                | 1                | 1                      | 1                        |
+|                       | 4        | 5.97     | 7.03      | 0.98 [0.93-1.04] | 1.01 [0.95-1.07] | 1.00, 1.00             | 0.99, 0.98               |
+|                       | 6        | 5.88     | 7.15      | 0.97 [0.92-1.01] | 1.03 [0.94-1.12] | 1.01, 0.99             | 1.00, 0.96 [0.94-0.99]   |
+| 6 E-cores (16-21)     | 2        | 6.02     | 6.55      | 0.95 [0.92-0.98] | 0.88 [0.87-0.90] | 0.95, 0.96             | 1.02, 1.05               |
+|                       | 3 (dflt) | 6.34     | 7.41      | 1                | 1                | 1                      | 1                        |
+|                       | 4        | 6.34     | 7.89      | 1.00 [0.99-1.01] | 1.07 [1.02-1.11] | 1.02, 0.99             | 1.01, 1.02               |
+|                       | 6        | 6.23     | 8.07      | 0.98 [0.95-1.02] | 1.09 [1.06-1.12] | 1.01, 1.01             | 1.01, 1.02               |
+| 8 E-cores (16-23)     | 3 (dflt) | 7.18     | 7.88      | 1                | 1                | 1                      | 1                        |
+|                       | 4        | 7.34     | 8.22      | 1.02 [1.00-1.04] | 1.04 [1.02-1.07] | 1.01, 1.04             | 1.01, 1.03               |
+| 10 E-cores (22-31)    | 2        | 6.41     | 6.46      | 0.95 [0.84-1.07] | 0.87 [0.82-0.91] | 0.95, 0.97             | 1.00, 0.98               |
+|                       | 4 (dflt) | 6.82     | 7.97      | 1.01 [0.75-1.36] | 1.07 [1.02-1.11] | 1.05, 1.03             | 1.01, 0.99               |
+|                       | 5        | 7.11     | 8.75      | 1.02 [0.99-1.06] | 1.09 [1.07-1.12] | 1.07, 1.07             | 0.95 [0.91-1.00], 0.96   |
+|                       | 6        | 7.12     | 8.07      | 1.05 [0.97-1.14] | 1.08 [1.06-1.11] | 1.06, 1.09             | 1.01, 0.96               |
+|                       | 8        | 7.10     | 8.36      | 1.05 [1.01-1.09] | 1.12 [1.07-1.17] | 1.04, 1.06             | 0.98, 0.98               |
+| 16 E-cores (16-31)    | 2        | 6.25     | 6.82      | 0.91 [0.90-0.92] | 0.85 [0.84-0.86] | 0.95, 0.98             | 0.99, 1.02               |
+|                       | 4        | 7.06     | 8.59      | 1.03 [0.98-1.08] | 1.07 [1.03-1.11] | 1.03, 1.03             | 0.97 [0.94-1.00], 0.98   |
+|                       | 6 (dflt) | 7.22     | 8.96      | 1.05 [1.02-1.08] | 1.12 [1.10-1.13] | 1.05, 1.08             | 0.99, 0.98               |
+|                       | 6, rerun | 6.96     | 9.01      | 1.06 [0.94-1.19] | 1.12 [1.10-1.15] | 1.03, 1.08             | 1.01, 0.96               |
+|                       | 8        | 7.27     | 9.18      | 1.06 [1.00-1.12] | 1.14 [1.13-1.16] | 1.03, 1.08             | 0.98 [0.97-1.00], 0.94   |
+| 8 hyper-threads (0-7) | 2        | 5.71     | 6.22      | 0.86 [0.82-0.91] | 0.86 [0.84-0.87] | 0.94, 0.95             | 0.99, 1.05               |
+|                       | 3 (dflt) | 6.61     | 7.25      | 1                | 1                | 1                      | 1                        |
+|                       | 4        | 6.13     | 7.41      | 0.93 [0.71-1.21] | 1.02 [0.98-1.07] | 1.10, 1.08             | 0.98 [0.97-1.00], 1.01   |
+|                       | 6        | 6.50     | 7.59      | 0.98 [0.96-1.01] | 1.05 [1.00-1.09] | 1.11, 1.14             | 0.98, 1.03               |
+| 16 hyper-threads      | 2        | 5.85     | 6.49      | 0.88 [0.88-0.89] | 0.84 [0.80-0.87] | 0.94, 0.96             | 1.10, 1.03               |
+| (0-15)                | 4        | 6.33     | 8.43      | 0.96 [0.65-1.41] | 1.09 [1.05-1.12] | 1.09, 1.04             | 1.02, 0.97               |
+|                       | 6 (dflt) | 6.37     | 9.15      | 0.96 [0.68-1.36] | 1.18 [1.13-1.23] | 1.15, 1.11             | 0.99, 0.96               |
+| 0-15, 8 busy loops on | 6 (dflt) | 5.85     | 6.97      | 1.01 [0.95-1.08] | 1.08 [1.06-1.10] | 1.10, 1.14             | -                        |
+| 8-15 (shared machine) |          |          |           |                  |                  |                        |                          |
+
+- Scenarios: `find` and `update` x64 grow up to 6 workers (16 CPUs: `find limit 10` +42-55%,
+  `update scalar field` +49-64% over 3 workers). `findByID` and REST lose a few percent when there
+  are more workers than the formula gives:
+  - `findByID` x8: 0.84 [0.78-0.90] with 4 workers on 4 E-cores, 0.92 [0.84-1.00] with 4 on 6
+    E-cores.
+  - `findByID` x64: 0.95 [0.93-0.98] with 4 on 8 E-cores.
+  - REST `GET /posts` with 4 workers on 8 hyper-threads: x8 0.92 [0.85-1.00], x64 0.88 [0.79-0.98].
+  - Within the formula, the worst cases are on 16 CPUs with 6 workers: REST `GET /posts` x8 0.87
+    [0.79-0.97] on E-cores in one of two runs, `REST POST` x64 0.96 [0.93-0.99] on
+    hyper-threads; with the busy loops, `findByID` x8 0.95 [0.91-0.99].
+- `cpus / 2` (the previous rule without its cap of 3) gives 4 workers on 8 CPUs. That costs REST
+  throughput on hyper-threads, where 4 workers fill the 4 cores' second threads. `cpus / 3 + 1`
+  keeps 2 workers on 4 CPUs and 3 on 6 and 8, the best or equal settings there.
+- The cap of 6 bounds the CPU cost: past 6 workers (8 workers on 16 E-cores) x64 gains 2% more for
+  the same CPU per request. A host whose quota or affinity is wider than its actual share gets at
+  most 6 workers. With half of 16 CPUs busy, 6 workers still gain 8% at x64 over 3. Idle workers
+  park; the cost of the extra workers is their wake-ups (CPU per request +3-15%).
+- Single-request latency does not depend on the worker count beyond the placement noise
+  (test/__rs/perf/README.md). The same scenario switches between about 0.7 and 1.3 ms
+  (`find limit 10`) by round, in every variant. One run on 10 E-cores had 5 workers 4-5% slower,
+  and the sweep with 4 and 6 workers did not repeat it.
+- `create` x8 sometimes collapses for one round (2,600 → 470-720 req/s, event-loop utilization
+  0.28, CPU per request x2). It hits 3 and 6 workers alike: in 8 rounds with only the throughput
+  scenarios, both collapsed in the same round. It is not a worker-count effect (open).
+- Reproduce with `node test/__rs/perf/run.mjs --surfaces throughput --engines
+  ts,rs-threads-3,rs-threads-6 --cpus <set>`. `rs-threads-<n>` is the default selection with
+  `PAYLOAD_MONGO_DRIVER_THREADS=<n>`.
 
 ## Clients
 

@@ -75,12 +75,13 @@ pub fn runtime() -> &'static Runtime {
   })
 }
 
-/// Half the CPUs the process may run on (its affinity and cgroup quota), 2 to 3 workers: the fused
-/// reads' transforms run on these workers and need more than 2 for their throughput, while the rest
-/// is left to the JS thread (a third worker on 4 CPUs cost `findByID` throughput, a fourth on 6 CPUs
-/// cost CPU per request and `create` throughput; FUSED_WRITES.md section 13, WP-X).
+/// A third of the CPUs the process may run on (its affinity and cgroup quota) plus one, 2 to 6
+/// workers: the fused reads' and writes' Rust work runs on these workers (`find` and `update`
+/// throughput grow with them), while the rest is left to the JS thread and its JS-bound requests
+/// (more workers cost `findByID` throughput on 4 and 6 CPUs and REST throughput on 8 hyper-threads;
+/// past 6 workers the gain is small and the CPU per request grows; MONGO_DRIVER_CONTRACT.md, WP-Z).
 fn default_worker_threads() -> usize {
-  std::thread::available_parallelism().map_or(2, |n| n.get() / 2).clamp(2, 3)
+  std::thread::available_parallelism().map_or(2, |n| n.get() / 3 + 1).clamp(2, 6)
 }
 
 pub struct DriverClient {
