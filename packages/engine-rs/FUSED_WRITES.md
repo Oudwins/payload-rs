@@ -723,6 +723,8 @@ defaulted array), 0 differences.
 
 ## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, WP-S, WP-U, WP-V, WP-W, status 2026-11-27)
 
+## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, WP-S, WP-U, WP-V, WP-X, status 2026-11-27)
+
 Built and on by default since WP-K (`PAYLOAD_RS_FUSE_WRITES=off` restores the exact lane for
 every write; WP-J's default-on commit was held until update-many / delete-many were fused, see
 below). create, updateByID, deleteByID, update-many and delete-many run on WP-I's prepare,
@@ -1627,6 +1629,77 @@ I/O ordering against its sibling fields modelled), a custom `slugify` (a user fu
 compiler would have to run outside a guarded call site), unique fields in array / block rows and
 localized containers of an all-locales publish, unique compound indexes, `plan:field:condition`
 64, `plan:field:ui` 38, `plan:field:code` 33.
+
+**WP-X (2026-11-27)**: the three complex scenarios where `rs` is below `rs-fused-off` with the
+fused lane guarded (REST `DELETE /posts/:id`, `PATCH /posts/:id (one field)`, Local `create as
+draft`). Measured in bench processes of the perf app (release addon, complex, 1k posts, CPUs 16-21)
+with per-thread CPU from `/proc/self/task/*/schedstat` and context switches in the timed op window
+and between ops, and `perf stat` user-space cycles and instructions counted over the timed op
+windows only (`--control` fifo):
+
+- **The Rust threads are idle during the guarded op and between ops**: 0.001-0.002 ms CPU and
+  0.05-0.08 context switches per `create as draft` on the driver runtime's threads, 0 between ops
+  (nothing of the setups' and teardowns' fused writes still runs: commit, session check-in and
+  cursor cleanup finish before the promise resolves or within the same few microseconds). An idle
+  process: Rust threads 0.14 ms/s CPU and 4.4 wakeups/s (the Rust driver's pool maintenance and
+  monitors), the JS thread 1.6 ms/s and 10.7 wakeups/s (mostly the Node driver's 100 ms pool
+  timer): the second pool's monitoring is ~0.02% of a core. Nothing spins. A call after 20 ms idle
+  pays ~0.4 ms on both engines (`findByID` depth 0: rs 0.60 → 1.06 ms, ts 0.81 → 1.21; `count`: rs
+  0.33 → 0.69, ts 0.36 → 0.74): the machine's and mongod's wake-up, not the Rust runtime's.
+- **The dispatch is small**: in a CPU profile of the timed loop, the guarded create's `fuseWrite`
+  (`checkCreate`) is 0.05-0.07 ms per call.
+- **The gap is the JS exact lane's JIT warmth.** In an `rs` process the seeding (1000 fused
+  creates), the setups and the teardowns run in Rust, so the JS of the exact write path (payload's
+  operation, mongoose casting and save, the Node driver's command path) has run far fewer times
+  than in an `rs-fused-off` process when a guarded scenario starts: V8 still tiers it up during the
+  timed iterations (`--trace-opt`: the Node driver's `prepareCommand`, `checkOut`, `selectServer`
+  reach TurboFan only in the timed window after 1500 warm-up creates in `rs`, before it in `off`;
+  363 against 194 compilations in 200 timed calls after 100 warm-up calls). With the suite's 3
+  warm-up calls, `create as draft` runs 40.2 M user instructions per op in `rs` against 31.4 M in
+  `off`, the V8 compiler threads use 3.1 against 1.5 ms CPU per op. Seeding on the exact lane
+  (`select`, which guards the fused create) and exact setups / teardowns (`disableTransaction`) in
+  an `rs` process bring the instructions to `off`'s (PATCH and create as draft: CPU -1.4 to -1.6 ms
+  per op). In the steady state (1500 warm-up calls, 4 interleaved rounds) `create as draft` is
+  equal: `rs`/`off` wall 0.990 [0.906-1.082], CPU 1.066 [0.951-1.196]; with exact seeding and
+  setups CPU 0.996 [0.974-1.018].
+- **What is left after warm-up is clock frequency**: at equal instructions and cycles, the fused
+  teardowns leave the JS thread idle while the Rust threads work, and its core then runs at a lower
+  effective clock (2.80-2.85 against 2.95-3.03 GHz, +0.45 ms task-clock per op, the idle-wake
+  effect above). Under load (throughput) it does not occur.
+- In the perf suite (write categories, complex, 5 rounds, CPUs 16-21; `off/rs`), every scenario
+  that stays on the exact lane is below 1 with the default `--warmup 3` (create as draft 0.912
+  [0.883-0.942], duplicate 0.933, REST duplicate 0.952, `PATCH /posts/:id` one field 0.919
+  [0.880-0.961] / whole 0.901, `PATCH ?where` 0.938, GraphQL `updatePost` 0.934) and moves to 1
+  with `--warmup 100` (0.942, 0.943, 0.985, 0.981 [0.904-1.065] / 0.932, 0.998, 0.941): a
+  property of comparing processes whose exact lanes ran different amounts of JS, not work the
+  fused dispatch or the Rust runtime adds. REST `DELETE /posts/:id` runs fused in these processes
+  (1.075 [0.778-1.485], with `--warmup 100` 1.589 [1.201-2.103]).
+
+Changed: the driver runtime's default worker count (`PAYLOAD_MONGO_DRIVER_THREADS` unset) is half
+the CPUs the process may run on, 2 to 3 (it was 2). The fused reads' transforms run on these
+workers: `find limit 10` (complex, depth 0) uses ~0.8 ms of Rust CPU per request, so 2 workers
+capped it at ~2500 req/s. Interleaved A/Bs of the release addon (`new`/`base`, [95% t interval]):
+
+| CPUs (rounds) | `find limit 10` x8 / x64                  | `findByID` x8 / x64                       | REST `GET /posts` x8 / x64                | `create` x8 / x64                         |
+| ------------- | ----------------------------------------- | ----------------------------------------- | ----------------------------------------- | ----------------------------------------- |
+| 16-21 (5)     | 1.399 [1.381-1.419] / 1.453 [1.440-1.466] | 1.013 [0.971-1.057] / 1.047 [1.028-1.067] | 1.004 [0.994-1.015] / 1.025 [1.006-1.046] | 0.990 [0.956-1.025] / 0.999 [0.962-1.037] |
+| 24-29 (3)     | 1.365 [1.305-1.429] / 1.446 [1.403-1.490] | 1.011 [0.932-1.097] / 1.075 [0.997-1.158] | 0.989 [0.955-1.025] / 1.012 [0.980-1.044] | 0.956 [0.849-1.077] / 1.012 [0.927-1.106] |
+
+CPU per request: `findByID` +8-10% (x8 1.100 [1.060-1.142], x64 1.084 [1.069-1.100] on 16-21;
+the third worker's extra wake-ups), REST x8 +3%, the others within ±2%. Sequential (10 read and
+write scenarios, 5 rounds on each set): `find limit 100` 0.885 [0.862-0.909] (16-21) and 0.889
+[0.844-0.936] (24-29), every other interval includes 1. Rejected: 4 workers on 6 CPUs (`create` x8
+0.948 [0.913-0.984], `findByID` CPU +20%) and 3 workers on 4 CPUs (`findByID` x8 0.900
+[0.854-0.948]); 1 worker halves `find limit 10` throughput. 24-29 was used briefly for the
+placement A/B (load average 3-5 from other jobs).
+
+Bars on the final tree (release addon, mongod 8.2 rs0 on :27048, every run pinned to CPUs 16-21,
+so the driver runtime ran 3 workers): the harness with `--engine default` and with both shadows
+3330 / 164 / 422, equal to `.rs-baseline/mongodb-all.json` (test/cli differs by the worktree path;
+storage emulators and hmr absent), 0 lane-shadow differences; the 8 shadow files 971 / 0 / 46, 0
+divergences; parity 503/503 (twice); driver lane 4/4; glue 33/33; HTTP lanes 18/18; fn-compile
+39/39; the corpus 35/35; the lane suites 98/98 in default and with both shadows; packaging OK.
+SQLite and Postgres do not use the driver runtime.
 
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon

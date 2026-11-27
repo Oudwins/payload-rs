@@ -106,6 +106,13 @@ subset. On shared servers, `--mongodb-server <url>` selects the MongoDB server a
   within a process when the scheduler moves threads. Compare runs only with the same `--cpus`,
   and read a Rust-only slowdown of populate-heavy reads with a wide interval as placement, not as
   engine work, until a focused A/B confirms it.
+- **Warm-up of the exact lane.** A scenario a variant runs on the exact lane (a guarded fused
+  write) starts with colder JS in a process whose seeding, setups and teardowns ran fused (`rs`)
+  than in one where they ran in JS (`rs-fused-off`, `ts`): V8 still compiles the exact write path
+  during the timed iterations, so with the default `--warmup 3` such scenarios measure 5-10%
+  slower and use more CPU (the compiler threads) than in the other variant, and approach it with
+  `--warmup 100` (FUSED_WRITES.md section 13, WP-X). Read an `rs` < `rs-fused-off` result of a
+  guarded scenario as warm-up, not as fused-dispatch work, unless a larger `--warmup` keeps it.
 - Per scenario: `gc()`, warmup runs (the first records the result fingerprint and hook calls), then
   timed iterations until at least `--min-iterations` and `--min-time-ms` (capped by
   `--max-iterations` / `--max-time-ms`). Per-iteration setup (e.g. creating the document a delete
