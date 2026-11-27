@@ -457,6 +457,69 @@ latency-bound (event-loop utilization 0.3-0.75), so JS-thread time moves them le
   - SQLite `--fuse shadow`: 134/135 identical, 0 lane differences (create-payload-app: failed ->
     passed, as before). PostgreSQL 131/135 (= baseline). Packaging and default-path check: OK.
 
+WP-AB (2026-11-27), REST write byte lanes and byte bodies (MongoDB, typical, 1k posts, cores
+16-31):
+
+- **Landed** (RUST_HTTP_LANES.md section 6):
+  - The default REST `create` / `updateByID` handlers send `{ doc, message }` with the document as
+    the UTF-8 bytes of the fused write's canonical result read (`fusedWriteResponse`,
+    ops-write `fusedWriteResult`): no materialization of the populated result, no
+    `Response.json` stringify. A canonical populated result is `#{"n":[...],"r":...}`; the
+    nested finds' `req` mutations are replayed, the dataloader is not primed and a create's
+    `req.data` keeps the request body (no code reads either after a REST write).
+  - Fused Mongo reads and writes give byte-lane text as a `Buffer` (`asBytes`): the read byte
+    lanes' responses are built from bytes too.
+  - The write lane-shadow's state reads are built only in the shadow (about 9 µs per fused
+    create or by-id write).
+  - Shadows: the write lane-shadow compares the bytes with `JSON.stringify` of the exact result
+    (`compareBytes`); the HTTP shadow checks every response built from bytes against
+    `Response.json` of the parsed document (`bytes:hit:write`).
+- **Profile** (REST POST x64, µs of JS thread per request, base -> this tree): the response
+  (`Response.json` 53 -> bytes response 32), the result's materialization (38 -> canonical
+  settle 15), the caller-data replay (29 -> 0), the shadow state reads (9.5 -> 0). The rest is
+  unchanged: the fused create's guards and result-read request (173, of which the request
+  snapshot of `req` for population's access 42), the Rust prepare's JS side (95), request
+  building and the JWT lookup (about 90).
+- **Throughput** (rs req/s new / base, base and new apps alternating, 2 x 3 rounds each; a third
+  new run under another session's load, load average 8, is left out: every scenario and TS were
+  slower in it; JS-thread ms per request; rs / ts):
+
+| scenario                 | x64 new/base     | JS ms x64     | x64 rs/ts   | x8 new/base      |
+| ------------------------ | ---------------- | ------------- | ----------- | ---------------- |
+| find limit 10            | 1.01 [0.94-1.09] | 0.109 > 0.106 | 12.0 > 12.2 | 1.04 [0.97-1.11] |
+| findByID                 | 1.05 [0.95-1.15] | 0.044 > 0.041 | 10.1 > 10.5 | 1.06 [0.98-1.14] |
+| REST GET /posts limit 10 | 0.97 [0.92-1.02] | 0.346 > 0.360 | 6.0 > 5.9   | 1.01 [0.94-1.10] |
+| create                   | 1.07 [1.00-1.14] | 0.304 > 0.283 | 13.2 > 14.0 | 1.09 [0.99-1.19] |
+| update scalar field      | 1.08 [0.98-1.18] | 0.258 > 0.238 | 16.6 > 17.5 | 0.90 [0.78-1.04] |
+| REST POST /posts         | 1.12 [1.08-1.17] | 0.817 > 0.727 | 6.4 > 7.1   | 1.13 [1.02-1.25] |
+| REST PATCH /posts/:id    | 1.10 [1.03-1.17] | 0.730 > 0.669 | 8.4 > 9.1   | 1.10 [1.00-1.20] |
+
+Geomean new/base 1.05 over the 14 scenarios. REST GET's bytes body saves about 15 µs in the
+profile, below the run-to-run spread here.
+
+- Single-request latency (local / rest / graphql, rs, 2 alternating rounds, base median / new
+  median): 1.068 / 1.119 / 1.083; the 7 scenarios under 0.95 in both rounds were 0.99 / 0.99 /
+  1.06 in a 3-round rerun with none slower in every round.
+- **Not done**: REST stays JS-thread bound (0.36-0.73 ms per request). The largest parts left are
+  the fused writes' JS guards and request building (the `req` snapshot, the population request,
+  the Rust prepare's request text), the JWT user lookup and undici's `Request` / `Response`.
+  Bulk `PATCH ?where`, deletes and globals have no byte lane.
+- **Verification** (final tree, cores 16-31):
+  - MongoDB `--engine default` = baseline (3330 / 164 / 422; cli path, emulators, hmr), 8,699
+    fused read hits.
+  - The same with `--fuse shadow --fuse-writes shadow`: 3330 / 164 / 422, 0 lane differences, 0
+    fused-write differences (4,355 creates, 541 updateByID compared; 236 REST creates through the
+    byte lane). The perf suite's REST POST / PATCH scenarios under the write shadow: 102 creates
+    and 87 updateByID through the byte lane, 0 differences. The HTTP shadow over
+    collections-rest: 236 `bytes:hit:write`, 0 divergences.
+  - Shadow 8/8 files, 22,519 calls, 0 divergences. Parity 503/503 in 3 of 3 runs.
+  - Glue / driver lane / HTTP lanes / fn-compile / switch: 33/33, 4/4, 18/18, 39/39, 9/9.
+  - Corpus 37/37; lane suites 101/101 with and without `--fuse shadow --fuse-writes shadow`.
+  - SQLite `--fuse shadow`: 133/135 identical, 0 lane differences (test/cli by the worktree path;
+    create-payload-app: failed -> passed, as before). PostgreSQL 131/135 (= baseline). The
+    SQLite / PostgreSQL baselines key files by absolute path: in a worktree they need the
+    paths rewritten (else every file is "missing"). Packaging and default-path check: OK.
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).
