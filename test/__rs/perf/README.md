@@ -38,7 +38,8 @@ node test/__rs/perf/run.mjs --reuse --databases mongodb --shapes typical --sizes
 time and report requests per second, the per-request latency under load (p50 / p95 / p99),
 process CPU time per request (all threads: JS, engine and database) and JS-thread time per
 request (event loop active time, including synchronous waits on native calls); their speedup is
-Rust req/s / TS req/s.
+Rust req/s / TS req/s. Each entry records when its timed window began (`startedAt`, ISO), to line
+a slow round up with the database server's own metrics.
 
 Plus **startup** (fresh processes against an existing schema: import of payload + adapters,
 `buildConfig`, `getPayload`; median of `--startup-runs`; up to 200 collections) and **seeding**

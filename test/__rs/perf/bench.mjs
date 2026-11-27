@@ -458,6 +458,7 @@ async function measureThroughput(ctx, scenario) {
     const cpu0 = process.cpuUsage()
     const loop0 = performance.eventLoopUtilization()
     const started = now()
+    entry.startedAt = new Date().toISOString()
     let isDone = false
     await Promise.all(
       Array.from({ length: concurrency }, async () => {
