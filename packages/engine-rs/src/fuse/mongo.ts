@@ -181,7 +181,7 @@ const repeatedKey = (lane: DriverLane, method: string, args: Any, isWriteRead: b
     return undefined
   }
   return {
-    key: `${method}|${isWriteRead}|${Boolean(lane.view.allowAdditionalKeys)}|${argsKey}`,
+    key: `${method}|${isWriteRead}|${adapterSettingsKey(lane)}|${argsKey}`,
     Model: entityOf.Model,
     plan: entityOf.plan,
   }
@@ -223,6 +223,19 @@ const rememberEncoding = (
     repeatedEncodings.set(found.Model, encodings)
   }
   encodings.set(found.key, bytes)
+}
+
+/**
+ * The adapter settings the encoding reads that users may change at runtime (e.g. a test setting
+ * `payload.db.collation`): part of every reused encoding's key.
+ */
+const adapterSettingsKey = (lane: DriverLane) => {
+  const adapter = lane.view
+  return JSON.stringify([
+    adapter.collation ?? null,
+    Boolean(adapter.useJoinAggregations),
+    Boolean(adapter.allowAdditionalKeys),
+  ])
 }
 
 /**
@@ -348,7 +361,7 @@ const encodeByID = (lane: DriverLane, args: Any, isWriteRead: boolean) => {
     joins,
     locale,
     isWriteRead,
-    Boolean(lane.view.allowAdditionalKeys),
+    adapterSettingsKey(lane),
   ])
   let template = templates.get(key)
   if (template === undefined) {
