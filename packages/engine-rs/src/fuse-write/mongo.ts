@@ -6,9 +6,10 @@
  *
  * Preparing a write (beforeValidate, the default validators, beforeChange, db-mongodb's write
  * transform and mongoose's casting) is WP-I's pure Rust `prepare_create` (crates/payload-fuse-write
- * `prepare`, section 12, through `fuseWritePrepare` with WP-I's plan of writePlan.ts): the JS side
- * captures the clock readings and ObjectIds upstream would generate, in upstream's order
- * (`captureCreateReadings`), with the classes upstream generates them with.
+ * `prepare`, section 12, with WP-I's plan of writePlan.ts, registered once), run by the operation
+ * drivers inside the fused write, off the JS thread: the JS side captures the clock readings and
+ * ObjectIds upstream would generate, in upstream's order (`captureCreateReadings`), with the
+ * classes upstream generates them with.
  *
  * TEMPORARY (`PAYLOAD_RS_FUSE_WRITES_PREPARE=ts`, never a default): `prepareCreateTS` runs
  * upstream's own steps in JS instead (the field traversals, db-mongodb `create` / `createVersion`
@@ -515,8 +516,8 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
   if (typeof fieldAccess === 'string') {
     return fieldAccess
   }
-  const { fuseWritePrepare } = loadCoreRuntimeAddon() as FuseWriteAddon
-  if (typeof fuseWritePrepare !== 'function') {
+  const planID = writePlanID(plan, plan.json)
+  if (planID === undefined) {
     return 'prepare:addon'
   }
   const { req } = args
@@ -544,60 +545,47 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
   if (!readings) {
     return 'ctx:rows'
   }
-  // no translations: a validation failure bails, the exact lane throws upstream's error
-  const out = JSON.parse(
-    fuseWritePrepare(
-      plan.json,
-      `${request},"clock":${JSON.stringify(readings.clock)},"ids":${JSON.stringify(readings.ids)}}`,
-    ),
-  )
-  if (out.bail !== undefined) {
-    return `prepare:${out.bail}`
-  }
-  if (out.invalid || !out.doc) {
-    return 'prepare:invalid'
-  }
-  if (out.clockLeft || out.idsLeft) {
-    return 'prepare:readings-left'
-  }
-  for (const [key, value] of out.contextWrites) {
-    context[key] = decodeTree(value)
-  }
-  const hex = (text: string) => Buffer.from(text, 'hex')
+  // WP-I's prepare runs in the driver, inside the fused write (crates/payload-fuse-write `ops`):
+  // its bails, a validation failure (no translations: the exact lane throws upstream's error) and
+  // unused readings abort the transaction before any statement
   const op: Record<string, unknown> = {
     c: Model.collection.collectionName,
-    dob: hex(out.doc),
     op: 'create',
-    ...(VersionModel && out.version
-      ? {
-          v: {
-            c: VersionModel.collection.collectionName,
-            dob: hex(out.version.doc),
-            ff: hex(out.version.flipFilter),
-            fu: hex(out.version.flipUpdate),
-          },
-        }
-      : {}),
+    p: `${request},"clock":${JSON.stringify(readings.clock)},"ids":${JSON.stringify(readings.ids)}}`,
+    ...(VersionModel ? { vc: VersionModel.collection.collectionName } : {}),
+    wp: planID,
   }
-  const prepared = () => ({
-    id: readings.documentID.toHexString(),
-    data: out.callerData === undefined ? data : decodeTree(out.callerData),
-    op: lane.BSON.serialize(op),
-    state: documentState(lane, Model, VersionModel, readings.documentID),
-  })
-  if (!out.unique) {
-    return prepared()
-  }
-  // the all-locales publish validation's unique-value lookups: run by the driver before the insert
-  return uniqueLookupTemplates(lane, collectionConfig, Model).then((templates) => {
-    if (typeof templates !== 'object') {
-      return `mongo:${templates ?? 'template:unique:none'}`
+  const prepared = (templates: Record<string, unknown> | string | undefined) => {
+    // the all-locales publish validation's unique-value lookups (the prepare decides whether it
+    // makes any) run in the driver before the insert, with these templates or bailing with `ub`
+    if (typeof templates === 'object') {
+      op.ut = templates
+    } else if (typeof templates === 'string') {
+      op.ub = `mongo:${templates}`
     }
-    op.ut = templates
-    op.u = out.unique.map(([path, locale, value]: Any) => [path, locale, decodeTree(value)])
-    return prepared()
+    return {
+      id: readings.documentID.toHexString(),
+      op: lane.BSON.serialize(op),
+      settle: (result: string[]) => {
+        for (const [key, value] of JSON.parse(result[2] || '[]')) {
+          context[key] = decodeTree(value)
+        }
+        return result[3] ? decodeTree(JSON.parse(result[3])) : data
+      },
+      state: documentState(lane, Model, VersionModel, readings.documentID),
+    }
+  }
+  if (resolvedUniqueTemplates.has(Model)) {
+    return prepared(resolvedUniqueTemplates.get(Model))
+  }
+  return uniqueLookupTemplates(lane, collectionConfig, Model).then((templates) => {
+    resolvedUniqueTemplates.set(Model, templates)
+    return prepared(templates)
   })
 }
+
+/** `uniqueLookupTemplates`' settled value per model (a create reads it without waiting). */
+const resolvedUniqueTemplates = new WeakMap<object, Record<string, unknown> | string | undefined>()
 
 /** generateSlug's duplicate mark in `req.context` (fields/baseFields/slug/duplicateContext.ts). */
 const slugDuplicateKey = '_slugDuplicateFallbackFields'
@@ -1553,8 +1541,8 @@ const prepareCreateTS = async (lane: DriverLane, args: Any, data: Any, context: 
   )
   return {
     id: id.toHexString(),
-    data,
     op,
+    settle: () => data,
     state: documentState(lane, Model, VersionModel, id),
   }
 }

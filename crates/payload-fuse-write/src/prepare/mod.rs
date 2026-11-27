@@ -28,7 +28,7 @@ use payload_mongo_driver::mongodb::bson::{Document, oid::ObjectId};
 
 pub use ops::{prepare_create, prepare_update};
 pub use plan::{WritePlan, register_write_plan, write_plan};
-pub use text::{DriverPrepared, prepare_json, prepare_update_request};
+pub use text::{DriverPrepared, prepare_create_request, prepare_json, prepare_update_request};
 pub use unique::UniqueLookup;
 
 /// Not modelled for this input: run the exact lane with the untouched arguments.

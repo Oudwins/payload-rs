@@ -501,7 +501,8 @@ const fusedCreate = async (
     read,
     state: isShadow ? prepared.state : undefined,
   })
-  return { data: prepared.data, read, result, state: prepared.state }
+  const data = result[0]!.charCodeAt(0) === 33 /* ! */ ? undefined : prepared.settle(result)
+  return { data, read, result, state: prepared.state }
 }
 
 /**

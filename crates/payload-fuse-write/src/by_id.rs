@@ -444,7 +444,7 @@ pub(crate) async fn update_document(
 }
 
 /// A unique lookup's value as js-bson serializes it (strings and numbers; anything else bails).
-fn lookup_value(value: &payload_engine::js::JsVal) -> Result<Bson, String> {
+pub(crate) fn lookup_value(value: &payload_engine::js::JsVal) -> Result<Bson, String> {
   use payload_engine::js::JsVal;
   match value {
     JsVal::Str(s) => Ok(Bson::String(s.to_string())),

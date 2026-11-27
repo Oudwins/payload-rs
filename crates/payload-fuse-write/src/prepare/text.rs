@@ -161,6 +161,17 @@ pub fn prepare_update_request(plan: &WritePlan, request_json: &str, input: &Upda
   Ok(DriverPrepared { prepared, left, context_writes })
 }
 
+/// `prepare_create` with the request `request_json` (this module's format), for the create driver
+/// (crates/payload-fuse-write `ops`, which runs it inside the fused write).
+pub fn prepare_create_request(plan: &WritePlan, request_json: &str) -> Result<DriverPrepared, Bail> {
+  let mut request = parse(request_json)?;
+  let data = request.data.clone();
+  let prepared = prepare_create(plan, &data, &mut request.ctx())?;
+  let left = request.left();
+  let context_writes = format!("[{}]", context_writes_text(&prepared).join(","));
+  Ok(DriverPrepared { prepared, left, context_writes })
+}
+
 fn context_writes_text(prepared: &Prepared) -> Vec<String> {
   prepared
     .context_writes

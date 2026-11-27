@@ -11,10 +11,14 @@ type Any = any
 
 /** A prepared create: its generated id, the native request, the shadow's state reads. */
 export type PreparedCreate = {
-  /** The copy of the caller's `data` after `beforeValidate` (the mutations to replay). */
-  data: Any
   id: string
   op: Uint8Array
+  /**
+   * After a successful `run` (its result texts): assigns the prepare's `req.context` writes to the
+   * context copy and returns the copy of the caller's `data` after `beforeValidate` (the mutations
+   * to replay).
+   */
+  settle: (result: string[]) => Any
   state: Uint8Array
 }
 

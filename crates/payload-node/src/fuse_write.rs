@@ -5,7 +5,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use payload_fuse_mongo::MongoReads;
-use payload_fuse_write::{ResultRead, decode_statements, exec, exec_shadowed};
+use payload_fuse_write::{ResultRead, decode_statements, exec};
 
 type Resolver = Box<dyn FnOnce(Env) -> Result<String> + Send>;
 type ListResolver = Box<dyn FnOnce(Env) -> Result<Vec<String>> + Send>;
@@ -19,7 +19,9 @@ type ListResolver = Box<dyn FnOnce(Env) -> Result<Vec<String>> + Send>;
 /// `deleteByID` (crates/payload-fuse-write `by_id`, which need the result read) resolve with
 /// `[text, stateJson | '', contextWritesJson | '']`, as do `updateMany` / `deleteMany`
 /// (crates/payload-fuse-write `bulk`, after `fuseWriteMongoFind` on the same transaction; `text`
-/// is the `find` page of the results). Never rejects.
+/// is the `find` page of the results), and creates whose Rust prepare runs here (`wp`, see
+/// crates/payload-fuse-write `ops::decode`) with `[text, stateJson | '', contextWritesJson | '',
+/// callerDataJson | '']`. Never rejects.
 #[napi]
 #[allow(clippy::too_many_arguments)]
 pub fn fuse_write_mongo_op<'env>(
@@ -84,13 +86,16 @@ pub fn fuse_write_mongo_op<'env>(
         }]
       }
       (None, None, Ok(request), Ok(read), Ok(state)) => {
-        let outcome = match payload_fuse_write::ops::unique_lookups(client, txn, &request).await {
-          Ok(()) => exec_shadowed(client, txn, request.statements, read, state).await,
-          Err(text) => payload_fuse_write::Outcome { text, state: None, context: None },
-        };
-        match outcome.state {
-          Some(state) => vec![outcome.text, state],
-          None => vec![outcome.text],
+        let is_prepared_here = request.prepare.is_some();
+        let payload_fuse_write::ops::CreateOutcome { outcome, caller_data } =
+          payload_fuse_write::ops::exec(client, txn, request, read, state).await;
+        if is_prepared_here {
+          vec![outcome.text, outcome.state.unwrap_or_default(), outcome.context.unwrap_or_default(), caller_data.unwrap_or_default()]
+        } else {
+          match outcome.state {
+            Some(state) => vec![outcome.text, state],
+            None => vec![outcome.text],
+          }
         }
       }
       (None, None, Err(reason), _, _) => {
