@@ -2,6 +2,10 @@
 //! errors (the core runtime's host), object literals built with CreateDataProperty, template
 //! literals, `for...of`, native callbacks for array methods. Helpers whose exact semantics are the
 //! language's run in V8 (`helpers.js`, compiled once per env with `napi_run_script`).
+//!
+//! Calls go to JS unguarded (`js::call_unguarded`): model building never calls the config's
+//! access functions, hooks or validators, the only functions the function compiler's call guard
+//! verifies, so the guard would only add its argument array and trampoline to every call.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
@@ -35,7 +39,7 @@ pub fn helpers() -> JsResult<Local> {
 /// Calls helper `name` with `this === undefined`.
 pub fn call(name: &str, args: &[Local]) -> JsResult<Local> {
   let f = js::get_named(helpers()?, name)?;
-  js::call(f, js::undefined(), args)
+  js::call_unguarded(f, js::undefined(), args)
 }
 
 pub fn val(v: Local) -> JsResult<Val> {
@@ -86,7 +90,7 @@ pub fn is_array(v: Local) -> JsResult<bool> {
 /// `f(...args)` evaluated as `<expr>(...)` with `this`: non-callables throw V8's TypeError.
 pub fn call_fn(f: Local, this: Local, args: &[Local], expr: &str) -> JsResult<Local> {
   if js::type_of(f) == Type::Function {
-    js::call(f, this, args)
+    js::call_unguarded(f, this, args)
   } else {
     Err(thrown(call("notAFunction", &[s(expr)])?))
   }
@@ -396,5 +400,5 @@ pub fn array_method(target: Local, method: &str, expr: &str, f: &mut (dyn FnMut(
   if js::type_of(m) != Type::Function {
     return Err(thrown(call("notAFunction", &[s(&format!("{expr}.{method}"))])?));
   }
-  with_cb(f, |cb| js::call(m, target, &[cb]))
+  with_cb(f, |cb| js::call_unguarded(m, target, &[cb]))
 }

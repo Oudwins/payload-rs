@@ -312,7 +312,7 @@ impl Gen<'_> {
             define(next, prop_key(locale)?, schema)?;
             Ok(next)
           },
-          |cb| js::call(m, codes, &[cb, initial]),
+          |cb| js::call_unguarded(m, codes, &[cb, initial]),
         )
       };
       let type_ = reduce(get(localization, "localeCodes")?)?;
@@ -681,7 +681,7 @@ impl Gen<'_> {
           define(next, key, value)?;
           Ok(next)
         },
-        |cb| js::call(m, codes, &[cb, js::object()]),
+        |cb| js::call_unguarded(m, codes, &[cb, js::object()]),
       )?;
       schema_to_return = obj(&[("_id", js::boolean(false)), ("type", type_), ("localized", js::boolean(true))])?;
     } else if has_many_relations {
