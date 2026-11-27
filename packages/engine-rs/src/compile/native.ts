@@ -45,6 +45,11 @@ export type FnIrBinding = {
   fnIrDescribe: (id: number) => null | string
   /** The result, or the reason the evaluation handed the call back to JS. */
   fnIrEvaluate: (id: number, args: unknown[]) => CompiledResult | string
+  /**
+   * `fnIrEvaluate` on `JSON.stringify(encodeSnapshot(args))`; `null` when the text is not such an
+   * encoding of an array.
+   */
+  fnIrEvaluateText: (id: number, text: string) => CompiledResult | null | string
   fnIrInit: (deps: Record<string, unknown>) => void
   fnIrIsActive: (id: number) => boolean
   fnIrLaneInWarmup: (id: number) => boolean
@@ -65,6 +70,8 @@ export type FnIrBinding = {
     mismatches: number
     verified: number
   }
+  /** Whether the call-site guard verifies this call besides its policy's (`guard::take_verify`). */
+  fnIrTakeVerify: (id: number) => boolean
 }
 
 let binding: FnIrBinding | undefined

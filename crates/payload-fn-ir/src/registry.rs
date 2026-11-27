@@ -36,7 +36,10 @@ pub struct Entry {
   pub(crate) verified: AtomicU64,
   pub(crate) mismatches: AtomicU64,
   pub(crate) bails: AtomicU64,
+  /// Lane calls since the last verification.
   pub(crate) lane_calls: AtomicU64,
+  /// A lane left a call to the exact lane for verification (`guard::take_verify`).
+  pub(crate) verify_due: AtomicBool,
 }
 
 /// Lock-free append-only table: segment `k` holds ids `2^k - 1 .. 2^(k+1) - 1`, allocated on first

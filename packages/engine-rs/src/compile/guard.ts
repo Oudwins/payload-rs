@@ -141,9 +141,12 @@ const guardCall = (fn: AnyFunction, thisArg: unknown, args: unknown[]): unknown 
   scheduleFlush()
   let compiled: CompiledResult | undefined
   let snapArgs: undefined | unknown[]
+  // besides the policy's calls: the call a fused lane left to this (exact) lane for verification,
+  // and calls of functions halfway due on the lanes (`fnIrTakeVerify`)
   const shouldVerify =
     calls <= verifyPolicy.first ||
-    (verifyPolicy.sampleEvery > 0 && calls % verifyPolicy.sampleEvery === 0)
+    (verifyPolicy.sampleEvery > 0 && calls % verifyPolicy.sampleEvery === 0) ||
+    fnIr.fnIrTakeVerify(id)
   if (shouldVerify && fnIr.fnIrIsActive(id)) {
     snapArgs = snapshotArgs(args, entry.argKeys)
     const evaluated = fnIr.fnIrEvaluate(id, snapArgs)

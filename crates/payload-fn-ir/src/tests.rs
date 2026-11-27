@@ -178,3 +178,51 @@ fn request_headers() {
   let args = lanes::collection_access_args(Value::Undefined, "posts", Value::Undefined, req);
   assert!(evaluate(id, &[args]).is_err());
 }
+
+#[test]
+fn typed_text_matches_typed_json() {
+  let decoded = |text: &str| {
+    let json: Option<serde_json::Value> = serde_json::from_str(text).ok();
+    json
+      .and_then(|json| crate::lanes::from_typed(&payload_engine::js::JsVal::from_json(&json)))
+      .map(|v| format!("{v:?}"))
+  };
+  let fast = |text: &str| crate::lanes::from_typed_text(text).map(|v| format!("{v:?}"));
+  for text in [
+    r#"["a",[["o",[["id",["u"]],["slug","posts"],["data",["u"]],["isReadingStaticFile",false],["req",["p",[["context",["o",[]]],["headers",["h",[["a","b"],["c","d\"e"]]]],["payload",["p",[["config",["p",[["admin",["p",[["user","users"]]]]]]]]]],["user",null]]]],["skipCompilation",["x","function"]]]]]]"#,
+    r#"["a",[1,-2.5,1e21,1.5e-7,0,["n","-0"],["n","NaN"],["n","Infinity"],["n","-Infinity"],12345678901234567890]]"#,
+    r#"["z",[["a",["a",[]]],["b",["o",[]]],["c","é😀\n\t\\\/\b\f\r\u0000"],["d",["x","object"]],["e",["x","primitive"]]]]"#,
+    r#" [ "o" , [ [ "k" , true ] ] ] "#,
+    "\"plain\"",
+    "null",
+    "true",
+    "3",
+  ] {
+    assert!(fast(text).is_some(), "{text}");
+    assert_eq!(fast(text), decoded(text), "{text}");
+  }
+  for text in [
+    r#"["u",1]"#,
+    r#"["n",1]"#,
+    r#"["q",[]]"#,
+    r#"["a",[1,]]"#,
+    r#"["a",[,1]]"#,
+    r#"["o",[["k"]]]"#,
+    r#"["o",[[1,2]]]"#,
+    r#"["h",[["a",1]]]"#,
+    r#"{"a":1}"#,
+    r#"["a",[01]]"#,
+    r#"["a",[1.]]"#,
+    r#"["a",[+1]]"#,
+    r#""\ud800""#,
+    r#""a" x"#,
+    "[]",
+    "",
+  ] {
+    assert!(fast(text).is_none(), "{text}");
+    assert!(decoded(text).is_none(), "{text}");
+  }
+  let deep = format!("{}1{}", r#"["a",["#.repeat(250), "]]".repeat(250));
+  assert!(fast(&deep).is_none());
+  assert!(decoded(&deep).is_none());
+}

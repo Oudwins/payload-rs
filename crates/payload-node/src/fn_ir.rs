@@ -7,9 +7,10 @@
 //! fnIrReserve(): number
 //! fnIrCompile(id, source, resolutions, label): string | null   // reject reason, or null
 //! fnIrEvaluate(id, args: unknown[]): External | string           // result, or the bail reason
+//! fnIrEvaluateText(id, text): External | string | null           // the same on encodeSnapshot JSON
 //! fnIrCompare(result: External, jsResult: unknown): 0 | 1 | 2    // match, mismatch, unverifiable
 //! fnIrResultToJs(result: External): unknown                      // undefined if not representable
-//! fnIrShouldVerify(id) / fnIrRecord(id, outcome) / fnIrStats(id) / fnIrSetPolicy(first, every)
+//! fnIrShouldVerify(id) / fnIrTakeVerify(id) / fnIrRecord(id, outcome) / fnIrStats(id) / fnIrSetPolicy(first, every)
 //! fnIrIsActive(id) / fnIrLaneInWarmup(id) / fnIrDescribe(id)
 //! ```
 //!
@@ -376,6 +377,20 @@ pub fn fn_ir_evaluate(env: Env, id: u32, args: Unknown) -> Result<Either<Externa
   })
 }
 
+/// `fnIrEvaluate` on the arguments' snapshot as the JSON text of `encodeSnapshot`
+/// (`payload_fn_ir::lanes::from_typed`): one string crosses instead of the snapshot's objects.
+/// `null`: the text is not such an encoding of an array (the caller passes the snapshot itself).
+#[napi]
+pub fn fn_ir_evaluate_text(id: u32, text: String) -> Option<Either<External<Value>, String>> {
+  let Value::Array(args) = payload_fn_ir::lanes::from_typed_text(&text)? else {
+    return None;
+  };
+  Some(match payload_fn_ir::evaluate(id, &args) {
+    Ok(v) => Either::A(External::new(v)),
+    Err(b) => Either::B(b.reason().to_string()),
+  })
+}
+
 /// 0: equal, 1: different, 2: not comparable (the compiled result holds opaque values).
 #[napi]
 pub fn fn_ir_compare(env: Env, result: &External<Value>, js_result: Unknown) -> Result<u32> {
@@ -420,6 +435,13 @@ pub fn fn_ir_should_verify(id: u32) -> bool {
 #[napi]
 pub fn fn_ir_lane_should_verify(id: u32) -> bool {
   guard::lane_should_verify(id)
+}
+
+/// `guard::take_verify`: whether the call-site guard verifies this JS call of `id` besides the
+/// calls its own policy selects (a lane left it to the exact lane, or it is halfway due).
+#[napi]
+pub fn fn_ir_take_verify(id: u32) -> bool {
+  guard::take_verify(id)
 }
 
 #[napi]

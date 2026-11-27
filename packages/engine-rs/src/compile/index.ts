@@ -21,7 +21,7 @@ import { compileFunction, getCompiledFunction } from './compileFunction.js'
 import { configFunctions } from './configFunctions.js'
 import { compileGuardsInstalled } from './guard.js'
 import { getFnIr } from './native.js'
-import { snapshotArgs } from './snapshot.js'
+import { encodeSnapshot, snapshotArgs } from './snapshot.js'
 
 export type { CompiledFunction } from './compileFunction.js'
 export { compileFunction, getCompiledFunction } from './compileFunction.js'
@@ -88,7 +88,11 @@ export const evaluateOnLane = (
   if (fnIr.fnIrLaneShouldVerify(entry.id)) {
     return { ok: false, reason: 'verify' }
   }
-  const result = fnIr.fnIrEvaluate(entry.id, snapshotArgs(args, entry.argKeys))
+  // the snapshot crosses as one JSON text (far fewer Node-API calls than its objects)
+  const snapshot = snapshotArgs(args, entry.argKeys)
+  const result =
+    fnIr.fnIrEvaluateText(entry.id, JSON.stringify(encodeSnapshot(snapshot))) ??
+    fnIr.fnIrEvaluate(entry.id, snapshot)
   if (typeof result === 'string') {
     return { ok: false, reason: `bail:${result}` }
   }

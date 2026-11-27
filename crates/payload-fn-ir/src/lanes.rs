@@ -162,6 +162,243 @@ fn typed_entries(payload: Option<&JsVal>) -> Option<Vec<(Arc<str>, &JsVal)>> {
     .collect()
 }
 
+/// [`from_typed`] of the JSON text of a typed snapshot (`JSON.stringify(encodeSnapshot(...))`),
+/// read in one pass without an intermediate JSON tree. `None`: not valid JSON, or valid JSON that
+/// is not such an encoding (as for [`from_typed`]).
+pub fn from_typed_text(text: &str) -> Option<Value> {
+  let mut reader = TypedText { bytes: text.as_bytes(), at: 0 };
+  let value = reader.typed(0)?;
+  reader.space();
+  (reader.at == reader.bytes.len()).then_some(value)
+}
+
+struct TypedText<'a> {
+  bytes: &'a [u8],
+  at: usize,
+}
+
+impl TypedText<'_> {
+  fn space(&mut self) {
+    while let Some(b' ' | b'\t' | b'\n' | b'\r') = self.bytes.get(self.at) {
+      self.at += 1;
+    }
+  }
+
+  fn peek(&mut self) -> Option<u8> {
+    self.space();
+    self.bytes.get(self.at).copied()
+  }
+
+  fn eat(&mut self, byte: u8) -> Option<()> {
+    (self.peek()? == byte).then(|| self.at += 1)
+  }
+
+  /// `,` before the next element of a list, or `None` at its `]` (consumed).
+  fn next_in_list(&mut self, is_first: bool) -> Option<bool> {
+    match self.peek()? {
+      b']' => {
+        self.at += 1;
+        Some(false)
+      }
+      b',' if !is_first => {
+        self.at += 1;
+        Some(true)
+      }
+      _ if is_first => Some(true),
+      _ => None,
+    }
+  }
+
+  fn literal(&mut self, word: &[u8]) -> Option<()> {
+    self.space();
+    self.bytes.get(self.at..self.at + word.len()).filter(|w| *w == word)?;
+    self.at += word.len();
+    Some(())
+  }
+
+  /// One value of the typed encoding at `depth` ([`from_typed_at`]).
+  fn typed(&mut self, depth: u32) -> Option<Value> {
+    if depth > MAX_DEPTH {
+      return None;
+    }
+    match self.peek()? {
+      b'n' => self.literal(b"null").map(|()| Value::Null),
+      b't' => self.literal(b"true").map(|()| Value::Bool(true)),
+      b'f' => self.literal(b"false").map(|()| Value::Bool(false)),
+      b'"' => self.string().map(|s| Value::String(Arc::from(s.as_str()))),
+      b'[' => {
+        self.at += 1;
+        let tag = self.string()?;
+        let value = match tag.as_str() {
+          "u" => Value::Undefined,
+          "n" => {
+            self.eat(b',')?;
+            Value::Number(match self.string()?.as_str() {
+              "NaN" => f64::NAN,
+              "Infinity" => f64::INFINITY,
+              "-Infinity" => f64::NEG_INFINITY,
+              "-0" => -0.0,
+              _ => return None,
+            })
+          }
+          "a" => {
+            self.eat(b',')?;
+            self.eat(b'[')?;
+            let mut items = Vec::new();
+            while self.next_in_list(items.is_empty())? {
+              items.push(self.typed(depth + 1)?);
+            }
+            Value::Array(Arc::new(items))
+          }
+          "o" | "z" | "p" => {
+            self.eat(b',')?;
+            self.eat(b'[')?;
+            let mut o = Object { closed: tag != "p", null_proto: tag == "z", ..Object::default() };
+            let mut is_first = true;
+            while self.next_in_list(is_first)? {
+              is_first = false;
+              self.eat(b'[')?;
+              let key = self.string()?;
+              self.eat(b',')?;
+              let value = self.typed(depth + 1)?;
+              self.eat(b']')?;
+              o.set(Arc::from(key.as_str()), value);
+            }
+            Value::Object(Arc::new(o))
+          }
+          "h" => {
+            self.eat(b',')?;
+            self.eat(b'[')?;
+            let mut entries = Vec::new();
+            while self.next_in_list(entries.is_empty())? {
+              self.eat(b'[')?;
+              let name = self.string()?;
+              self.eat(b',')?;
+              let value = self.string()?;
+              self.eat(b']')?;
+              entries.push((Arc::from(name.as_str()), Arc::from(value.as_str())));
+            }
+            Value::Headers(Arc::new(crate::value::HeadersValue { entries }))
+          }
+          "x" => {
+            self.eat(b',')?;
+            Value::Opaque(match self.string()?.as_str() {
+              "object" => OpaqueKind::Object,
+              "function" => OpaqueKind::Function,
+              "primitive" => OpaqueKind::Primitive,
+              _ => return None,
+            })
+          }
+          _ => return None,
+        };
+        self.eat(b']')?;
+        Some(value)
+      }
+      b'-' | b'0'..=b'9' => self.number().map(Value::Number),
+      _ => None,
+    }
+  }
+
+  fn number(&mut self) -> Option<f64> {
+    let start = self.at;
+    while let Some(b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9') = self.bytes.get(self.at) {
+      self.at += 1;
+    }
+    let text = std::str::from_utf8(&self.bytes[start..self.at]).ok()?;
+    // JSON's grammar (no leading `+`, no leading zeros, digits around `.`), then the correctly
+    // rounded value, as `JSON.parse` / serde_json read it
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    let (int, rest) = digits.split_at(digits.find(['.', 'e', 'E']).unwrap_or(digits.len()));
+    if int.is_empty() || (int.len() > 1 && int.starts_with('0')) || !int.bytes().all(|b| b.is_ascii_digit()) {
+      return None;
+    }
+    let (fraction, exponent) = match rest.find(['e', 'E']) {
+      Some(i) => (&rest[..i], Some(&rest[i + 1..])),
+      None => (rest, None),
+    };
+    if let Some(fraction) = fraction.strip_prefix('.') {
+      if fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+      }
+    } else if !fraction.is_empty() {
+      return None;
+    }
+    if let Some(exponent) = exponent {
+      let exponent = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+      if exponent.is_empty() || !exponent.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+      }
+    }
+    text.parse().ok()
+  }
+
+  fn string(&mut self) -> Option<String> {
+    self.eat(b'"')?;
+    let mut out = Vec::new();
+    loop {
+      let start = self.at;
+      while let Some(&b) = self.bytes.get(self.at) {
+        if b == b'"' || b == b'\\' || b < 0x20 {
+          break;
+        }
+        self.at += 1;
+      }
+      out.extend_from_slice(&self.bytes[start..self.at]);
+      match *self.bytes.get(self.at)? {
+        b'"' => {
+          self.at += 1;
+          return String::from_utf8(out).ok();
+        }
+        b'\\' => {
+          self.at += 1;
+          let escaped = *self.bytes.get(self.at)?;
+          self.at += 1;
+          match escaped {
+            b'"' => out.push(b'"'),
+            b'\\' => out.push(b'\\'),
+            b'/' => out.push(b'/'),
+            b'b' => out.push(0x08),
+            b'f' => out.push(0x0c),
+            b'n' => out.push(b'\n'),
+            b'r' => out.push(b'\r'),
+            b't' => out.push(b'\t'),
+            b'u' => {
+              let unit = self.hex4()?;
+              let c = if (0xd800..0xdc00).contains(&unit) {
+                // a surrogate pair; a lone surrogate has no `str` form (serde_json rejects it too)
+                if self.bytes.get(self.at..self.at + 2)? != b"\\u" {
+                  return None;
+                }
+                self.at += 2;
+                let low = self.hex4()?;
+                if !(0xdc00..0xe000).contains(&low) {
+                  return None;
+                }
+                char::from_u32(0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00))?
+              } else {
+                char::from_u32(unit)?
+              };
+              let mut buf = [0u8; 4];
+              out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+            }
+            _ => return None,
+          }
+        }
+        _ => return None,
+      }
+    }
+  }
+
+  fn hex4(&mut self) -> Option<u32> {
+    let digits = std::str::from_utf8(self.bytes.get(self.at..self.at + 4)?).ok()?;
+    if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+      return None;
+    }
+    self.at += 4;
+    u32::from_str_radix(digits, 16).ok()
+  }
+}
+
 /// What a lane knows about the request (`packages/engine-rs/src/compile/snapshot.ts`
 /// `capturedRequest`). Every field is the value JS would read (`Value::Undefined` when absent).
 #[derive(Clone, Debug)]

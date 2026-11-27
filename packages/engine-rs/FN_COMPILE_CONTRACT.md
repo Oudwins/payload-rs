@@ -118,9 +118,14 @@ The real function is the authority. Two places verify:
   `PAYLOAD_FN_COMPILE_GUARD=all` (every call) or `=sample` (first 32 calls, then 1 in 256);
   counters to `PAYLOAD_FN_COMPILE_STATS=<dir>`.
 - **Lanes**: `guard::lane_should_verify(id)` is true until the function has had `Policy::first`
-  verified (or bailed) calls, then for one lane call in `Policy::sample_every`. On true, run the
-  exact lane for this call (where the call-site guard verifies). A lane may only use a compiled
-  function when guards are installed and `lane_should_verify` says false.
+  verified (or bailed) calls, then once `Policy::sample_every` lane calls have passed since its
+  last verification. On true, run the exact lane for this call: the function is marked due, and
+  the call-site guard verifies its next JS call (`guard::take_verify`, `fnIrTakeVerify`). The
+  call-site guard also verifies a JS call of a function halfway due (half of `sample_every` lane
+  calls since its last verification), so the functions one operation uses are verified together
+  in the operations that one of them sent to the exact lane, instead of each sending operations
+  of its own. A verification restarts the lane count. A lane may only use a compiled function
+  when guards are installed and `lane_should_verify` says false.
 - On the exact lane compiled functions are only verified, never substituted: tick counts there stay
   upstream's.
 - The fused writes' prepare (FUSED_WRITES.md section 12.7) evaluates compiled field validators

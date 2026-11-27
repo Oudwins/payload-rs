@@ -49,8 +49,10 @@ pub fn lane_in_warmup(id: FnId) -> bool {
 
 /// For fused lanes: whether this call of `id` must run on the exact (JS-calling) lane so the JS
 /// side can verify it (the guard wrapper compares there). True until the function has
-/// [`Policy::first`] verified (or bailed) calls, then for one lane call in
-/// [`Policy::sample_every`]. Counts lane calls separately from the JS wrapper's calls.
+/// [`Policy::first`] verified (or bailed) calls, then once [`Policy::sample_every`] lane calls
+/// have passed since its last verification: that call is marked due, so the call-site guard
+/// verifies the exact lane's call ([`take_verify`]). Counts lane calls separately from the JS
+/// wrapper's calls.
 pub fn lane_should_verify(id: FnId) -> bool {
   let Some(e) = registry::entry(id) else { return true };
   let p = policy();
@@ -59,7 +61,30 @@ pub fn lane_should_verify(id: FnId) -> bool {
     return true;
   }
   let n = e.lane_calls.fetch_add(1, Ordering::Relaxed) + 1;
-  p.sample_every > 0 && n % p.sample_every == 0
+  if p.sample_every == 0 || n < p.sample_every {
+    return false;
+  }
+  e.lane_calls.store(0, Ordering::Relaxed);
+  e.verify_due.store(true, Ordering::Relaxed);
+  true
+}
+
+/// For the call-site guard, on a call of `id` in JS (the exact lane): whether to verify it besides
+/// the calls its own policy selects. True for the call a lane left to the exact lane
+/// ([`lane_should_verify`]), and for any call once half of [`Policy::sample_every`] lane calls
+/// have passed since the last verification: an operation that runs on the exact lane for one
+/// function's sample then verifies its other functions that are halfway due, so the samples of
+/// functions one operation uses together fall into the same operations instead of each sending
+/// its own operations to the exact lane. A verification restarts the function's lane count.
+pub fn take_verify(id: FnId) -> bool {
+  let Some(e) = registry::entry(id) else { return false };
+  let p = policy();
+  let is_due = e.verify_due.swap(false, Ordering::Relaxed)
+    || (p.sample_every > 0 && e.lane_calls.load(Ordering::Relaxed) >= p.sample_every.div_ceil(2));
+  if is_due {
+    e.lane_calls.store(0, Ordering::Relaxed);
+  }
+  is_due
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
