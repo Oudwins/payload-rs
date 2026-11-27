@@ -468,8 +468,10 @@ pass's `req.locale`; create: `doc` and `docWithLocales` one `{}`; update: `{ ...
 `docWithLocales` the operation's as beforeChange left it, `originalDoc` its `originalDoc` for
 the request's locale, else `docWithLocales` flattened). A pass without errors is unobservable
 (cloned request, context and data); any error bails (`drafts:localizedPublish:invalid`: the
-exact lane throws the aggregated, deduplicated `ValidationError`), as does a `unique` field
-anywhere (`drafts:localizedPublish:unique`: `validateUniqueConstraints` reads the database).
+exact lane throws the aggregated, deduplicated `ValidationError`). `validateUniqueConstraints`
+reads the database: since WP-W the passes return its `fieldValueExists` lookups (section 13,
+WP-W) and a unique compound index bails (`drafts:localizedPublish:uniqueIndex`; before WP-W the
+check of a collection without unique fields was skipped).
 The passes' `mergeLocaleActions` only change their discarded data and are not run. Bails: with `localizeStatus` a
 beforeChange `_status` that is a string (`drafts:statusString`) and an update that is not a
 draft save and publishes the request's locale (`buildLocalizedPublishData` reads the main
@@ -719,7 +721,7 @@ the enum rejects), plus the plan's ineligibility for `pattern`. The corpus is 44
 absent required key, a string json, a null group, an update whose stored document lacks a
 defaulted array), 0 differences.
 
-## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, WP-S, WP-U, WP-V, status 2026-11-26)
+## 13. Dispatch, drivers and the write lane-shadow (WP-H, WP-J, WP-K, WP-L, WP-O, WP-P, WP-S, WP-U, WP-V, WP-W, status 2026-11-27)
 
 Built and on by default since WP-K (`PAYLOAD_RS_FUSE_WRITES=off` restores the exact lane for
 every write; WP-J's default-on commit was held until update-many / delete-many were fused, see
@@ -840,9 +842,9 @@ takes none (the lock check's clock reading only happens when a lock exists, whic
 
 Guards besides the create's: a 24-hex lowercase id, no `trash` argument and no `deletedAt` in the
 data of a trash collection, no `autosave` / `publishAllLocales` / `unpublishAllLocales`
-(`draft` allowed since WP-L), deletes of a collection with `schedulePublish` guarded, a plain `req.context`, and without `overrideAccess` an `access.update` /
-`access.delete` that compiles to `true` (a where constraint would change the stored-document
-read). State reads add the locked documents of the id (`document.value` as ObjectId or string)
+(`draft` allowed since WP-L), deletes of a collection with `schedulePublish` guarded, a plain `req.context`, and without `overrideAccess` a compiled `access.update` /
+`access.delete` that grants (`true`, or since WP-W a where constraint, combined into the
+stored-document read). State reads add the locked documents of the id (`document.value` as ObjectId or string)
 and, for deletes, the preferences key.
 
 Verification of updateByID / deleteByID: the lane suites test/__rs/fuse-writes-lane (typical,
@@ -1516,6 +1518,115 @@ conflict only ever bails, so the prepare can return the lookups it needs, field 
 value, for the drivers to run without a session before any statement, with filters templated in
 JS from db-mongodb's `buildQuery` of `{ [path]: { equals } }` and the value substituted
 natively), localized json fields with a schema, and the `pattern` / `format` keywords.
+
+**WP-W (2026-11-27)**: where-constraint update / delete access, the all-locales publish
+validation's unique lookups, slug fields.
+
+- **Update / delete access returning a where** (the perf suite's complex posts). Upstream
+  (updateByID.ts, deleteByID.ts) combines the access result with the id
+  (`combineQueries({ id: { equals } }, accessResults)`) only in the stored-document read:
+  `getLatestCollectionVersion` (with drafts first the latest version's `findVersions` with the
+  where's version keys, then the main `findOne`) or deleteByID's `findOne`; the `updateOne` /
+  `deleteOne` filters are the id alone. No document: `Forbidden` with a where policy, else
+  `NotFound`. The dispatch evaluates the compiled access per call (`evaluateCompiledAccess`,
+  guard sampling through `evaluateOnLane`) and the result read's `findOne` takes the combined
+  where (`fusedFindByIDRequest(args, storedAccess)`, encoded by the fused reads' `buildFilter` /
+  mongoose cast; its `afterRead` still runs on the written document); with drafts the request
+  carries `tl`, the latest version's find built for that where (`latestAccessTemplate`, a cache
+  per versions model, where and locale, with the sentinel id). A miss bails `byID:notFound` in the
+  transaction and the exact lane throws upstream's `Forbidden` / `NotFound`. update-many /
+  delete-many: update.ts / delete.ts combine the result into the bulk find
+  (`combineQueries(where, accessResult)`), so the fused find does too; a where that
+  `sanitizeWhereQuery` would rewrite (virtual paths) guards `access:where:sanitize`. The
+  `access:where` guard is gone.
+- **Unique lookups of the all-locales publish validation** (`prepare:drafts:localizedPublish:unique`,
+  test/database's `categories`). `validateUniqueConstraints` runs per locale pass on
+  `deepMergeWithSourceArraysIgnoringUndefined(originalDoc, beforeChange's result)`: one
+  `fieldValueExists` (`payload.find`, `limit: 2`, `depth: 0`, `overrideAccess: true`,
+  `pagination: false`, the pass's locale, without the transaction) per unique field with a value
+  that is not `null` / `undefined`, a conflict (`docs.some((doc) => doc.id !== id)`) a
+  `ValidationError`. The prepare (`prepare/unique.rs`) collects these lookups in `traverseFields`
+  order (`PreparedWrite.unique`; rows of arrays / blocks holding unique fields, localized groups
+  / tabs and dotted keys bail) instead of bailing for every collection with a unique field; the
+  create driver (`ops::unique_lookups`, `u` / `ut`) and `by_id::update_document` (also each
+  document of an update-many) run them with no session before any statement
+  (`crates/payload-fuse-write/src/unique.rs`); a conflict bails
+  (`drafts:localizedPublish:unique:conflict`, the exact lane throws). The finds are templates
+  per unique path and locale (`uniqueLookupTemplates`: db-mongodb's `buildQuery` of `{ [path]: {
+  equals } }` with a sentinel string, number or ObjectId, mongoose's cast, the find operation's
+  default sort, `limit: 2`); the driver puts the value in the sentinel's place (strings, numbers
+  as js-bson serializes them, 24-hex relationship ids as ObjectId and string). A unique compound
+  index (`sanitizedIndexes`) now bails `drafts:localizedPublish:uniqueIndex`: the prepare used to
+  skip that check for collections without unique fields.
+- **Slug fields** (`plan:field:slug`, test/fields). A `slug` field is a text field whose
+  `beforeChange` is `generateSlug` (`slugBeforeChange`, `:custom` with a `slugify` option) and
+  whose validator is the `() => true` `validations.slug`. Every branch of the hook but two reads
+  the database (`fieldValueExists`, `getUniqueFieldValue`, `getSlugFallbackValue`, and
+  `fillEmptyLocalizedSlugs` on creates); the prepare runs the two that do not, on updates: a value
+  that `slugify` (payload `utilities/slugify.ts`, ECMAScript `trim`) turns into the stored slug
+  (`originalDoc[name]`, the top-level document's) returns it after one more tick (`await
+  slugify(value)`), and no usable value with a stored slug returns the stored slug. Everything
+  else bails exactly there: creates and new values `slug:lookup`, a custom `slugify` reached
+  `slug:slugify`, a non-string value `slug:value`; a `req.context` holding
+  `_slugDuplicateFallbackFields` (a duplicate's mark, which the hook consumes) bails
+  `context:slugDuplicate` before the prepare. Slug fields count as unique strings for the unique lookups above.
+
+Corpus (`PAYLOAD_ENGINE=ts`): groups `unique publish` (16, localized config: unique text,
+number in a group and relationship in nested named tabs and a row; creates and updates with and
+without values, taken values, values from the stored document, a draft, rows, a unique compound
+index) and `slugs` (12); the harness records upstream's `fieldValueExists` finds and compares them
+with the prepare's lookups (as multisets: the passes may run concurrently), and a lookup upstream
+found taken counts as a bail (`unique:conflict`, the drivers bail there). 472 cases: 402 equal (295
+written, 107 invalid), 70 bails, 0 differences. Lane suites: a where-constraint collection by id,
+REST, update-many, delete-many and drafts (`Forbidden` for a stored document outside the
+constraint, a latest version outside it falling back to the main document), unique lookups on
+creates, updates and an update-many with a conflict, slug updates kept / taken / renamed.
+
+Measured, full MongoDB harness with `--fuse shadow --fuse-writes shadow` (`wpv2_mf` → `wpw_mf`):
+write hits 5255 → 5352 (creates 4264 → 4353, updateByID 533 → 541), bails 512 → 416
+(`prepare:drafts:localizedPublish:unique` 90 → 0, none of test/database's calls has a unique
+value; `plan:field:slug` 78 → `prepare:slug:lookup` 65 and `prepare:slug:slugify` 5: test/fields'
+slug writes are mostly creates, which always look up), guards 2838 → 2836, ineligible 3814 →
+3807; 0 lane-shadow differences, 0 fused-write differences.
+
+Bars on the final tree (release addon, mongod 8.2 rs0): the harness with `--engine default` 3330 /
+164 / 422, equal to `.rs-baseline/mongodb-all.json` (test/cli differs by the worktree path;
+storage emulators and hmr absent; the plugin-ecommerce settlement test passed; fused writes
+served: 4351 creates, 541 updateByID, 234 deleteByID, 6 update-many, 215 delete-many), the harness
+with both shadows 3330 / 164 / 422 and 0 lane differences (above; run before the last commit, which
+only adds the `context:slugDuplicate` bail); the 8 shadow files 971 / 0 / 46, 0 divergences; parity
+503/503 (twice); driver lane 4/4; glue 33/33; HTTP lanes 18/18; fn-compile 39/39; the corpus 37/37;
+the lane suites 101/101 in default and with both shadows, the write lane suites 70/70 on the TS
+engine; packaging OK.
+
+Perf (WP-W, test/__rs/perf, MongoDB 1k posts, release addon, packed install verified against the
+builds, 3 interleaved rounds per cell, CPUs 22-31, write categories; `ts/x` per category: the
+geometric mean of the per-round geomeans of the scenarios' TS / variant medians, [95% t interval
+over the rounds]; `off` = `rs-fused-off` → `on`):
+
+| shape   | surface | create                              | update                              | partial-update                      | delete                              |
+| ------- | ------- | ----------------------------------- | ----------------------------------- | ----------------------------------- | ----------------------------------- |
+| typical | local   | 1.11 [1.08-1.15] → 1.46 [0.86-2.48] | 1.02 [0.98-1.07] → 2.30 [1.89-2.80] | 1.02 [0.97-1.08] → 2.07 [1.52-2.82] | 0.97 [0.91-1.03] → 1.63 [1.33-1.99] |
+| typical | rest    | 1.05 [1.00-1.10] → 1.17 [0.83-1.66] | 1.01 [0.84-1.21] → 1.23 [1.08-1.40] | 1.04 [0.95-1.14] → 1.50 [0.97-2.30] | 0.97 [0.84-1.13] → 1.29 [0.94-1.77] |
+| typical | graphql | 1.11 [0.97-1.28] → 1.51 [1.19-1.92] | -                                   | 1.01 [0.95-1.08] → 1.89 [1.55-2.30] | 1.03 [0.74-1.45] → 1.39 [0.99-1.96] |
+| complex | local   | 1.09 [1.05-1.13] → 1.41 [1.40-1.42] | 1.04 [1.03-1.06] → 1.98 [1.13-3.45] | 1.04 [1.03-1.04] → 1.70 [1.34-2.15] | 0.99 [0.90-1.09] → 1.22 [0.78-1.91] |
+| complex | rest    | 1.02 [0.95-1.09] → 1.21 [0.83-1.77] | 1.04 [0.90-1.19] → 1.49 [1.32-1.69] | 1.04 [0.98-1.12] → 1.73 [1.06-2.80] | 0.99 [0.97-1.01] → 1.13 [0.70-1.82] |
+| complex | graphql | 1.06 [0.98-1.15] → 1.17 [0.58-2.34] | -                                   | 1.04 [1.00-1.08] → 1.57 [1.11-2.21] | 0.97 [0.91-1.03] → 1.09 [0.90-1.31] |
+
+The complex shape's where-constraint updates now fuse: REST `PATCH /posts/:id (one field)` 1.73
+[1.06-2.80] (WP-V: 0.95 [0.90-0.99], WP-U 0.91-0.95), `PATCH /posts?where (bulk, 10)` 2.18
+[1.38-3.45] (WP-V: 0.94 `off/rs`), GraphQL `updatePost` 1.57 [1.11-2.21] (WP-V: 0.98); with fused
+writes off all three are 0.98-1.10. The whole-document REST `PATCH` is 1.02 [0.53-1.95] (one slow
+round). Of the 55 write scenarios none is confidently slower than TS, 27 are confidently faster.
+The perf shapes have no slug fields and no unique fields on a localized drafts collection: the
+other two parts of WP-W do not run in this suite.
+
+What is left (WP-W), on the write side: slug creates and new slug values (generateSlug's lookups
+decide the value: an iterative prepare that suspends on each `fieldValueExists`, with the hook's
+I/O ordering against its sibling fields modelled), a custom `slugify` (a user function the
+compiler would have to run outside a guarded call site), unique fields in array / block rows and
+localized containers of an all-locales publish, unique compound indexes, `plan:field:condition`
+64, `plan:field:ui` 38, `plan:field:code` 33.
 
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
