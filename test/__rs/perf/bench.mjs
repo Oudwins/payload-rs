@@ -11,8 +11,9 @@
  *   selected surfaces (scenarios.mjs): warmup, then iterations until both `minIterations` and
  *   `minTimeMs` are reached (capped by `maxIterations` / `maxTimeMs`); the first warmup iteration
  *   also records the result fingerprint and the hook calls it made. The `throughput` surface
- *   runs last, once per concurrency level (`measureThroughput`). Started by run.mjs with an IPC
- *   channel, the process is driven instead: after seeding it reports its scenario list (`ready`)
+ *   runs once per concurrency level (`measureThroughput`). Read-only scenarios run before the
+ *   mutating ones, and a read-only scenario that changed the stored posts is an error. Started
+ *   by run.mjs with an IPC channel, the process is driven instead: after seeding it reports its scenario list (`ready`)
  *   and measures the scenario of each `run` message (`done`), in the order run.mjs picks, until
  *   `finish`. Every scenario entry records the heap and RSS after it (`memoryAfter`).
  * - `startup`: the phases of a cold start in this fresh process: importing payload and the
@@ -116,10 +117,22 @@ if (spec.mode === 'scenarios') {
       (!spec.scenarioPattern || new RegExp(spec.scenarioPattern, 'i').test(scenario.name)),
   )
   const runScenario = async (scenario) => {
+    const storedBefore = scenario.isMutating ? undefined : await storedPostsStamp(ctx)
     const entry = await (scenario.surface === 'throughput' ? measureThroughput : measure)(
       ctx,
       scenario,
     )
+    if (storedBefore !== undefined && !entry.error) {
+      const storedAfter = await storedPostsStamp(ctx)
+      if (storedAfter !== storedBefore) {
+        // reads run before every write (run.mjs `scenarioOrder`), so a write misclassified as
+        // read-only would make later reads depend on its iteration count
+        entry.error = {
+          message: `a read-only scenario changed the stored posts (${storedBefore} -> ${storedAfter}): it must be marked mutating`,
+          name: 'ReadOnlyScenarioWrote',
+        }
+      }
+    }
     const memory = process.memoryUsage()
     entry.memoryAfter = {
       external: memory.external,
@@ -153,7 +166,10 @@ if (spec.mode === 'scenarios') {
       })
     })
   } else {
-    for (const scenario of selected) {
+    for (const scenario of [
+      ...selected.filter((scenario) => !scenario.isMutating),
+      ...selected.filter((scenario) => scenario.isMutating),
+    ]) {
       await runScenario(scenario)
     }
   }
@@ -525,6 +541,19 @@ async function measureThroughput(ctx, scenario) {
     entry.samples = latencies.map((value) => Math.round(value * 1000) / 1000)
   }
   return entry
+}
+
+/** The stored posts' count and latest update (untimed): what a read-only scenario must not change. */
+async function storedPostsStamp(ctx) {
+  const { docs, totalDocs } = await ctx.payload.find({
+    collection: 'posts',
+    depth: 0,
+    limit: 1,
+    overrideAccess: true,
+    select: { updatedAt: true },
+    sort: '-updatedAt',
+  })
+  return `${totalDocs} posts, latest update ${docs[0]?.id} at ${docs[0]?.updatedAt}`
 }
 
 /** Size of a result (JSON bytes) and the documents it carries, for per-document costs. */

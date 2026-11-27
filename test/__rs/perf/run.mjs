@@ -28,8 +28,9 @@
  * engine, each on its own fresh database, seeded one after the other; then the processes take turns
  * scenario by scenario (only one measures at a time, the engine that goes first alternates), so
  * both engines see the same machine state. The scenario order is shuffled per round (`--order
- * shuffle`, the default; read-only scenarios before mutating ones before throughput, as in the
- * catalogue), equal for every engine of the round, so no number depends on one fixed predecessor.
+ * shuffle`, the default; read-only scenarios and read-only throughput before mutating scenarios and
+ * mutating throughput, `scenarioOrder`), equal for every engine of the round, so no number
+ * depends on one fixed predecessor.
  * A cell (database, shape, size, engine) pools the samples of its processes and keeps each
  * process's numbers (`processes`) for the spread. `--cpus <list>` pins every bench process
  * (taskset). Engines: `ts` = PAYLOAD_ENGINE=ts (upstream), `rs` = PAYLOAD_ENGINE unset (the
@@ -630,16 +631,25 @@ async function startDriven({ database, engine, round, shape, size }) {
 }
 
 /**
- * The indexes of `listed` in the order a round measures them: read-only scenarios, then mutating
- * ones, then throughput (as in the catalogue); within the first two groups shuffled with the round
- * as the seed (`--order shuffle`), or the catalogue order (`--order suite`).
+ * The indexes of `listed` in the order a round measures them: read-only scenarios, then read-only
+ * throughput, then mutating scenarios, then mutating throughput, so no read sees a write (whose
+ * iteration count differs between engines); the scenarios (not the throughput levels) shuffled
+ * within their group with the round as the seed (`--order shuffle`), or the catalogue order
+ * (`--order suite`).
  */
 function scenarioOrder(listed, round) {
   const indexes = listed.map((_, index) => index)
+  const groupOf = (isThroughput, isMutating) =>
+    indexes.filter(
+      (index) =>
+        (listed[index].surface === 'throughput') === isThroughput &&
+        Boolean(listed[index].isMutating) === isMutating,
+    )
   const groups = [
-    indexes.filter((index) => listed[index].surface !== 'throughput' && !listed[index].isMutating),
-    indexes.filter((index) => listed[index].surface !== 'throughput' && listed[index].isMutating),
-    indexes.filter((index) => listed[index].surface === 'throughput'),
+    groupOf(false, false),
+    groupOf(true, false),
+    groupOf(false, true),
+    groupOf(true, true),
   ]
   if (options.order === 'suite') {
     return groups.flat()
@@ -653,7 +663,9 @@ function scenarioOrder(listed, round) {
     }
     return shuffled
   }
-  return [...shuffle(groups[0]), ...shuffle(groups[1]), ...groups[2]]
+  const reads = shuffle(groups[0])
+  const writes = shuffle(groups[2])
+  return [...reads, ...groups[1], ...writes, ...groups[3]]
 }
 
 /**

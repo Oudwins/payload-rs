@@ -98,9 +98,14 @@ subset. On shared servers, `--mongodb-server <url>` selects the MongoDB server a
   server) hits both or shows up as the spread between rounds, instead of biasing one engine's
   whole cell.
 - **Order.** `--order shuffle` (default) shuffles the scenarios per round, with the round as the
-  seed and the same order for every engine of the round: read-only scenarios first, then the
-  mutating ones (each group shuffled), then throughput, so reads still see the seeded data. No
-  scenario's number depends on one fixed predecessor; `--order suite` keeps the catalogue order.
+  seed and the same order for every engine of the round: read-only scenarios first (shuffled),
+  then read-only throughput, then the mutating scenarios (shuffled), then mutating throughput, so
+  reads still see the seeded data whatever the (engine-dependent) iteration counts of the writes
+  were. A read-only scenario that changed the stored posts is an error. No scenario's number
+  depends on one fixed predecessor; `--order suite` keeps the catalogue order.
+- **Fingerprint mismatches.** Each process keeps every scenario's first response
+  (`cells/<label>.first.json`); a mismatch writes both engines' full fingerprints, first
+  responses and the differing paths to `<out>/mismatches/`.
 - `--cpus <list>` pins every bench process with `taskset` (e.g. `--cpus 0-7`; MongoDB and other
   servers are not pinned by the suite). The CPU set changes the Rust engine's numbers more than
   TypeScript's: an operation hands work between the JS thread and the engine's worker threads

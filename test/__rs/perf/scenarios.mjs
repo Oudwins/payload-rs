@@ -1215,7 +1215,10 @@ export const scenarios = [...all.filter((s) => !s.isMutating), ...all.filter((s)
  * callers issue the operation back to back for the measuring time. `run(ctx, index)` is one
  * request (`index` counts the requests of the scenario); `created(result)` returns the id of a
  * post a request created, deleted after the measurement (untimed), so the collection size stays
- * the measured size.
+ * the measured size. `isMutating`: the operation writes (it runs after every read-only scenario,
+ * like the mutating scenarios above: how many requests a write made within the measuring time
+ * differs between engines, and so would the documents a later read sees, e.g. the `updatedBy` an
+ * authenticated REST update stamps).
  */
 const throughputOperations = [
   { name: 'find limit 10', run: (ctx) => find(ctx, { depth: 0, limit: 10 }) },
@@ -1233,19 +1236,22 @@ const throughputOperations = [
     name: 'REST GET /posts limit 10',
     run: (ctx) => ctx.rest('GET', ['posts'], { query: { depth: 0, limit: 10 } }),
   },
-  { created: (doc) => doc.id, name: 'create', run: (ctx) => createPost(ctx) },
+  { created: (doc) => doc.id, isMutating: true, name: 'create', run: (ctx) => createPost(ctx) },
   // concurrent writes target different posts (`index` advances per request), so in-flight
   // requests don't conflict on one document
   {
+    isMutating: true,
     name: 'update scalar field',
     run: (ctx, index) => update(ctx, { data: { revision: index }, id: by(ctx, index) }),
   },
   {
     created: (response) => response.json.doc.id,
+    isMutating: true,
     name: 'REST POST /posts',
     run: (ctx) => ctx.rest('POST', ['posts'], { body: freshPost(ctx) }),
   },
   {
+    isMutating: true,
     name: 'REST PATCH /posts/:id (one field)',
     run: (ctx, index) =>
       ctx.rest('PATCH', ['posts', String(by(ctx, index))], { body: { revision: index } }),
@@ -1261,7 +1267,7 @@ export const throughputScenarios = (concurrencies = defaultThroughputConcurrency
       ...operation,
       category: 'throughput',
       concurrency,
-      isMutating: Boolean(operation.created),
+      isMutating: Boolean(operation.isMutating),
       name: `${operation.name} x${concurrency}`,
       surface: 'throughput',
     })),
