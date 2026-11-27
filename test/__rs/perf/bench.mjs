@@ -36,6 +36,22 @@ const spec = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
 const now = () => Number(process.hrtime.bigint()) / 1e6
 const result = { spec, startedAt: new Date().toISOString() }
 let scenarioNumber = 0
+/**
+ * The first response of every scenario (`<surface> <name>`), written next to `spec.out`
+ * (`firstResultsPath`): run.mjs puts both engines' responses into the report of a fingerprint
+ * mismatch.
+ */
+const firstResults = {}
+const firstResultsPath = spec.out.replace(/\.json$/, '.first.json')
+const keepFirstResult = (scenario, value) => {
+  try {
+    firstResults[`${scenario.surface} ${scenario.name}`] = JSON.parse(
+      JSON.stringify(value) ?? 'null',
+    )
+  } catch (error) {
+    firstResults[`${scenario.surface} ${scenario.name}`] = { unserializable: String(error) }
+  }
+}
 
 /**
  * GC pauses while a scenario's timed loop runs (`gc` performance entries; the observer callback
@@ -151,6 +167,10 @@ result.environment = {
   engine: process.env.PAYLOAD_ENGINE ?? '(unset: default)',
   node: process.version,
   platform: `${process.platform}-${process.arch}`,
+}
+if (spec.mode === 'scenarios') {
+  result.firstResultsPath = firstResultsPath
+  fs.writeFileSync(firstResultsPath, JSON.stringify(firstResults))
 }
 fs.writeFileSync(spec.out, JSON.stringify(result, null, 2))
 await payload.destroy?.()
@@ -368,6 +388,7 @@ async function measure(ctx, scenario) {
     }
     const first = await once()
     entry.fingerprint = fingerprint(first.value, 0, { isCountVariable: scenario.isCountVariable })
+    keepFirstResult(scenario, first.value)
     entry.hookCalls = { ...hookCounter }
     entry.result = describeResult(first.value)
     for (let index = 1; index < spec.warmup; index++) {
@@ -449,6 +470,7 @@ async function measureThroughput(ctx, scenario) {
     }
     const first = await request()
     entry.fingerprint = fingerprint(first, 0)
+    keepFirstResult(scenario, first)
     entry.hookCalls = { ...hookCounter }
     entry.result = describeResult(first)
     await Promise.all(

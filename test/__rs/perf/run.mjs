@@ -789,8 +789,16 @@ function checkRound({ database, outputs: { rs, ts }, round, shape, size }) {
       continue
     }
     if (JSON.stringify(tsScenario.fingerprint) !== JSON.stringify(rsScenario.fingerprint)) {
+      const differences = fingerprintDifferences(tsScenario.fingerprint, rsScenario.fingerprint)
+      const reportPath = writeMismatch({
+        differences,
+        name: `${database}-${shape}-${size}-r${round}-${tsScenario.surface}-${tsScenario.name}`,
+        outputs: { rs, ts },
+        rsScenario,
+        tsScenario,
+      })
       fail(
-        `${where}: result fingerprints differ: ts ${JSON.stringify(tsScenario.fingerprint).slice(0, 400)} / rs ${JSON.stringify(rsScenario.fingerprint).slice(0, 400)}`,
+        `${where}: result fingerprints differ (${reportPath}): ${differences.slice(0, 10).join('; ')}`,
       )
     }
     if (JSON.stringify(tsScenario.hookCalls) !== JSON.stringify(rsScenario.hookCalls)) {
@@ -799,6 +807,60 @@ function checkRound({ database, outputs: { rs, ts }, round, shape, size }) {
       )
     }
   }
+}
+
+/** The paths where two fingerprints differ, with each side's value (`-`: absent). */
+function fingerprintDifferences(ts, rs, at = '') {
+  if (
+    ts &&
+    rs &&
+    typeof ts === 'object' &&
+    typeof rs === 'object' &&
+    Array.isArray(ts) === Array.isArray(rs)
+  ) {
+    return [...new Set([...Object.keys(ts), ...Object.keys(rs)])]
+      .toSorted()
+      .flatMap((key) => fingerprintDifferences(ts[key], rs[key], at ? `${at}.${key}` : key))
+  }
+  if (JSON.stringify(ts) === JSON.stringify(rs)) {
+    return []
+  }
+  const show = (value) => (value === undefined ? '-' : JSON.stringify(value).slice(0, 200))
+  return [`${at || '(root)'}: ts ${show(ts)} / rs ${show(rs)}`]
+}
+
+/**
+ * A fingerprint mismatch's report, <out>/mismatches/<name>.json: both engines' full fingerprints
+ * and first responses (bench.mjs `firstResultsPath`) and the differing paths. Returns its path.
+ */
+function writeMismatch({ differences, name, outputs, rsScenario, tsScenario }) {
+  const key = `${tsScenario.surface} ${tsScenario.name}`
+  const firstResultOf = (output) => {
+    try {
+      return JSON.parse(fs.readFileSync(output.firstResultsPath, 'utf8'))[key]
+    } catch (error) {
+      return { unavailable: String(error) }
+    }
+  }
+  const reportPath = path.join(
+    options.out,
+    'mismatches',
+    `${name.replaceAll(/[^\w.-]+/g, '_')}.json`,
+  )
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true })
+  fs.writeFileSync(
+    reportPath,
+    JSON.stringify(
+      {
+        differences,
+        rs: { fingerprint: rsScenario.fingerprint, firstResult: firstResultOf(outputs.rs) },
+        ts: { fingerprint: tsScenario.fingerprint, firstResult: firstResultOf(outputs.ts) },
+      },
+      null,
+      2,
+    ),
+  )
+  return reportPath
 }
 
 /** The scenario catalogue as markdown, grouped by category. */
