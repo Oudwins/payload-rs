@@ -376,6 +376,27 @@ Typical geomean 6.70x [6.60-6.79]; cores 24-29 give the same picture (5.4-8.9x).
   - SQLite `--fuse shadow`: 134/135 identical, 0 lane differences (create-payload-app: failed ->
     passed, as before). PostgreSQL 131/135 (= baseline). Packaging and default-path check: OK.
 
+Status 2026-11-27 (verified as rounds 19-22), MongoDB throughput.
+
+Driver runtime (WP-X, WP-Z, MONGO_DRIVER_CONTRACT.md):
+
+- Driver runtime workers default to `clamp(cpus / 3 + 1, 2, 6)` of the CPUs the process may use (affinity mask and cgroup quota).
+- 2-3 workers on up to 8 CPUs, 6 from 15 CPUs.
+
+Throughput under concurrent load, Rust / TS requests per second at x64:
+
+| scenario (16 CPUs)                    | Rust / TS                                                        |
+| ------------------------------------- | ---------------------------------------------------------------- |
+| geomean of the 7 throughput scenarios | about 9x                                                         |
+| update                                | 12.8-16.8x                                                       |
+| find limit 10                         | 10.8-11.9x                                                       |
+| create                                | 10-11.4x                                                         |
+| findByID                              | 7.9-12.3x                                                        |
+| REST                                  | about 5.6-6.9x (JS-thread bound: 0.38-0.88 ms of JS per request) |
+
+- Fused writes, with the prepare in the driver (WP-Y), use 0.3-0.4 ms of JS-thread time per write, against 4-6 ms on TS.
+- Single-request latency is still database-bound: about 1.3-1.5x geomean over the perf suite (interleaved multi-process rounds, `test/__rs/perf/README.md`).
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).
