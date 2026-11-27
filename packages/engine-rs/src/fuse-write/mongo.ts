@@ -502,6 +502,10 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
   if (plan.json === undefined) {
     return `plan:${plan.reason}`
   }
+  if (slugDuplicateKey in context) {
+    // a duplicate's mark for generateSlug (consumed and deleted by the hook)
+    return 'context:slugDuplicate'
+  }
   // a draft save validates only with `drafts.validate`
   const drafts = collectionConfig.versions?.drafts
   if (isInWarmup(plan, !(args.draft && drafts && !drafts.validate))) {
@@ -594,6 +598,9 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
     return prepared()
   })
 }
+
+/** generateSlug's duplicate mark in `req.context` (fields/baseFields/slug/duplicateContext.ts). */
+const slugDuplicateKey = '_slugDuplicateFallbackFields'
 
 const writePlanIDs = new WeakMap<object, number>()
 
@@ -1168,6 +1175,9 @@ const prepareByID = async (
     const plan = writePlanOf(args.collection, req.payload)
     if (plan.json === undefined) {
       return `plan:${plan.reason}`
+    }
+    if (slugDuplicateKey in req.context) {
+      return 'context:slugDuplicate'
     }
     // utilities/update.ts `isSavingDraft` (no `publishAllLocales`: guarded); a draft save
     // validates only with `drafts.validate`
