@@ -769,8 +769,10 @@ the lane was installed, a replica set, `transactionOptions !== false`, no tracin
 version and the latest flip `update` (`$unset: { latest: 1 }`, filter as `createVersion`), no
 max-versions find; then `run_document` (the fused `findByID` request of the new id: afterRead and
 population in the transaction), then the commit. JS replays what upstream mutates in place
-(`args.data` by `beforeValidate`, `req.context` by Payload's own hooks: the lane works on copies
-so a bail leaves both untouched), primes the dataloader with keys carrying a fresh transaction
+(`args.data` by `beforeValidate`, `req.context` by Payload's own hooks: the TS prepare works on
+copies so a bail leaves both untouched; the Rust prepare only reads them, as one JSON text, so
+since WP-AA it is given them uncopied when the context is a plain object, the context writes being
+assigned after a successful write), primes the dataloader with keys carrying a fresh transaction
 id (upstream's population runs inside the operation's transaction) and deletes
 `req.transactionID` like `commitTransaction`.
 

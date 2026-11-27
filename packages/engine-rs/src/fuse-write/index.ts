@@ -529,8 +529,19 @@ const copyMutable = (args: Any) => {
   }
 }
 
+/**
+ * What the fused create works on: with the Rust prepare `args.data` and `req.context` themselves
+ * when the context is a plain object (the prepare only reads them, as one JSON text, and the
+ * context writes of Payload's own hooks are assigned after a successful write, `settle`), else
+ * `copyMutable`'s copies.
+ */
+const createInputs = (args: Any) =>
+  !isTSPrepare && isPlainObject(args.req.context)
+    ? { context: args.req.context, data: args.data }
+    : copyMutable(args)
+
 const runCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => {
-  const copies = copyMutable(args)
+  const copies = createInputs(args)
   if (!copies) {
     count(stats.guards, 'context')
     return exact()
@@ -559,8 +570,10 @@ const runCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => {
     return exact()
   }
   count(stats.hits, 'create')
-  replayInto(args.data, outcome.data)
-  if (isPlainObject(args.req.context)) {
+  if (outcome.data !== args.data) {
+    replayInto(args.data, outcome.data)
+  }
+  if (isPlainObject(args.req.context) && copies.context !== args.req.context) {
     replayInto(args.req.context, copies.context)
   }
   const result = materializeFusedResult(withLoadTransaction(outcome.read, randomUUID()), text)
