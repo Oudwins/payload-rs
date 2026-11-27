@@ -1234,6 +1234,22 @@ const throughputOperations = [
     run: (ctx) => ctx.rest('GET', ['posts'], { query: { depth: 0, limit: 10 } }),
   },
   { created: (doc) => doc.id, name: 'create', run: (ctx) => createPost(ctx) },
+  // concurrent writes target different posts (`index` advances per request), so in-flight
+  // requests don't conflict on one document
+  {
+    name: 'update scalar field',
+    run: (ctx, index) => update(ctx, { data: { revision: index }, id: by(ctx, index) }),
+  },
+  {
+    created: (response) => response.json.doc.id,
+    name: 'REST POST /posts',
+    run: (ctx) => ctx.rest('POST', ['posts'], { body: freshPost(ctx) }),
+  },
+  {
+    name: 'REST PATCH /posts/:id (one field)',
+    run: (ctx, index) =>
+      ctx.rest('PATCH', ['posts', String(by(ctx, index))], { body: { revision: index } }),
+  },
 ]
 
 /** Concurrency levels of the throughput scenarios (run.mjs `--throughput-concurrency`). */
