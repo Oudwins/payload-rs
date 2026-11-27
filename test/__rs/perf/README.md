@@ -75,7 +75,10 @@ database per cell; db-postgres itself is upstream TS, the core is Rust).
 - `results.json` (everything) and the raw per-process results in `cells/`
 
 One engine alone works too (`--engines ts` or `--engines rs`: absolute numbers, no speedups);
-`--engines ts,rs,db-rs,core-rs` attributes a difference to the database engine or the core.
+`--engines ts,rs,db-rs,core-rs` attributes a difference to the database engine or the core;
+`rs-threads-<n>` is the default selection with `PAYLOAD_MONGO_DRIVER_THREADS=<n>` (the MongoDB
+driver runtime's workers), e.g. `--engines ts,rs-threads-2,rs-threads-4` (only `ts` and `rs` cells
+are paired in the report).
 `--categories`, `--scenarios <regex>`, `--surfaces`, `--shapes`, `--sizes`, `--databases` select a
 subset. On shared servers, `--mongodb-server <url>` selects the MongoDB server and `--db-prefix
 <prefix>` (default `perf`) the name prefix of every database a run creates. `--processes <n>`

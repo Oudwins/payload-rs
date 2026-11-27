@@ -124,9 +124,14 @@ for (const category of options.categories) {
  * `--engines` values: `ts` (upstream), `rs` (the default selection), and for attributing a
  * difference to a layer `db-rs` (Rust database engine, TS core), `core-rs` (TS database
  * adapter, Rust core), `rs-fused-off` / `rs-fused-writes` (`PAYLOAD_RS_FUSE_WRITES` off / on,
- * the fused MongoDB writes, packages/engine-rs/FUSED_WRITES.md). Only ts and rs cells are paired
- * for the fingerprint checks and the report.
+ * the fused MongoDB writes, packages/engine-rs/FUSED_WRITES.md), `rs-threads-<n>` (the default
+ * selection with `PAYLOAD_MONGO_DRIVER_THREADS=<n>`, the MongoDB driver runtime's workers). Only ts
+ * and rs cells are paired for the fingerprint checks and the report.
  */
+const engineEnv = (engine) => {
+  const threads = /^rs-threads-([1-9]\d*)$/.exec(engine)?.[1]
+  return threads ? { PAYLOAD_MONGO_DRIVER_THREADS: threads } : engineVariants[engine]
+}
 const engineVariants = {
   'core-rs': { PAYLOAD_CORE_ENGINE: 'rs', PAYLOAD_ENGINE: 'ts' },
   'db-rs': { PAYLOAD_CORE_ENGINE: 'ts' },
@@ -139,9 +144,9 @@ if (!['shuffle', 'suite'].includes(options.order)) {
   throw new Error(`--order: shuffle or suite, not ${options.order}`)
 }
 for (const engine of options.engines) {
-  if (!engineVariants[engine]) {
+  if (!engineEnv(engine)) {
     throw new Error(
-      `--engines: unknown engine ${engine} (${Object.keys(engineVariants).join(', ')})`,
+      `--engines: unknown engine ${engine} (${Object.keys(engineVariants).join(', ')}, rs-threads-<n>)`,
     )
   }
 }
@@ -409,7 +414,7 @@ function benchProcess({ engine, label, spec: specInput }) {
       delete env[key]
     }
   }
-  Object.assign(env, engineVariants[engine])
+  Object.assign(env, engineEnv(engine))
   if (options.fuse) {
     env.PAYLOAD_RS_FUSE = options.fuse
   }
