@@ -75,6 +75,14 @@ export const upstreamMethods = [
 
 const isLiveWrites = () => process.env.PAYLOAD_RS_MONGO_LIVE_WRITES === 'true'
 
+/**
+ * Whether model building (`init`) is the live Rust port (`PAYLOAD_RS_MONGO_LIVE_INIT=rust`). By
+ * default upstream's db-mongodb `init` builds the models: the port drives mongoose through
+ * Node-API once per property and call, about 6x the JS time of upstream's own code (WP-AD,
+ * MongoDB: `getPayload` +9 ms on the typical shape, +90 ms with 200 collections).
+ */
+const isLiveInit = () => process.env.PAYLOAD_RS_MONGO_LIVE_INIT === 'rust'
+
 type AdapterObj = { init: (args: { payload: any }) => AnyObject }
 
 const rustAdapters = new WeakSet<object>()
@@ -180,8 +188,8 @@ const writeStatsFile = (file: string) => {
 
 /**
  * Wraps the object returned by `@payloadcms/db-mongodb`'s `mongooseAdapter(args)`. Its `init`
- * builds the upstream adapter and swaps the data methods and model building for the live Rust
- * engine (throws when the addon lacks any part of it).
+ * builds the upstream adapter and swaps the data methods (and, with `isLiveInit`, model building)
+ * for the live Rust engine (throws when the addon lacks any part of it).
  */
 export const withRustMongoEngine = <TAdapterObj extends AdapterObj>(
   adapterObj: TAdapterObj,
@@ -202,7 +210,10 @@ export const withRustMongoEngine = <TAdapterObj extends AdapterObj>(
       live.delete(method)
     }
     const driver = installDriverLane(adapter)
-    adapter.init = createLiveInit()
+    const isLiveInitInstalled = isLiveInit()
+    if (isLiveInitInstalled) {
+      adapter.init = createLiveInit()
+    }
     recordStats(() => {
       stats.engines.live++
       stats.liveMethods = [...new Set([...live, ...stats.liveMethods])].sort()
@@ -210,7 +221,7 @@ export const withRustMongoEngine = <TAdapterObj extends AdapterObj>(
         ...new Set([...stats.upstreamMethods, ...upstream.map(([method]) => method)]),
       ].sort()
       stats.driverMethods = [...new Set([...driver, ...stats.driverMethods])].sort()
-      stats.liveInit++
+      stats.liveInit += isLiveInitInstalled ? 1 : 0
     })
     flushStatsBeforeDestroy(adapter)
     return adapter

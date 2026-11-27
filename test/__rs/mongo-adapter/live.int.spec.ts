@@ -200,7 +200,7 @@ async function exercise(payload: Payload) {
 }
 
 describe('withRustMongoEngine (live engine)', () => {
-  it('serves every data method and model building with the live Rust ports', async () => {
+  it('serves every data method with the live Rust ports, models built by upstream', async () => {
     counter++
     const liveInitBefore = getRustMongoEngineStats().liveInit
     const payload = await start(
@@ -210,9 +210,10 @@ describe('withRustMongoEngine (live engine)', () => {
     )
     expect(isRustMongoEngineAdapter(payload.db)).toBe(true)
     const stats = getRustMongoEngineStats()
-    // model building is the live port by default
-    expect(stats.liveInit - liveInitBefore).toBe(1)
-    expect(payload.db.init.toString()).toContain('getMongoLiveSchema()')
+    // model building is upstream's db-mongodb `init` by default (the live port with
+    // PAYLOAD_RS_MONGO_LIVE_INIT=rust, below)
+    expect(stats.liveInit - liveInitBefore).toBe(0)
+    expect(payload.db.init.toString()).not.toContain('getMongoLiveSchema()')
     expect(stats.upstreamMethods).toEqual([...upstreamMethods].sort())
     expect([...stats.liveMethods, ...stats.upstreamMethods].sort()).toEqual(
       [...mongoEngineMethods].sort(),
@@ -281,9 +282,10 @@ describe('withRustMongoEngine (live engine)', () => {
     })
   }
 
-  it('shadow (serial): models built by the live init port by default, zero divergences', async () => {
+  it('shadow (serial): models built by the live init port (PAYLOAD_RS_MONGO_LIVE_INIT=rust), zero divergences', async () => {
     counter++
-    {
+    process.env.PAYLOAD_RS_MONGO_LIVE_INIT = 'rust'
+    try {
       const liveInitBefore = getRustMongoEngineStats().liveInit
       const records: ShadowRecord[] = []
       const db = createMongoShadowAdapter({
@@ -303,6 +305,8 @@ describe('withRustMongoEngine (live engine)', () => {
       await state.diffDatabases()
       expect(records.filter((r) => r.type === 'divergence')).toEqual([])
       expect(state.calls).toBeGreaterThan(40)
+    } finally {
+      delete process.env.PAYLOAD_RS_MONGO_LIVE_INIT
     }
   })
 })
