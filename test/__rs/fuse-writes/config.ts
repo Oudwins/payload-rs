@@ -64,6 +64,28 @@ export default buildConfigWithDefaults({
         versions: { drafts: { validate: true } },
       },
       {
+        // slug fields (`generateSlug`): updates keeping the stored slug read nothing
+        slug: 'slugs',
+        fields: [
+          { name: 'title', type: 'text' },
+          { name: 'slug', type: 'slug', useAsSlug: 'title' },
+          { name: 'plainSlug', type: 'slug' },
+        ],
+      },
+      {
+        // a custom `slugify` (a user function, called for any value): bails
+        slug: 'customSlugs',
+        fields: [
+          { name: 'title', type: 'text' },
+          {
+            name: 'customSlug',
+            type: 'slug',
+            slugify: ({ valueToSlugify }) => String(valueToSlugify).toUpperCase(),
+            useAsSlug: 'title',
+          },
+        ],
+      },
+      {
         slug: 'minimal',
         fields: [
           { name: 'title', type: 'text', index: true, required: true },

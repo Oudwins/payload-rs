@@ -104,12 +104,16 @@ pub enum OwnHook {
   RowIdBeforeChange,
   AuthorshipBeforeValidate(Authorship),
   AuthorshipBeforeChange(Authorship),
+  /// A `slug` field's `generateSlug` (`custom`: the field has its own `slugify`).
+  SlugBeforeChange { custom: bool },
 }
 
 impl OwnHook {
   fn parse(s: &str) -> Option<OwnHook> {
     Some(match s {
       "rowIdBeforeChange" => OwnHook::RowIdBeforeChange,
+      "slugBeforeChange" => OwnHook::SlugBeforeChange { custom: false },
+      "slugBeforeChange:custom" => OwnHook::SlugBeforeChange { custom: true },
       "authorshipBeforeValidate:createdBy" => OwnHook::AuthorshipBeforeValidate(Authorship::CreatedBy),
       "authorshipBeforeValidate:updatedBy" => OwnHook::AuthorshipBeforeValidate(Authorship::UpdatedBy),
       "authorshipBeforeChange:createdBy" => OwnHook::AuthorshipBeforeChange(Authorship::CreatedBy),

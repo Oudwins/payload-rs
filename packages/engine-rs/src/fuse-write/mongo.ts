@@ -971,6 +971,7 @@ const uniqueKind = (payload: Any, field: Any) => {
     case 'email':
     case 'radio':
     case 'select':
+    case 'slug':
     case 'text':
     case 'textarea':
       return 'str'

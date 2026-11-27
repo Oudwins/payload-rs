@@ -19,6 +19,39 @@ import { finish, fixtures, runAll } from './corpus.js'
 
 requireTsEngine({ file: 'test/__rs/fuse-writes/int.spec.ts' })
 
+const storedSlugs = (n: number) => ({ raw: { title: 'r', slug: `s${n}`, plainSlug: `p${n}` } })
+
+const slugCases = (): Case[] => [
+  ...[
+    { name: 'create (looks up)', data: { title: 'Fresh' } },
+    { name: 'update keeping the stored slugs', data: { title: 't' }, seed: storedSlugs(1) },
+    { name: 'update with a value slugifying to it', data: { slug: ' S2 ' }, seed: storedSlugs(2) },
+    { name: 'update with an empty slug', data: { slug: '' }, seed: storedSlugs(3) },
+    { name: 'update with a slug of symbols', data: { slug: '!!!' }, seed: storedSlugs(4) },
+    { name: 'update with a null slug', data: { slug: null }, seed: storedSlugs(5) },
+    { name: 'update with a new slug (looks up)', data: { slug: 'other' }, seed: storedSlugs(6) },
+    { name: 'update with a number slug', data: { slug: 7 }, seed: storedSlugs(7) },
+    {
+      name: 'raw: update without stored slugs (looks up)',
+      data: { title: 't' },
+      seed: { raw: { title: 'r' } },
+    },
+    {
+      name: 'update of a created document',
+      data: { title: 'later' },
+      seed: { data: { title: 'Hello World' } },
+    },
+  ].map((c) => ({ ...c, collection: 'slugs' })),
+  ...[
+    { name: 'custom slugify: create', data: { title: 'c' } },
+    {
+      name: 'custom slugify: update',
+      data: { title: 't' },
+      seed: { raw: { title: 'r', customSlug: 'R' } },
+    },
+  ].map((c) => ({ ...c, collection: 'customSlugs' })),
+]
+
 const minimalCreates = (f: Fixtures): Case[] =>
   [
     { name: 'title only', data: { title: 'a' } },
@@ -1247,6 +1280,12 @@ test.suite('fused writes: write-side corpus', { config: './config.ts' }, () => {
     const f = await fixtures(payload)
     await runAll(payload, 'rich update', richUpdates(), f)
     finish('rich update')
+  })
+
+  test('slug fields', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'slugs', slugCases(), f)
+    finish('slugs')
   })
 
   test('kinds updates', async ({ payload }) => {

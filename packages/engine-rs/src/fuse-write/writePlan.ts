@@ -1,5 +1,6 @@
 import { defaultFieldValidators } from '../../../payload/src/fields/config/defaultFieldValidators.js'
 import { payloadOwnFunctions } from '../../../payload/src/fields/config/payloadOwnFunctions.js'
+import { slug } from '../../../payload/src/fields/validations.js'
 import { getVersionsMax } from '../../../payload/src/utilities/getVersionsConfig.js'
 import { buildVersionCollectionFields } from '../../../payload/src/versions/buildCollectionFields.js'
 import { compileFunction } from '../compile/compileFunction.js'
@@ -66,6 +67,8 @@ const modelledTypes = new Set([
   'richText',
   'row',
   'select',
+  // a text field with `generateSlug` (the prepare runs its branches that read nothing)
+  'slug',
   'tabs',
   'text',
   'textarea',
@@ -268,10 +271,22 @@ const portedKinds = new Set([
   'rowIdDefaultValue',
 ])
 
-const ownKind = (fn: unknown) => {
+const ownKind = (fn: unknown, field?: Any) => {
   const own = typeof fn === 'function' ? payloadOwnFunctions.get(fn) : undefined
   if (!own) {
     return ineligible('field:userFunction')
+  }
+  if (own.kind === 'slugBeforeChange') {
+    // the field's own `generateSlug` (`name` and `localized` as sanitization passed them)
+    const { options } = own
+    if (
+      field?.type !== 'slug' ||
+      options.name !== field.name ||
+      Boolean(options.localized) !== Boolean(field.localized)
+    ) {
+      return ineligible('field:slug:hook')
+    }
+    return options.slugify ? 'slugBeforeChange:custom' : 'slugBeforeChange'
   }
   const kind = 'field' in own ? `${own.kind}:${own.field}` : own.kind
   return portedKinds.has(kind) ? kind : ineligible(`field:${own.kind}`)
@@ -292,7 +307,9 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
   }
   // an upload field is a relationship everywhere on the write path (beforeValidate, beforeChange,
   // the transforms: `relationship || upload`) except its validator (`upload`, the same code)
-  const out: Record<string, unknown> = { t: type === 'upload' ? 'relationship' : type }
+  const out: Record<string, unknown> = {
+    t: type === 'upload' ? 'relationship' : type === 'slug' ? 'text' : type,
+  }
   const named = 'name' in field
   if (named) {
     if (typeof field.name !== 'string' || objectPrototypeKeys.has(field.name)) {
@@ -336,7 +353,7 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
               ? userFunctionPlan(builder, hook, 0, hookArgKeys, 'field:hooks', (key) =>
                   key === 'field' ? (tab ? { ...field, type: 'tab' } : field) : undefined,
                 )
-              : ownKind(hook),
+              : ownKind(hook, field),
           )
         }
       }
@@ -381,7 +398,8 @@ const fieldPlan = (builder: Builder, field: Any, tab?: 'tab') => {
       )
     } else if (known.field !== field) {
       return ineligible('field:validate')
-    } else if (known.validate === validate) {
+    } else if (known.validate === validate || (type === 'slug' && known.validate === slug)) {
+      // `() => true` stubs (`validations.slug` among them: uniqueness is the hook's)
       out.val = true
     } else {
       out.val = type

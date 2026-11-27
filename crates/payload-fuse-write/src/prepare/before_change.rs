@@ -172,6 +172,16 @@ fn promise<'r, 'e: 'r>(s: S<'r, 'e>, field: &'r Field, level: Level) -> Task<'r,
             Err(bail) => return run.fail(bail),
           },
           Hook::Own(OwnHook::AuthorshipBeforeValidate(_)) => return run.fail(Bail::new("beforeChange:hook")),
+          Hook::Own(OwnHook::SlugBeforeChange { custom }) => match generate_slug(&s, *custom, name, &level) {
+            Ok((value, awaited)) => {
+              if awaited {
+                // `await slugify(value)` inside the async hook
+                tick().await;
+              }
+              value
+            }
+            Err(bail) => return run.fail(bail),
+          },
         };
         // `await callUserFunction(hook)` of a synchronous hook (a compiled one settles at once)
         tick().await;
@@ -483,6 +493,65 @@ fn has_operator_like_keys(heap: &Heap, value: &V) -> bool {
 }
 
 /// `hasInvalidFieldValueShape({ field, value })`.
+/// `generateSlug` (fields/baseFields/slug/generateSlug.ts) where it reads nothing: an update
+/// keeping the stored slug (the value slugifies to it, or there is no value). Every other branch
+/// queries the database (`fieldValueExists`, `getUniqueFieldValue`, `getSlugFallbackValue`): a
+/// bail. The hook's result and whether it awaited `slugify`.
+fn generate_slug(s: &S<'_, '_>, custom: bool, name: &str, level: &Level) -> Result<(V, bool), Bail> {
+  let run = s.run;
+  if run.operation == Operation::Create {
+    return Err(Bail::new("slug:lookup"));
+  }
+  let has_value = |v: &V| !v.is_nullish() && v.as_str() != Some("");
+  let value = run.get(&level.data, name);
+  // `originalDoc?.[name]`: the top-level document's
+  let stored = run.get(&run.root_doc.borrow(), name);
+  if Heap::is_object_like(&stored) {
+    return Err(Bail::new("slug:stored"));
+  }
+  let mut awaited = false;
+  if has_value(&value) {
+    if custom {
+      return Err(Bail::new("slug:slugify"));
+    }
+    let Some(text) = value.as_str() else {
+      // `val?.trim()` of a non-string throws
+      return Err(Bail::new("slug:value"));
+    };
+    let slugified = default_slugify(text);
+    awaited = true;
+    if !slugified.is_empty() {
+      if stored.as_str() == Some(slugified.as_str()) {
+        return Ok((stored, awaited));
+      }
+      return Err(Bail::new("slug:lookup"));
+    }
+  }
+  if has_value(&stored) {
+    return Ok((stored, awaited));
+  }
+  // derived from the source, or the `<singular>-<N>` fallback: both look up the database
+  Err(Bail::new("slug:lookup"))
+}
+
+/// payload `utilities/slugify.ts`: `trim()`, spaces to `-`, everything but `[A-Za-z0-9_-]` removed,
+/// `toLowerCase()`.
+fn default_slugify(value: &str) -> String {
+  // ECMAScript `WhiteSpace` and `LineTerminator`
+  let is_js_space = |c: char| {
+    matches!(c, '\u{9}'..='\u{d}' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
+  };
+  value
+    .trim_matches(is_js_space)
+    .chars()
+    .filter_map(|c| match c {
+      ' ' => Some('-'),
+      c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => Some(c.to_ascii_lowercase()),
+      _ => None,
+    })
+    .collect()
+}
+
 fn has_invalid_field_value_shape(heap: &Heap, field: &Field, value: &V) -> bool {
   if value.is_nullish() || !field.affects_data() {
     return false;

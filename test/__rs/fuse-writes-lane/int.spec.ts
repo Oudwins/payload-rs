@@ -1095,6 +1095,68 @@ test.suite('fuse-writes', { config: './config.ts' }, () => {
     }
   })
 
+  test('should keep and generate slugs like upstream', async ({ payload }) => {
+    const hitsBefore = { ...fuseWriteStats()?.hits }
+    const first = await payload.create({
+      collection: 'slugged',
+      data: { title: 'Hello World' },
+      overrideAccess: true,
+    })
+    const second = await payload.create({
+      collection: 'slugged',
+      data: { title: 'Hello World' },
+      overrideAccess: true,
+    })
+    const kept = await payload.update({
+      id: first.id,
+      collection: 'slugged',
+      data: { title: 'Renamed' },
+      overrideAccess: true,
+    })
+    const same = await payload.update({
+      id: first.id,
+      collection: 'slugged',
+      data: { slug: ' Hello World ' },
+      overrideAccess: true,
+    })
+    const renamed = await payload.update({
+      id: first.id,
+      collection: 'slugged',
+      data: { slug: 'Other Slug' },
+      overrideAccess: true,
+    })
+    await expect(
+      payload.update({
+        id: second.id,
+        collection: 'slugged',
+        data: { slug: 'other-slug' },
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: slug')
+    const many = await payload.update({
+      collection: 'slugged',
+      data: { title: 'Many' },
+      overrideAccess: true,
+      where: { id: { in: [first.id, second.id] } },
+    })
+
+    expect(first.slug).toBe('hello-world')
+    expect(second.slug).toBe('hello-world-1')
+    expect(kept).toMatchObject({ slug: 'hello-world', title: 'Renamed' })
+    expect(same.slug).toBe('hello-world')
+    expect(renamed.slug).toBe('other-slug')
+    expect(many.docs.map((doc) => doc.slug).sort()).toStrictEqual(['hello-world-1', 'other-slug'])
+    const hits = fuseWriteStats()?.hits
+    if (
+      hits &&
+      process.env.PAYLOAD_RS_FUSE_WRITES !== 'off' &&
+      process.env.PAYLOAD_ENGINE !== 'ts'
+    ) {
+      expect(hits.updateByID).toBeGreaterThanOrEqual((hitsBefore.updateByID ?? 0) + 2)
+      expect(hits.updateMany).toBeGreaterThanOrEqual((hitsBefore.updateMany ?? 0) + 1)
+    }
+  })
+
   test('should have served writes without lane differences', async () => {
     const stats = fuseWriteStats()
 

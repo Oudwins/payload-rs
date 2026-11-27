@@ -250,6 +250,15 @@ export default buildConfigWithDefaults({
         fields: [{ name: 'title', type: 'text' }],
       },
       {
+        // slug fields: updates keeping the stored slug are fused, everything that looks one up
+        // runs the exact lane
+        slug: 'slugged',
+        fields: [
+          { name: 'title', type: 'text' },
+          { name: 'slug', type: 'slug', useAsSlug: 'title' },
+        ],
+      },
+      {
         // update / delete access returning a where constraint (the perf suite's complex posts):
         // combined into the stored-document read and the bulk writes' find
         slug: 'constrained',
