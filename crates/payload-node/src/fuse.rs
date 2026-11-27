@@ -65,10 +65,11 @@ pub fn fuse_run_mongo<'env>(
   request_json: String,
   reads: BufferSlice,
 ) -> Result<Object<'env>> {
-  let reads = MongoReads::decode(&reads);
+  // decoded on the runtime: the JS thread only copies the bytes
+  let reads = reads.to_vec();
   let (deferred, promise) = env.create_deferred::<String, Resolver>()?;
   payload_mongo_driver::runtime().spawn(async move {
-    let text = match reads {
+    let text = match MongoReads::decode(&reads) {
       Ok(reads) => payload_fuse_mongo::run(client, transform_plan, reads, request_json).await,
       Err(_) => "!mongo:args".to_string(),
     };

@@ -34,34 +34,36 @@ pub fn fuse_write_mongo_op<'env>(
   reads: Option<BufferSlice>,
   state: Option<BufferSlice>,
 ) -> Result<Object<'env>> {
-  let raw = payload_mongo_driver::mongodb::bson::RawDocument::from_bytes(&op);
-  let by_id = match raw {
-    Ok(doc) if matches!(doc.get_str("op"), Ok("updateByID" | "deleteByID")) => Some(payload_fuse_write::by_id::decode(doc)),
-    _ => None,
-  };
-  let bulk = match raw {
-    Ok(doc) if matches!(doc.get_str("op"), Ok("updateMany" | "deleteMany")) => Some(payload_fuse_write::bulk::decode(doc)),
-    _ => None,
-  };
-  let request = if by_id.is_some() || bulk.is_some() {
-    Err("!byID".to_string())
-  } else {
-    payload_fuse_write::ops::decode(&op)
-  };
-  let read = match (plan, request_json, reads) {
-    (Some(plan), Some(request_json), Some(reads)) => match MongoReads::decode(&reads) {
-      Ok(reads) => Ok(Some(ResultRead { plan, reads, request_json })),
-      Err(_) => Err(()),
-    },
-    _ => Ok(None),
-  };
-  let state = match state.map(|state| payload_fuse_write::state::decode_state_reads(&state)) {
-    Some(Ok(state)) => Ok(Some(state)),
-    Some(Err(_)) => Err(()),
-    None => Ok(None),
-  };
+  // decoded on the runtime: the JS thread only copies the bytes
+  let (op, reads, state) = (op.to_vec(), reads.map(|reads| reads.to_vec()), state.map(|state| state.to_vec()));
   let (deferred, promise) = env.create_deferred::<Vec<String>, ListResolver>()?;
   payload_mongo_driver::runtime().spawn(async move {
+    let raw = payload_mongo_driver::mongodb::bson::RawDocument::from_bytes(&op);
+    let by_id = match raw {
+      Ok(doc) if matches!(doc.get_str("op"), Ok("updateByID" | "deleteByID")) => Some(payload_fuse_write::by_id::decode(doc)),
+      _ => None,
+    };
+    let bulk = match raw {
+      Ok(doc) if matches!(doc.get_str("op"), Ok("updateMany" | "deleteMany")) => Some(payload_fuse_write::bulk::decode(doc)),
+      _ => None,
+    };
+    let request = if by_id.is_some() || bulk.is_some() {
+      Err("!byID".to_string())
+    } else {
+      payload_fuse_write::ops::decode(&op)
+    };
+    let read = match (plan, request_json, reads) {
+      (Some(plan), Some(request_json), Some(reads)) => match MongoReads::decode(&reads) {
+        Ok(reads) => Ok(Some(ResultRead { plan, reads, request_json })),
+        Err(_) => Err(()),
+      },
+      _ => Ok(None),
+    };
+    let state = match state.map(|state| payload_fuse_write::state::decode_state_reads(&state)) {
+      Some(Ok(state)) => Ok(Some(state)),
+      Some(Err(_)) => Err(()),
+      None => Ok(None),
+    };
     let outcome = match (bulk, by_id, request, read, state) {
       (Some(Ok(request)), _, _, Ok(Some(read)), Ok(state)) => {
         let outcome = payload_fuse_write::bulk::exec(client, txn, request, read, state).await;
@@ -127,10 +129,10 @@ pub fn fuse_write_mongo_find<'env>(
   request_json: String,
   reads: BufferSlice,
 ) -> Result<Object<'env>> {
-  let reads = MongoReads::decode(&reads);
+  let reads = reads.to_vec();
   let (deferred, promise) = env.create_deferred::<Vec<String>, ListResolver>()?;
   payload_mongo_driver::runtime().spawn(async move {
-    let outcome = match reads {
+    let outcome = match MongoReads::decode(&reads) {
       Ok(reads) => payload_fuse_write::bulk::find(client, txn, &ResultRead { plan, reads, request_json }).await,
       Err(_) => {
         let _ = payload_mongo_driver::txn_end(txn, false).await;
