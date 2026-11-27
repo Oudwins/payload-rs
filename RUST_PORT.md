@@ -314,6 +314,68 @@ WP-Q (2026-11-26), the read scenarios WP-N left below TS:
   - Corpus 21/21; lane suites 75/75 with and without `--fuse shadow`.
   - Packaging and the default-path check: OK.
 
+WP-Y (2026-11-27), JS-thread time per request under concurrent load (MongoDB throughput
+scenarios):
+
+- **Causes found** (`--cpu-prof`-style inspector profiles of the timed window, x64):
+  - Fused create: the Rust prepare (`fuseWritePrepare`) ran on the JS thread and decoded the
+    whole write plan from JSON per call: about 0.9 of 1.3 ms.
+  - Compiled functions on lanes (`evaluateOnLane`) crossed their argument snapshot object by
+    object through Node-API: 20-60 µs per call. Every collection access is a `withBaseAccess`
+    wrapper whose spread makes the snapshot copy the whole argument (a create's `data`, the
+    request's user).
+  - Guard sampling: each compiled function of an operation sampled on its own lane counter, so
+    REST writes (about a dozen compiled access functions) ran about 5% of their operations on the
+    exact lane, and the call-site guard did not even verify the call the lane left to it.
+  - Fused writes built their result read twice (guards, then run); fused Mongo calls decoded
+    their BSON requests on the JS thread.
+- **Fixed**:
+  - Creates run `prepare_create` in the driver, inside the fused write (the plan registered once).
+  - `fnIrEvaluateText`: the snapshot as one typed JSON text, read by a one-pass parser
+    (`lanes::from_typed_text`, tested equal to `from_typed`).
+  - payload's `withBaseAccess` registers its wrappers (internal `WeakMap` on `globalThis`); lanes
+    evaluate the wrapped access function on `{ ...args, slug }` when there is no `baseAccess`,
+    for wrappers verified on their first calls.
+  - Lane samples mark the function due and the call-site guard verifies that call
+    (`fnIrTakeVerify`); functions halfway due are verified on any JS call, so one operation's
+    functions are sampled together (each still verified at least once per 256 lane calls).
+  - The guards' result read is reused (by id; creates take the ObjectId in the guards outside the
+    shadow); requests are decoded on the driver runtime.
+- **Perf** (`--surfaces throughput`, 1k posts, 3 interleaved rounds, Rust req/s / TS req/s,
+  cores 22-31; tput-writes report -> this tree; JS-thread ms per request rs at x64):
+
+| scenario                 | typical x8   | typical x64  | complex x64 | rs JS ms x64 (typical) |
+| ------------------------ | ------------ | ------------ | ----------- | ---------------------- |
+| findByID                 | 6.27 -> 7.25 | 6.66 -> 6.83 | 6.84        | 0.079 -> 0.057         |
+| find limit 10            | 6.61 -> 6.28 | 5.89 -> 6.23 | 5.54        | 0.175 -> 0.131         |
+| REST GET /posts limit 10 | 4.52 -> 6.01 | 3.86 -> 5.65 | 5.89        | 0.617 -> 0.379         |
+| create (Local)           | 3.86 -> 8.84 | 2.92 -> 9.69 | 10.03       | 1.629 -> 0.366         |
+| update scalar field      | 5.21 -> 6.71 | 7.06 -> 7.41 | 5.46        | 0.452 -> 0.278         |
+| REST POST /posts         | 2.14 -> 5.85 | 2.15 -> 5.73 | 6.21        | 2.833 -> 0.882         |
+| REST PATCH /posts/:id    | 3.70 -> 5.61 | 4.71 -> 6.91 | 6.03        | 1.541 -> 0.869         |
+
+Typical geomean 6.70x [6.60-6.79]; cores 24-29 give the same picture (5.4-8.9x).
+
+- **Not JS-bound any more**: find, findByID and update run below an event-loop utilization of 1;
+  the driver runtime's 2 worker threads (`PAYLOAD_MONGO_DRIVER_THREADS`) are saturated. With 4
+  threads (same tree, one process, x64): find limit 10 4,701 -> 8,463 req/s, update 1,581 ->
+  2,834, findByID 16,393 -> 20,180, create 2,323 -> 3,025 (about 11x, 14x, 9x and 12x TS).
+- Single-request latency (local / rest / graphql surfaces, this tree vs the base app, rs, 2
+  alternating rounds): typical 1.08x / 1.09x / 1.31x, complex 1.13x / 1.10x / 1.13x faster;
+  scenarios slower in both rounds were within noise in 4-6-round reruns.
+- **Verification**:
+  - MongoDB `--engine default` = baseline (3330 / 164 / 422; cli path, emulators, hmr), 8,701
+    fused read hits.
+  - The same with `--fuse shadow --fuse-writes shadow`: one write lane-shadow record (the exact
+    lane's transaction aborted by the server during collections-rest's load-time hook
+    timeouts); collections-rest alone: clean, 0 differences. auth's locking tests and
+    create-payload-app timed out under load and passed solo.
+  - Shadow 8/8 files, 22,527 calls, 0 divergences. Parity 503/503 in 3 of 3 runs.
+  - Glue / driver lane / HTTP lanes / fn-compile / switch: 33/33, 4/4, 18/18, 39/39, 9/9.
+  - Corpus 37/37; lane suites 101/101 with and without `--fuse shadow --fuse-writes shadow`.
+  - SQLite `--fuse shadow`: 134/135 identical, 0 lane differences (create-payload-app: failed ->
+    passed, as before). PostgreSQL 131/135 (= baseline). Packaging and default-path check: OK.
+
 Remaining: making the engine faster than upstream (above); Postgres SQL engine; prebuilt addons for
 the other platforms (needs the CI workflow to run); the upstream JS helpers the Rust core still
 calls (`RUST_OPS_DESIGN.md` section 7).
