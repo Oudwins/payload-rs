@@ -745,7 +745,9 @@ section 12:
 Switches: `PAYLOAD_RS_FUSE_WRITES=off|on|shadow` (default `on` since WP-K, 2026-11-25);
 `PAYLOAD_RS_FUSE_WRITES_PREPARE=ts` selects the **temporary TS prepare** (upstream's own
 `beforeValidate` / `beforeChange`, db-mongodb `create` / `createVersion` and mongoose's document
-casting, without their I/O); otherwise WP-I's Rust prepare (`fuseWritePrepare`). The TS
+casting, without their I/O); otherwise WP-I's Rust prepare, which the operation drivers run
+inside the fused write on the driver runtime (creates since WP-Y, by-id and bulk updates since
+WP-J; `fuseWritePrepare` remains the JSON entry of the corpus tests). The TS
 prepare is never a default: it exists to prove the drivers, the transaction and the shadow.
 
 **Eligibility** (plan, per collection): no collection hooks on any write path, no root
@@ -778,8 +780,13 @@ document's `_id`, `saveVersion`'s `now`, the version's `_id`. Row ids (`bson-obj
 `beforeValidate` before all of these) must be pre-generated per row without an id, in traversal
 order, once WP-I's plan says how many; until then the Rust path bails for data with
 `createdAt` / `updatedAt`. The op request for the Rust prepare is
-`{ op: 'create', c, vc?, p: { plan, data (JSON), clock, ids, user?, locale? } }`; with the TS
-prepare `{ op, c, doc, v?: { c, doc } }`.
+`{ op: 'create', c, vc?, wp: <write plan id>, p: <prepare request: data, context, clock, ids,
+user?, locale?, ...>, ut? | ub? }` (`ut` the all-locales publish validation's unique-lookup
+templates, `ub` why there are none); the driver runs `prepare_create` first (a bail, a
+validation failure or unused readings abort before any statement) and resolves with `[text,
+state | '', contextWrites, callerData]`. Outside the shadow the dispatch takes the document's
+ObjectId in its guards (the same synchronous run as the prepare's other readings), so the
+guards' result read is the one sent. With the TS prepare `{ op, c, doc, v?: { c, doc } }`.
 
 **Write lane-shadow**: the fused lane runs first (its readings recorded on replay tapes), reads the
 touched collections inside its transaction (the document by `_id`, its versions by `parent`,
