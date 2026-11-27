@@ -305,6 +305,21 @@ reads the driver lane would send, without mongoose:
 - mongoose-paginate-v2's count / find decisions (estimated count for an empty filter, custom
   counts, `skip` / `limit`, collation) and result `meta`.
 
+The encoded reads are reused (WP-AA): the encoding is a function of the arguments, the model and
+the lane's settings (`allowAdditionalKeys`), so per model
+
+- a `findOne` whose `where` is one `id` equal to a 24-hex id (bare or as `combineQueries`' one
+  `and` clause), without `select` or joins arguments, takes the encoding of the same call with a
+  sentinel id, given the call's id in the sentinel's bytes (`src/fuse/idTemplate.ts`, the fused
+  writes' by-id statement templates). Keyed by the other arguments the encoding reads;
+- any other call whose argument tree was seen before takes that encoding. The key
+  (`encodingKey`) tells apart scalar types and values, key order, absent and `undefined`
+  properties; trees with anything else (dates, ObjectIds, regexps, class instances, accessors,
+  `-0`, non-finite numbers) are encoded per call. At most 128 per model.
+
+`entity`'s checks (pristine model, the transform plan) still run per call. Shadow mode encodes
+every call and records a lane difference when a reused encoding is not the same bytes.
+
 The reads (js-bson, the driver lane's `ReadArgs` plus `op` and `meta`) and the request go to
 `fuseRunMongo(client, transformPlan, requestJson, reads) -> Promise<string>`: on the driver
 runtime it runs the count and find (both in flight), decodes and transforms the documents (the

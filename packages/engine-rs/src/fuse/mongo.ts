@@ -11,6 +11,9 @@
  *
  * Only the driver lane imports this module (it loads db-mongodb's sources).
  */
+import { types } from 'node:util'
+
+import type { Template } from './idTemplate.js'
 import type { FusedTarget, FusedTargetLookup } from './targets.js'
 
 import { buildSortParam } from '../../../db-mongodb/src/queries/buildSortParam.js'
@@ -35,7 +38,9 @@ import {
 } from '../mongo-driver/lane.js'
 import { verifyMode } from '../mongo-driver/verify.js'
 import { installDriverTrace, isTracing, runTraced, type TraceEvent } from '../shadow-mongo/trace.js'
+import { sentinelHex, toTemplate, withID } from './idTemplate.js'
 import { isInertTree } from './inert.js'
+import { recordDiff } from './stats.js'
 import { registerFusedTarget } from './targets.js'
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- mirrors untyped upstream code */
@@ -125,6 +130,253 @@ const emptyDb = '{"objects":[],"root":null}'
  * cannot be fused.
  */
 const encode = (
+  lane: DriverLane,
+  method: 'count' | 'find' | 'findOne',
+  args: Any,
+  isWriteRead: boolean,
+): { db: string; payload: MongoPayload } | string => {
+  const reused =
+    (method === 'findOne' ? encodeByID(lane, args, isWriteRead) : undefined) ??
+    encodeRepeated(lane, method, args, isWriteRead)
+  if (reused && !isShadow) {
+    return reused.encoded
+  }
+  const encoded = encodeReads(lane, method, args, isWriteRead)
+  if (reused) {
+    if (
+      typeof encoded === 'string' ||
+      Buffer.compare(reused.encoded.payload.bytes, encoded.payload.bytes) !== 0
+    ) {
+      recordDiff({ collection: args.collection, op: `${method}:${reused.kind}` })
+    }
+  } else if (typeof encoded !== 'string') {
+    rememberEncoding(lane, method, args, isWriteRead, encoded.payload.bytes)
+  }
+  return encoded
+}
+
+/**
+ * Shadow mode (`PAYLOAD_RS_FUSE=shadow`): every call is encoded, and a reused encoding (by-id
+ * template, repeated arguments) is compared with it.
+ */
+const isShadow = process.env.PAYLOAD_RS_FUSE === 'shadow'
+
+/**
+ * Encodings of calls whose arguments were seen before (`encodingKey`), per model: the encoding is
+ * a function of the arguments, the model and the lane's settings, which the key and the per-call
+ * `entity` check cover. At most `maxRepeatedEncodings` per model (then started over).
+ */
+const repeatedEncodings = new WeakMap<object, Map<string, Uint8Array>>()
+const maxRepeatedEncodings = 128
+
+const repeatedKey = (lane: DriverLane, method: string, args: Any, isWriteRead: boolean) => {
+  const argsKey = encodingKey(args, 16)
+  if (argsKey === undefined) {
+    return undefined
+  }
+  let entityOf: ReturnType<typeof entity>
+  try {
+    entityOf = entity(lane, args.collection)
+  } catch {
+    return undefined
+  }
+  return {
+    key: `${method}|${isWriteRead}|${Boolean(lane.view.allowAdditionalKeys)}|${argsKey}`,
+    Model: entityOf.Model,
+    plan: entityOf.plan,
+  }
+}
+
+const encodeRepeated = (lane: DriverLane, method: string, args: Any, isWriteRead: boolean) => {
+  const found = repeatedKey(lane, method, args, isWriteRead)
+  const bytes = found && repeatedEncodings.get(found.Model)?.get(found.key)
+  if (!found || !bytes) {
+    return undefined
+  }
+  return {
+    encoded: {
+      db: emptyDb,
+      payload: { bytes, client: lane.clientID, plan: found.plan, reads: undefined },
+    },
+    kind: 'repeated',
+  }
+}
+
+const rememberEncoding = (
+  lane: DriverLane,
+  method: string,
+  args: Any,
+  isWriteRead: boolean,
+  bytes: Uint8Array,
+) => {
+  if (method === 'findOne' && idEquals(args.where)) {
+    // by-id reads have their template
+    return
+  }
+  const found = repeatedKey(lane, method, args, isWriteRead)
+  if (!found) {
+    return
+  }
+  let encodings = repeatedEncodings.get(found.Model)
+  if (!encodings || encodings.size >= maxRepeatedEncodings) {
+    encodings = new Map()
+    repeatedEncodings.set(found.Model, encodings)
+  }
+  encodings.set(found.key, bytes)
+}
+
+/**
+ * A key that tells apart every two argument trees `encodeReads` could encode differently: the
+ * type and value of every scalar (`-0` and non-finite numbers: no key), the key order of objects,
+ * absent and `undefined` properties apart. `undefined` for anything else (dates, class
+ * instances, accessors, proxies, deeper than `depth`).
+ */
+const encodingKey = (value: unknown, depth: number): string | undefined => {
+  switch (typeof value) {
+    case 'boolean':
+      return value ? 't' : 'f'
+    case 'number':
+      return Number.isFinite(value) && !Object.is(value, -0) ? `d${value}` : undefined
+    case 'object':
+      break
+    case 'string':
+      return JSON.stringify(value)
+    case 'undefined':
+      return 'u'
+    default:
+      return undefined
+  }
+  if (value === null) {
+    return 'n'
+  }
+  if (depth === 0 || types.isProxy(value)) {
+    return undefined
+  }
+  const prototype = Object.getPrototypeOf(value)
+  const isArray = Array.isArray(value)
+  if (isArray ? prototype !== Array.prototype : prototype !== Object.prototype) {
+    return undefined
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const keys = Reflect.ownKeys(descriptors)
+  if (Array.isArray(value) && keys.length !== value.length + 1) {
+    return undefined
+  }
+  let out = isArray ? '[' : '{'
+  for (const key of keys) {
+    if (typeof key === 'symbol') {
+      return undefined
+    }
+    if (isArray && key === 'length') {
+      continue
+    }
+    const descriptor = descriptors[key]
+    if (!descriptor?.enumerable || !('value' in descriptor)) {
+      return undefined
+    }
+    const item = encodingKey(descriptor.value, depth - 1)
+    if (item === undefined) {
+      return undefined
+    }
+    out += isArray ? `${item},` : `${JSON.stringify(key)}:${item},`
+  }
+  return `${out}${isArray ? ']' : '}'}`
+}
+
+/** The `where` of a by-id read (`combineQueries({ id: { equals } }, true)`, or the bare clause). */
+const idEquals = (where: Any) => {
+  const clause =
+    isPlainObjectWithKey(where, 'and') && Array.isArray(where.and) && where.and.length === 1
+      ? where.and[0]
+      : where
+  const id = isPlainObjectWithKey(clause, 'id') ? clause.id : undefined
+  const value = isPlainObjectWithKey(id, 'equals') ? id.equals : undefined
+  return typeof value === 'string' && objectIDHex.test(value)
+    ? { hex: value, isAnd: clause !== where }
+    : undefined
+}
+
+/** A plain object whose only own enumerable key is `key` (no key: an empty one). */
+const isPlainObjectWithKey = (value: unknown, key?: string): value is Record<string, Any> => {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
+    return false
+  }
+  const keys = Object.keys(value)
+  return key === undefined ? keys.length === 0 : keys.length === 1 && keys[0] === key
+}
+
+const objectIDHex = /^[0-9a-f]{24}$/
+
+/** By-id `findOne` templates per model, keyed by the other arguments the encoding reads. */
+const byIDTemplates = new WeakMap<object, Map<string, null | Template>>()
+
+/**
+ * `encodeReads` of a `findOne` whose `where` is one `id` equal to a 24-hex id, without select or
+ * joins: the encoding of the same call with the sentinel id (built once per model and the other
+ * arguments it reads), given this call's id (./idTemplate.ts). The model and plan checks run per
+ * call. `undefined`: encode the call.
+ */
+const encodeByID = (lane: DriverLane, args: Any, isWriteRead: boolean) => {
+  const { collection: collectionSlug, draftsEnabled, joins, locale, select, where } = args
+  const byID = idEquals(where)
+  if (
+    !byID ||
+    (select !== undefined && select !== null) ||
+    !(joins === undefined || joins === false || isPlainObjectWithKey(joins))
+  ) {
+    return undefined
+  }
+  let entityOf: ReturnType<typeof entity>
+  try {
+    entityOf = entity(lane, collectionSlug)
+  } catch {
+    return undefined
+  }
+  const { Model, plan } = entityOf
+  let templates = byIDTemplates.get(Model)
+  if (!templates) {
+    templates = new Map()
+    byIDTemplates.set(Model, templates)
+  }
+  const key = JSON.stringify([
+    byID.isAnd,
+    draftsEnabled,
+    joins,
+    locale,
+    isWriteRead,
+    Boolean(lane.view.allowAdditionalKeys),
+  ])
+  let template = templates.get(key)
+  if (template === undefined) {
+    const sentinelWhere = { id: { equals: sentinelHex } }
+    const built = encodeReads(
+      lane,
+      'findOne',
+      { ...args, where: byID.isAnd ? { and: [sentinelWhere] } : sentinelWhere },
+      isWriteRead,
+    )
+    const candidate =
+      typeof built === 'string' ? null : toTemplate(Buffer.from(built.payload.bytes))
+    template = candidate && candidate.raw.length + candidate.hex.length > 0 ? candidate : null
+    templates.set(key, template)
+  }
+  if (!template) {
+    return undefined
+  }
+  return {
+    encoded: {
+      db: emptyDb,
+      payload: { bytes: withID(template, byID.hex), client: lane.clientID, plan, reads: undefined },
+    },
+    kind: 'byIDTemplate',
+  }
+}
+
+const encodeReads = (
   lane: DriverLane,
   method: 'count' | 'find' | 'findOne',
   args: Any,

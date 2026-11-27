@@ -23,6 +23,7 @@
 import { randomBytes } from 'node:crypto'
 import { createRequire } from 'node:module'
 
+import type { Template } from '../fuse/idTemplate.js'
 import type { DriverLane } from '../mongo-driver/lane.js'
 import type { FusedWriteTarget } from './targets.js'
 
@@ -51,6 +52,7 @@ import { loadCoreRuntimeAddon } from '../addon.js'
 import { getFnIr } from '../compile/native.js'
 import { encodeSnapshot, snapshotRequest } from '../compile/snapshot.js'
 import { evaluateRequestOnlyAccess } from '../fuse/access.js'
+import { sentinelHex, toTemplate, withID } from '../fuse/idTemplate.js'
 import {
   castQuery,
   findOptionKeys,
@@ -619,45 +621,8 @@ const writePlanID = (plan: WritePlanResult, json: string) => {
   return id
 }
 
-/**
- * The id the statement templates are built with (a valid ObjectId: the casting takes the branches
- * of any ObjectId id); a call's id replaces it byte for byte, as 12 ObjectId bytes and as 24 hex
- * characters (inside strings too, e.g. the preferences key).
- */
-const sentinelHex = randomBytes(12).toString('hex')
-const sentinelBytes = Buffer.from(sentinelHex, 'hex')
-const sentinelText = Buffer.from(sentinelHex, 'latin1')
 /** The `updatedAt` of the max-versions delete's template (`md`), replaced per call by Rust. */
 const sentinelDate = new Date(Date.UTC(2000, 0, 1) + randomBytes(4).readUInt32BE() * 1000)
-
-type Template = { bytes: Buffer; hex: number[]; raw: number[] }
-
-const positionsOf = (bytes: Buffer, needle: Buffer) => {
-  const positions: number[] = []
-  for (let at = bytes.indexOf(needle); at !== -1; at = bytes.indexOf(needle, at + 1)) {
-    positions.push(at)
-  }
-  return positions
-}
-
-const toTemplate = (bytes: Buffer): Template => ({
-  bytes,
-  hex: positionsOf(bytes, sentinelText),
-  raw: positionsOf(bytes, sentinelBytes),
-})
-
-/** `template` with the id `hex` (24 lowercase hex characters) in the sentinel's places. */
-const withID = ({ bytes, hex: hexAt, raw }: Template, hex: string) => {
-  const out = Buffer.from(bytes)
-  const idBytes = Buffer.from(hex, 'hex')
-  for (const at of raw) {
-    idBytes.copy(out, at)
-  }
-  for (const at of hexAt) {
-    out.write(hex, at, 'latin1')
-  }
-  return out
-}
 
 /** mongoose's cast of `query` on `Model` (what `find` / `deleteMany` / `findOneAndUpdate` send). */
 const castFilter = (Model: Any, query: Any) => castQuery(Model.find(query), findOptionKeys).filter
