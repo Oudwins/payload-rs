@@ -28,7 +28,8 @@ then `installDriverLane(adapter)`. `PAYLOAD_ENGINE=ts` runs upstream (nothing of
 | `node`                 | no driver lane: everything on the live engine / mongoose (the Node driver) |
 
 `PAYLOAD_MONGO_DRIVER_VERIFY=true|strict` runs the lane differential (below);
-`PAYLOAD_MONGO_DRIVER_THREADS` sets the driver runtime's workers (default 2).
+`PAYLOAD_MONGO_DRIVER_THREADS` sets the driver runtime's workers (default half the CPUs the process
+may run on, 2 to 3; FUSED_WRITES.md section 13, WP-X).
 
 ## Clients
 

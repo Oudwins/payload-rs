@@ -58,14 +58,14 @@ pub type Result<T> = std::result::Result<T, LaneError>;
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
 /// The runtime every client and lane call runs on (`PAYLOAD_MONGO_DRIVER_THREADS` workers,
-/// default 2).
+/// default `default_worker_threads`).
 pub fn runtime() -> &'static Runtime {
   RUNTIME.get_or_init(|| {
     let threads = std::env::var("PAYLOAD_MONGO_DRIVER_THREADS")
       .ok()
       .and_then(|v| v.parse::<usize>().ok())
       .filter(|&n| n > 0)
-      .unwrap_or(2);
+      .unwrap_or_else(default_worker_threads);
     tokio::runtime::Builder::new_multi_thread()
       .worker_threads(threads)
       .thread_name("payload-mongo-driver")
@@ -73,6 +73,14 @@ pub fn runtime() -> &'static Runtime {
       .build()
       .expect("payload-mongo-driver: tokio runtime")
   })
+}
+
+/// Half the CPUs the process may run on (its affinity and cgroup quota), 2 to 3 workers: the fused
+/// reads' transforms run on these workers and need more than 2 for their throughput, while the rest
+/// is left to the JS thread (a third worker on 4 CPUs cost `findByID` throughput, a fourth on 6 CPUs
+/// cost CPU per request and `create` throughput; FUSED_WRITES.md section 13, WP-X).
+fn default_worker_threads() -> usize {
+  std::thread::available_parallelism().map_or(2, |n| n.get() / 2).clamp(2, 3)
 }
 
 pub struct DriverClient {
