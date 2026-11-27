@@ -162,9 +162,23 @@ export const compileFunction = (
   }
 }
 
-/** The memoized result for `fn`, without compiling. */
+/** Compiles `fn` when it is a config function a lazy guard install has not compiled yet (guard.ts). */
+let compileOnFirstUse: (fn: AnyFunction) => unknown = () => undefined
+
+export const setCompileOnFirstUse = (next: (fn: AnyFunction) => unknown) => {
+  compileOnFirstUse = next
+}
+
+/**
+ * The memoized result for `fn`, without compiling it, except for a config function of a lazy
+ * guard install, which compiles on its first use (this lookup, or its first guarded call).
+ */
 export const getCompiledFunction = (fn: AnyFunction): CompiledFunction | undefined => {
-  const entry = compiled.get(fn)
+  let entry = compiled.get(fn)
+  if (!entry) {
+    compileOnFirstUse(fn)
+    entry = compiled.get(fn)
+  }
   return entry && 'ok' in entry ? entry : undefined
 }
 

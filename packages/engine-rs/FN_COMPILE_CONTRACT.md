@@ -116,7 +116,12 @@ The real function is the authority. Two places verify:
   `callUserFunction` is `Reflect.apply` (with V8's `x is not a function` message for a
   non-function) and `js::call` checks one thread-local. Installed by payload's `init` when
   `PAYLOAD_FN_COMPILE_GUARD=all` (every call) or `=sample` (first 32 calls, then 1 in 256);
-  counters to `PAYLOAD_FN_COMPILE_STATS=<dir>`.
+  counters to `PAYLOAD_FN_COMPILE_STATS=<dir>`. Payload's `init` installs them lazily
+  (`installCompileGuards(config, { isLazy: true })`): each config function compiles on its first
+  use, its first guarded call or a lane's `getCompiledFunction` lookup, both before any compiled
+  evaluation of it, so verification still covers its first calls (WP-AD: compiling every function
+  at init was 145 ms of `getPayload` on the typical shape and 2.5 s with 200 collections). With
+  `PAYLOAD_FN_COMPILE_STATS` set every function compiles at install, so the report lists them all.
 - **Lanes**: `guard::lane_should_verify(id)` is true until the function has had `Policy::first`
   verified (or bailed) calls, then once `Policy::sample_every` lane calls have passed since its
   last verification. On true, run the exact lane for this call: the function is marked due, and

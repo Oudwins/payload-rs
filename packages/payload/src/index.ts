@@ -1037,11 +1037,12 @@ export class BasePayload {
     // Guard mode of the Rust engine's function compiler (engine-rs `compile/guard.ts`, owner
     // decision D5): access functions, hooks and validators are compiled and their compiled results
     // verified against the real functions (`PAYLOAD_FN_COMPILE_GUARD`: unset / `sample` the first
-    // 32 calls of each, then 1 in 256; `all` every call; `off` no compilation).
+    // 32 calls of each, then 1 in 256; `all` every call; `off` no compilation). Each function
+    // compiles on its first use.
     if (process.env.PAYLOAD_FN_COMPILE_GUARD !== 'off' && isRustCoreEngine()) {
       const { importRustEngine } = await import('./utilities/importRustEngine.js')
       const { installCompileGuards } = await importRustEngine('@payloadcms/engine-rs/compile')
-      installCompileGuards(this.config)
+      installCompileGuards(this.config, { isLazy: true })
     }
 
     // Generate types on startup

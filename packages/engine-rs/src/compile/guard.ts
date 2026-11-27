@@ -7,7 +7,7 @@ import type { CompiledResult } from './native.js'
 import type { AnyFunction } from './snapshot.js'
 
 import { setUserFunctionGuard } from '../../../payload/src/utilities/callUserFunction.js'
-import { compileFunction } from './compileFunction.js'
+import { compileFunction, setCompileOnFirstUse } from './compileFunction.js'
 import { configFunctions } from './configFunctions.js'
 import { getFnIr } from './native.js'
 import { snapshot, snapshotArgs } from './snapshot.js'
@@ -28,6 +28,13 @@ import { snapshot, snapshotArgs } from './snapshot.js'
  * the policy selects; a de-optimisation is permanent). `PAYLOAD_FN_COMPILE_STATS=<dir>` writes `<dir>/<pid>.json`: every
  * function seen (once per function object, with all its config labels), compiled or not (and
  * why), with its counters, bail reasons and mismatches.
+ *
+ * With `isLazy` (payload's `init`), a config function compiles on its first use instead of at
+ * install: its first guarded call, or a lane's lookup of it (`getCompiledFunction`). Either comes
+ * before any compiled evaluation of it, so verification still starts at its first call; the scopes
+ * it captures are read then (a later point than install, so D5's no-reassignment assumption covers
+ * less time). With `PAYLOAD_FN_COMPILE_STATS` set every function compiles at install, so the
+ * report lists all of them.
  */
 type Tracked = {
   bailReasons: Record<string, number>
@@ -46,6 +53,8 @@ type Guarded = { argKeys: (null | string[])[]; id: number; record: Tracked }
 const tracked: Tracked[] = []
 const trackedByFunction = new WeakMap<AnyFunction, Tracked>()
 const guarded = new WeakMap<AnyFunction, Guarded>()
+/** Config functions of a lazy install that have not been compiled yet. */
+const pendingCompile = new WeakMap<AnyFunction, Tracked>()
 const guardedConfigs = new WeakSet<object>()
 let installed = false
 /** `fnIrSetPolicy`'s values: verify the first `first` calls of a function, then 1 in `sampleEvery`. */
@@ -56,6 +65,7 @@ let testFile: string | undefined
 
 export const installCompileGuards = (
   config: Record<string, any>,
+  { isLazy = false }: { isLazy?: boolean } = {},
 ): { compiled: number; total: number } => {
   if (guardedConfigs.has(config)) {
     return { compiled: 0, total: 0 }
@@ -68,40 +78,63 @@ export const installCompileGuards = (
   verifyPolicy =
     mode === 'all' ? { first: Infinity, sampleEvery: 1 } : { first: 32, sampleEvery: 256 }
   fnIr.fnIrSetPolicy(verifyPolicy.first, verifyPolicy.sampleEvery)
+  const isCompiledNow = !isLazy || Boolean(process.env.PAYLOAD_FN_COMPILE_STATS)
   let compiledCount = 0
   const entries = configFunctions(config)
   for (const entry of entries) {
     const existing = trackedByFunction.get(entry.fn)
     if (existing) {
       existing.labels.push(entry.label)
+      if (isCompiledNow) {
+        compilePending(entry.fn)
+      }
       compiledCount += existing.compiled ? 1 : 0
       continue
     }
-    const result = compileFunction(entry.fn, entry.label)
     const record: Tracked = {
       bailReasons: {},
       calls: 0,
-      compiled: result.ok,
+      compiled: false,
       kind: entry.kind,
       label: entry.label,
       labels: [entry.label],
       mismatches: [],
-      ...(result.ok ? { id: result.id } : { reason: result.reason }),
     }
     tracked.push(record)
     trackedByFunction.set(entry.fn, record)
-    if (result.ok) {
-      compiledCount++
-      guarded.set(entry.fn, { id: result.id, argKeys: result.argKeys, record })
+    pendingCompile.set(entry.fn, record)
+    if (isCompiledNow) {
+      compilePending(entry.fn)
+      compiledCount += record.compiled ? 1 : 0
     }
   }
   if (!installed) {
     installed = true
     setUserFunctionGuard(guardCall)
     fnIr.fnIrSetCallGuard(guardCall)
+    setCompileOnFirstUse(compilePending)
     installStatsWriter()
   }
   return { compiled: compiledCount, total: entries.length }
+}
+
+/** Compiles `fn` if it is a config function still waiting for its first use. */
+const compilePending = (fn: AnyFunction): Guarded | undefined => {
+  const record = pendingCompile.get(fn)
+  if (!record) {
+    return undefined
+  }
+  pendingCompile.delete(fn)
+  const result = compileFunction(fn, record.label)
+  record.compiled = result.ok
+  if (!result.ok) {
+    record.reason = result.reason
+    return undefined
+  }
+  record.id = result.id
+  const entry = { id: result.id, argKeys: result.argKeys, record }
+  guarded.set(fn, entry)
+  return entry
 }
 
 /**
@@ -112,6 +145,7 @@ export const compileGuardsInstalled = (): boolean => installed
 
 /** Guard counters of one config function (tests): `undefined` when guards never saw it. */
 export const guardStats = (fn: AnyFunction) => {
+  compilePending(fn)
   const record = trackedByFunction.get(fn)
   if (!record) {
     return undefined
@@ -131,7 +165,7 @@ const bail = (record: Tracked, reason: string) => {
 
 /** `Reflect.apply(fn, thisArg, args)`, verifying `fn` when it is a guarded compiled function. */
 const guardCall = (fn: AnyFunction, thisArg: unknown, args: unknown[]): unknown => {
-  const entry = guarded.get(fn)
+  const entry = guarded.get(fn) ?? compilePending(fn)
   if (!entry) {
     return Reflect.apply(fn, thisArg, args)
   }
