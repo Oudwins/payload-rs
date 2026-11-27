@@ -14,6 +14,13 @@
  *   the exact path runs too and the responses must have the same status, header list (name, value,
  *   in order) and body bytes; the exact response is returned. `bytes:hit:<operation>` counts served
  *   requests, `bytes:exact:<operation>` the others.
+ * - `bytesWriteResponse` (the default create / updateByID handlers' response from a write the fused
+ *   lane served as bytes; the write itself cannot run twice): the document bytes must be canonical
+ *   (`JSON.stringify(JSON.parse(text)) === text`), and the response must have the status, header
+ *   list and body bytes of `Response.json({ doc: JSON.parse(text), message }, { headers, status })`
+ *   (the handler's exact response for that document); `bytes:hit:write` counts them. That the
+ *   document is the exact lane's result is the write lane-shadow's check (`--fuse-writes shadow`,
+ *   packages/engine-rs/src/fuse-write `compareBytes`).
  *
  * One JSON line per event goes to PAYLOAD_RS_HTTP_SHADOW_REPORT (appended; unset: counted in
  * memory only, `shadowCounters()`); ./summarize.mjs adds them up.
@@ -70,7 +77,36 @@ type FusedResponseArgs = {
   operationArgs: Record<string, unknown>
 }
 
+type BytesWriteResponseArgs = {
+  bytes: Uint8Array
+  headers: () => Headers
+  message: () => unknown
+  status: number
+}
+
 const wrappers: Record<string, (upstream: any) => any> = {
+  bytesWriteResponse: (upstream) => async (args: BytesWriteResponseArgs) => {
+    const lane: Response = upstream(args)
+    const text = new TextDecoder().decode(args.bytes)
+    const isCanonical = JSON.stringify(JSON.parse(text)) === text
+    const exact = Response.json(
+      { doc: JSON.parse(text), message: args.message() },
+      { headers: args.headers(), status: args.status },
+    )
+    const expected = await describeResponse(exact)
+    const actual = await describeResponse(lane.clone())
+    if (!isCanonical || JSON.stringify(actual) !== JSON.stringify(expected)) {
+      record('bytes:divergence', {
+        actual: JSON.stringify(actual).slice(0, 2000),
+        expected: JSON.stringify(expected).slice(0, 2000),
+        isCanonical,
+        operation: 'write',
+      })
+    } else {
+      record('bytes:hit:write')
+    }
+    return lane
+  },
   fusedResponse: (upstream) => async (args: FusedResponseArgs) => {
     const notServed = new Response(null, { status: 599 })
     const runLane = (): Promise<Response> => upstream({ ...args, exact: async () => notServed })

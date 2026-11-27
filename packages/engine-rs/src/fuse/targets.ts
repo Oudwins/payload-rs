@@ -45,6 +45,11 @@ export type FusedTarget = {
   /** Runs one fused request (JSON), returning the result JSON or `!<reason>`. */
   run: (requestJson: string, payload?: unknown) => Promise<string> | string
   /**
+   * `run` for the byte lanes (a canonical request, RUST_HTTP_LANES.md section 6): the result JSON
+   * as its UTF-8 bytes, a bail as `!<reason>`. Without it the byte lanes take `run`'s text.
+   */
+  runBytes?: (requestJson: string, payload?: unknown) => Promise<string | Uint8Array<ArrayBuffer>>
+  /**
    * Shadow mode: runs the exact lane (`exact`) and checks what the backend sees of it against
    * `payload` (e.g. the database commands), reporting differences through `report`.
    */

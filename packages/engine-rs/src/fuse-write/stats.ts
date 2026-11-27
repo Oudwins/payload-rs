@@ -13,6 +13,8 @@ type Counts = Record<string, number>
 export type FuseWriteStats = {
   /** Calls the fused lane started and handed to the exact lane, per reason. */
   bails: Counts
+  /** Of `hits`: the writes whose result was given as bytes (the REST write byte lanes). */
+  bytes: Counts
   /** Shadow mode: fused writes that differed from the exact lane. */
   diffs: number
   /** Calls refused by a per-call guard, per reason. */
@@ -32,6 +34,7 @@ export type FuseWriteStats = {
 const statsKey = Symbol.for('@payloadcms/engine-rs/fuse-write-stats')
 const created: FuseWriteStats = {
   bails: {},
+  bytes: {},
   diffs: 0,
   guards: {},
   hits: {},

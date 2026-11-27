@@ -9,6 +9,7 @@ use payload_fuse_write::{ResultRead, decode_statements, exec};
 
 type Resolver = Box<dyn FnOnce(Env) -> Result<String> + Send>;
 type ListResolver = Box<dyn FnOnce(Env) -> Result<Vec<String>> + Send>;
+type OpResolver = Box<dyn FnOnce(Env) -> Result<Vec<Either<String, Buffer>>> + Send>;
 
 /// `fuseWriteMongoOp(client, txn, op, plan?, requestJson?, reads?, state?)`: one fused write
 /// operation (crates/payload-fuse-write `ops`: the request names the operation and carries its
@@ -21,7 +22,8 @@ type ListResolver = Box<dyn FnOnce(Env) -> Result<Vec<String>> + Send>;
 /// (crates/payload-fuse-write `bulk`, after `fuseWriteMongoFind` on the same transaction; `text`
 /// is the `find` page of the results), and creates whose Rust prepare runs here (`wp`, see
 /// crates/payload-fuse-write `ops::decode`) with `[text, stateJson | '', contextWritesJson | '',
-/// callerDataJson | '']`. Never rejects.
+/// callerDataJson | '']`. With `asBytes` a `text` that is not a bail comes as a `Buffer` of its
+/// UTF-8 bytes (the REST write byte lanes, RUST_HTTP_LANES.md section 6). Never rejects.
 #[napi]
 #[allow(clippy::too_many_arguments)]
 pub fn fuse_write_mongo_op<'env>(
@@ -33,10 +35,11 @@ pub fn fuse_write_mongo_op<'env>(
   request_json: Option<String>,
   reads: Option<BufferSlice>,
   state: Option<BufferSlice>,
+  as_bytes: Option<bool>,
 ) -> Result<Object<'env>> {
   // decoded on the runtime: the JS thread only copies the bytes
   let (op, reads, state) = (op.to_vec(), reads.map(|reads| reads.to_vec()), state.map(|state| state.to_vec()));
-  let (deferred, promise) = env.create_deferred::<Vec<String>, ListResolver>()?;
+  let (deferred, promise) = env.create_deferred::<Vec<Either<String, Buffer>>, OpResolver>()?;
   payload_mongo_driver::runtime().spawn(async move {
     let raw = payload_mongo_driver::mongodb::bson::RawDocument::from_bytes(&op);
     let by_id = match raw {
@@ -110,6 +113,12 @@ pub fn fuse_write_mongo_op<'env>(
         vec!["!fuse-write:args".to_string()]
       }
     };
+    let as_bytes = as_bytes.unwrap_or(false);
+    let outcome: Vec<_> = outcome
+      .into_iter()
+      .enumerate()
+      .map(|(i, text)| if i == 0 { crate::fuse::text_or_bytes(text, as_bytes) } else { Either::A(text) })
+      .collect();
     deferred.resolve(Box::new(move |_| Ok(outcome)));
   });
   Ok(promise)

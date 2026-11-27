@@ -6,7 +6,9 @@
  * - packages/payload/src/auth/strategies/verifyJWTSync.ts: `verifyJWTSync` (the synchronous HS256
  *   path of the JWT strategy), compared with jose's `jwtVerify`
  * - packages/payload/src/collections/endpoints/fusedResponse.ts: `fusedResponse` (the byte lanes of
- *   the default read handlers), compared byte for byte with the handler's exact path
+ *   the default read handlers), compared byte for byte with the handler's exact path;
+ *   `bytesWriteResponse` (the response of a write the fused lane served as bytes), compared with
+ *   `Response.json` of the parsed document
  * - packages/next/src/routes/graphql/documentCache.ts: `parseWithCache`, `concatRules`,
  *   `validateWithCache` (the GraphQL document cache), compared with `parse` / `validate` uncached
  */
@@ -24,6 +26,7 @@ const targets: Record<string, string[]> = {
   ],
   [path.join('packages', 'payload', 'src', 'collections', 'endpoints', 'fusedResponse.ts')]: [
     'fusedResponse',
+    'bytesWriteResponse',
   ],
   [path.join('packages', 'payload', 'src', 'auth', 'strategies', 'verifyJWTSync.ts')]: [
     'verifyJWTSync',

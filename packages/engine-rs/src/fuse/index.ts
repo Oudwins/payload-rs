@@ -31,6 +31,7 @@ import {
   populatedResult,
   type PopulationContext,
   populationRequest,
+  settleCanonical,
 } from './populate.js'
 import { canonical, firstDifference } from './shadow.js'
 import { count, recordDiff, stats } from './stats.js'
@@ -40,9 +41,9 @@ import { isAcceptedWhere } from './where.js'
 /* eslint-disable @typescript-eslint/no-explicit-any -- operation args keep upstream's generics */
 type Any = any
 
+export { canonicalResult } from './populate.js'
 export { getFusedCallCount, stats as fuseStats } from './stats.js'
 export { registerFusedTarget } from './targets.js'
-export type { FusedTarget, FusedTargetLookup } from './targets.js'
 
 type FuseMode = 'off' | 'on' | 'shadow'
 
@@ -984,6 +985,19 @@ export const materializeFusedResult = (
   text.charCodeAt(0) === 35 /* # */ ? materializePopulated(text, population!) : JSON.parse(text)
 export { parseResult as fusedResultValue }
 export type { Fused as FusedRead }
+export type { FusedTarget, FusedTargetLookup } from './targets.js'
+
+/** `read` asking for canonical text (the byte lanes, RUST_HTTP_LANES.md sections 3.1 and 6). */
+export const canonicalRead = (read: Fused): Fused => ({
+  ...read,
+  request: `${read.request.slice(0, -1)},"canonical":true}`,
+})
+
+/** The response bytes of a canonical `read`'s result, its nested finds' `req` mutations replayed. */
+export const settleFusedBytes = (
+  { population }: { population?: PopulationContext },
+  bytes: Uint8Array<ArrayBuffer>,
+) => settleCanonical(bytes, population)
 
 /**
  * The fused writes' bulk update / delete (src/fuse-write): a `find` request whose reads are
@@ -1073,7 +1087,7 @@ export const fusedOperationText = ({
 }: {
   operation: 'count' | 'find' | 'findByID' | 'findGlobal'
   operationArgs: Any
-}): Promise<string | undefined> | string | undefined => {
+}): Promise<string | Uint8Array<ArrayBuffer> | undefined> | string | undefined => {
   if (mode === 'off' || operation === 'findGlobal') {
     return undefined
   }
@@ -1092,13 +1106,14 @@ export const fusedOperationText = ({
   }
   const request = `${fused.request.slice(0, -1)},"canonical":true}`
   const { replayJoins } = fused
-  const finish = (text: string): string | undefined => {
-    if (text.charCodeAt(0) === 33 /* ! */) {
-      count(stats.bails, text.slice(1))
+  const finish = <T extends string | Uint8Array<ArrayBuffer>>(result: T) => {
+    if (typeof result === 'string' && result.charCodeAt(0) === 33 /* ! */) {
+      count(stats.bails, result.slice(1))
       return undefined
     }
     count(stats.hits, `${operation}:text`)
     if (mode === 'shadow') {
+      const text = typeof result === 'string' ? result : new TextDecoder().decode(result)
       if (JSON.stringify(JSON.parse(text)) !== text) {
         recordDiff({
           kind: 'text',
@@ -1110,8 +1125,19 @@ export const fusedOperationText = ({
       return undefined
     }
     replayJoins?.(operationArgs.joins)
-    return text
+    return result
   }
-  const text = runNative({ ...fused, request })
-  return typeof text === 'string' ? finish(text) : text.then(finish)
+  // the asynchronous backends give the text as the response body's bytes (`runBytes`)
+  const { runBytes } = fused.target
+  if (!runBytes) {
+    const text = runNative({ ...fused, request })
+    return typeof text === 'string' ? finish(text) : text.then(finish)
+  }
+  let pending: Promise<string | Uint8Array<ArrayBuffer>>
+  try {
+    pending = runBytes(request, fused.payload)
+  } catch {
+    return finish('!native:error')
+  }
+  return pending.then(finish)
 }

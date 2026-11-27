@@ -305,3 +305,71 @@ unit differentials 18 / 18.
   guard pass on databases without a backend (~15 µs per REST read).
 - The lane's remaining JS: `JSON.parse` of the result (removed entirely by text results through
   the byte lanes) and mongoose `Query` construction for the filter.
+
+## 6. Byte bodies and REST write byte lanes (WP-AB, 2026-11-27)
+
+**Bodies as bytes.** On an asynchronous backend (MongoDB) the fused text comes to JS as the UTF-8
+bytes of the canonical text instead of a string: `fuseRunMongo(..., asBytes)` and
+`fuseWriteMongoOp(..., asBytes)` resolve with a `Buffer` (an external buffer over the Rust
+`String`'s bytes, no copy on the JS thread), a bail stays a `!<reason>` string. The fused targets
+expose it as `runBytes` (src/fuse `FusedTarget.runBytes`, src/fuse-write `runBytes`). A response
+body built from bytes skips `new Response(text)`'s string encoding. `new Response(bytes, init)`
+has `Response.json`'s semantics for the same bytes: the handler's headers, `content-type:
+application/json` appended when absent (a `BufferSource` body adds no content type of its own),
+no `content-length` header on the `Response` (the body's length is internal, as for a string
+body), and `handleEndpoints` still re-wraps the body stream, so the framing users see is
+unchanged. `fusedOperationText` (the read byte lanes) returns the bytes when the target has
+`runBytes`; SQLite keeps its synchronous string.
+
+**Canonical populated results.** `crates/payload-fuse` `write_result` in canonical mode wrote no
+populated result (`populate:text`); it now writes `#{"n":[depth...],"r":<result>}`: the result
+whole, every document at each of its places (what `JSON.stringify` writes for upstream's shared
+objects), and the nested finds' depths, whose `req` mutations JS replays
+(`fuse/populate.ts` `settleCanonical`). The dataloader entries (`k`) are left out. The read byte
+lanes still guard `populate:text` (a REST read's `req` is read again by nothing either, but
+their population needs a fresh dataloader and they were not measured); only the write byte lanes
+send populated canonical requests.
+
+**REST write byte lanes.** Upstream's default `create` (`POST /:collection`) and `updateByID`
+(`PATCH /:collection/:id`) handlers return `Response.json({ doc, message }, { headers, status })`.
+They now call `fusedWriteResponse` (`collections/endpoints/fusedResponse.ts`) with their
+operation arguments, the operation (`exact`, called when the Rust engine is not loaded), the
+message and header callbacks and the status. With the Rust engine, `@payloadcms/engine-rs/ops-write`
+`fusedWriteResult` runs the operation exactly as the operation drop-in does (`fuseWrite`, else the
+exact lane), with the fused write's result read asking for canonical text (`canonicalRead`) and
+the bytes back (`runBytes`): `{ bytes }` when the fused lane served the call, `{ doc }` otherwise
+(the exact lane's result, then `Response.json` as upstream). For bytes, `bytesWriteResponse`
+calls `message()` then `headers()` (the order the handler's `Response.json` arguments evaluate)
+and builds the body `{"doc":` + bytes + `,"message":` + `JSON.stringify(message)` + `}`, which
+is `JSON.stringify({ doc, message })` for a string message (a non-string message goes through
+`Response.json` with the document parsed: canonical text stringifies to itself).
+
+What a served write does not reproduce, and why it is unobservable: upstream's write leaves the
+request dataloader primed with the result's populated documents, and a create leaves `req.data`
+(the create's `data`) with `beforeValidate`'s in-place changes. The materialized fused lane
+reproduces both for the Local API, whose caller keeps `req`. In the REST handlers nothing reads
+either after the operation: the handler translates its message (`req.t`, `getTranslation` of
+the labels, whose functions receive `{ i18n, t }`), `handleEndpoints` merges `req.responseHeaders`
+and the CORS headers, and the request ends. Everything else a served write does to `req` stays:
+`req.context`'s writes, the nested finds' `req` mutations (`req.query.depth`, `transactionID`,
+`createPayloadRequest`), `delete req.transactionID`. Writes with collection hooks
+(`afterOperation`, `afterChange`, `afterRead`, ...) or user field hooks are not fused at all
+(FUSED_WRITES.md section 13); a user-replaced endpoint handler never reaches this code.
+
+Shadows:
+
+- the write lane-shadow (`PAYLOAD_RS_FUSE_WRITES=shadow`, `--fuse-writes shadow`) runs the byte
+  lane's fused write in its aborted transaction and compares the result bytes with
+  `JSON.stringify` of the exact lane's result byte for byte (`fuse-write/index.ts`
+  `compareBytes`, difference kind `bytes`), and the `req.query.depth` the nested finds leave
+  (`req-state`), besides the state, readings, `data` and `req.context` comparisons of every fused
+  write (the shadow keeps replaying `data`). `fuse-writes-<pid>.json` counts these calls in
+  `bytes` (also among `hits`);
+- the HTTP shadow (test/__rs/http-lanes, `bytesWriteResponse`) checks every response built from
+  bytes: the document bytes are canonical, and status, header list and body equal
+  `Response.json({ doc: JSON.parse(text), message }, { headers, status })`
+  (`bytes:hit:write`). The write itself cannot run twice there; the lane-shadow above proves the
+  document.
+
+Not covered: bulk `PATCH /:collection?where` (its `{ docs, errors, message }` body), deletes,
+globals.

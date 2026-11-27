@@ -7,13 +7,14 @@ import { headersWithCors } from '../../utilities/headersWithCors.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
 import { parseParams } from '../../utilities/parseParams/index.js'
 import { createOperation } from '../operations/create.js'
+import { fusedWriteResponse } from './fusedResponse.js'
 
 export const createHandler: PayloadHandler = async (req) => {
   const collection = getRequestCollection(req)
 
   const { autosave, depth, draft, populate, publishAllLocales, select } = parseParams(req.query)
 
-  const doc = await createOperation({
+  const operationArgs = {
     autosave,
     collection,
     data: req.data!,
@@ -23,21 +24,21 @@ export const createHandler: PayloadHandler = async (req) => {
     publishAllLocales,
     req,
     select,
-  })
+  }
 
-  return Response.json(
-    {
-      doc,
-      message: req.t('general:successfullyCreated', {
-        label: getTranslation(collection.config.labels.singular, req.i18n),
-      }),
-    },
-    {
-      headers: headersWithCors({
+  return fusedWriteResponse({
+    exact: () => createOperation(operationArgs),
+    headers: () =>
+      headersWithCors({
         headers: new Headers(),
         req,
       }),
-      status: httpStatus.CREATED,
-    },
-  )
+    message: () =>
+      req.t('general:successfullyCreated', {
+        label: getTranslation(collection.config.labels.singular, req.i18n),
+      }),
+    operation: 'create',
+    operationArgs,
+    status: httpStatus.CREATED,
+  })
 }

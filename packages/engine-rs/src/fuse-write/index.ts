@@ -16,19 +16,22 @@ import { randomUUID } from 'node:crypto'
 
 import type { FusedRead } from '../fuse/index.js'
 import type { RecordedReadings } from '../shadow-mongo/replay.js'
-import type { FusedWriteTarget } from './targets.js'
+import type { FusedWriteTarget, WriteResult } from './targets.js'
 
 import { sanitizeSortQuery } from '../../../payload/src/collections/operations/utilities/sanitizeSortQuery.js'
 import { combineQueries } from '../../../payload/src/database/combineQueries.js'
 import { sanitizeWhereQuery } from '../../../payload/src/database/sanitizeWhereQuery.js'
 import { appendNonTrashedFilter } from '../../../payload/src/utilities/appendNonTrashedFilter.js'
 import {
+  canonicalRead,
+  canonicalResult,
   evaluateCompiledAccess,
   fusedFindByIDRequest,
   fusedPageRequest,
   fusedResultValue,
   isAcceptedRequest,
   materializeFusedResult,
+  settleFusedBytes,
 } from '../fuse/index.js'
 import { hasDataProperties, isInertTree, isPlainObject } from '../fuse/inert.js'
 import { getCollectionPlan } from '../fuse/plan.js'
@@ -126,13 +129,17 @@ const deleteArgKeys = [
 /** The ids of collections without a custom ID type, as `ObjectId#toHexString` writes them. */
 const objectIDHex = /^[0-9a-f]{24}$/
 
-/** The fused lane of operation `name`, or `undefined` (run the exact lane). */
-export const fuseWrite = (name: string, args: Any, exact: Exact) => {
+/**
+ * The fused lane of operation `name`, or `undefined` (run the exact lane). `asBytes` (create and
+ * updateByID, `fuseWriteBytes`): the promise resolves with `{ bytes }` when the fused lane served
+ * the call, else with `{ doc }`, `exact`'s result.
+ */
+export const fuseWrite = (name: string, args: Any, exact: Exact, asBytes = false) => {
   if (mode === 'off') {
     return undefined
   }
   if (name === 'updateByID' || name === 'deleteByID') {
-    return fuseByID(name, args, exact)
+    return fuseByID(name, args, exact, asBytes)
   }
   if (name === 'update' || name === 'delete') {
     return fuseBulk(name, args, exact)
@@ -152,7 +159,46 @@ export const fuseWrite = (name: string, args: Any, exact: Exact) => {
   if (!checked) {
     return undefined
   }
-  return mode === 'shadow' ? shadowCreate(checked, args, exact) : runCreate(checked, args, exact)
+  return mode === 'shadow'
+    ? shadowCreate(checked, args, exact, asBytes)
+    : runCreate(checked, args, asBytes ? exactAsDoc(exact) : exact, asBytes)
+}
+
+/**
+ * A REST create / updateByID of upstream's default handlers (the write byte lanes,
+ * RUST_HTTP_LANES.md section 6): `{ bytes }`, the UTF-8 bytes of `JSON.stringify(result)`, when the
+ * fused lane served the call, else `{ doc }`, the result of `exact` (the exact lane). Served calls
+ * leave `req.context` and `req` as the materialized lane does, except for what only `req` holds
+ * and no code reads after the operation (the callers' guarantee): the request dataloader is not
+ * primed with the result's populated documents, and the creates' `data` (`req.data`) does not
+ * get upstream's in-place `beforeValidate` changes.
+ */
+export const fuseWriteBytes = (name: 'create' | 'updateByID', args: Any, exact: Exact) =>
+  fuseWrite(name, args, exact, true) ?? exactAsDoc(exact)()
+
+const exactAsDoc = (exact: Exact) => () => exact().then((doc) => ({ doc }))
+
+/** A native result that is a bail (`!<reason>`; a result as bytes never is). */
+const isBail = (text: string | Uint8Array | undefined): text is `!${string}` =>
+  typeof text === 'string' && text.charCodeAt(0) === 33 /* ! */
+
+/**
+ * The lane-shadow's check of a byte-lane result (`bytes`, canonical, crates/payload-fuse
+ * `write_result`) against the exact lane's `result`, which the response body must hold as
+ * `JSON.stringify` writes it, and against the `req` state the exact lane's nested finds left.
+ */
+const compareBytes = (bytes: Uint8Array<ArrayBuffer>, result: Any, req: Any) => {
+  const { depths, result: resultBytes } = canonicalResult(bytes)
+  const fusedJSON = new TextDecoder().decode(resultBytes)
+  const exactJSON = JSON.stringify(result)
+  if (fusedJSON !== exactJSON) {
+    return { kind: 'bytes', ...firstDifference(exactJSON, fusedJSON) }
+  }
+  const depth = depths.at(-1)
+  if (depth !== undefined && req.query?.depth !== depth) {
+    return { exact: req.query?.depth, fused: depth, kind: 'req-state' }
+  }
+  return undefined
 }
 
 type Checked = { payload: Any; target: FusedWriteTarget }
@@ -401,8 +447,8 @@ const backOff = (backoff: Backoff, collection: Any) => {
 }
 
 /** Records a run lane's native result (`text`) of an operation that reads `read`. */
-const noteRun = (collection: Any, read: FusedRead, text: string) => {
-  const isDone = text.charCodeAt(0) !== 33 /* ! */
+const noteRun = (collection: Any, read: FusedRead, text: string | Uint8Array) => {
+  const isDone = !isBail(text)
   if (read.population?.reachesUnserved) {
     if (text === '!populate:related') {
       backOff(populateBackoff, collection)
@@ -497,6 +543,7 @@ const fusedCreate = async (
   args: Any,
   copies: { context: Any; data: Any },
   isShadow: boolean,
+  asBytes: boolean,
 ) => {
   const prepared = await target.prepareCreate(args, copies.data, copies.context, documentID)
   if (typeof prepared === 'string') {
@@ -506,12 +553,13 @@ const fusedCreate = async (
   if (!read) {
     return { bail: 'read' }
   }
-  const result = await target.run({
-    op: prepared.op,
-    read,
-    state: isShadow ? prepared.state : undefined,
-  })
-  const data = result[0]!.charCodeAt(0) === 33 /* ! */ ? undefined : prepared.settle(result)
+  const input = { op: prepared.op, read, state: isShadow ? prepared.state() : undefined }
+  const result: WriteResult = asBytes
+    ? await target.runBytes({ ...input, read: canonicalRead(read) })
+    : await target.run(input)
+  // the REST write byte lanes' `data` is `req.data`, which no code reads after the operation
+  // (`fuseWriteBytes`): its `beforeValidate` mutations are not replayed outside the shadow
+  const data = isBail(result[0]) ? undefined : prepared.settle(result, asBytes && !isShadow)
   return { data, read, result, state: prepared.state }
 }
 
@@ -540,7 +588,7 @@ const createInputs = (args: Any) =>
     ? { context: args.req.context, data: args.data }
     : copyMutable(args)
 
-const runCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => {
+const runCreate = async (checked: CheckedCreate, args: Any, exact: Exact, asBytes: boolean) => {
   const copies = createInputs(args)
   if (!copies) {
     count(stats.guards, 'context')
@@ -548,7 +596,7 @@ const runCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => {
   }
   let outcome: Awaited<ReturnType<typeof fusedCreate>>
   try {
-    outcome = await fusedCreate(checked, args, copies, false)
+    outcome = await fusedCreate(checked, args, copies, false, asBytes)
   } catch {
     // a prepare step threw (e.g. a ValidationError): the exact lane throws upstream's error
     count(stats.bails, 'prepare:threw')
@@ -558,9 +606,9 @@ const runCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => {
     count(stats.bails, outcome.bail)
     return exact()
   }
-  const text = outcome.result[0]!
+  const text = outcome.result[0]
   noteRun(args.collection, outcome.read, text)
-  if (text.charCodeAt(0) === 33 /* ! */) {
+  if (isBail(text)) {
     if (text.charCodeAt(1) === 33) {
       // the commit failed after the statements were sent: its outcome is unknown, like upstream's
       count(stats.bails, 'commit')
@@ -570,13 +618,19 @@ const runCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => {
     return exact()
   }
   count(stats.hits, 'create')
+  if (typeof text !== 'string') {
+    count(stats.bytes, 'create')
+  }
   if (outcome.data !== args.data) {
     replayInto(args.data, outcome.data)
   }
   if (isPlainObject(args.req.context) && copies.context !== args.req.context) {
     replayInto(args.req.context, copies.context)
   }
-  const result = materializeFusedResult(withLoadTransaction(outcome.read, randomUUID()), text)
+  const result =
+    typeof text === 'string'
+      ? materializeFusedResult(withLoadTransaction(outcome.read, randomUUID()), text)
+      : { bytes: settleFusedBytes(outcome.read, text) }
   // upstream's `commitTransaction` deletes the id `initTransaction` set (after the nested finds)
   delete args.req.transactionID
   return result
@@ -614,11 +668,12 @@ const exactLoadTransaction = (req: Any) => {
   }
 }
 
-const shadowCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => {
+const shadowCreate = async (checked: CheckedCreate, args: Any, exact: Exact, asBytes: boolean) => {
+  const exactResult = asBytes ? exactAsDoc(exact) : exact
   const copies = copyMutable(args)
   if (!copies) {
     count(stats.guards, 'context')
-    return exact()
+    return exactResult()
   }
   installReplay()
   installObjectIdReplay(checked.target.objectIdClass)
@@ -629,7 +684,7 @@ const shadowCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => 
   let outcome: Awaited<ReturnType<typeof fusedCreate>> | undefined
   let fusedError: unknown
   try {
-    outcome = await tapes.reference(() => fusedCreate(checked, args, copies, true))
+    outcome = await tapes.reference(() => fusedCreate(checked, args, copies, true, asBytes))
   } catch (error) {
     fusedError = error
   }
@@ -638,12 +693,12 @@ const shadowCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => 
     recordDiff({ ...difference, collection: slug, op: 'create' })
   if (outcome?.bail !== undefined) {
     count(stats.bails, outcome.bail)
-    return exact()
+    return exactResult()
   }
   const text = outcome?.result[0]
-  if (text !== undefined && text.charCodeAt(0) === 33) {
+  if (isBail(text)) {
     count(stats.bails, text.slice(1))
-    return exact()
+    return exactResult()
   }
   let result: Any
   try {
@@ -660,9 +715,12 @@ const shadowCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => 
   }
   if (fusedError !== undefined || !outcome || text === undefined) {
     report({ fused: errorSummary(fusedError), kind: 'fused-threw' })
-    return result
+    return asBytes ? { doc: result } : result
   }
   count(stats.hits, 'create')
+  if (typeof text !== 'string') {
+    count(stats.bytes, 'create')
+  }
   const unmatched = Object.fromEntries(
     // the exact lane's transaction id (db-mongodb `beginTransaction`: `uuid()`) has no fused
     // counterpart (D4: the Rust driver owns the session)
@@ -673,21 +731,28 @@ const shadowCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => 
   if (Object.keys(unmatched).length > 0) {
     report({ kind: 'readings', unmatched })
   }
-  const exactState = await checked.target.readState(outcome.state)
+  const exactState = await checked.target.readState(outcome.state())
   const fusedState = outcome.result[1]!
   if (exactState !== fusedState) {
     report({ kind: 'state', ...firstDifference(exactState, fusedState) })
   }
-  const exactText = canonical(result)
-  const fusedText = canonical(fusedResultValue(text))
-  if (exactText !== fusedText) {
-    report({ kind: 'result', ...firstDifference(exactText, fusedText) })
-  }
-  if (text.charCodeAt(0) === 35 /* # */) {
-    const read = withLoadTransaction(outcome.read, exactLoadTransaction(args.req))
-    const difference = await comparePopulated(text, read.population!, result)
+  if (typeof text !== 'string') {
+    const difference = compareBytes(text, result, args.req)
     if (difference) {
-      report({ ...difference })
+      report(difference)
+    }
+  } else {
+    const exactText = canonical(result)
+    const fusedText = canonical(fusedResultValue(text))
+    if (exactText !== fusedText) {
+      report({ kind: 'result', ...firstDifference(exactText, fusedText) })
+    }
+    if (text.charCodeAt(0) === 35 /* # */) {
+      const read = withLoadTransaction(outcome.read, exactLoadTransaction(args.req))
+      const difference = await comparePopulated(text, read.population!, result)
+      if (difference) {
+        report({ ...difference })
+      }
     }
   }
   // the fused lane's copies replayed onto the state before the call must equal what the exact
@@ -702,12 +767,12 @@ const shadowCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => 
       report({ kind, ...firstDifference(exactAfter, canonical(before)) })
     }
   }
-  return result
+  return asBytes ? { doc: result } : result
 }
 
 type ByIDName = 'deleteByID' | 'updateByID'
 
-const fuseByID = (name: ByIDName, args: Any, exact: Exact) => {
+const fuseByID = (name: ByIDName, args: Any, exact: Exact, asBytes: boolean) => {
   // read before `isPlainObject` narrows `args` to unknown values
   const collection = args?.collection
   if (!isPlainObject(args)) {
@@ -724,9 +789,9 @@ const fuseByID = (name: ByIDName, args: Any, exact: Exact) => {
   }
   return mode === 'shadow'
     ? serializedPerDocument(`${collection.config.slug}:${String(args.id)}`, () =>
-        shadowByID(checked, name, args, exact),
+        shadowByID(checked, name, args, exact, asBytes),
       )
-    : runByID(checked, name, args, exact)
+    : runByID(checked, name, args, asBytes ? exactAsDoc(exact) : exact, asBytes)
 }
 
 /**
@@ -872,6 +937,7 @@ const fusedByID = async (
   name: ByIDName,
   args: Any,
   isShadow: boolean,
+  asBytes: boolean,
 ) => {
   // the result read's `findOne` is also the stored-document read (with the access constraint);
   // outside the shadow nothing ran since the guards built it on the same arguments (the shadow
@@ -895,18 +961,23 @@ const fusedByID = async (
     name === 'deleteByID' && fused.population
       ? { ...fused, population: { ...fused.population, draft: undefined } }
       : fused
-  const result = await target.run({
-    op: prepared.op,
-    read,
-    state: isShadow ? prepared.state : undefined,
-  })
+  const input = { op: prepared.op, read, state: isShadow ? prepared.state() : undefined }
+  const result: WriteResult = asBytes
+    ? await target.runBytes({ ...input, read: canonicalRead(read) })
+    : await target.run(input)
   return { read, result, state: prepared.state }
 }
 
-const runByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact: Exact) => {
+const runByID = async (
+  checked: CheckedByID,
+  name: ByIDName,
+  args: Any,
+  exact: Exact,
+  asBytes: boolean,
+) => {
   let outcome: Awaited<ReturnType<typeof fusedByID>>
   try {
-    outcome = await fusedByID(checked, name, args, false)
+    outcome = await fusedByID(checked, name, args, false, asBytes)
   } catch {
     count(stats.bails, 'prepare:threw')
     return exact()
@@ -915,9 +986,9 @@ const runByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact: E
     count(stats.bails, outcome.bail)
     return exact()
   }
-  const [text = '!result', , contextWrites] = outcome.result
+  const [text, , contextWrites] = outcome.result
   noteRun(args.collection, outcome.read, text)
-  if (text.charCodeAt(0) === 33 /* ! */) {
+  if (isBail(text)) {
     if (text.charCodeAt(1) === 33) {
       count(stats.bails, 'commit')
       throw new Error(safeMessage(text.slice(2)))
@@ -926,18 +997,31 @@ const runByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact: E
     return exact()
   }
   count(stats.hits, name)
+  if (typeof text !== 'string') {
+    count(stats.bytes, name)
+  }
   if (contextWrites) {
     for (const [key, value] of checked.target.contextWrites(contextWrites)) {
       args.req.context[key] = value
     }
   }
-  const result = materializeFusedResult(withLoadTransaction(outcome.read, randomUUID()), text)
+  const result =
+    typeof text === 'string'
+      ? materializeFusedResult(withLoadTransaction(outcome.read, randomUUID()), text)
+      : { bytes: settleFusedBytes(outcome.read, text) }
   // upstream's `commitTransaction` deletes the id `initTransaction` set (after the nested finds)
   delete args.req.transactionID
   return result
 }
 
-const shadowByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact: Exact) => {
+const shadowByID = async (
+  checked: CheckedByID,
+  name: ByIDName,
+  args: Any,
+  exact: Exact,
+  asBytes: boolean,
+) => {
+  const exactResult = asBytes ? exactAsDoc(exact) : exact
   installReplay()
   installObjectIdReplay(checked.target.objectIdClass)
   installBsonObjectIdReplay(checked.target.rowIdClass)
@@ -948,12 +1032,12 @@ const shadowByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact
     contextBefore = structuredClone(args.req.context)
   } catch {
     count(stats.guards, 'context')
-    return exact()
+    return exactResult()
   }
   let outcome: Awaited<ReturnType<typeof fusedByID>> | undefined
   let fusedError: unknown
   try {
-    outcome = await tapes.reference(() => fusedByID(checked, name, args, true))
+    outcome = await tapes.reference(() => fusedByID(checked, name, args, true, asBytes))
   } catch (error) {
     fusedError = error
   }
@@ -962,12 +1046,12 @@ const shadowByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact
     recordDiff({ ...difference, collection: slug, op: name })
   if (outcome?.bail !== undefined) {
     count(stats.bails, outcome.bail)
-    return exact()
+    return exactResult()
   }
   const text = outcome?.result[0]
-  if (text !== undefined && text.charCodeAt(0) === 33) {
+  if (isBail(text)) {
     count(stats.bails, text.slice(1))
-    return exact()
+    return exactResult()
   }
   let result: Any
   try {
@@ -984,9 +1068,12 @@ const shadowByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact
   }
   if (fusedError !== undefined || !outcome || text === undefined) {
     report({ fused: errorSummary(fusedError), kind: 'fused-threw' })
-    return result
+    return asBytes ? { doc: result } : result
   }
   count(stats.hits, name)
+  if (typeof text !== 'string') {
+    count(stats.bytes, name)
+  }
   const unmatched = Object.fromEntries(
     Object.entries(tapes.unmatched()).filter(
       ([channel, reads]) => channel !== 'uuids' || reads.recorded > 0,
@@ -995,21 +1082,28 @@ const shadowByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact
   if (Object.keys(unmatched).length > 0) {
     report({ kind: 'readings', unmatched })
   }
-  const exactState = await checked.target.readState(outcome.state)
+  const exactState = await checked.target.readState(outcome.state())
   const fusedState = outcome.result[1] ?? ''
   if (exactState !== fusedState) {
     report({ kind: 'state', ...firstDifference(exactState, fusedState) })
   }
-  const exactText = canonical(result)
-  const fusedText = canonical(fusedResultValue(text))
-  if (exactText !== fusedText) {
-    report({ kind: 'result', ...firstDifference(exactText, fusedText) })
-  }
-  const loaded = withLoadTransaction(outcome.read, exactLoadTransaction(args.req))
-  if (text.charCodeAt(0) === 35 /* # */ && loaded.population) {
-    const difference = await comparePopulated(text, loaded.population, result)
+  if (typeof text !== 'string') {
+    const difference = compareBytes(text, result, args.req)
     if (difference) {
-      report({ ...difference })
+      report(difference)
+    }
+  } else {
+    const exactText = canonical(result)
+    const fusedText = canonical(fusedResultValue(text))
+    if (exactText !== fusedText) {
+      report({ kind: 'result', ...firstDifference(exactText, fusedText) })
+    }
+    const loaded = withLoadTransaction(outcome.read, exactLoadTransaction(args.req))
+    if (text.charCodeAt(0) === 35 /* # */ && loaded.population) {
+      const difference = await comparePopulated(text, loaded.population, result)
+      if (difference) {
+        report({ ...difference })
+      }
     }
   }
   // updateByID works on a deep copy of `data`: the exact lane leaves the caller's untouched
@@ -1028,7 +1122,7 @@ const shadowByID = async (checked: CheckedByID, name: ByIDName, args: Any, exact
   if (canonical(contextBefore) !== contextAfter) {
     report({ kind: 'context', ...firstDifference(contextAfter, canonical(contextBefore)) })
   }
-  return result
+  return asBytes ? { doc: result } : result
 }
 
 type BulkName = 'delete' | 'update'

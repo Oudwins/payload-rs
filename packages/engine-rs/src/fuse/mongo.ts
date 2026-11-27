@@ -47,12 +47,17 @@ import { registerFusedTarget } from './targets.js'
 type Any = any
 
 type FuseAddon = {
-  fuseRunMongo?: (
-    client: number,
-    transformPlan: number,
-    requestJson: string,
-    reads: Uint8Array,
-  ) => Promise<string>
+  fuseRunMongo?: {
+    (client: number, transformPlan: number, requestJson: string, reads: Uint8Array): Promise<string>
+    /** the result JSON as its UTF-8 bytes, a bail as `!<reason>` */
+    (
+      client: number,
+      transformPlan: number,
+      requestJson: string,
+      reads: Uint8Array,
+      asBytes: true,
+    ): Promise<string | Uint8Array<ArrayBuffer>>
+  }
 }
 
 /** What a request carries to the native call besides its JSON (`reads`: for the shadow check). */
@@ -114,6 +119,10 @@ export const registerFusedMongoTarget = ({
       run: (requestJson, payload) => {
         const { bytes, client, plan } = payload as MongoPayload
         return fuseRunMongo(client, plan, requestJson, bytes)
+      },
+      runBytes: (requestJson, payload) => {
+        const { bytes, client, plan } = payload as MongoPayload
+        return fuseRunMongo(client, plan, requestJson, bytes, true)
       },
       shadowExact: (payload, exact, report) =>
         shadowExact(lane, (payload as MongoPayload).reads, exact, report),

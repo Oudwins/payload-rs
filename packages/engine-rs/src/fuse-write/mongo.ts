@@ -25,7 +25,7 @@ import { createRequire } from 'node:module'
 
 import type { Template } from '../fuse/idTemplate.js'
 import type { DriverLane } from '../mongo-driver/lane.js'
-import type { FusedWriteTarget } from './targets.js'
+import type { FusedWriteTarget, WriteResult } from './targets.js'
 
 import { buildQuery } from '../../../db-mongodb/src/queries/buildQuery.js'
 import { buildSortParam } from '../../../db-mongodb/src/queries/buildSortParam.js'
@@ -76,15 +76,28 @@ type FuseWriteAddon = {
     requestJson: string,
     reads: Uint8Array,
   ) => Promise<string[]>
-  fuseWriteMongoOp?: (
-    client: number,
-    txn: number,
-    op: Uint8Array,
-    plan?: number,
-    requestJson?: string,
-    reads?: Uint8Array,
-    state?: Uint8Array,
-  ) => Promise<string[]>
+  fuseWriteMongoOp?: {
+    /** the result text, unless it is a bail, as its UTF-8 bytes */
+    (
+      client: number,
+      txn: number,
+      op: Uint8Array,
+      plan: number,
+      requestJson: string,
+      reads: Uint8Array,
+      state: Uint8Array | undefined,
+      asBytes: true,
+    ): Promise<WriteResult>
+    (
+      client: number,
+      txn: number,
+      op: Uint8Array,
+      plan?: number,
+      requestJson?: string,
+      reads?: Uint8Array,
+      state?: Uint8Array,
+    ): Promise<[string, ...string[]]>
+  }
   fuseWriteMongoState?: (client: number, state: Uint8Array) => Promise<string>
   fuseWritePrepare?: (planJson: string, requestJson: string, stored?: Uint8Array) => string
   fuseWriteRegisterPlan?: (planJson: string) => number
@@ -214,6 +227,19 @@ export const registerFusedMongoWriteTarget = ({
           isShadow ? prepared.state : undefined,
         )
         return { result, state: prepared.state }
+      },
+      runBytes: ({ op, read, state }) => {
+        const { bytes, client, plan } = read.payload as ReadPayload
+        return fuseWriteMongoOp(
+          client,
+          lane.binding.txnBegin(client),
+          op,
+          plan,
+          read.request,
+          bytes,
+          state,
+          true,
+        )
       },
     }
     return target
@@ -581,13 +607,13 @@ const prepareCreateRust = (
     return {
       id: readings.documentID.toHexString(),
       op: lane.BSON.serialize(op),
-      settle: (result: string[]) => {
+      settle: (result: WriteResult, isDataUnread?: boolean) => {
         for (const [key, value] of JSON.parse(result[2] || '[]')) {
           context[key] = decodeTree(value)
         }
-        return result[3] ? decodeTree(JSON.parse(result[3])) : data
+        return result[3] && !isDataUnread ? decodeTree(JSON.parse(result[3])) : data
       },
-      state: documentState(lane, Model, VersionModel, readings.documentID),
+      state: () => documentState(lane, Model, VersionModel, readings.documentID),
     }
   }
   if (resolvedUniqueTemplates.has(Model)) {
@@ -1224,7 +1250,7 @@ const prepareByID = async (
         ]
       : []),
   ]
-  return { op: lane.BSON.serialize(request), reads, state: lane.BSON.serialize({ r: reads }) }
+  return { op: lane.BSON.serialize(request), reads, state: () => lane.BSON.serialize({ r: reads }) }
 }
 
 const unservedPathCache = new WeakMap<object, Map<string, string[][]>>()
@@ -1521,7 +1547,7 @@ const prepareCreateTS = async (lane: DriverLane, args: Any, data: Any, context: 
     id: id.toHexString(),
     op,
     settle: () => data,
-    state: documentState(lane, Model, VersionModel, id),
+    state: () => documentState(lane, Model, VersionModel, id),
   }
 }
 

@@ -297,10 +297,27 @@ fn nested_args(request: &Population, slug: &str, related: &crate::backend::Relat
 /// k: [[slug, id, depth, currentDepth, path | null]...], n: [depth...] }`: a repeated document is
 /// written once (`0` at its other paths, patched to the first object), `k` lists the dataloader
 /// entries in cache insertion order (`null`: no document), `n` the nested finds in start order.
+///
+/// Canonical text (the byte lanes, RUST_HTTP_LANES.md section 6) is `#{"n":[depth...],"r":result}`
+/// instead: the result written whole (a repeated document at each of its places, as
+/// `JSON.stringify` writes it), and only the nested finds, whose `req` mutations JS replays; the
+/// dataloader entries are left out (the byte lanes serve only requests where no code can read
+/// them).
 pub(crate) fn write_result(result: &JsVal, run: Option<&PopRun<'_>>) -> FuseResult<String> {
   let Some(run) = run.filter(|run| !run.is_empty()) else { return write::to_json(result) };
   if write::canonical() {
-    return Err(Bail::new("populate:text"));
+    let mut out = String::with_capacity(1024);
+    out.push_str("#{\"n\":[");
+    for (i, depth) in run.nested.iter().enumerate() {
+      if i > 0 {
+        out.push(',');
+      }
+      write::write(&JsVal::Num(*depth), &mut out, 0)?;
+    }
+    out.push_str("],\"r\":");
+    write::write(result, &mut out, 0)?;
+    out.push('}');
+    return Ok(out);
   }
   let mut shared = HashSet::new();
   for value in &run.values {

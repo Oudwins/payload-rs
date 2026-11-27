@@ -9,23 +9,36 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- operation arguments are untyped here */
 type Any = any
 
-/** A prepared create: its generated id, the native request, the shadow's state reads. */
+/**
+ * A prepared create: its generated id, the native request, the shadow's state reads (built when
+ * the shadow asks).
+ */
 export type PreparedCreate = {
   id: string
   op: Uint8Array
   /**
    * After a successful `run` (its result texts): assigns the prepare's `req.context` writes to the
    * context copy and returns the copy of the caller's `data` after `beforeValidate` (the mutations
-   * to replay).
+   * to replay); with `isDataUnread` the `data` it was given (the caller's data is read by no one
+   * after the operation: the REST write byte lanes).
    */
-  settle: (result: string[]) => Any
-  state: Uint8Array
+  settle: (result: WriteResult, isDataUnread?: boolean) => Any
+  state: () => Uint8Array
 }
 
-/** A prepared `updateByID` / `deleteByID`: the native request, the shadow's state reads. */
+/**
+ * The texts of a fused write (`run`): the result text first (with `runBytes` its UTF-8 bytes when
+ * it is not a bail), then the operation's other outputs.
+ */
+export type WriteResult = [string | Uint8Array<ArrayBuffer>, ...string[]]
+
+/**
+ * A prepared `updateByID` / `deleteByID`: the native request, the shadow's state reads (built when
+ * the shadow asks).
+ */
 export type PreparedByID = {
   op: Uint8Array
-  state: Uint8Array
+  state: () => Uint8Array
 }
 
 export type FusedWriteTarget = {
@@ -75,7 +88,7 @@ export type FusedWriteTarget = {
     op: Uint8Array
     read: { payload: unknown; request: string }
     state?: Uint8Array
-  }) => Promise<string[]>
+  }) => Promise<[string, ...string[]]>
   /**
    * Runs a bulk update / delete (`args` the operation's) in a new Rust-owned transaction: the
    * document read of `read` (the fused `find` request of `payload.db.find` and of the results'
@@ -90,6 +103,15 @@ export type FusedWriteTarget = {
     name: 'delete' | 'update'
     read: { payload: unknown; request: string }
   }) => Promise<{ result: string[]; state: Uint8Array } | string>
+  /**
+   * `run` for the REST write byte lanes (`read` a canonical request, RUST_HTTP_LANES.md section
+   * 7): the result text, unless it is a bail, as its UTF-8 bytes (the response body's document).
+   */
+  runBytes: (input: {
+    op: Uint8Array
+    read: { payload: unknown; request: string }
+    state?: Uint8Array
+  }) => Promise<WriteResult>
 }
 
 export type FusedWriteTargetLookup = (adapter: object) => FusedWriteTarget | string

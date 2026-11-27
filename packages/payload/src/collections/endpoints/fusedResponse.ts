@@ -24,7 +24,18 @@ type ReadOperationArgs = {
 type FusedOperationText = (args: {
   operation: FusedOperation
   operationArgs: ReadOperationArgs
-}) => Promise<string | undefined> | string | undefined
+}) => Promise<string | Uint8Array<ArrayBuffer> | undefined> | string | undefined
+
+type FusedWriteOperation = 'create' | 'updateByID'
+
+/**
+ * `@payloadcms/engine-rs/ops-write` `fusedWriteResult`: the operation, resolving with the UTF-8
+ * bytes of `JSON.stringify(result)` when the fused write lane served it, else with the result.
+ */
+type FusedWriteResult = (args: {
+  operation: FusedWriteOperation
+  operationArgs: Record<string, unknown>
+}) => Promise<{ bytes: Uint8Array<ArrayBuffer> } | { doc: unknown }>
 
 // oxlint-disable-next-line typescript/no-explicit-any
 type AnyFunction = (...args: any[]) => any
@@ -43,6 +54,7 @@ type Compiler = {
  * loaded, and never with `PAYLOAD_ENGINE=ts`.
  */
 let fusedOperationText: FusedOperationText | undefined
+let fusedWriteResult: FusedWriteResult | undefined
 let compiler: Compiler | undefined
 
 if (isRustCoreEngine()) {
@@ -51,12 +63,20 @@ if (isRustCoreEngine()) {
       Promise.all([
         importRustEngine('@payloadcms/engine-rs/ops'),
         importRustEngine('@payloadcms/engine-rs/compile'),
+        importRustEngine('@payloadcms/engine-rs/ops-write'),
       ]),
     )
-    .then(([ops, compile]: [{ fusedOperationText?: FusedOperationText }, Compiler]) => {
-      compiler = compile
-      fusedOperationText = ops.fusedOperationText
-    })
+    .then(
+      ([ops, compile, opsWrite]: [
+        { fusedOperationText?: FusedOperationText },
+        Compiler,
+        { fusedWriteResult?: FusedWriteResult },
+      ]) => {
+        compiler = compile
+        fusedOperationText = ops.fusedOperationText
+        fusedWriteResult = opsWrite.fusedWriteResult
+      },
+    )
     .catch(() => {})
 }
 
@@ -64,7 +84,8 @@ if (isRustCoreEngine()) {
  * The response of a default read handler (find / findByID / count) served as bytes by the fused
  * lane (RUST_HTTP_LANES.md 3.3), or `exact()` (the handler's own path) when the lane does not
  * serve the call. The lane's text is canonical (`JSON.stringify(JSON.parse(text))`), i.e. the body
- * `Response.json(result)` writes, and the headers follow `Response.json`: the handler's headers,
+ * `Response.json(result)` writes (as a string, or as its UTF-8 bytes from an asynchronous backend,
+ * RUST_HTTP_LANES.md section 6), and the headers follow `Response.json`: the handler's headers,
  * then `content-type: application/json` when absent. `headers` runs only when the lane serves.
  *
  * `operationArgs` are the arguments the handler passes to the operation; the exact path receives
@@ -93,7 +114,7 @@ export const fusedResponse = async ({
     return exact()
   }
 
-  let text: string | undefined
+  let text: string | Uint8Array<ArrayBuffer> | undefined
 
   try {
     const isFusable = isAccessFusable({ operation, operationArgs })
@@ -120,6 +141,92 @@ export const fusedResponse = async ({
   }
 
   return new Response(text, { headers: responseHeaders, status: httpStatus.OK })
+}
+
+/**
+ * The response of a default create / updateByID handler, `Response.json({ doc, message },
+ * { headers, status })`, with the document as bytes when the fused write lane serves the call
+ * (RUST_HTTP_LANES.md section 6). `exact` is the handler's operation call, made when the Rust
+ * engine is not loaded; otherwise the engine's `fusedWriteResult` runs the same operation and
+ * gives its result either as the bytes of `JSON.stringify(doc)` or as the document. `message`
+ * and `headers` are called once each, after the operation, in that order (as the handler's
+ * `Response.json` arguments evaluate).
+ *
+ * A served write leaves the request dataloader without the result's populated documents and a
+ * create leaves `req.data` without `beforeValidate`'s in-place changes (the materialized lane
+ * reproduces both): no code reads them after the operation (the handler only translates its
+ * message, `handleEndpoints` only merges headers).
+ */
+export const fusedWriteResponse = async ({
+  exact,
+  headers,
+  message,
+  operation,
+  operationArgs,
+  status,
+}: {
+  exact: () => Promise<unknown>
+  headers: () => Headers
+  message: () => unknown
+  operation: FusedWriteOperation
+  operationArgs: Record<string, unknown>
+  status: number
+}): Promise<Response> => {
+  const lane = fusedWriteResult
+  const outcome = lane ? await lane({ operation, operationArgs }) : { doc: await exact() }
+
+  if ('doc' in outcome) {
+    return Response.json({ doc: outcome.doc, message: message() }, { headers: headers(), status })
+  }
+
+  return bytesWriteResponse({ bytes: outcome.bytes, headers, message, status })
+}
+
+const encoder = new TextEncoder()
+
+/** `{"doc":` */
+const docPrefix = encoder.encode('{"doc":')
+
+/**
+ * `Response.json({ doc, message: message() }, { headers: headers(), status })` for the document
+ * whose `JSON.stringify` is `bytes`: the body `{"doc":<bytes>,"message":<message as JSON>}` for a
+ * string message (what `JSON.stringify` writes for the object), with `Response.json`'s headers
+ * (the handler's, then `content-type: application/json` when absent). Any other message goes
+ * through `Response.json` with the document parsed (canonical text: its stringify is `bytes`).
+ */
+export const bytesWriteResponse = ({
+  bytes,
+  headers,
+  message,
+  status,
+}: {
+  bytes: Uint8Array<ArrayBuffer>
+  headers: () => Headers
+  message: () => unknown
+  status: number
+}): Response => {
+  const text = message()
+  const responseHeaders = headers()
+
+  if (typeof text !== 'string') {
+    return Response.json(
+      { doc: JSON.parse(new TextDecoder().decode(bytes)), message: text },
+      { headers: responseHeaders, status },
+    )
+  }
+
+  if (!responseHeaders.has('content-type')) {
+    responseHeaders.append('content-type', 'application/json')
+  }
+
+  const suffix = encoder.encode(`,"message":${JSON.stringify(text)}}`)
+  const body = new Uint8Array(docPrefix.length + bytes.length + suffix.length)
+
+  body.set(docPrefix)
+  body.set(bytes, docPrefix.length)
+  body.set(suffix, docPrefix.length + bytes.length)
+
+  return new Response(body, { headers: responseHeaders, status })
 }
 
 /**

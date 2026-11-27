@@ -197,7 +197,10 @@ result text instead of materializing it, or `undefined` (nothing observable ran;
 the exact operation). Canonical text is `JSON.stringify(JSON.parse(text))` byte for byte: `-0` is
 written as `0`, an integer-like key bails (JS would order it first), spliced json / rich text
 values must already be canonical (`scan::is_canonical`). In shadow mode it checks that invariant
-and returns `undefined`. `findGlobal` is not fused yet (`undefined`).
+and returns `undefined`. `findGlobal` is not fused yet (`undefined`). On MongoDB the text comes
+as its UTF-8 bytes (`runBytes`). A populated canonical result (only the REST write byte lanes
+send one, RUST_HTTP_LANES.md section 6) is `#{"n":[depth...],"r":result}`: the result written
+whole and the nested finds' depths, no dataloader entries.
 
 ## 6. The FusedBackend trait
 

@@ -433,13 +433,18 @@ const cacheKey = (
  */
 export const materializePopulated = (text: string, context: PopulationContext) => {
   const envelope = parseEnvelope(text)
-  const { payload, req } = context
-  const loader = req.payloadDataLoader
+  const loader = context.req.payloadDataLoader
   for (const entry of envelope.k) {
     const path = entry[4]
     loader.prime(cacheKey(context, entry), path === null ? null : at(envelope, path))
   }
-  for (const depth of envelope.n) {
+  replayNestedFinds(envelope.n, context)
+  return envelope.r
+}
+
+/** The `req` mutations of the nested finds that ran with `depth`s (in start order). */
+const replayNestedFinds = (depths: number[], { payload, req }: PopulationContext) => {
+  for (const depth of depths) {
     req.transactionID = null
     void createPayloadRequest({
       depth,
@@ -449,7 +454,35 @@ export const materializePopulated = (text: string, context: PopulationContext) =
       req,
     }).catch(() => {})
   }
-  return envelope.r
+}
+
+/**
+ * A canonical fused result (crates/payload-fuse `write_result`, the byte lanes) as UTF-8 bytes:
+ * the text itself, or for a populated call (`#{"n":[depth...],"r":result}`) the result's bytes and
+ * the depths of the nested finds that ran (in start order). No side effects.
+ */
+export const canonicalResult = (bytes: Uint8Array<ArrayBuffer>) => {
+  if (bytes[0] !== 35 /* # */) {
+    return { depths: [], result: bytes }
+  }
+  // `#{"n":[`: the depths are numbers, so the first `]` closes them; `,"r":` follows
+  const close = bytes.indexOf(93 /* ] */, 7)
+  const depths: number[] = JSON.parse(new TextDecoder().decode(bytes.subarray(6, close + 1)))
+  return { depths, result: bytes.subarray(close + 6, bytes.length - 1) }
+}
+
+/**
+ * `canonicalResult`'s result after the nested finds' `req` mutations are replayed (`context`: the
+ * request's population, set whenever the call can populate). The dataloader entries are not
+ * primed: the byte lanes serve only calls whose `req` no code reads afterwards
+ * (RUST_HTTP_LANES.md section 6).
+ */
+export const settleCanonical = (bytes: Uint8Array<ArrayBuffer>, context?: PopulationContext) => {
+  const { depths, result } = canonicalResult(bytes)
+  if (context) {
+    replayNestedFinds(depths, context)
+  }
+  return result
 }
 
 /** The result of a populated fused call without its side effects (lane-shadow mode). */

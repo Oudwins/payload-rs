@@ -23,7 +23,7 @@ import { afterRead as tsAfterRead } from '../../../payload/src/fields/hooks/afte
 import { beforeChange as tsBeforeChange } from '../../../payload/src/fields/hooks/beforeChange/index.js'
 import { beforeValidate as tsBeforeValidate } from '../../../payload/src/fields/hooks/beforeValidate/index.js'
 import { coreRuntimeAddonPath, loadCoreRuntimeAddon } from '../addon.js'
-import { fuseWrite } from '../fuse-write/index.js'
+import { fuseWrite, fuseWriteBytes } from '../fuse-write/index.js'
 import { getCoreOps } from '../ops/index.js'
 import { getCoreHooksAfter } from '../runtime/afterChange/binding.js'
 import { getBeforeChangeBinding } from '../runtime/beforeChange/index.js'
@@ -160,6 +160,21 @@ export const restoreVersionOperation = op('restoreVersion')
 export const validateOperation = op('validate')
 /** Drop-in for `updateDocument` of `collections/operations/utilities/update.ts`. */
 export const updateDocument = op('updateDocument')
+
+/**
+ * `create` / `updateByID` for upstream's default REST handlers (payload's
+ * `collections/endpoints/fusedResponse.ts`, RUST_HTTP_LANES.md section 6): resolves with
+ * `{ bytes }`, the UTF-8 bytes of `JSON.stringify(result)`, when the fused write lane served the
+ * call, else with `{ doc }`, the operation's result (`createOperation` / `updateByIDOperation`
+ * run as above). Rejects as the operation does.
+ */
+export const fusedWriteResult = ({
+  operation,
+  operationArgs,
+}: {
+  operation: 'create' | 'updateByID'
+  operationArgs: Any
+}) => fuseWriteBytes(operation, operationArgs, () => runExact(operation, operationArgs))
 
 /** Operations served by the Rust crate so far in this process (0 before the first call). */
 export const getCoreOpsWriteCalls = (): number => (binding ? binding.stats() : 0)

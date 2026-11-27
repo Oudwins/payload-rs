@@ -5,6 +5,7 @@ import { headersWithCors } from '../../utilities/headersWithCors.js'
 import { httpStatus } from '../../utilities/httpStatus.js'
 import { parseParams } from '../../utilities/parseParams/index.js'
 import { updateByIDOperation } from '../operations/updateByID.js'
+import { fusedWriteResponse } from './fusedResponse.js'
 
 export const updateByIDHandler: PayloadHandler = async (req) => {
   const { id, collection } = getRequestCollectionWithID(req)
@@ -21,7 +22,7 @@ export const updateByIDHandler: PayloadHandler = async (req) => {
     unpublishAllLocales,
   } = parseParams(req.query)
 
-  const doc = await updateByIDOperation({
+  const operationArgs = {
     id,
     autosave,
     collection,
@@ -35,28 +36,29 @@ export const updateByIDHandler: PayloadHandler = async (req) => {
     select,
     trash,
     unpublishAllLocales,
-  })
-
-  let message = req.t('general:updatedSuccessfully')
-
-  if (draft) {
-    message = req.t('version:draftSavedSuccessfully')
-  }
-  if (autosave) {
-    message = req.t('version:autosavedSuccessfully')
   }
 
-  return Response.json(
-    {
-      doc,
-      message,
-    },
-    {
-      headers: headersWithCors({
+  return fusedWriteResponse({
+    exact: () => updateByIDOperation(operationArgs),
+    headers: () =>
+      headersWithCors({
         headers: new Headers(),
         req,
       }),
-      status: httpStatus.OK,
+    message: () => {
+      let message = req.t('general:updatedSuccessfully')
+
+      if (draft) {
+        message = req.t('version:draftSavedSuccessfully')
+      }
+      if (autosave) {
+        message = req.t('version:autosavedSuccessfully')
+      }
+
+      return message
     },
-  )
+    operation: 'updateByID',
+    operationArgs,
+    status: httpStatus.OK,
+  })
 }
