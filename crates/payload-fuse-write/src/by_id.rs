@@ -41,6 +41,7 @@ use payload_mongo_driver::mongodb::bson::{Bson, Document, RawBsonRef, RawDocumen
 use payload_mongo_driver::{FindSpec, find_raw, find_spec};
 
 use crate::ops::version_statements;
+use crate::unique::UniqueTemplates;
 use crate::prepare::{DriverPrepared, UpdateInput, prepare_update_request, write_plan};
 use crate::{Outcome, ResultRead, abort, finish, send, state::StateRead};
 
@@ -83,6 +84,9 @@ pub struct ByIDRequest {
   /// The stored-document paths of relationships to collections the result read does not serve
   /// (`up`): a stored value at one bails before any statement (the result read would).
   pub unserved: Vec<Vec<String>>,
+  /// updateByID: the templates of the all-locales publish validation's unique-value lookups
+  /// (`ut`) and the document's id (`uid`, its own value is no conflict).
+  pub unique: Option<(UniqueTemplates, String)>,
 }
 
 /// Decodes `{ op: 'updateByID' | 'deleteByID', d?, c, t: <BSON { q, lf?, mf?, vq?, pf?, lv? }>,
@@ -158,7 +162,12 @@ pub fn decode(request: &RawDocument) -> Result<ByIDRequest, String> {
       unserved.push(segments);
     }
   }
+  let unique = match (request.get_document("ut"), request.get_str("uid")) {
+    (Ok(templates), Ok(id)) => Some((crate::unique::decode(templates)?, id.to_string())),
+    _ => None,
+  };
   Ok(ByIDRequest {
+    unique,
     unserved,
     op,
     database: text("d"),
@@ -353,6 +362,13 @@ pub(crate) async fn update_document(
   // the prepare runs before the lock check: it is pure (the order is unobservable) and a bail
   // then leaves the locks alone
   let (write, context) = prepare_write(&input(stored)?, *plan_id, prepare)?;
+  if !write.unique.is_empty() {
+    // the all-locales publish validation's `fieldValueExists` finds (no session), before any
+    // statement
+    let lookups = write.unique.iter().map(|u| Ok((u.path.clone(), u.locale.clone(), lookup_value(&u.value)?))).collect::<Result<Vec<_>, String>>()?;
+    let (templates, id) = request.unique.as_ref().map(|(t, id)| (Some(t), Some(id.as_str()))).unwrap_or((None, None));
+    crate::unique::run(client, database.as_deref(), templates, &lookups, id).await?;
+  }
   if let Some(lock) = &request.lock {
     lock_statements(client, txn, database.as_deref(), lock, is_shadow).await?;
   }
@@ -425,6 +441,16 @@ pub(crate) async fn update_document(
     _ => return Err("!byID:versions".to_string()),
   };
   Ok((doc, context))
+}
+
+/// A unique lookup's value as js-bson serializes it (strings and numbers; anything else bails).
+fn lookup_value(value: &payload_engine::js::JsVal) -> Result<Bson, String> {
+  use payload_engine::js::JsVal;
+  match value {
+    JsVal::Str(s) => Ok(Bson::String(s.to_string())),
+    JsVal::Num(n) => Ok(Bson::Double(*n)),
+    _ => Err("!drafts:localizedPublish:unique:value".to_string()),
+  }
 }
 
 /// `prepare_update` on `input`; the prepared write and the context writes.

@@ -30,6 +30,7 @@ import { buildSortParam } from '../../../db-mongodb/src/queries/buildSortParam.j
 import { buildProjectionFromSelect } from '../../../db-mongodb/src/utilities/buildProjectionFromSelect.js'
 import { getCollection } from '../../../db-mongodb/src/utilities/getEntity.js'
 import { transform } from '../../../db-mongodb/src/utilities/transform.js'
+import { sanitizeSortQuery } from '../../../payload/src/collections/operations/utilities/sanitizeSortQuery.js'
 import { combineQueries } from '../../../payload/src/database/combineQueries.js'
 import { beforeChange } from '../../../payload/src/fields/hooks/beforeChange/index.js'
 import { beforeValidate } from '../../../payload/src/fields/hooks/beforeValidate/index.js'
@@ -559,7 +560,7 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
     context[key] = decodeTree(value)
   }
   const hex = (text: string) => Buffer.from(text, 'hex')
-  const op = lane.BSON.serialize({
+  const op: Record<string, unknown> = {
     c: Model.collection.collectionName,
     dob: hex(out.doc),
     op: 'create',
@@ -573,13 +574,25 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
           },
         }
       : {}),
-  })
-  return {
+  }
+  const prepared = () => ({
     id: readings.documentID.toHexString(),
     data: out.callerData === undefined ? data : decodeTree(out.callerData),
-    op,
+    op: lane.BSON.serialize(op),
     state: documentState(lane, Model, VersionModel, readings.documentID),
+  })
+  if (!out.unique) {
+    return prepared()
   }
+  // the all-locales publish validation's unique-value lookups: run by the driver before the insert
+  return uniqueLookupTemplates(lane, collectionConfig, Model).then((templates) => {
+    if (typeof templates !== 'object') {
+      return `mongo:${templates ?? 'template:unique:none'}`
+    }
+    op.ut = templates
+    op.u = out.unique.map(([path, locale, value]: Any) => [path, locale, decodeTree(value)])
+    return prepared()
+  })
 }
 
 const writePlanIDs = new WeakMap<object, number>()
@@ -788,22 +801,191 @@ const versionsFindSpec = (
   VersionModel: Any,
   filter: Any,
   skip: number | undefined,
-) => {
-  const adapter = lane.view
-  const sort = buildSortParam({
-    adapter,
-    config: adapter.payload.config,
-    fields,
-    locale: undefined,
+) =>
+  laneFindSpec(lane, fields, VersionModel, filter, {
+    limit: 1,
+    skip,
     sort: '-updatedAt',
     timestamps: true,
   })
+
+/** The driver lane's find with `pagination: false` (`lanePaginate`): `Model.find(filter)` as cast. */
+const laneFindSpec = (
+  lane: DriverLane,
+  fields: Any,
+  Model: Any,
+  filter: Any,
+  {
+    limit,
+    locale,
+    skip,
+    sort,
+    timestamps,
+  }: { limit: number; locale?: string; skip?: number; sort: unknown; timestamps: boolean },
+) => {
+  const adapter = lane.view
+  const sortParam = buildSortParam({
+    adapter,
+    config: adapter.payload.config,
+    fields,
+    locale,
+    sort: sort as never,
+    timestamps,
+  })
   const projection = buildProjectionFromSelect({ adapter, fields, select: undefined })
-  const query = VersionModel.find(filter, projection, { limit: 1, session: undefined, skip })
+  const query = Model.find(filter, projection, { limit, session: undefined, skip })
   query.select('')
-  query.sort(sort)
+  query.sort(sortParam)
   query.lean(true)
   return findSpec(castQuery(query, findOptionKeys))
+}
+
+/**
+ * The finds of `fieldValueExists` (the all-locales publish validation's unique lookups,
+ * crates/payload-fuse-write `unique`), per unique field the prepare can look up and locale:
+ * `payload.find({ where: { [path]: { equals } }, locale, limit: 2, pagination: false })` as
+ * db-mongodb builds it (`buildQuery`, the find operation's default sort) and mongoose casts it,
+ * with a sentinel value per kind of path (a string, a number, an ObjectId and its hex). Paths
+ * under arrays, blocks or localized groups / tabs get none (the prepare bails there).
+ * `undefined`: the collection publishes no locales together or has no unique field.
+ */
+const uniqueLookupTemplates = (lane: DriverLane, collectionConfig: Any, Model: Any) => {
+  let templates = uniqueTemplates.get(Model)
+  if (!templates) {
+    templates = buildUniqueLookupTemplates(lane, collectionConfig, Model).catch(
+      () => 'template:unique',
+    )
+    uniqueTemplates.set(Model, templates)
+  }
+  return templates
+}
+
+const uniqueTemplates = new WeakMap<object, Promise<Record<string, unknown> | string | undefined>>()
+
+const uniqueSentinels = {
+  num: randomBytes(4).readUInt32BE() + 0.5,
+  oid: randomBytes(12).toString('hex'),
+  str: `\u0000unique:${randomBytes(12).toString('hex')}`,
+}
+
+const buildUniqueLookupTemplates = async (
+  lane: DriverLane,
+  collectionConfig: Any,
+  Model: Any,
+): Promise<Record<string, unknown> | string | undefined> => {
+  const adapter = lane.view
+  const config = adapter.payload.config
+  if (!config.localization || !hasDraftsEnabled(collectionConfig)) {
+    return undefined
+  }
+  const paths: [string, 'num' | 'oid' | 'str'][] = []
+  collectUniquePaths(adapter.payload, collectionConfig.fields, '', paths)
+  if (paths.length === 0) {
+    return undefined
+  }
+  if (adapter.collation) {
+    return 'template:unique:collation'
+  }
+  const sentinel = { num: uniqueSentinels.num, oid: uniqueSentinels.oid, str: uniqueSentinels.str }
+  const templates: Record<string, unknown>[] = []
+  for (const locale of config.localization.localeCodes) {
+    for (const [path, kind] of paths) {
+      const query = await buildQuery({
+        adapter,
+        collectionSlug: collectionConfig.slug,
+        fields: collectionConfig.flattenedFields,
+        locale,
+        where: { [path]: { equals: sentinel[kind] } },
+      })
+      templates.push({
+        f: laneFindSpec(lane, collectionConfig.flattenedFields, Model, query, {
+          limit: 2,
+          locale,
+          sort: sanitizeSortQuery({
+            fields: collectionConfig.flattenedFields,
+            sort: collectionConfig.defaultSort,
+          }),
+          timestamps: Boolean(collectionConfig.timestamps),
+        }),
+        k: kind,
+        l: locale,
+        p: path,
+      })
+    }
+  }
+  return {
+    c: Model.collection.collectionName,
+    s: {
+      num: sentinel.num,
+      oid: new lane.mongoose.Types.ObjectId(sentinel.oid),
+      str: sentinel.str,
+    },
+    t: templates,
+  }
+}
+
+/** The unique fields `validateUniqueConstraints` reaches outside rows and localized containers. */
+const collectUniquePaths = (
+  payload: Any,
+  fields: Any[],
+  prefix: string,
+  out: [string, 'num' | 'oid' | 'str'][],
+) => {
+  for (const field of fields) {
+    if (field.type === 'tabs') {
+      for (const tab of field.tabs) {
+        if ('name' in tab && tab.name) {
+          if (!tab.localized) {
+            collectUniquePaths(payload, tab.fields, `${prefix}${tab.name}.`, out)
+          }
+        } else {
+          collectUniquePaths(payload, tab.fields, prefix, out)
+        }
+      }
+      continue
+    }
+    if (field.type === 'array' || field.type === 'blocks') {
+      continue
+    }
+    if (Array.isArray(field.fields)) {
+      if (!('name' in field) || !field.name) {
+        collectUniquePaths(payload, field.fields, prefix, out)
+      } else if (!field.localized) {
+        collectUniquePaths(payload, field.fields, `${prefix}${field.name}.`, out)
+      }
+      continue
+    }
+    if (!field.unique || !field.name || field.hasMany) {
+      continue
+    }
+    const kind = uniqueKind(payload, field)
+    if (kind) {
+      out.push([`${prefix}${field.name}`, kind])
+    }
+  }
+}
+
+const uniqueKind = (payload: Any, field: Any) => {
+  switch (field.type) {
+    case 'code':
+    case 'email':
+    case 'radio':
+    case 'select':
+    case 'text':
+    case 'textarea':
+      return 'str'
+    case 'number':
+      return 'num'
+    case 'relationship':
+    case 'upload':
+      return typeof field.relationTo === 'string' &&
+        payload.collections[field.relationTo] &&
+        !payload.collections[field.relationTo].customIDType
+        ? 'oid'
+        : undefined
+    default:
+      return undefined
+  }
 }
 
 /**
@@ -973,6 +1155,15 @@ const prepareByID = async (
     request.pc = preferences.collection.collectionName
   }
   if (name === 'updateByID') {
+    // the all-locales publish validation's unique-value lookups (the prepare decides which)
+    const unique = await uniqueLookupTemplates(lane, collectionConfig, Model)
+    if (typeof unique === 'string') {
+      return `mongo:${unique}`
+    }
+    if (unique) {
+      request.ut = unique
+      request.uid = id
+    }
     const plan = writePlanOf(args.collection, req.payload)
     if (plan.json === undefined) {
       return `plan:${plan.reason}`

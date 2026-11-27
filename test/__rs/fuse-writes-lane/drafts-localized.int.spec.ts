@@ -10,6 +10,7 @@ import { test } from '../../__helpers/int/vitest.js'
  * on the exact lane and is compared.
  */
 type FuseWriteStats = {
+  bails: Record<string, number>
   diffs: number
   hits: Record<string, number>
 }
@@ -279,6 +280,97 @@ test.suite('fuse-writes drafts localized', { config: './drafts-localized.config.
         overrideAccess: true,
       }),
     ).rejects.toThrow('The following field is invalid: title')
+  })
+
+  test('should look up unique values when publishing all locales', async ({ payload }) => {
+    const note = await payload.create({
+      collection: 'notes',
+      data: { title: 'n' },
+      overrideAccess: true,
+    })
+    const before = { ...fuseWriteStats()?.hits }
+    const conflictsBefore = fuseWriteStats()?.bails['drafts:localizedPublish:unique:conflict'] ?? 0
+
+    const first = await payload.create({
+      collection: 'codes',
+      data: { code: 'a', hideout: { note: note.id }, meta: { rank: 1 } },
+      locale: 'de',
+      overrideAccess: true,
+    })
+    await expect(
+      payload.create({
+        collection: 'codes',
+        data: { code: 'a' },
+        locale: 'en',
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Code')
+    await expect(
+      payload.create({
+        collection: 'codes',
+        data: { hideout: { note: note.id } },
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Note')
+    const second = await payload.create({
+      collection: 'codes',
+      data: { code: 'b' },
+      overrideAccess: true,
+    })
+    // the stored code is looked up again and only matches the document itself
+    const kept = await payload.update({
+      id: first.id,
+      collection: 'codes',
+      data: { meta: { rank: 2 } },
+      locale: 'en',
+      overrideAccess: true,
+    })
+    await expect(
+      payload.update({
+        id: second.id,
+        collection: 'codes',
+        data: { code: 'a' },
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Code')
+    await expect(
+      payload.update({
+        id: second.id,
+        collection: 'codes',
+        data: { meta: { rank: 2 } },
+        overrideAccess: true,
+      }),
+    ).rejects.toThrow('The following field is invalid: Rank')
+    const many = await payload.update({
+      collection: 'codes',
+      data: { code: 'a' },
+      overrideAccess: true,
+      where: { id: { in: [first.id, second.id] } },
+    })
+    const draft = await payload.create({
+      collection: 'codes',
+      data: { code: 'c' },
+      draft: true,
+      overrideAccess: true,
+    })
+
+    expect(first).toMatchObject({ code: 'a', meta: { rank: 1 } })
+    expect(kept).toMatchObject({ code: 'a', meta: { rank: 2 } })
+    expect(many.docs.map((doc) => doc.id)).toStrictEqual([first.id])
+    expect(many.errors.map((error) => error.id)).toStrictEqual([second.id])
+    expect(draft.code).toBe('c')
+    const stats = fuseWriteStats()
+    if (
+      stats &&
+      process.env.PAYLOAD_RS_FUSE_WRITES !== 'off' &&
+      process.env.PAYLOAD_ENGINE !== 'ts'
+    ) {
+      expect(stats.hits.create).toBeGreaterThanOrEqual((before.create ?? 0) + 3)
+      expect(stats.hits.updateByID).toBeGreaterThanOrEqual((before.updateByID ?? 0) + 1)
+      expect(stats.bails['drafts:localizedPublish:unique:conflict'] ?? 0).toBeGreaterThan(
+        conflictsBefore,
+      )
+    }
   })
 
   test('should have served writes without lane differences', () => {

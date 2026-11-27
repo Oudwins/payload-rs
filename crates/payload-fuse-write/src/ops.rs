@@ -13,10 +13,13 @@
 //!    the write plan in src/fuse-write/plan.ts);
 //!
 //! then the result's `afterRead` (population in the transaction) on the inserted document and the
-//! commit ([`crate::exec_shadowed`]).
+//! commit ([`crate::exec_shadowed`]). Before the statements, the all-locales publish validation's
+//! unique-value lookups (`u` with the templates `ut`, [`crate::unique`]; no session).
 
-use payload_mongo_driver::mongodb::bson::{RawBsonRef, RawDocument, RawDocumentBuf, rawdoc};
 
+use payload_mongo_driver::mongodb::bson::{Bson, RawBsonRef, RawDocument, RawDocumentBuf, rawdoc};
+
+use crate::unique::UniqueTemplates;
 use crate::{ResultOf, Statement};
 
 pub enum Op {
@@ -27,6 +30,18 @@ pub struct OpRequest {
   pub op: Op,
   pub database: Option<String>,
   pub statements: Vec<Statement>,
+  /// The prepare's unique-value lookups `(path, locale, value)` and their templates.
+  pub unique: Option<(UniqueTemplates, Vec<(String, String, Bson)>)>,
+}
+
+/// Runs `request`'s unique-value lookups (no session) before its statements; `Err`: the bail
+/// text, the transaction `txn` aborted.
+pub async fn unique_lookups(client: u32, txn: u32, request: &OpRequest) -> Result<(), String> {
+  let Some((templates, lookups)) = &request.unique else { return Ok(()) };
+  match crate::unique::run(client, request.database.as_deref(), Some(templates), lookups, None).await {
+    Ok(()) => Ok(()),
+    Err(reason) => Err(crate::abort(txn, reason).await),
+  }
 }
 
 /// The latest flip of a version insert: its filter and update as mongoose casts them (`None`:
@@ -65,7 +80,23 @@ pub fn decode(bytes: &[u8]) -> Result<OpRequest, String> {
   for statement in &mut statements {
     statement.database.clone_from(&database);
   }
-  Ok(OpRequest { op, database, statements })
+  let unique = match request.get_document("ut") {
+    Ok(templates) => {
+      let mut lookups = Vec::new();
+      for entry in request.get_array("u").map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?.as_array().ok_or("create:u")?;
+        let mut parts = entry.into_iter();
+        let mut next = || parts.next().ok_or("create:u").and_then(|p| p.map_err(|_| "create:u"));
+        let path = next()?.as_str().ok_or("create:u")?.to_string();
+        let locale = next()?.as_str().ok_or("create:u")?.to_string();
+        let value = Bson::try_from(next()?.to_raw_bson()).map_err(|e| e.to_string())?;
+        lookups.push((path, locale, value));
+      }
+      Some((crate::unique::decode(templates)?, lookups))
+    }
+    Err(_) => None,
+  };
+  Ok(OpRequest { op, database, statements, unique })
 }
 
 /// The document at `key` (a subdocument) or at `bytes_key` (its BSON bytes).

@@ -12,6 +12,7 @@ pub mod by_id;
 pub mod ops;
 pub mod prepare;
 pub mod state;
+pub mod unique;
 
 use payload_fuse_mongo::MongoReads;
 use payload_mongo_driver::mongodb::bson::{Bson, Document, RawBsonRef, RawDocumentBuf};

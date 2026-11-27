@@ -15,6 +15,7 @@ mod read;
 mod run;
 mod text;
 mod transform;
+mod unique;
 mod user_fn;
 #[cfg(test)]
 mod tests;
@@ -28,6 +29,7 @@ use payload_mongo_driver::mongodb::bson::{Document, oid::ObjectId};
 pub use ops::{prepare_create, prepare_update};
 pub use plan::{WritePlan, register_write_plan, write_plan};
 pub use text::{DriverPrepared, prepare_json, prepare_update_request};
+pub use unique::UniqueLookup;
 
 /// Not modelled for this input: run the exact lane with the untouched arguments.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,6 +154,9 @@ pub struct PreparedWrite {
   /// `None`), the version is built from beforeChange's result.
   pub draft: bool,
   pub version: Option<VersionWrite>,
+  /// The all-locales publish validation's `fieldValueExists` lookups (unique fields with a value,
+  /// in upstream's order): the driver runs them before any statement, a conflict bails.
+  pub unique: Vec<UniqueLookup>,
 }
 
 #[derive(Debug)]

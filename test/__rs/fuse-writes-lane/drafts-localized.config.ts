@@ -93,6 +93,25 @@ export default buildConfigWithDefaults({
         ],
         versions: { drafts: true },
       },
+      {
+        // no localized fields, unique fields: a publish's all-locales validation looks up every
+        // unique value (test/database's `categories`)
+        slug: 'codes',
+        fields: [
+          { name: 'code', type: 'text', unique: true },
+          { name: 'meta', type: 'group', fields: [{ name: 'rank', type: 'number', unique: true }] },
+          {
+            type: 'tabs',
+            tabs: [
+              {
+                name: 'hideout',
+                fields: [{ name: 'note', type: 'relationship', relationTo: 'notes', unique: true }],
+              },
+            ],
+          },
+        ],
+        versions: { drafts: true },
+      },
     ],
   },
 })

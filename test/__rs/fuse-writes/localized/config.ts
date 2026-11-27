@@ -234,6 +234,58 @@ export default buildConfigWithDefaults({
         versions: { drafts: true, maxPerDoc: 0 },
       },
       {
+        // drafts without localized fields holding unique fields (test/database's `categories`):
+        // every publish validates all locales, with `validateUniqueConstraints`' lookups
+        slug: 'codes',
+        fields: [
+          { name: 'code', type: 'text', unique: true },
+          { name: 'meta', type: 'group', fields: [{ name: 'rank', type: 'number', unique: true }] },
+          {
+            type: 'tabs',
+            tabs: [
+              {
+                name: 'hideout',
+                fields: [
+                  {
+                    type: 'tabs',
+                    tabs: [
+                      {
+                        name: 'camera',
+                        fields: [
+                          {
+                            type: 'row',
+                            fields: [
+                              {
+                                name: 'ref',
+                                type: 'relationship',
+                                relationTo: 'authors',
+                                unique: true,
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+          { name: 'items', type: 'array', fields: [{ name: 'sku', type: 'text', unique: true }] },
+        ],
+        versions: { drafts: true },
+      },
+      {
+        // a unique compound index on a drafts collection without localized fields
+        slug: 'pairs',
+        fields: [
+          { name: 'a', type: 'text' },
+          { name: 'b', type: 'text' },
+        ],
+        indexes: [{ fields: ['a', 'b'], unique: true }],
+        versions: { drafts: true },
+      },
+      {
         // named tabs: localized, and not localized holding localized fields
         slug: 'magazines',
         fields: [

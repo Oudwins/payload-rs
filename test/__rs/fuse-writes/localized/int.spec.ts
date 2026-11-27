@@ -386,7 +386,74 @@ const draftPosts = (): Case[] =>
     },
   ].map((c) => ({ ...c, collection: 'draftPosts' }))
 
+const codes = (f: Fixtures): Case[] =>
+  [
+    { name: 'create publish without unique values', data: { items: [] }, locale: 'en' },
+    { name: 'create publish code', data: { code: 'a' }, locale: 'en' },
+    { name: 'create publish taken code', data: { code: 'a' }, locale: 'de' },
+    { name: 'create publish rank', data: { code: 'r', meta: { rank: 1 } }, locale: 'fr' },
+    { name: 'create publish taken rank', data: { meta: { rank: 1 } }, locale: 'en' },
+    { name: 'create publish null code', data: { code: null, meta: { rank: null } }, locale: 'en' },
+    {
+      name: 'create publish ref',
+      data: { hideout: { camera: { ref: f.author } } },
+      locale: 'en',
+    },
+    {
+      name: 'create publish taken ref',
+      data: { hideout: { camera: { ref: f.author } } },
+      locale: 'de',
+    },
+    { name: 'create publish rows', data: { items: [{ sku: 's' }] }, locale: 'en' },
+    { name: 'create draft taken code', data: { code: 'a' }, draft: true, locale: 'en' },
+    {
+      name: 'update publish keeping its code',
+      data: { meta: { rank: 5 } },
+      locale: 'en',
+      seed: { data: { code: 'u1' } },
+    },
+    {
+      name: 'update publish to a taken code',
+      data: { code: 'a' },
+      locale: 'de',
+      seed: { data: { code: 'u2' } },
+    },
+    {
+      name: 'update publish over a draft',
+      data: { code: 'u3' },
+      locale: 'en',
+      seed: {
+        data: { code: 'd' },
+        draft: true,
+        updates: [{ data: { meta: { rank: 7 } }, draft: true }],
+      },
+    },
+    {
+      name: 'update publish with a stored ref',
+      data: { code: 'u4' },
+      locale: 'fr',
+      seed: { data: { hideout: { camera: { ref: f.author2 } } } },
+    },
+    {
+      name: 'raw: update publish clearing the stored code',
+      data: { code: null },
+      locale: 'en',
+      seed: { raw: { code: 'raw', _status: 'published' } },
+    },
+  ].map((c) => ({ ...c, collection: 'codes' }))
+
+const pairs = (): Case[] =>
+  [
+    { name: 'create publish with a unique compound index', data: { a: 'x', b: 'y' }, locale: 'en' },
+  ].map((c) => ({ ...c, collection: 'pairs' }))
+
 test.suite('fused writes: localized write-side corpus', { config: './config.ts' }, () => {
+  test('localized publishes of unique values', async ({ payload }) => {
+    const f = await fixtures(payload)
+    await runAll(payload, 'unique publish', [...codes(f), ...pairs()], f)
+    finish('unique publish')
+  })
+
   test('localized publishes of all locales', async ({ payload }) => {
     const f = await fixtures(payload)
     await runAll(payload, 'all locales publish', bulletins(), f)

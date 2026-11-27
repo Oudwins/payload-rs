@@ -394,6 +394,9 @@ pub struct WritePlan {
   pub validate_collections: JsVal,
   /// `req.payload.db.defaultIDType`.
   pub default_id_type: JsVal,
+  /// `collection.sanitizedIndexes` has a unique compound index (`validateUniqueConstraints`
+  /// reads the database for it).
+  pub unique_indexes: bool,
 }
 
 fn bad(what: &str) -> String {
@@ -468,6 +471,7 @@ pub fn decode(text: &str) -> Result<WritePlan, String> {
     schema: decode_schema(json.get("schema").ok_or_else(|| bad("schema"))?)?,
     slug,
     timestamps: flag("timestamps"),
+    unique_indexes: flag("uniqueIndexes"),
     validate_collections: JsVal::obj(collections),
     validate_config: JsVal::obj(config),
     versions,

@@ -84,7 +84,10 @@ pub fn fuse_write_mongo_op<'env>(
         }]
       }
       (None, None, Ok(request), Ok(read), Ok(state)) => {
-        let outcome = exec_shadowed(client, txn, request.statements, read, state).await;
+        let outcome = match payload_fuse_write::ops::unique_lookups(client, txn, &request).await {
+          Ok(()) => exec_shadowed(client, txn, request.statements, read, state).await,
+          Err(text) => payload_fuse_write::Outcome { text, state: None, context: None },
+        };
         match outcome.state {
           Some(state) => vec![outcome.text, state],
           None => vec![outcome.text],

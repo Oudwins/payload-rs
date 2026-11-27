@@ -16,7 +16,8 @@ use super::plan::{Field, Kind, WritePlan};
 use super::read::read_document;
 use super::run::{Operation, Run, S};
 use super::transform::{iso, transform_write};
-use super::{Bail, IdUse, Invalid, Prepared, PreparedWrite, UpdateInput, VersionWrite, WriteCtx};
+use super::unique::pass_lookups;
+use super::{Bail, IdUse, Invalid, Prepared, PreparedWrite, UniqueLookup, UpdateInput, VersionWrite, WriteCtx};
 
 fn new_run<'e>(
   plan: &'e WritePlan,
@@ -100,21 +101,24 @@ impl super::Entropy for NoReadings {
 /// `skipHooks` and `isValidationOperation` on a request of that locale, then
 /// `validateUniqueConstraints`. A pass without errors has no observable effect (the request,
 /// its context and the data are clones; no hook runs, no reading is taken); any error bails, the
-/// exact lane throws the aggregated `ValidationError`. Unique fields bail (their check reads the
-/// database).
+/// exact lane throws the aggregated `ValidationError`. The unique fields' `fieldValueExists`
+/// lookups of the passes are returned (unique.rs; the driver runs them), unique compound indexes
+/// bail.
 ///
 /// create: no id and no source data (`docWithLocales` and `originalDoc` are one `{}`); update:
 /// `sourceData` is the operation's `docWithLocales` and `publicationHookDoc` (its `originalDoc`
 /// here) as beforeChange left them, `originalDoc` of a pass being the latter for the request's
 /// locale, else `docWithLocales` flattened to the pass's locale.
-fn validate_all_locales(run: &Run<'_>, result: Ref, source: Option<(Ref, Ref)>) -> Result<(), Bail> {
+fn validate_all_locales(run: &Run<'_>, result: Ref, source: Option<(Ref, Ref)>) -> Result<Vec<UniqueLookup>, Bail> {
   let plan = run.plan;
+  let mut lookups = Vec::new();
   let Some(localization) = &plan.localization else {
-    return Ok(());
+    return Ok(lookups);
   };
-  if plan.fields.iter().any(Field::has_unique) {
-    return Err(Bail::new("drafts:localizedPublish:unique"));
+  if plan.unique_indexes {
+    return Err(Bail::new("drafts:localizedPublish:uniqueIndex"));
   }
+  let has_unique = plan.fields.iter().any(Field::has_unique);
   if localization.filter_available_locales {
     // `resolveValidationLocales` calls it (a user function)
     return Err(Bail::new("drafts:localizedPublish:filterAvailableLocales"));
@@ -197,8 +201,14 @@ fn validate_all_locales(run: &Run<'_>, result: Ref, source: Option<(Ref, Ref)>) 
     if !pass.errors.borrow().is_empty() {
       return Err(Bail::new("drafts:localizedPublish:invalid"));
     }
+    if has_unique {
+      // `validateData({ data: deepMergeWithSourceArraysIgnoringUndefined(originalDoc,
+      // processedData) })`, processedData beforeChange's result
+      let heap = pass.heap.borrow();
+      pass_lookups(&plan.fields, &heap.export(&V::Ref(doc)), &heap.export(&V::Ref(data)), locale, &mut lookups)?;
+    }
   }
-  Ok(())
+  Ok(lookups)
 }
 
 /// A value `flattenFields` descends into (`value && typeof value === 'object' &&
@@ -408,10 +418,9 @@ pub fn prepare_create(plan: &WritePlan, data: &JsVal, ctx: &mut WriteCtx<'_>) ->
     return Ok(Prepared { caller_data: Some(caller_data), context_writes, outcome: Err(invalid) });
   }
   check_localized_status(&run, copy)?;
-  if publish_all_locales {
-    validate_all_locales(&run, copy, None)?;
-  }
-  let write = create_statements(&run, copy)?;
+  let unique = if publish_all_locales { validate_all_locales(&run, copy, None)? } else { Vec::new() };
+  let mut write = create_statements(&run, copy)?;
+  write.unique = unique;
   Ok(Prepared { caller_data: Some(caller_data), context_writes, outcome: Ok(write) })
 }
 
@@ -436,7 +445,7 @@ fn create_statements(run: &Run<'_>, data: Ref) -> Result<PreparedWrite, Bail> {
     }
     None => None,
   };
-  Ok(PreparedWrite { doc, stored_after: None, draft: false, version })
+  Ok(PreparedWrite { doc, stored_after: None, draft: false, version, unique: Vec::new() })
 }
 
 /// `saveVersion` + db-mongodb `createVersion` (a new version; `updateLatestVersion` is not
@@ -521,10 +530,10 @@ pub fn prepare_update(plan: &WritePlan, id: &JsVal, data: &JsVal, input: &Update
     return Ok(Prepared { caller_data: None, context_writes, outcome: Err(invalid) });
   }
   check_localized_status(&run, copy)?;
-  if publish_all_locales {
-    validate_all_locales(&run, copy, Some((doc_with_locales, original_doc)))?;
-  }
-  let write = if run.saving_draft { draft_statements(&run, copy)? } else { update_statements(&run, copy, &input.stored)? };
+  let unique =
+    if publish_all_locales { validate_all_locales(&run, copy, Some((doc_with_locales, original_doc)))? } else { Vec::new() };
+  let mut write = if run.saving_draft { draft_statements(&run, copy)? } else { update_statements(&run, copy, &input.stored)? };
+  write.unique = unique;
   Ok(Prepared { caller_data: None, context_writes, outcome: Ok(write) })
 }
 
@@ -545,7 +554,7 @@ fn update_statements(run: &Run<'_>, result: Ref, stored: &Document) -> Result<Pr
     }
     None => None,
   };
-  Ok(PreparedWrite { doc: update, stored_after: Some(after), draft: false, version })
+  Ok(PreparedWrite { doc: update, stored_after: Some(after), draft: false, version, unique: Vec::new() })
 }
 
 /// utilities/update.ts `writeDocument` of a draft save: no `updateOne`, saveVersion on
@@ -556,5 +565,5 @@ fn draft_statements(run: &Run<'_>, result: Ref) -> Result<PreparedWrite, Bail> {
     Some(_) => Some(version_statements(run, &mut heap, result)?),
     None => return Err(Bail::new("drafts:versions")),
   };
-  Ok(PreparedWrite { doc: Document::new(), stored_after: None, draft: true, version })
+  Ok(PreparedWrite { doc: Document::new(), stored_after: None, draft: true, version, unique: Vec::new() })
 }

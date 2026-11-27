@@ -9,7 +9,8 @@
 //!
 //! Result: `{ bail }` or `{ callerData, contextWrites: [[key, value]], invalid?: { collection,
 //! errors }, doc?, storedAfter?, draft?: true (a draft save: no `doc`), version?: { doc,
-//! flipFilter, flipUpdate }, clockLeft, idsLeft }` with BSON documents as hex.
+//! flipFilter, flipUpdate }, unique?: [[path, locale, value]] (the all-locales publish
+//! validation's `fieldValueExists` lookups), clockLeft, idsLeft }` with BSON documents as hex.
 
 use serde_json::{Value as Json, json};
 
@@ -191,6 +192,15 @@ fn run(plan_json: &str, request_json: &str, stored: Option<&[u8]>) -> Result<Str
   // values as `encode_value_text` writes them (`-0` kept), spliced below
   let caller_data = prepared.caller_data.as_ref().map(encode_value_text);
   let context_writes = context_writes_text(&prepared);
+  // the all-locales publish validation's unique lookups: `[[path, locale, value], ...]`
+  let unique: Vec<String> = match &prepared.outcome {
+    Ok(write) => write
+      .unique
+      .iter()
+      .map(|u| format!("[{},{},{}]", Json::String(u.path.clone()), Json::String(u.locale.clone()), encode_value_text(&u.value)))
+      .collect(),
+    Err(_) => Vec::new(),
+  };
   match &prepared.outcome {
     Err(invalid) => {
       let errors: Vec<Json> =
@@ -227,6 +237,9 @@ fn run(plan_json: &str, request_json: &str, stored: Option<&[u8]>) -> Result<Str
   if let Some(caller_data) = caller_data {
     text.push_str(",\"callerData\":");
     text.push_str(&caller_data);
+  }
+  if !unique.is_empty() {
+    text.push_str(&format!(",\"unique\":[{}]", unique.join(",")));
   }
   if rest.len() > 2 {
     text.push(',');

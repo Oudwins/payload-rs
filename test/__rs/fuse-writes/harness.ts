@@ -306,6 +306,21 @@ export const runCase = async ({
     })
   }
   const contextBefore = { ...req.context }
+  // the all-locales publish validation's `fieldValueExists` finds (`limit: 2`, `depth: 0`,
+  // `pagination: false`): what they looked up and whether another document holds the value
+  const lookups: { conflict: boolean; key: string }[] = []
+  const find = payload.find
+  payload.find = async function (this: Payload, args: any) {
+    const found = await find.call(this, args)
+    if (args.limit === 2 && args.depth === 0 && args.pagination === false) {
+      const [[path, condition]] = Object.entries(args.where) as [string, any][]
+      lookups.push({
+        conflict: found.docs.some((doc: any) => doc.id !== id),
+        key: canon([path, args.locale, condition.equals]),
+      })
+    }
+    return found
+  } as typeof find
   const { recorded, value } = await recording(() =>
     captureCommands(payload, () =>
       // the operations themselves: the Local API would hand them a copy of `data`
@@ -326,7 +341,9 @@ export const runCase = async ({
             req,
           }),
     ),
-  )
+  ).finally(() => {
+    payload.find = find
+  })
   const commands = 'result' in value ? value.result.commands : []
   const slugCollection = payload.db.collections[collection]!.collection.name
   const versionCollection = payload.db.versions[collection]?.collection.name
@@ -335,6 +352,12 @@ export const runCase = async ({
   )
   const versionInsert = commands.find((c) => c.name === `insert ${versionCollection}`)
   const flip = commands.find((c) => c.name === `update ${versionCollection}`)
+  // a ValidationError of the all-locales publish validation's unique lookups is thrown before
+  // the statements' readings: the prepare (which only returns the lookups) gets stand-ins
+  const isInvalid =
+    'error' in value &&
+    value.error instanceof ValidationError &&
+    lookups.some(({ conflict }) => conflict)
   const ids: [string, string][] = recorded.rows.map((row) => ['row', row])
   if (op === 'create' && main) {
     ids.push(['document', String(main.command.documents[0]._id)])
@@ -342,8 +365,16 @@ export const runCase = async ({
   if (versionInsert) {
     ids.push(['version', String(versionInsert.command.documents[0]._id)])
   }
+  if (isInvalid) {
+    if (op === 'create') {
+      ids.push(['document', new BSON.ObjectId().toHexString()])
+    }
+    ids.push(['version', new BSON.ObjectId().toHexString()])
+  }
   const request = {
-    clock: recorded.clock,
+    clock: isInvalid
+      ? [...recorded.clock, ...[1, 2, 3, 4].map((n) => recorded.clock.length + n)]
+      : recorded.clock,
     context: encode(contextBefore),
     data: encode(inputData),
     docWithLocales: op === 'update' ? encode(docWithLocales) : undefined,
@@ -366,6 +397,22 @@ export const runCase = async ({
     return { kind: 'bail', reason: out.bail }
   }
   const diffs: string[] = []
+  const rustLookups = (out.unique ?? []).map(([path, locale, val]: [string, string, unknown]) =>
+    canon([path, locale, deserializeFromEngine(val, [])]),
+  )
+  if (lookups.length || rustLookups.length) {
+    const upstream = lookups.map(({ key }) => key).sort()
+    if (canon(upstream) !== canon([...rustLookups].sort())) {
+      diffs.push(`unique lookups:\n  upstream ${upstream}\n  rust     ${rustLookups}`)
+      return { diffs, kind: 'diff' }
+    }
+    if (lookups.some(({ conflict }) => conflict)) {
+      // the drivers run the lookups and bail on a conflict; upstream throws its ValidationError
+      return 'error' in value && value.error instanceof ValidationError && !out.invalid
+        ? { kind: 'bail', reason: 'unique:conflict' }
+        : { diffs: ['a unique conflict upstream did not throw for'], kind: 'diff' }
+    }
+  }
   const check = (what: string, expected: unknown, actual: unknown) => {
     if (expected !== actual) {
       diffs.push(`${what}:\n  upstream ${String(expected)}\n  rust     ${String(actual)}`)

@@ -209,6 +209,8 @@ export const buildWritePlan = ({ collection, payload }: { collection: Any; paylo
       relations,
       schema: schemaPlan(Model.schema),
       timestamps: config.timestamps !== false,
+      // a unique compound index: the all-locales publish validation would read the database
+      uniqueIndexes: (config.sanitizedIndexes ?? []).some((index: Any) => index.unique),
       v: 1,
       versions,
       // `versions.drafts` (sanitized): `validate` (draft validation), `autosave`, `localizeStatus`
