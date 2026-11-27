@@ -23,65 +23,84 @@ type Args = (
 
 const authenticatedAccess: Access = ({ req }) => Boolean(req.user)
 
+/**
+ * The functions `withBaseAccess` returned, with the access function each one calls and the slug it
+ * adds (a `WeakMap` on `globalThis`, shared by every copy of this module). Used by the Rust
+ * engine's fused lanes: without `baseAccess`, a wrapper's result is its access function's on the
+ * same arguments plus `slug`, so a lane evaluates that function on only what it reads.
+ */
+const baseAccessWrappers = ((globalThis as Record<symbol, unknown>)[
+  Symbol.for('payload.withBaseAccess')
+] ??= new WeakMap()) as WeakMap<Access, { documentAccess: Access; slug: string }>
+
+const registerBaseAccess = (wrapper: Access, documentAccess: Access, slug: string) => {
+  baseAccessWrappers.set(wrapper, { slug, documentAccess })
+  return wrapper
+}
+
 export const withBaseAccess = (options: Args): Access => {
   const documentAccess = options.access ?? authenticatedAccess
 
-  return async (args: AccessArgs): Promise<AccessResult> => {
-    const accessArgs = {
-      ...args,
-      slug: options.slug,
-    }
-    const { baseAccess } = args.req.payload.config
-    let baseAccessFunction: Access | undefined
+  return registerBaseAccess(
+    async (args: AccessArgs): Promise<AccessResult> => {
+      const accessArgs = {
+        ...args,
+        slug: options.slug,
+      }
+      const { baseAccess } = args.req.payload.config
+      let baseAccessFunction: Access | undefined
 
-    if (options.entityType === 'collection') {
-      baseAccessFunction =
-        options.operation === 'validate'
-          ? (baseAccess?.collections?.validate ?? baseAccess?.collections?.update)
-          : baseAccess?.collections?.[options.operation]
-    } else {
-      baseAccessFunction =
-        options.operation === 'validate'
-          ? (baseAccess?.globals?.validate ?? baseAccess?.globals?.update)
-          : baseAccess?.globals?.[options.operation]
-    }
+      if (options.entityType === 'collection') {
+        baseAccessFunction =
+          options.operation === 'validate'
+            ? (baseAccess?.collections?.validate ?? baseAccess?.collections?.update)
+            : baseAccess?.collections?.[options.operation]
+      } else {
+        baseAccessFunction =
+          options.operation === 'validate'
+            ? (baseAccess?.globals?.validate ?? baseAccess?.globals?.update)
+            : baseAccess?.globals?.[options.operation]
+      }
 
-    if (!baseAccessFunction) {
-      return documentAccess(accessArgs)
-    }
+      if (!baseAccessFunction) {
+        return documentAccess(accessArgs)
+      }
 
-    const baseResult = await baseAccessFunction(accessArgs)
+      const baseResult = await baseAccessFunction(accessArgs)
 
-    if (!baseResult) {
-      return false
-    }
+      if (!baseResult) {
+        return false
+      }
 
-    if (
-      options.entityType === 'collection' &&
-      options.operation === 'create' &&
-      typeof baseResult === 'object'
-    ) {
-      throw new Error('baseAccess must return a boolean for collection create operations.')
-    }
+      if (
+        options.entityType === 'collection' &&
+        options.operation === 'create' &&
+        typeof baseResult === 'object'
+      ) {
+        throw new Error('baseAccess must return a boolean for collection create operations.')
+      }
 
-    const documentResult = await documentAccess(accessArgs)
+      const documentResult = await documentAccess(accessArgs)
 
-    if (!documentResult) {
-      return false
-    }
+      if (!documentResult) {
+        return false
+      }
 
-    if (baseResult === true) {
-      return documentResult
-    }
+      if (baseResult === true) {
+        return documentResult
+      }
 
-    if (documentResult === true) {
-      return baseResult
-    }
+      if (documentResult === true) {
+        return baseResult
+      }
 
-    return {
-      and: [baseResult, documentResult],
-    }
-  }
+      return {
+        and: [baseResult, documentResult],
+      }
+    },
+    documentAccess,
+    options.slug,
+  )
 }
 
 export const withBaseAdminAccess = ({

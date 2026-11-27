@@ -21,7 +21,7 @@ import { compileFunction, getCompiledFunction } from './compileFunction.js'
 import { configFunctions } from './configFunctions.js'
 import { compileGuardsInstalled } from './guard.js'
 import { getFnIr } from './native.js'
-import { encodeSnapshot, snapshotArgs } from './snapshot.js'
+import { encodeSnapshot, readDataProperty, snapshotArgs } from './snapshot.js'
 
 export type { CompiledFunction } from './compileFunction.js'
 export { compileFunction, getCompiledFunction } from './compileFunction.js'
@@ -88,16 +88,82 @@ export const evaluateOnLane = (
   if (fnIr.fnIrLaneShouldVerify(entry.id)) {
     return { ok: false, reason: 'verify' }
   }
+  const unwrapped = unwrapBaseAccess(fn, entry.id, args)
+  const target = unwrapped ?? { args, entry }
   // the snapshot crosses as one JSON text (far fewer Node-API calls than its objects)
-  const snapshot = snapshotArgs(args, entry.argKeys)
+  const snapshot = snapshotArgs(target.args, target.entry.argKeys)
   const result =
-    fnIr.fnIrEvaluateText(entry.id, JSON.stringify(encodeSnapshot(snapshot))) ??
-    fnIr.fnIrEvaluate(entry.id, snapshot)
+    fnIr.fnIrEvaluateText(target.entry.id, JSON.stringify(encodeSnapshot(snapshot))) ??
+    fnIr.fnIrEvaluate(target.entry.id, snapshot)
   if (typeof result === 'string') {
     return { ok: false, reason: `bail:${result}` }
   }
   return { ok: true, value: fnIr.fnIrResultToJs(result) }
 }
+
+/** payload's `withBaseAccess` wrappers (auth/withBaseAccess.ts): the access function each calls. */
+const baseAccessWrappers = ((globalThis as Record<symbol, unknown>)[
+  Symbol.for('payload.withBaseAccess')
+] ??= new WeakMap()) as WeakMap<AnyFunction, { documentAccess: AnyFunction; slug: string }>
+
+/** Wrappers whose compiled form has matched JS on the policy's first calls (monotonic). */
+const verifiedWrappers = new WeakSet<AnyFunction>()
+
+/**
+ * A `withBaseAccess` wrapper's call as the call of the access function it wraps: without
+ * `req.payload.config.baseAccess` the wrapper returns `documentAccess({ ...args, slug })`, so the
+ * compiled access function is evaluated on those arguments and the snapshot holds only what it
+ * reads (the wrapper's spread makes its own snapshot copy the whole argument, `data` and `req`
+ * included). Only for a wrapper whose compiled form, which evaluates the wrapped function's, has
+ * been verified (its guard sampling covers the wrapped function: the lane call above counts on
+ * the wrapper), a wrapped function that is compiled and active, and arguments read without
+ * running code (plain data properties, as the snapshot would read them). `undefined`: evaluate
+ * the wrapper itself.
+ */
+const unwrapBaseAccess = (fn: AnyFunction, id: number, args: unknown[]) => {
+  const wrapped = baseAccessWrappers.get(fn)
+  const [arg] = args
+  if (!wrapped || args.length !== 1 || typeof arg !== 'object' || arg === null) {
+    return undefined
+  }
+  const fnIr = getFnIr()
+  if (!verifiedWrappers.has(fn)) {
+    if (fnIr.fnIrStats(id).verified < 32) {
+      return undefined
+    }
+    verifiedWrappers.add(fn)
+  }
+  const entry = getCompiledFunction(wrapped.documentAccess)
+  if (
+    !entry?.ok ||
+    !fnIr.fnIrIsActive(entry.id) ||
+    Object.getPrototypeOf(arg) !== Object.prototype
+  ) {
+    return undefined
+  }
+  const req = readDataProperty(arg, 'req')
+  const payload = isObjectRead(req) ? readDataProperty(req.value, 'payload') : undefined
+  const config = isObjectRead(payload) ? readDataProperty(payload.value, 'config') : undefined
+  const baseAccess = isObjectRead(config) ? readDataProperty(config.value, 'baseAccess') : undefined
+  if (!baseAccess || baseAccess.value !== undefined) {
+    return undefined
+  }
+  const accessArgs: Record<string, unknown> = {}
+  for (const key of Object.keys(arg)) {
+    const read = readDataProperty(arg, key)
+    if (!read?.found) {
+      return undefined
+    }
+    accessArgs[key] = read.value
+  }
+  accessArgs.slug = wrapped.slug
+  return { args: [accessArgs], entry }
+}
+
+const isObjectRead = (
+  read: { found: boolean; value?: unknown } | undefined,
+): read is { found: true; value: object } =>
+  read?.found === true && typeof read.value === 'object' && read.value !== null
 
 /**
  * `evaluateOnLane`'s checks for a lane that evaluates `fn` in Rust itself (the fused `afterRead`'s

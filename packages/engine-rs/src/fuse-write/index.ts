@@ -157,11 +157,15 @@ export const fuseWrite = (name: string, args: Any, exact: Exact) => {
 
 type Checked = { payload: Any; target: FusedWriteTarget }
 
+/** A create past its guards; `documentID` / `read`: the document's ObjectId and its result read. */
+type CheckedCreate = { documentID?: Any; read: FusedRead } & Checked
+
 /**
  * A by-id write past its guards; `accessWhere`: the update / delete access result when it is a
- * where constraint (upstream combines it into the stored-document read).
+ * where constraint (upstream combines it into the stored-document read); `read`: the result read
+ * the guards built (`resultRead`).
  */
-type CheckedByID = { accessWhere?: unknown } & Checked
+type CheckedByID = { accessWhere?: unknown; read: FusedRead } & Checked
 
 const checkCreate = (args: Any) => {
   if (!hasDataProperties(args, createArgKeys)) {
@@ -240,8 +244,14 @@ const checkCreate = (args: Any) => {
     }
   }
   // the result read's guards (population's access without `overrideAccess`, ...) depend on the
-  // call, not on the document: checked before the prepare
-  const read = resultRead(args, placeholderID)
+  // call, not on the document: checked before the prepare. Outside the shadow (whose tapes record
+  // the document's ObjectId inside the fused run) and the TS prepare, the document's id is taken
+  // here, in the synchronous run that reaches the prepare's other readings (the ObjectId is
+  // upstream's next one: no other ObjectId is generated in between), so this read is the result
+  // read
+  const documentID =
+    mode === 'shadow' || isTSPrepare ? undefined : new (target.objectIdClass as Any)()
+  const read = resultRead(args, documentID ? documentID.toHexString() : placeholderID)
   if (!read) {
     return guard('read')
   }
@@ -257,7 +267,7 @@ const checkCreate = (args: Any) => {
       return guard('backoff:populate:related')
     }
   }
-  return { payload, read, target }
+  return { documentID, payload, read, target }
 }
 
 /**
@@ -483,16 +493,16 @@ const replayInto = (target: Any, source: Any) => {
 
 /** What preparing and running a fused create produced (a string: bailed before any statement). */
 const fusedCreate = async (
-  { target }: Checked,
+  { documentID, read: checkedRead, target }: CheckedCreate,
   args: Any,
   copies: { context: Any; data: Any },
   isShadow: boolean,
 ) => {
-  const prepared = await target.prepareCreate(args, copies.data, copies.context)
+  const prepared = await target.prepareCreate(args, copies.data, copies.context, documentID)
   if (typeof prepared === 'string') {
     return { bail: prepared }
   }
-  const read = resultRead(args, prepared.id)
+  const read = documentID ? checkedRead : resultRead(args, prepared.id)
   if (!read) {
     return { bail: 'read' }
   }
@@ -519,7 +529,7 @@ const copyMutable = (args: Any) => {
   }
 }
 
-const runCreate = async (checked: Checked, args: Any, exact: Exact) => {
+const runCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => {
   const copies = copyMutable(args)
   if (!copies) {
     count(stats.guards, 'context')
@@ -591,7 +601,7 @@ const exactLoadTransaction = (req: Any) => {
   }
 }
 
-const shadowCreate = async (checked: Checked, args: Any, exact: Exact) => {
+const shadowCreate = async (checked: CheckedCreate, args: Any, exact: Exact) => {
   const copies = copyMutable(args)
   if (!copies) {
     count(stats.guards, 'context')
@@ -840,18 +850,20 @@ const checkByID = (name: ByIDName, args: Any) => {
   ) {
     return guard('backoff:populate:related')
   }
-  return { accessWhere, payload, target }
+  return { accessWhere, payload, read, target }
 }
 
 /** What preparing and running a fused updateByID / deleteByID produced (a string: a bail). */
 const fusedByID = async (
-  { accessWhere, target }: CheckedByID,
+  { accessWhere, read: checkedRead, target }: CheckedByID,
   name: ByIDName,
   args: Any,
   isShadow: boolean,
 ) => {
-  // the result read's `findOne` is also the stored-document read (with the access constraint)
-  const fused = resultRead(args, args.id, accessWhere)
+  // the result read's `findOne` is also the stored-document read (with the access constraint);
+  // outside the shadow nothing ran since the guards built it on the same arguments (the shadow
+  // runs one document's calls one after the other, later)
+  const fused = isShadow ? resultRead(args, args.id, accessWhere) : checkedRead
   if (!fused) {
     return { bail: 'read' }
   }

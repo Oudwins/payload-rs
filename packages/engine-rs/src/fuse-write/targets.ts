@@ -52,9 +52,15 @@ export type FusedWriteTarget = {
    * Prepares a create of `args` on `data` and `context` (copies of the caller's data and
    * `req.context`, which upstream mutates in place: the dispatch replays that): the clock readings and
    * ids in upstream's order, the statements' documents. A string is a bail (nothing ran that the
-   * caller can observe); a thrown error is the error the operation throws.
+   * caller can observe); a thrown error is the error the operation throws. `documentID`: the
+   * document's ObjectId when the dispatch took it already (as upstream's next ObjectId).
    */
-  prepareCreate: (args: Any, data: Any, context: Any) => Promise<PreparedCreate | string>
+  prepareCreate: (
+    args: Any,
+    data: Any,
+    context: Any,
+    documentID?: unknown,
+  ) => Promise<PreparedCreate | string>
   /** The touched collections' state outside any transaction (shadow, after the exact lane). */
   readState: (state: Uint8Array) => Promise<string>
   /** payload's `bson-objectid` class (array / block row ids; shadow replay). */

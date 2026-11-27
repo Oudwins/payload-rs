@@ -166,10 +166,10 @@ export const registerFusedMongoWriteTarget = ({
       objectIdClass: lane.mongoose.Types.ObjectId,
       prepareByID: (name, args, unserved, accessWhere) =>
         prepareByID(lane, name, args, unserved, accessWhere),
-      prepareCreate: (args, data, context) =>
+      prepareCreate: (args, data, context, documentID) =>
         isTSPrepare
           ? prepareCreateTS(lane, args, data, context)
-          : Promise.resolve(prepareCreateRust(lane, args, data, context)),
+          : Promise.resolve(prepareCreateRust(lane, args, data, context, documentID)),
       readState: (state) => fuseWriteMongoState(lane.clientID, state),
       rowIdClass: rowIdClass(),
       run: ({ op, read, state }) => {
@@ -270,6 +270,7 @@ const captureCreateReadings = (
   fields: Any[],
   data: Any,
   hasVersions: boolean,
+  takenDocumentID?: Any,
 ) => {
   const rows = countMissingRowIds(fields, data, true)
   if (rows === undefined) {
@@ -282,7 +283,7 @@ const captureCreateReadings = (
     ids.push(['row', new RowId().toHexString()])
   }
   const clock = [Date.now(), Date.now()]
-  const documentID = new ObjectId()
+  const documentID = takenDocumentID ?? new ObjectId()
   ids.push(['document', documentID.toHexString()])
   if (hasVersions) {
     clock.push(Date.now())
@@ -489,7 +490,13 @@ const fieldAccessRequest = (
 const requestSnapshot = (plan: { readsReq: boolean }, req: Any) =>
   plan.readsReq ? encodeSnapshot(snapshotRequest(req)) : undefined
 
-const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any) => {
+const prepareCreateRust = (
+  lane: DriverLane,
+  args: Any,
+  data: Any,
+  context: Any,
+  documentID?: unknown,
+) => {
   const resolved = entity(lane, args.collection.config.slug)
   if (typeof resolved === 'string') {
     return `mongo:${resolved}`
@@ -541,7 +548,13 @@ const prepareCreateRust = (lane: DriverLane, args: Any, data: Any, context: Any)
   } catch {
     return 'prepare:encode'
   }
-  const readings = captureCreateReadings(lane, collectionConfig.fields, data, Boolean(VersionModel))
+  const readings = captureCreateReadings(
+    lane,
+    collectionConfig.fields,
+    data,
+    Boolean(VersionModel),
+    documentID,
+  )
   if (!readings) {
     return 'ctx:rows'
   }
