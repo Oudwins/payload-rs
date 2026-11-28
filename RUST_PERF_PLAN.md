@@ -22,6 +22,9 @@ Scope: ideation only, nothing in the repo was changed. Numbers marked "measured 
 - **2026-11-25:**
   - **Parity bulk updates:** `test/__rs/mongo-harness/parity.int.spec.ts` requires, for the bulk-update steps whose documents upstream processes concurrently (`update > updateMany where`, `live > update many over several docs` / `drafts (versions)`), exactly the golden's trace entries in any order. The tracer sorts overlapping calls by content, so the goldens hold no per-document order to check. Every entry (arguments, fingerprints, events) must match; the goldens stay TS-recorded.
   - **D10, auxiliary MongoDB indexes: not built.** `packages/engine-rs/AUX_INDEXES_PROPOSAL.md` has the measurement: within noise at 1k documents, 2.3-5.1x on matched queries at 10k, two query shapes slower, and the same gain would apply to the TS engine.
+- **2026-11-28:**
+  - **Startup time is the least important performance measure.** A startup cost is acceptable when it buys significantly more performance elsewhere.
+  - **Model building:** upstream's db-mongodb init builds the mongoose models by default, and the Rust model-building port is opt-in (`PAYLOAD_RS_MONGO_LIVE_INIT=rust`). Our own `test/__rs/mongo-adapter/live.int.spec.ts` asserts that wiring.
 - Every work package must keep: the full upstream suite on MongoDB / SQLite / PostgreSQL equal to the TS baselines, shadow mode at 0 divergences, and add lane-specific differential checks (fast lane vs exact lane) with hit counters proving the fast lane ran.
 
 ## 1. Bottom line
