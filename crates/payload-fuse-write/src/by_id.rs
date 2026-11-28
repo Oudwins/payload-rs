@@ -43,7 +43,7 @@
 
 use payload_fuse_mongo::{find_stored, run_document, update_inputs};
 use payload_mongo_driver::mongodb::bson::{Bson, Document, RawArrayBuf, RawBsonRef, RawDocument, RawDocumentBuf, rawdoc};
-use payload_mongo_driver::{FindSpec, find_one_raw, find_raw, find_spec, txn_command_raw};
+use payload_mongo_driver::{FindSpec, find_raw, find_spec, txn_command_raw};
 
 use crate::ops::version_statements;
 use crate::unique::UniqueTemplates;
@@ -489,12 +489,9 @@ pub(crate) async fn update_document(
 }
 
 /// [`update_document`]'s statements after the prepare, merged (FUSED_WRITES.md section 13,
-/// "Merged statements"): the lock delete joins the first write in the transaction and the lock
-/// `find` runs beside it; with versions the main update, the version insert and the latest flip
-/// are one `bulkWrite`, then one `aggregate` reads the updated document (which must be the
-/// prepare's `stored_after`, as `findAndModify`'s value must) and `enforceMaxVersions`' version.
-/// A draft save and a publish from the latest version send their `findAndModify` / version
-/// writes as before, with the lock statements merged the same way.
+/// "Merged statements"): the lock `find` runs beside the first statement after the check, the
+/// lock delete joins the version insert and the latest flip in one `bulkWrite` (after
+/// `findAndModify`, none for a draft save), then `enforceMaxVersions`' find.
 #[allow(clippy::too_many_arguments)]
 async fn merged_update(
   client: u32,
@@ -521,27 +518,10 @@ async fn merged_update(
     delete_older_versions(client, txn, request, collection, oldest.as_deref()).await?;
     return Ok(returned);
   }
+  // `findAndModify` first (its value is checked against the prepare's `stored_after`, is the result
+  // without versions, and is what a publish from the latest version builds its version from),
+  // then the lock delete with the version writes
   let update = to_raw(&write.doc)?;
-  if let (Some((collection, max_find, _)), false) = (versions, from_version) {
-    let stored_after = to_raw(write.stored_after.as_ref().ok_or("!byID:storedAfter")?)?;
-    let version = write.version.ok_or("!byID:versions")?;
-    let returned = returned_version(&version.doc)?;
-    let main = writes.len();
-    writes.push((database.clone(), update_command(request, update)));
-    writes.extend(version_writes(&database, collection, &version)?);
-    let counts = beside_lock_find(client, database.as_deref(), lock, send_writes(client, txn, writes)).await?;
-    if counts[main] != 1 {
-      return Err("!byID:notFound".to_string());
-    }
-    let (updated, oldest) = updated_and_oldest(client, txn, request, collection, max_find.as_ref()).await?;
-    if updated.as_bytes() != stored_after.as_bytes() {
-      return Err("!byID:storedAfter".to_string());
-    }
-    delete_older_versions(client, txn, request, collection, oldest.as_deref()).await?;
-    return Ok(returned);
-  }
-  // without versions `findAndModify`'s value is the result; a publish from the latest version
-  // builds its version from it
   let command = rawdoc! {
     "findAndModify": request.collection.as_str(),
     "query": request.query.clone(),
@@ -586,8 +566,8 @@ async fn merged_update(
   Ok(returned)
 }
 
-/// The main update of the merged statements: `findAndModify`'s update as an `update` command (the
-/// document after it is read back, see [`updated_stages`]).
+/// update-many's main update of a document: `findAndModify`'s update as an `update` command (the
+/// document after it is read back, see [`updated_and_oldest_many`]).
 pub(crate) fn update_command(request: &ByIDRequest, update: RawDocumentBuf) -> RawDocumentBuf {
   rawdoc! {
     "update": request.collection.as_str(),
@@ -634,33 +614,9 @@ async fn max_versions_find(
   Ok(found.into_iter().next())
 }
 
-/// The document after the main update (`$match` of the update's query, as `findAndModify`
-/// returns it) and `enforceMaxVersions`' version (the same `find` as a `$lookup` pipeline:
-/// `$match`, `$sort`, `$skip`, `$limit`, only its `updatedAt` kept), one `aggregate` in the
-/// transaction. The document is wrapped (`{ d: $$ROOT }`) so its own keys never meet the lookup's.
-async fn updated_and_oldest(
-  client: u32,
-  txn: u32,
-  request: &ByIDRequest,
-  versions: &str,
-  max_find: Option<&FindSpec>,
-) -> Result<(RawDocumentBuf, Option<RawDocumentBuf>), String> {
-  let Some(pipeline) = updated_stages(request, versions, max_find)? else {
-    // a `find` reads a non-positive limit differently from `$limit`: separately
-    let updated = updated_document(client, txn, request).await?;
-    return Ok((updated, max_versions_find(client, txn, request.database.as_deref(), versions, max_find).await?));
-  };
-  let command = rawdoc! { "aggregate": request.collection.as_str(), "pipeline": pipeline, "cursor": {} };
-  let reply = txn_command_raw(txn, request.database.clone(), command).await.map_err(merged_command_failed)?;
-  let first = first_result(&reply)?;
-  match first.and_then(|first| first.as_document()) {
-    Some(first) => updated_result(first),
-    None => Err("!byID:notFound".to_string()),
-  }
-}
-
-/// [`updated_and_oldest`] of several documents of one collection (update-many), one `aggregate`
-/// whose `$facet` has the stages of each (`None`: a document needs the separate reads).
+/// The documents of several updates of one collection after their update (update-many) and
+/// their `enforceMaxVersions` versions: one `aggregate` whose `$facet` has [`updated_stages`] of
+/// each (`None`: a document needs the separate reads).
 pub(crate) async fn updated_and_oldest_many(
   txn: u32,
   requests: &[&ByIDRequest],
@@ -690,8 +646,9 @@ pub(crate) async fn updated_and_oldest_many(
   Ok(Some(out))
 }
 
-/// The stages reading the document of `request`'s query after the update (wrapped as `{ d:
-/// $$ROOT }`, so its own keys never meet the lookup's) and, as `m`, `enforceMaxVersions`' version
+/// The stages reading the document of `request`'s query after the update, as `findAndModify`
+/// returns it (wrapped as `{ d: $$ROOT }`, so its own keys never meet the lookup's) and, as `m`,
+/// `enforceMaxVersions`' version
 /// (`max_find` as a `$lookup` pipeline: `$match`, `$sort`, `$skip`, `$limit`, only `updatedAt`
 /// kept). `None`: `max_find` has a non-positive limit, which a `find` reads differently.
 fn updated_stages(request: &ByIDRequest, versions: &str, max_find: Option<&FindSpec>) -> Result<Option<RawArrayBuf>, String> {
@@ -742,14 +699,6 @@ fn updated_result(result: &Document) -> Result<(RawDocumentBuf, Option<RawDocume
     Some(_) => return Err("!byID:maxVersions:find".to_string()),
   };
   Ok((updated, oldest))
-}
-
-/// The document of the update's query in the transaction (the main document after the update).
-async fn updated_document(client: u32, txn: u32, request: &ByIDRequest) -> Result<RawDocumentBuf, String> {
-  let filter = Document::try_from(request.query.as_ref()).map_err(|_| "!byID:query")?;
-  let find = FindSpec { filter, ..FindSpec::default() };
-  let found = find_one_raw(client, request.database.as_deref(), &request.collection, find, Some(txn)).await.map_err(|_| "!byID:updated")?;
-  found.ok_or_else(|| "!byID:notFound".to_string())
 }
 
 /// `enforceMaxVersions` after its find: when the oldest version to keep has an `updatedAt`, its

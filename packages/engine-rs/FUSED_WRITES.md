@@ -1732,23 +1732,29 @@ measurement switch; perf engine variant `rs-merge-off`). What merges:
   without a session. A lock bails, and the abort undoes the write, so the outcome is the one of the
   find first. The bulk writes look for the locks of all their documents in one `find`
   (`$or` of each document's filter, `limit: 1`): any lock bails, as each document's find would.
-- **updateByID's main update** is sent as an `update` op (`findAndModify`'s update, `multi: false`)
-  in the `bulkWrite` with the version insert and the latest flip. The document after it is then
-  read in one `aggregate` together with `enforceMaxVersions`' find: `$match` of the update's query,
-  `$limit: 1`, `$replaceWith: { d: '$$ROOT' }`, and the max-versions find as a `$lookup` pipeline
-  (`$match`, `$sort`, `$skip`, `$limit`, `$project` of `updatedAt`). The document must equal the
-  prepare's `stored_after` byte for byte, as `findAndModify`'s value had to. Within the
-  transaction's snapshot nothing else changes it: a concurrent write is a write conflict, which
-  bails. `$unionWith` is not allowed in a transaction, and `$lookup` is.
+- **updateByID** keeps its `findAndModify` (its value is checked against the prepare's
+  `stored_after`) and sends the lock delete, the version insert and the latest flip after it as
+  one `bulkWrite`, then `enforceMaxVersions`' find. A variant that sent the main update as a
+  `bulkWrite` op too and read the updated document back with the max-versions find in one
+  `aggregate` (`$lookup`; `$unionWith` is not allowed in a transaction) was slower: the
+  `aggregate` costs about what the two statements cost separately (0.8-0.9 ms against 0.25 ms
+  for the stored-document `findOne`, with 100 versions to sort), so it saved no time and the
+  per-op overhead of the bigger `bulkWrite` was added (in-process A/B, updateByID statements
+  1.89 → 1.96 ms; the `findAndModify` variant 0.90-0.93 of the separate statements).
 - **deleteByID** has its stored-document `findOne` read the whole document (no projection), so the
   removed document is that `findOne`'s document. The lock delete, `deleteVersions`, the document's
   `delete` (`limit: 1`, `n` must be 1) and the preferences `delete` are one `bulkWrite`.
 - **Creates** send the document insert, the version insert and the latest flip as one `bulkWrite`.
 - **update-many** runs every document's prepare first (pure; a draft save, unique lookups, no
   versions or a max-versions `find` with a non-positive limit keep the per-document statements). It
-  then sends one `bulkWrite` of every document's statements in the find's order, with one lock
-  `find` beside it. One `aggregate` per 4 MB of stored documents follows, whose `$facet` holds each
-  document's read-back stages. Each document's own statements keep their order; between documents
+  then sends one `bulkWrite` of every document's statements in the find's order (each main update
+  as an `update` op), with one lock `find` beside it. One `aggregate` per 4 MB of stored documents
+  follows: `$match` of the documents, then a `$facet` with each document's stages (`$match` of its
+  query, `$limit: 1`, `$replaceWith: { d: '$$ROOT' }`, and the max-versions find as a `$lookup`
+  pipeline: `$match`, `$sort`, `$skip`, `$limit`, `$project` of `updatedAt`). Each updated
+  document must equal its prepare's `stored_after` byte for byte, as `findAndModify`'s value had
+  to; within the transaction's snapshot nothing else changes it (a concurrent write is a write
+  conflict, which bails). Each document's own statements keep their order; between documents
   the interleaving differs, which D1 allows, as with the per-document sequence.
 - **delete-many**: the lock delete, `deleteCollectionVersions` and the documents' `delete` are one
   `bulkWrite`, beside the lock `find`. The preferences delete stays after the results' `afterRead`:
@@ -1759,7 +1765,7 @@ Round trips per operation, before → after:
 | operation (typical, versions on) | before                                                                                           | after                                                                    | saved        |
 | -------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------ |
 | create                           | insert, version insert, (latest flip with drafts), P, commit                                     | bulkWrite, P, commit                                                     | 1-2          |
-| updateByID                       | findOne, (lock find), lock delete, findAndModify, version insert, (flip), max find, P, commit    | findOne, bulkWrite (+ lock find), aggregate, P, commit                   | 2-4          |
+| updateByID                       | findOne, (lock find), lock delete, findAndModify, version insert, (flip), max find, P, commit    | findOne, findAndModify (+ lock find), bulkWrite, max find, P, commit     | 1-3          |
 | updateByID, draft save           | latest find, (findOne), (lock find), lock delete, version insert, flip, max find, P, commit      | latest find, (findOne), bulkWrite (+ lock find), max find, P, commit     | 2-3          |
 | updateByID, publish over a draft | latest find, (lock find), lock delete, findAndModify, version insert, flip, max find, P, commit  | latest find, findAndModify (+ lock find), bulkWrite, max find, P, commit | 2-3          |
 | updateByID, no versions          | findOne, (lock find), lock delete, findAndModify, P, commit                                      | findOne, findAndModify (+ lock find), lock delete, P, commit             | 0-1          |
