@@ -13,3 +13,4 @@ payload-fn-ir = { path = "../payload-fn-ir" }
 payload-fuse-mongo = { path = "../payload-fuse-mongo" }
 payload-mongo-driver = { path = "../payload-mongo-driver" }
 serde_json.workspace = true
+tokio = { version = "1", features = ["macros"] }

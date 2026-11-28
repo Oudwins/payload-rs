@@ -15,7 +15,7 @@ use mongodb::options::{Collation, Hint};
 
 pub use client::{
   ConnectInfo, ConnectSpec, CountSpec, FindSpec, LaneError, ReadTarget, aggregate, aggregate_docs_raw, aggregate_raw, close, command, connect, count,
-  command_raw, find_one, find_one_raw, find_raw, paginate, register_plan, runtime, transform_raw, txn_begin,
+  command_raw, database_name, find_one, find_one_raw, find_raw, paginate, register_plan, runtime, transform_raw, txn_begin,
   txn_command, txn_command_raw, txn_end,
 };
 pub use transform::Flags;

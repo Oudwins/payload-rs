@@ -1710,6 +1710,67 @@ divergences; parity 503/503 (twice); driver lane 4/4; glue 33/33; HTTP lanes 18/
 39/39; the corpus 35/35; the lane suites 98/98 in default and with both shadows; packaging OK.
 SQLite and Postgres do not use the driver runtime.
 
+**Merged statements (WP-AE, 2026-11-28)**: the drivers send a fused write's independent
+statements in fewer round trips, inside the same Rust-owned transaction (D9, applied to MongoDB;
+`crates/payload-fuse-write/src/lib.rs` `send_writes`, `by_id.rs` `merged_update`, `bulk.rs`
+`merged_updates`). `PAYLOAD_RS_FUSE_WRITES_MERGE=off` restores one command per statement (a
+measurement switch; perf engine variant `rs-merge-off`). What merges:
+
+- **Writes in a row become one `bulkWrite`** (MongoDB 8.0's multi-collection command on `admin`,
+  `ordered: true`, `errorsOnly: false`): each `insert` / `update` / `delete` command's entries
+  become its ops in order, so every collection gets the same writes in the same order. A command
+  with any other option is sent alone. An op error bails like a write error of the separate
+  command did (the transaction is aborted, the exact lane reruns); each op's `n` is checked where
+  the separate command's result was read.
+- **The lock delete moves into the transaction**, as the first op of the first write after the
+  lock check. Upstream sends it without a session, committed at once; inside the transaction it
+  commits with the write. The final state is the same: on success both are deleted, and on a bail
+  the abort keeps the locks, which the exact lane's rerun then deletes itself (with the separate
+  delete it found nothing left). For concurrent readers, the locks disappear at the commit instead
+  of a little earlier during the operation. The write lane-shadow already sent it this way.
+- **The lock `find`** (`overrideLock: false`) runs beside that first write, on another connection
+  without a session. A lock bails, and the abort undoes the write, so the outcome is the one of the
+  find first. The bulk writes look for the locks of all their documents in one `find`
+  (`$or` of each document's filter, `limit: 1`): any lock bails, as each document's find would.
+- **updateByID's main update** is sent as an `update` op (`findAndModify`'s update, `multi: false`)
+  in the `bulkWrite` with the version insert and the latest flip. The document after it is then
+  read in one `aggregate` together with `enforceMaxVersions`' find: `$match` of the update's query,
+  `$limit: 1`, `$replaceWith: { d: '$$ROOT' }`, and the max-versions find as a `$lookup` pipeline
+  (`$match`, `$sort`, `$skip`, `$limit`, `$project` of `updatedAt`). The document must equal the
+  prepare's `stored_after` byte for byte, as `findAndModify`'s value had to. Within the
+  transaction's snapshot nothing else changes it: a concurrent write is a write conflict, which
+  bails. `$unionWith` is not allowed in a transaction, and `$lookup` is.
+- **deleteByID** has its stored-document `findOne` read the whole document (no projection), so the
+  removed document is that `findOne`'s document. The lock delete, `deleteVersions`, the document's
+  `delete` (`limit: 1`, `n` must be 1) and the preferences `delete` are one `bulkWrite`.
+- **Creates** send the document insert, the version insert and the latest flip as one `bulkWrite`.
+- **update-many** runs every document's prepare first (pure; a draft save, unique lookups, no
+  versions or a max-versions `find` with a non-positive limit keep the per-document statements). It
+  then sends one `bulkWrite` of every document's statements in the find's order, with one lock
+  `find` beside it. One `aggregate` per 4 MB of stored documents follows, whose `$facet` holds each
+  document's read-back stages. Each document's own statements keep their order; between documents
+  the interleaving differs, which D1 allows, as with the per-document sequence.
+- **delete-many**: the lock delete, `deleteCollectionVersions` and the documents' `delete` are one
+  `bulkWrite`, beside the lock `find`. The preferences delete stays after the results' `afterRead`:
+  population could read that collection.
+
+Round trips per operation, before → after:
+
+| operation (typical, versions on) | before                                                                                           | after                                                                    | saved        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------ |
+| create                           | insert, version insert, (latest flip with drafts), P, commit                                     | bulkWrite, P, commit                                                     | 1-2          |
+| updateByID                       | findOne, (lock find), lock delete, findAndModify, version insert, (flip), max find, P, commit    | findOne, bulkWrite (+ lock find), aggregate, P, commit                   | 2-4          |
+| updateByID, draft save           | latest find, (findOne), (lock find), lock delete, version insert, flip, max find, P, commit      | latest find, (findOne), bulkWrite (+ lock find), max find, P, commit     | 2-3          |
+| updateByID, publish over a draft | latest find, (lock find), lock delete, findAndModify, version insert, flip, max find, P, commit  | latest find, findAndModify (+ lock find), bulkWrite, max find, P, commit | 2-3          |
+| updateByID, no versions          | findOne, (lock find), lock delete, findAndModify, P, commit                                      | findOne, findAndModify (+ lock find), lock delete, P, commit             | 0-1          |
+| deleteByID                       | findOne, (lock find), lock delete, delete versions, findAndModify, delete preferences, P, commit | findOne, bulkWrite (+ lock find), P, commit                              | 3-4          |
+| update-many (n documents)        | find, n × ((lock find), lock delete, findAndModify, version insert, max find), P, commit         | find, bulkWrite (+ lock find), aggregate, P, commit                      | 4n-2 to 5n-2 |
+| delete-many                      | find, (lock find), lock delete, delete versions, delete documents, P, delete preferences, commit | find, bulkWrite (+ lock find), P, delete preferences, commit             | 2-3          |
+
+P is the result read's population finds (none at depth 0); the max-versions delete (only once a
+document has more than `maxPerDoc` versions) and the all-locales publish validation's unique
+lookups are unchanged. "+ lock find" is concurrent, not an extra round trip.
+
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
 byte-identical; `ts/rs` ratios, per scenario the median of 3 processes per variant, geometric

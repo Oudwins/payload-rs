@@ -125,7 +125,8 @@ for (const category of options.categories) {
  * `--engines` values: `ts` (upstream), `rs` (the default selection), and for attributing a
  * difference to a layer `db-rs` (Rust database engine, TS core), `core-rs` (TS database
  * adapter, Rust core), `rs-fused-off` / `rs-fused-writes` (`PAYLOAD_RS_FUSE_WRITES` off / on,
- * the fused MongoDB writes, packages/engine-rs/FUSED_WRITES.md), `rs-threads-<n>` (the default
+ * the fused MongoDB writes, packages/engine-rs/FUSED_WRITES.md), `rs-merge-off` (the fused writes
+ * one command per statement, `PAYLOAD_RS_FUSE_WRITES_MERGE=off`), `rs-threads-<n>` (the default
  * selection with `PAYLOAD_MONGO_DRIVER_THREADS=<n>`, the MongoDB driver runtime's workers). Only ts
  * and rs cells are paired for the fingerprint checks and the report.
  */
@@ -138,6 +139,7 @@ const engineVariants = {
   'db-rs': { PAYLOAD_CORE_ENGINE: 'ts' },
   'rs-fused-off': { PAYLOAD_RS_FUSE_WRITES: 'off' },
   'rs-fused-writes': { PAYLOAD_RS_FUSE_WRITES: 'on' },
+  'rs-merge-off': { PAYLOAD_RS_FUSE_WRITES_MERGE: 'off' },
   rs: {},
   ts: { PAYLOAD_ENGINE: 'ts' },
 }

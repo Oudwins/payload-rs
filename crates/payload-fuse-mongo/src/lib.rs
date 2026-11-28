@@ -113,6 +113,11 @@ enum ReadOp {
 }
 
 impl MongoReads {
+  /// Whether [`find_stored`] reads whole stored documents (a `find` without a projection).
+  pub fn reads_whole_document(&self) -> bool {
+    self.pipeline.is_none() && self.find.as_ref().is_some_and(|find| find.projection.as_ref().is_none_or(Document::is_empty))
+  }
+
   pub fn decode(bytes: &[u8]) -> Result<Self, LaneError> {
     let args = read_args(bytes)?;
     let doc = Document::from_reader(bytes).map_err(|_| LaneError::Bail("args"))?;

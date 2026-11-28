@@ -1860,6 +1860,7 @@ dependencies = [
  "payload-fuse-mongo",
  "payload-mongo-driver",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

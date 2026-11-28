@@ -17,12 +17,18 @@
 //! document (`getLockedDocumentIds` / `deleteDocumentLocks`, no session), `deleteCollectionVersions`
 //! (`parent in ids`), the documents' `deleteMany` (`id in ids`), the results' `afterRead` (one
 //! page), `deleteUserPreferences` (`key in [...]`, sent for zero documents too), then the commit.
+//!
+//! By default ([`crate::is_merging`]) the writes of every document are one `bulkWrite`
+//! ([`merged_updates`], `delete_statements`; FUSED_WRITES.md section 13, "Merged statements").
 
 use payload_fuse_mongo::{find_stored_many, run_documents};
-use payload_mongo_driver::mongodb::bson::{RawBsonRef, RawDocument, RawDocumentBuf};
+use payload_mongo_driver::mongodb::bson::{RawArrayBuf, RawBsonRef, RawDocument, RawDocumentBuf, rawdoc};
 
-use crate::by_id::{ByIDRequest, Lock, decode as decode_by_id, delete_command, lock_statements, update_document};
-use crate::{Outcome, ResultRead, abort, finish, send, state::StateRead};
+use crate::by_id::{
+  ByIDRequest, Lock, beside_lock_find, decode as decode_by_id, delete_command, delete_older_versions, lock_statements,
+  prepare_document, returned_version, to_raw, update_command, update_document, updated_and_oldest_many, version_writes,
+};
+use crate::{Outcome, ResultRead, abort, finish, is_merging, send, send_writes, state::StateRead};
 
 pub enum BulkRequest {
   /// One updateByID request per document (`op: 'updateByID'`), in the find's order.
@@ -142,8 +148,18 @@ async fn run(
   let mut context_writes: Option<String> = None;
   let text = match request {
     BulkRequest::Update { docs, entries } => {
+      let merged = if is_merging() { merged_updates(client, txn, &docs, &entries, read).await } else { Ok(None) };
       let mut results = Vec::with_capacity(docs.len());
-      for (stored, entry) in docs.iter().zip(&entries) {
+      let separate = match merged {
+        Ok(Some((merged, context))) => {
+          results = merged;
+          context_writes = context;
+          &[][..]
+        }
+        Ok(None) => &docs[..],
+        Err(reason) => return Err(abort(txn, reason).await),
+      };
+      for (stored, entry) in separate.iter().zip(&entries) {
         match update_document(client, txn, entry, read, stored, is_shadow, true, false).await {
           // The documents share `req.context`: upstream's later documents find the keys an
           // earlier one wrote (authorship's submitted marks, `_isNewDoc`, lexical's
@@ -185,6 +201,93 @@ async fn run(
   Ok((text, state, context_writes))
 }
 
+/// Stored-document bytes read back per `aggregate` of [`merged_updates`] (its one result
+/// document holds them all and must stay below the 16 MB BSON limit).
+const UPDATED_READ_BYTES: usize = 4 << 20;
+
+/// update-many's documents merged (FUSED_WRITES.md section 13, "Merged statements"): every
+/// document's prepare (pure) first; then one `bulkWrite` of every document's lock delete, update,
+/// version insert and latest flip, in the find's order, beside one lock `find` of all of them
+/// (any lock bails, as each document's own find would); then the updated documents (each must be
+/// its prepare's `stored_after`) and their `enforceMaxVersions` versions, one `aggregate` per
+/// few MB of documents, and the max-versions deletes. Each document's statements keep their
+/// order; only the interleaving between documents differs (D1, as the per-document sequence).
+/// `None`: a document needs the per-document statements (a draft save, unique lookups, no
+/// versions, a max-versions find `$lookup` would read differently).
+async fn merged_updates(
+  client: u32,
+  txn: u32,
+  docs: &[RawDocumentBuf],
+  entries: &[ByIDRequest],
+  read: &ResultRead,
+) -> Result<Option<(Vec<RawDocumentBuf>, Option<String>)>, String> {
+  let mut prepared = Vec::with_capacity(docs.len());
+  let mut context_writes: Option<String> = None;
+  for (stored, entry) in docs.iter().zip(entries) {
+    let (write, context) = prepare_document(entry, read, stored, true)?;
+    let Some((_, max_find, _)) = &entry.versions else { return Ok(None) };
+    let is_lookup_read = max_find.as_ref().is_none_or(|find| find.limit.is_none_or(|limit| limit > 0));
+    if write.draft || !write.unique.is_empty() || write.version.is_none() || write.stored_after.is_none() || !is_lookup_read {
+      return Ok(None);
+    }
+    // the documents share `req.context` (see `run`)
+    if context_writes.as_ref().is_some_and(|previous| *previous != context) {
+      return Err("!bulk:context".to_string());
+    }
+    context_writes = Some(context);
+    prepared.push(write);
+  }
+  let mut writes = Vec::new();
+  let mut mains = Vec::with_capacity(entries.len());
+  let mut lock_filters = RawArrayBuf::new();
+  let mut lock_collection: Option<&str> = None;
+  for (entry, write) in entries.iter().zip(&prepared) {
+    if let Some(lock) = &entry.lock {
+      writes.push((entry.database.clone(), delete_command(&lock.collection, lock.filter.clone())));
+      if lock.find {
+        if lock_collection.is_some_and(|collection| collection != lock.collection) {
+          return Ok(None);
+        }
+        lock_collection = Some(&lock.collection);
+        lock_filters.push(lock.filter.clone());
+      }
+    }
+    mains.push(writes.len());
+    writes.push((entry.database.clone(), update_command(entry, to_raw(&write.doc)?)));
+    let (Some(version), Some((versions, _, _))) = (&write.version, &entry.versions) else { return Err("!byID:versions".to_string()) };
+    writes.extend(version_writes(&entry.database, versions, version)?);
+  }
+  let lock = lock_collection.map(|collection| Lock { collection: collection.to_string(), filter: rawdoc! { "$or": lock_filters }, find: true });
+  let database = entries.first().and_then(|entry| entry.database.clone());
+  let counts = beside_lock_find(client, database.as_deref(), lock.as_ref(), send_writes(client, txn, writes)).await?;
+  if mains.iter().any(|&main| counts[main] != 1) {
+    return Err("!byID:notFound".to_string());
+  }
+  let mut results = Vec::with_capacity(entries.len());
+  let mut start = 0;
+  while start < entries.len() {
+    let mut end = start;
+    let mut bytes = 0;
+    while end < entries.len() && (end == start || bytes + docs[end].as_bytes().len() <= UPDATED_READ_BYTES) {
+      bytes += docs[end].as_bytes().len();
+      end += 1;
+    }
+    let requests: Vec<&ByIDRequest> = entries[start..end].iter().collect();
+    let found = updated_and_oldest_many(txn, &requests).await?.ok_or("!bulk:updated")?;
+    for ((updated, oldest), (entry, write)) in found.into_iter().zip(entries[start..end].iter().zip(&prepared[start..end])) {
+      let stored_after = write.stored_after.as_ref().ok_or("!byID:storedAfter")?;
+      if updated.as_bytes() != to_raw(stored_after)?.as_bytes() {
+        return Err("!byID:storedAfter".to_string());
+      }
+      let (Some(version), Some((versions, _, _))) = (&write.version, &entry.versions) else { return Err("!byID:versions".to_string()) };
+      delete_older_versions(client, txn, entry, versions, oldest.as_deref()).await?;
+      results.push(returned_version(&version.doc)?);
+    }
+    start = end;
+  }
+  Ok(Some((results, context_writes)))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn delete_statements(
   client: u32,
@@ -201,13 +304,24 @@ async fn delete_statements(
   if docs.is_empty() {
     return Ok(run_documents(client, read.plan, &read.reads, docs, &read.request_json, Some(txn), true));
   }
-  if let Some(lock) = lock {
-    lock_statements(client, txn, database.as_deref(), lock, is_shadow).await?;
+  if is_merging() {
+    // the lock delete, `deleteCollectionVersions` and the documents' delete in one `bulkWrite`,
+    // beside the lock `find` (by_id `beside_lock_find`)
+    let mut writes: Vec<_> = lock.map(|lock| (database.clone(), delete_command(&lock.collection, lock.filter.clone()))).into_iter().collect();
+    if let Some((versions, filter)) = versions {
+      writes.push((database.clone(), delete_command(&versions, filter)));
+    }
+    writes.push((database.clone(), delete_command(collection, query)));
+    beside_lock_find(client, database.as_deref(), lock, send_writes(client, txn, writes)).await?;
+  } else {
+    if let Some(lock) = lock {
+      lock_statements(client, txn, database.as_deref(), lock, is_shadow).await?;
+    }
+    if let Some((versions, filter)) = versions {
+      send(client, txn, database.clone(), delete_command(&versions, filter), true).await?;
+    }
+    send(client, txn, database.clone(), delete_command(collection, query), true).await?;
   }
-  if let Some((versions, filter)) = versions {
-    send(client, txn, database.clone(), delete_command(&versions, filter), true).await?;
-  }
-  send(client, txn, database.clone(), delete_command(collection, query), true).await?;
   let text = run_documents(client, read.plan, &read.reads, docs, &read.request_json, Some(txn), true);
   if text.starts_with('!') {
     return Err(text);

@@ -730,6 +730,12 @@ pub async fn txn_command_raw(
   database.run_raw_command(command).session(session.get()).await.map_err(|error| command_error_json(&error))
 }
 
+/// The name of the database commands for `database` run on (`None`: the client's default).
+pub fn database_name(client_id: u32, database: Option<&str>) -> Result<String> {
+  let state = client(client_id)?;
+  Ok(database.unwrap_or(&state.default_database).to_string())
+}
+
 /// A command (BSON as the caller serialized it) outside any transaction (statements upstream sends
 /// without a session, e.g. the expired-locks delete of `checkDocumentLockStatus`).
 pub async fn command_raw(

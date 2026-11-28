@@ -35,15 +35,20 @@
 //!
 //! The filters arrive cast (mongoose's casting of db-mongodb's `buildQuery`, built once per
 //! collection by src/fuse-write/mongo.ts and given this call's id).
+//!
+//! By default ([`crate::is_merging`]) independent statements share round trips: writes in a row
+//! are one `bulkWrite`, the lock delete joins them inside the transaction, the lock `find` runs
+//! beside them ([`merged_update`], the delete in `steps`; FUSED_WRITES.md section 13, "Merged
+//! statements").
 
 use payload_fuse_mongo::{find_stored, run_document, update_inputs};
-use payload_mongo_driver::mongodb::bson::{Bson, Document, RawBsonRef, RawDocument, RawDocumentBuf, rawdoc};
-use payload_mongo_driver::{FindSpec, find_raw, find_spec};
+use payload_mongo_driver::mongodb::bson::{Bson, Document, RawArrayBuf, RawBsonRef, RawDocument, RawDocumentBuf, rawdoc};
+use payload_mongo_driver::{FindSpec, find_one_raw, find_raw, find_spec, txn_command_raw};
 
 use crate::ops::version_statements;
 use crate::unique::UniqueTemplates;
-use crate::prepare::{DriverPrepared, UpdateInput, prepare_update_request, write_plan};
-use crate::{Outcome, ResultRead, abort, finish, send, state::StateRead};
+use crate::prepare::{DriverPrepared, PreparedWrite, UpdateInput, VersionWrite, prepare_update_request, write_plan};
+use crate::{Outcome, ResultRead, abort, finish, is_merging, merged_command_failed, send, send_writes, state::StateRead};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ByID {
@@ -248,6 +253,29 @@ async fn steps(
     }
     ByID::Delete => {
       let database = request.database.clone();
+      if is_merging() && read.reads.reads_whole_document() {
+        // The stored document is the one `findAndModify` would remove (read in this transaction's
+        // snapshot: a concurrent change makes the delete a write conflict), so the lock delete,
+        // `deleteVersions`, the document's delete and the preferences delete are one `bulkWrite`.
+        let mut writes = lock_delete(&database, request.lock.as_ref());
+        if let Some((versions, _, Some(filter))) = &request.versions {
+          writes.push((database.clone(), delete_command(versions, filter.clone())));
+        }
+        let main = writes.len();
+        writes.push((database.clone(), rawdoc! {
+          "delete": request.collection.as_str(),
+          "deletes": [{ "q": request.query.clone(), "limit": 1 }],
+          "ordered": true,
+        }));
+        if let Some((preferences, filter)) = &request.preferences {
+          writes.push((database.clone(), delete_command(preferences, filter.clone())));
+        }
+        let counts = beside_lock_find(client, database.as_deref(), request.lock.as_ref(), send_writes(client, txn, writes)).await?;
+        if counts[main] != 1 {
+          return Err("!byID:notFound".to_string());
+        }
+        return Ok((read, stored, None));
+      }
       if let Some(lock) = &request.lock {
         lock_statements(client, txn, database.as_deref(), lock, state.is_some()).await?;
       }
@@ -308,15 +336,47 @@ pub(crate) async fn lock_statements(
   is_shadow: bool,
 ) -> Result<(), String> {
   if lock.find {
-    let filter = Document::try_from(lock.filter.as_ref()).map_err(|e| format!("!lock:{e}"))?;
-    let find = FindSpec { filter, limit: Some(1), ..FindSpec::default() };
-    let locks = find_raw(client, database, &lock.collection, find, None).await.map_err(|_| "!lock:find")?;
-    if !locks.is_empty() {
-      return Err("!byID:locked".to_string());
-    }
+    lock_find(client, database, lock).await?;
   }
   send(client, txn, database.map(str::to_string), delete_command(&lock.collection, lock.filter.clone()), is_shadow).await?;
   Ok(())
+}
+
+/// The lock `find` of `checkDocumentLockStatus` with `overrideLock: false` (no session): any lock
+/// of the documents bails.
+async fn lock_find(client: u32, database: Option<&str>, lock: &Lock) -> Result<(), String> {
+  let filter = Document::try_from(lock.filter.as_ref()).map_err(|e| format!("!lock:{e}"))?;
+  let find = FindSpec { filter, limit: Some(1), ..FindSpec::default() };
+  let locks = find_raw(client, database, &lock.collection, find, None).await.map_err(|_| "!lock:find")?;
+  if !locks.is_empty() {
+    return Err("!byID:locked".to_string());
+  }
+  Ok(())
+}
+
+/// The merged statements' lock check: `write`, the first statements in the transaction after the
+/// check (the lock delete among them, inside the transaction), runs beside the lock `find` (with
+/// `overrideLock: false`). A lock bails, and the abort undoes what `write` did, so the outcome is
+/// the one of the find first; a bail's rerun on the exact lane deletes the locks itself.
+pub(crate) async fn beside_lock_find<T>(
+  client: u32,
+  database: Option<&str>,
+  lock: Option<&Lock>,
+  write: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+  match lock.filter(|lock| lock.find) {
+    Some(lock) => {
+      let (found, written) = tokio::join!(lock_find(client, database, lock), write);
+      found?;
+      written
+    }
+    None => write.await,
+  }
+}
+
+/// The lock delete of the merged statements: in the transaction, with the first write.
+fn lock_delete(database: &Option<String>, lock: Option<&Lock>) -> Vec<(Option<String>, RawDocumentBuf)> {
+  lock.map(|lock| (database.clone(), delete_command(&lock.collection, lock.filter.clone()))).into_iter().collect()
 }
 
 /// `getLatestCollectionVersion`'s `findVersions` (with drafts): the parent's latest version.
@@ -369,6 +429,10 @@ pub(crate) async fn update_document(
     let (templates, id) = request.unique.as_ref().map(|(t, id)| (Some(t), Some(id.as_str()))).unwrap_or((None, None));
     crate::unique::run(client, database.as_deref(), templates, &lookups, id).await?;
   }
+  if is_merging() {
+    let doc = merged_update(client, txn, request, write, &input, *plan_id, prepare, from_version).await?;
+    return Ok((doc, context));
+  }
   if let Some(lock) = &request.lock {
     lock_statements(client, txn, database.as_deref(), lock, is_shadow).await?;
   }
@@ -415,32 +479,303 @@ pub(crate) async fn update_document(
       for statement in version_statements(versions, to_raw(&version.doc)?, flip).map_err(|e| format!("!{e}"))? {
         send(client, txn, database.clone(), statement.command, true).await?;
       }
-      if let Some(find) = max_find {
-        let find = FindSpec { filter: find.filter.clone(), sort: find.sort.clone(), skip: find.skip, limit: find.limit, ..FindSpec::default() };
-        let found = find_raw(client, database.as_deref(), versions, find, Some(txn)).await.map_err(|_| "!byID:maxVersions:find")?;
-        if let Some(oldest) = found.first() {
-          // `oldestAllowedDoc?.updatedAt` (read-transformed: a Date becomes its ISO string, which
-          // the delete's cast turns back into the same Date): truthy, then `deleteVersions`
-          let updated_at = match oldest.get("updatedAt").map_err(|_| "!byID:maxVersions:updatedAt")? {
-            None | Some(RawBsonRef::Null) | Some(RawBsonRef::Undefined) => None,
-            Some(RawBsonRef::DateTime(date)) if date.try_to_rfc3339_string().is_ok() => Some(Bson::DateTime(date)),
-            Some(_) => return Err("!byID:maxVersions:updatedAt".to_string()),
-          };
-          if let Some(updated_at) = updated_at {
-            let (filter, sentinel) = request.max_delete.as_ref().ok_or("!byID:maxVersions")?;
-            let mut filter = filter.clone();
-            if replace_value(&mut filter, sentinel, &updated_at) == 0 {
-              return Err("!byID:maxVersions:template".to_string());
-            }
-            send(client, txn, database.clone(), delete_command(versions, to_raw(&filter)?), true).await?;
-          }
-        }
-      }
+      let oldest = max_versions_find(client, txn, database.as_deref(), versions, max_find.as_ref()).await?;
+      delete_older_versions(client, txn, request, versions, oldest.as_deref()).await?;
       returned
     }
     _ => return Err("!byID:versions".to_string()),
   };
   Ok((doc, context))
+}
+
+/// [`update_document`]'s statements after the prepare, merged (FUSED_WRITES.md section 13,
+/// "Merged statements"): the lock delete joins the first write in the transaction and the lock
+/// `find` runs beside it; with versions the main update, the version insert and the latest flip
+/// are one `bulkWrite`, then one `aggregate` reads the updated document (which must be the
+/// prepare's `stored_after`, as `findAndModify`'s value must) and `enforceMaxVersions`' version.
+/// A draft save and a publish from the latest version send their `findAndModify` / version
+/// writes as before, with the lock statements merged the same way.
+#[allow(clippy::too_many_arguments)]
+async fn merged_update(
+  client: u32,
+  txn: u32,
+  request: &ByIDRequest,
+  write: PreparedWrite,
+  input: &impl Fn(&RawDocumentBuf) -> Result<UpdateInput, String>,
+  plan_id: u32,
+  prepare: &str,
+  from_version: bool,
+) -> Result<RawDocumentBuf, String> {
+  let database = request.database.clone();
+  let lock = request.lock.as_ref();
+  let mut writes = lock_delete(&database, lock);
+  let versions = request.versions.as_ref();
+  if write.draft {
+    let (Some(version), Some((collection, max_find, _))) = (write.version, versions) else {
+      return Err("!byID:versions".to_string());
+    };
+    let returned = returned_version(&version.doc)?;
+    writes.extend(version_writes(&database, collection, &version)?);
+    beside_lock_find(client, database.as_deref(), lock, send_writes(client, txn, writes)).await?;
+    let oldest = max_versions_find(client, txn, database.as_deref(), collection, max_find.as_ref()).await?;
+    delete_older_versions(client, txn, request, collection, oldest.as_deref()).await?;
+    return Ok(returned);
+  }
+  let update = to_raw(&write.doc)?;
+  if let (Some((collection, max_find, _)), false) = (versions, from_version) {
+    let stored_after = to_raw(write.stored_after.as_ref().ok_or("!byID:storedAfter")?)?;
+    let version = write.version.ok_or("!byID:versions")?;
+    let returned = returned_version(&version.doc)?;
+    let main = writes.len();
+    writes.push((database.clone(), update_command(request, update)));
+    writes.extend(version_writes(&database, collection, &version)?);
+    let counts = beside_lock_find(client, database.as_deref(), lock, send_writes(client, txn, writes)).await?;
+    if counts[main] != 1 {
+      return Err("!byID:notFound".to_string());
+    }
+    let (updated, oldest) = updated_and_oldest(client, txn, request, collection, max_find.as_ref()).await?;
+    if updated.as_bytes() != stored_after.as_bytes() {
+      return Err("!byID:storedAfter".to_string());
+    }
+    delete_older_versions(client, txn, request, collection, oldest.as_deref()).await?;
+    return Ok(returned);
+  }
+  // without versions `findAndModify`'s value is the result; a publish from the latest version
+  // builds its version from it
+  let command = rawdoc! {
+    "findAndModify": request.collection.as_str(),
+    "query": request.query.clone(),
+    "remove": false,
+    "new": true,
+    "upsert": false,
+    "update": update.clone(),
+  };
+  let reply = beside_lock_find(client, database.as_deref(), lock, send(client, txn, database.clone(), command, true)).await?;
+  let value = match reply.get("value") {
+    Some(Bson::Document(value)) => to_raw(value)?,
+    _ => return Err("!byID:notFound".to_string()),
+  };
+  let write = if from_version {
+    let (again, _) = prepare_write(&input(&value)?, plan_id, prepare)?;
+    if again.draft || to_raw(&again.doc)?.as_bytes() != update.as_bytes() {
+      return Err("!byID:storedAfter:update".to_string());
+    }
+    again
+  } else {
+    write
+  };
+  let stored_after = write.stored_after.as_ref().ok_or("!byID:storedAfter")?;
+  if value.as_bytes() != to_raw(stored_after)?.as_bytes() {
+    return Err("!byID:storedAfter".to_string());
+  }
+  let has_version = write.version.is_some();
+  let (Some(version), Some((collection, max_find, _))) = (write.version, versions) else {
+    if versions.is_some() || has_version {
+      return Err("!byID:versions".to_string());
+    }
+    if !writes.is_empty() {
+      send_writes(client, txn, writes).await?;
+    }
+    return Ok(value);
+  };
+  let returned = returned_version(&version.doc)?;
+  writes.extend(version_writes(&database, collection, &version)?);
+  send_writes(client, txn, writes).await?;
+  let oldest = max_versions_find(client, txn, database.as_deref(), collection, max_find.as_ref()).await?;
+  delete_older_versions(client, txn, request, collection, oldest.as_deref()).await?;
+  Ok(returned)
+}
+
+/// The main update of the merged statements: `findAndModify`'s update as an `update` command (the
+/// document after it is read back, see [`updated_stages`]).
+pub(crate) fn update_command(request: &ByIDRequest, update: RawDocumentBuf) -> RawDocumentBuf {
+  rawdoc! {
+    "update": request.collection.as_str(),
+    "updates": [{ "q": request.query.clone(), "u": update, "multi": false, "upsert": false }],
+    "ordered": true,
+  }
+}
+
+/// [`update_document`]'s prepare alone (update-many's merged statements): the prepared write and
+/// the context writes.
+pub(crate) fn prepare_document(
+  request: &ByIDRequest,
+  read: &ResultRead,
+  stored: &RawDocumentBuf,
+  lean_with_id: bool,
+) -> Result<(PreparedWrite, String), String> {
+  let (plan_id, prepare) = request.update.as_ref().ok_or("!byID:prepare")?;
+  let (doc_with_locales, original_doc) = update_inputs(read.plan, &read.reads, stored, &read.request_json, lean_with_id)
+    .map_err(|bail| format!("!{}", bail.0))?;
+  let stored = Document::try_from(stored.as_ref()).map_err(|_| "!byID:stored")?;
+  prepare_write(&UpdateInput { stored, doc_with_locales, original_doc }, *plan_id, prepare)
+}
+
+/// db-mongodb `createVersion`'s writes of `version` on `collection` (the version insert, the latest
+/// flip).
+pub(crate) fn version_writes(database: &Option<String>, collection: &str, version: &VersionWrite) -> Result<Vec<(Option<String>, RawDocumentBuf)>, String> {
+  let flip = Some((to_raw(&version.flip_filter)?, to_raw(&version.flip_update)?));
+  let statements = version_statements(collection, to_raw(&version.doc)?, flip).map_err(|e| format!("!{e}"))?;
+  Ok(statements.into_iter().map(|statement| (database.clone(), statement.command)).collect())
+}
+
+/// `enforceMaxVersions`' `find` (`skip: max, limit: 1`) in the transaction: the oldest version to
+/// keep, if any (`None` without `max_find`: `max` is 0).
+async fn max_versions_find(
+  client: u32,
+  txn: u32,
+  database: Option<&str>,
+  versions: &str,
+  max_find: Option<&FindSpec>,
+) -> Result<Option<RawDocumentBuf>, String> {
+  let Some(find) = max_find else { return Ok(None) };
+  let find = FindSpec { filter: find.filter.clone(), sort: find.sort.clone(), skip: find.skip, limit: find.limit, ..FindSpec::default() };
+  let found = find_raw(client, database, versions, find, Some(txn)).await.map_err(|_| "!byID:maxVersions:find")?;
+  Ok(found.into_iter().next())
+}
+
+/// The document after the main update (`$match` of the update's query, as `findAndModify`
+/// returns it) and `enforceMaxVersions`' version (the same `find` as a `$lookup` pipeline:
+/// `$match`, `$sort`, `$skip`, `$limit`, only its `updatedAt` kept), one `aggregate` in the
+/// transaction. The document is wrapped (`{ d: $$ROOT }`) so its own keys never meet the lookup's.
+async fn updated_and_oldest(
+  client: u32,
+  txn: u32,
+  request: &ByIDRequest,
+  versions: &str,
+  max_find: Option<&FindSpec>,
+) -> Result<(RawDocumentBuf, Option<RawDocumentBuf>), String> {
+  let Some(pipeline) = updated_stages(request, versions, max_find)? else {
+    // a `find` reads a non-positive limit differently from `$limit`: separately
+    let updated = updated_document(client, txn, request).await?;
+    return Ok((updated, max_versions_find(client, txn, request.database.as_deref(), versions, max_find).await?));
+  };
+  let command = rawdoc! { "aggregate": request.collection.as_str(), "pipeline": pipeline, "cursor": {} };
+  let reply = txn_command_raw(txn, request.database.clone(), command).await.map_err(merged_command_failed)?;
+  let first = first_result(&reply)?;
+  match first.and_then(|first| first.as_document()) {
+    Some(first) => updated_result(first),
+    None => Err("!byID:notFound".to_string()),
+  }
+}
+
+/// [`updated_and_oldest`] of several documents of one collection (update-many), one `aggregate`
+/// whose `$facet` has the stages of each (`None`: a document needs the separate reads).
+pub(crate) async fn updated_and_oldest_many(
+  txn: u32,
+  requests: &[&ByIDRequest],
+) -> Result<Option<Vec<(RawDocumentBuf, Option<RawDocumentBuf>)>>, String> {
+  let Some(head) = requests.first() else { return Ok(Some(Vec::new())) };
+  let mut queries = RawArrayBuf::new();
+  let mut facets = RawDocumentBuf::new();
+  for (index, request) in requests.iter().enumerate() {
+    let Some((versions, max_find, _)) = &request.versions else { return Ok(None) };
+    let Some(stages) = updated_stages(request, versions, max_find.as_ref())? else { return Ok(None) };
+    queries.push(request.query.clone());
+    facets.append(index.to_string(), stages);
+  }
+  let mut pipeline = RawArrayBuf::new();
+  pipeline.push(rawdoc! { "$match": { "$or": queries } });
+  pipeline.push(rawdoc! { "$facet": facets });
+  let command = rawdoc! { "aggregate": head.collection.as_str(), "pipeline": pipeline, "cursor": {} };
+  let reply = txn_command_raw(txn, head.database.clone(), command).await.map_err(merged_command_failed)?;
+  let Some(Bson::Document(facets)) = first_result(&reply)? else { return Err("!byID:updated:cursor".to_string()) };
+  let mut out = Vec::with_capacity(requests.len());
+  for index in 0..requests.len() {
+    match facets.get_array(index.to_string()).map_err(|_| "!byID:updated")?.first() {
+      Some(Bson::Document(first)) => out.push(updated_result(first)?),
+      _ => return Err("!byID:notFound".to_string()),
+    }
+  }
+  Ok(Some(out))
+}
+
+/// The stages reading the document of `request`'s query after the update (wrapped as `{ d:
+/// $$ROOT }`, so its own keys never meet the lookup's) and, as `m`, `enforceMaxVersions`' version
+/// (`max_find` as a `$lookup` pipeline: `$match`, `$sort`, `$skip`, `$limit`, only `updatedAt`
+/// kept). `None`: `max_find` has a non-positive limit, which a `find` reads differently.
+fn updated_stages(request: &ByIDRequest, versions: &str, max_find: Option<&FindSpec>) -> Result<Option<RawArrayBuf>, String> {
+  let mut pipeline = RawArrayBuf::new();
+  pipeline.push(rawdoc! { "$match": request.query.clone() });
+  pipeline.push(rawdoc! { "$limit": 1 });
+  pipeline.push(rawdoc! { "$replaceWith": { "d": "$$ROOT" } });
+  if let Some(find) = max_find {
+    let mut lookup = RawArrayBuf::new();
+    lookup.push(rawdoc! { "$match": to_raw(&find.filter)? });
+    if let Some(sort) = find.sort.as_ref().filter(|sort| !sort.is_empty()) {
+      lookup.push(rawdoc! { "$sort": to_raw(sort)? });
+    }
+    if let Some(skip) = find.skip.filter(|&skip| skip > 0) {
+      lookup.push(rawdoc! { "$skip": i64::try_from(skip).map_err(|_| "!byID:maxVersions:skip")? });
+    }
+    match find.limit {
+      None => {}
+      Some(limit) if limit > 0 => lookup.push(rawdoc! { "$limit": limit }),
+      Some(_) => return Ok(None),
+    }
+    lookup.push(rawdoc! { "$project": { "_id": 0, "updatedAt": 1 } });
+    pipeline.push(rawdoc! { "$lookup": { "from": versions, "pipeline": lookup, "as": "m" } });
+  }
+  Ok(Some(pipeline))
+}
+
+/// The first document of an `aggregate` reply (whose cursor must be exhausted).
+fn first_result(reply: &Document) -> Result<Option<&Bson>, String> {
+  let cursor = reply.get_document("cursor").map_err(|_| "!byID:updated:cursor")?;
+  let batch = cursor.get_array("firstBatch").map_err(|_| "!byID:updated:cursor")?;
+  if !matches!(cursor.get("id"), Some(Bson::Int64(0) | Bson::Int32(0))) || batch.len() > 1 {
+    return Err("!byID:updated:cursor".to_string());
+  }
+  Ok(batch.first())
+}
+
+/// The updated document (`d`) and the oldest version to keep (`m`'s first) of [`updated_stages`].
+fn updated_result(result: &Document) -> Result<(RawDocumentBuf, Option<RawDocumentBuf>), String> {
+  let updated = to_raw(result.get_document("d").map_err(|_| "!byID:updated")?)?;
+  let oldest = match result.get("m") {
+    None => None,
+    Some(Bson::Array(found)) => match found.first() {
+      Some(Bson::Document(oldest)) => Some(to_raw(oldest)?),
+      Some(_) => return Err("!byID:maxVersions:find".to_string()),
+      None => None,
+    },
+    Some(_) => return Err("!byID:maxVersions:find".to_string()),
+  };
+  Ok((updated, oldest))
+}
+
+/// The document of the update's query in the transaction (the main document after the update).
+async fn updated_document(client: u32, txn: u32, request: &ByIDRequest) -> Result<RawDocumentBuf, String> {
+  let filter = Document::try_from(request.query.as_ref()).map_err(|_| "!byID:query")?;
+  let find = FindSpec { filter, ..FindSpec::default() };
+  let found = find_one_raw(client, request.database.as_deref(), &request.collection, find, Some(txn)).await.map_err(|_| "!byID:updated")?;
+  found.ok_or_else(|| "!byID:notFound".to_string())
+}
+
+/// `enforceMaxVersions` after its find: when the oldest version to keep has an `updatedAt`, its
+/// `deleteVersions` (`updatedAt <=` it, of the parent) in the transaction.
+pub(crate) async fn delete_older_versions(
+  client: u32,
+  txn: u32,
+  request: &ByIDRequest,
+  versions: &str,
+  oldest: Option<&RawDocument>,
+) -> Result<(), String> {
+  let Some(oldest) = oldest else { return Ok(()) };
+  // `oldestAllowedDoc?.updatedAt` (read-transformed: a Date becomes its ISO string, which the
+  // delete's cast turns back into the same Date): truthy, then `deleteVersions`
+  let updated_at = match oldest.get("updatedAt").map_err(|_| "!byID:maxVersions:updatedAt")? {
+    None | Some(RawBsonRef::Null) | Some(RawBsonRef::Undefined) => return Ok(()),
+    Some(RawBsonRef::DateTime(date)) if date.try_to_rfc3339_string().is_ok() => Bson::DateTime(date),
+    Some(_) => return Err("!byID:maxVersions:updatedAt".to_string()),
+  };
+  let (filter, sentinel) = request.max_delete.as_ref().ok_or("!byID:maxVersions")?;
+  let mut filter = filter.clone();
+  if replace_value(&mut filter, sentinel, &updated_at) == 0 {
+    return Err("!byID:maxVersions:template".to_string());
+  }
+  send(client, txn, request.database.clone(), delete_command(versions, to_raw(&filter)?), true).await?;
+  Ok(())
 }
 
 /// A unique lookup's value as js-bson serializes it (strings and numbers; anything else bails).
@@ -468,7 +803,7 @@ fn prepare_write(input: &UpdateInput, plan_id: u32, request_json: &str) -> Resul
 
 /// saveVersion's result as stored: the version's `version` with `_id = parent` (the read
 /// transform turns it into the trailing `id` sanitizeInternalFields and saveVersion leave).
-fn returned_version(version: &Document) -> Result<RawDocumentBuf, String> {
+pub(crate) fn returned_version(version: &Document) -> Result<RawDocumentBuf, String> {
   let mut doc = version.get_document("version").map_err(|_| "!byID:version")?.clone();
   let parent = version.get("parent").cloned().ok_or("!byID:parent")?;
   if doc.contains_key("_id") || doc.contains_key("id") {
