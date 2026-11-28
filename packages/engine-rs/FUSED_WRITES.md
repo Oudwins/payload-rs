@@ -1777,6 +1777,44 @@ P is the result read's population finds (none at depth 0); the max-versions dele
 document has more than `maxPerDoc` versions) and the all-locales publish validation's unique
 lookups are unchanged. "+ lock find" is concurrent, not an extra round trip.
 
+A round trip is cheap next to what the server does per statement and at the commit. Measured in
+one process with the two sequences alternating per call: release addon, mongod 8.2 rs0 on
+loopback, CPUs 16-31, the lane config's `posts` (versions on, 100 versions per document), depth 0,
+`overrideAccess`, 225-450 calls each; the time in the driver from the first statement to the
+result read (update-many: to the commit, the result read included), medians, separate → merged:
+
+| operation                 | separate       | merged         | change    |
+| ------------------------- | -------------- | -------------- | --------- |
+| create (2 statements)     | 0.38-0.41 ms   | 0.28-0.31 ms   | -25%      |
+| deleteByID (5 → 2)        | 1.06-1.11 ms   | 0.67-0.72 ms   | -36%      |
+| updateByID (5 → 4)        | 1.77 / 3.11 ms | 1.64 / 2.79 ms | -7, -10%  |
+| update-many, 10 documents | 18.8 / 25.7 ms | 12.6 / 15.2 ms | -33, -41% |
+
+The commit, 0.9-1.4 ms in the same runs, and the stored-document read stay the same. Statements
+between the two updateByID runs took twice as long: the machine's mongods share one disk.
+
+Perf suite (test/__rs/perf, MongoDB 1k posts, release addon, `--cpus 16-31`, 4 interleaved rounds
+of `ts`, `rs-merge-off` and `rs`; geometric mean per category of the per-round ratios, 95% t
+interval over the rounds; latency 1/median, throughput req/s):
+
+| shape   | surface | create           | update           | partial-update   | delete           |
+| ------- | ------- | ---------------- | ---------------- | ---------------- | ---------------- |
+| typical | local   | 0.96 [0.87-1.07] | 1.13 [1.04-1.24] | 1.07 [1.02-1.12] | 1.09 [0.92-1.29] |
+| typical | rest    | 1.02 [0.96-1.08] | 1.17 [1.07-1.28] | 1.30 [0.98-1.73] | 1.12 [1.00-1.25] |
+| typical | graphql | 1.02 [0.90-1.16] | -                | 1.05 [0.92-1.18] | 1.08 [0.92-1.27] |
+| complex | local   | 1.07 [0.99-1.16] | 1.17 [1.10-1.25] | 1.03 [0.97-1.09] | 1.08 [1.00-1.17] |
+| complex | rest    | 1.00 [0.97-1.03] | 1.21 [1.02-1.43] | 1.05 [0.87-1.28] | 1.12 [1.03-1.23] |
+| complex | graphql | 1.14 [0.86-1.51] | -                | 1.08 [1.01-1.15] | 1.22 [1.07-1.40] |
+
+That is `rs-merge-off/rs`; above 1 means merging is faster. Largest per scenario: update many
+(10 by where) 1.42 [1.23-1.64] (31.4 → 20.8 ms) and 1.45 [1.39-1.52] (complex, 48.9 → 32.9 ms).
+REST `PATCH /posts?where` is 1.36 / 1.38, and deleteByID is 1.18 (typical local) and 1.20-1.22
+(complex REST / GraphQL). The throughput scenarios are 1.00 [0.96-1.04] (typical) and 1.02
+[0.98-1.05] (complex). The versions category is 0.98-1.00 (its draft saves and publishes run on
+the exact lane). `ts/rs` against `ts/rs-merge-off` for typical: local update 1.63 → 1.85,
+partial-update 1.58 → 1.69, REST partial-update 1.28 → 1.66, REST update 0.98 → 1.15, local
+delete 1.05 → 1.15, local create 1.34 / 1.30 (within the spread); throughput 8.96 / 8.98.
+
 Perf suite (WP-K, 2026-11-25, test/__rs/perf, MongoDB 1k posts, release addon, packed install
 verified against the builds: engine-rs dist, payload and db-mongodb dist files and the addon
 byte-identical; `ts/rs` ratios, per scenario the median of 3 processes per variant, geometric
